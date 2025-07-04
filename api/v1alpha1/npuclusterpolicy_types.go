@@ -23,19 +23,30 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type FuriosaSpec struct {
+	Enabled           bool   `json:"enabled"`
+	DevicePluginImage string `json:"devicePluginImage"`
+	ConfigMapName     string `json:"configMapName,omitempty"`
+}
+
+type NvidiaSpec struct {
+	Enabled           bool   `json:"enabled"`
+	DevicePluginImage string `json:"devicePluginImage"`
+}
+
 // NPUClusterPolicySpec defines the desired state of NPUClusterPolicy.
 type NPUClusterPolicySpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of NPUClusterPolicy. Edit npuclusterpolicy_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	Nvidia  NvidiaSpec  `json:"nvidia"`
+	Furiosa FuriosaSpec `json:"furiosa"`
 }
 
 // NPUClusterPolicyStatus defines the observed state of NPUClusterPolicy.
 type NPUClusterPolicyStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	Phase string `json:"phase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
