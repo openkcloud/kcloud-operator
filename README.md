@@ -1,7 +1,9 @@
 # kcloud operator
 
-## 📖 Overview
-kcloud operator는 Kubernetes 환경에서 **NPU/GPU 가속기 장치의 드라이버 및 디바이스 플러그인 배포를 자동화**하기 위한 Kubernetes Operator입니다.  
+## 📖 Overview  
+
+`kcloud operator`는 Kubernetes 환경에서 **NPU/GPU 가속기 장치의 드라이버 및 디바이스 플러그인 배포를 자동화**하기 위한 Kubernetes Operator입니다.  
+<br>
 기존에는 각 벤더(Furiosa, NVIDIA 등)의 디바이스 플러그인을 개별적으로 설치해야 했지만, NPU Operator는 단일 CRD(`NPUClusterPolicy`)를 통해 통합 관리가 가능합니다.
 
 ✅ 노드 라벨 기반 자동 감지  
@@ -24,7 +26,7 @@ kcloud operator는 Kubernetes 환경에서 **NPU/GPU 가속기 장치의 드라�
   - NVIDIA: NVIDIA Driver, NVIDIA Container Toolkit  
   - Furiosa: Furiosa Driver, Toolkit  
 
---
+---
 
 ## 🚀 Build & Deploy
 
