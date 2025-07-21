@@ -1,135 +1,118 @@
-# npu-operator
-// TODO(user): Add simple overview of use/purpose
+# kcloud operator
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+## 📖 Overview
+kcloud operator는 Kubernetes 환경에서 **NPU/GPU 가속기 장치의 드라이버 및 디바이스 플러그인 배포를 자동화**하기 위한 Kubernetes Operator입니다.  
+기존에는 각 벤더(Furiosa, NVIDIA 등)의 디바이스 플러그인을 개별적으로 설치해야 했지만, NPU Operator는 단일 CRD(`NPUClusterPolicy`)를 통해 통합 관리가 가능합니다.
 
-## Getting Started
+✅ 노드 라벨 기반 자동 감지  
+✅ 벤더별 DaemonSet 자동 생성/관리  
+✅ ConfigMap 자동 배포(Furiosa)  
+✅ Helm Chart 기반 설치 지원  
+
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- Go 1.24+
+- Docker 17.03+
+- Kubectl 1.28+
+- Kubernetes v1.28+ cluster
+- Operator SDK v1.41.1+
+- Helm 3.x
+- (노드 환경 준비)  
+  - NVIDIA: NVIDIA Driver, NVIDIA Container Toolkit  
+  - Furiosa: Furiosa Driver, Toolkit  
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+--
 
-```sh
-make docker-build docker-push IMG=<some-registry>/npu-operator:tag
+## 🚀 Build & Deploy
+
+### 이미지 빌드 및 푸시
+```bash
+make docker-build docker-push IMG=<registry>/npu-operator:<tag>
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
-
-```sh
+### CRDs 설치
+```bash
 make install
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
-
-```sh
-make deploy IMG=<some-registry>/npu-operator:tag
+### Operator 배포
+```bash
+make deploy IMG=<registry>/npu-operator:<tag>
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
+### Custom Resource 생성
+```yaml
+apiVersion: npu.ai/v1alpha1
+kind: NPUClusterPolicy
+metadata:
+  name: my-npu-cluster-policy
+spec:
+  nvidia:
+    enabled: true
+    devicePluginImage: "nvcr.io/nvidia/k8s-device-plugin:v0.17.1"
+  furiosa:
+    enabled: true
+    devicePluginImage: "ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1"
+    configMapName: "npu-device-plugin"
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
+```bash
+kubectl apply -f my-npu-cluster-policy.yaml
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+---
 
-```sh
+## 🗑 Uninstall
+```bash
+kubectl delete -f my-npu-cluster-policy.yaml
+make undeploy
 make uninstall
 ```
 
-**UnDeploy the controller from the cluster:**
+---
 
-```sh
-make undeploy
+## 📦 Project Distribution
+
+### Option 1: Install via bundled YAML
+```bash
+make build-installer IMG=<registry>/npu-operator:<tag>
+kubectl apply -f dist/install.yaml
 ```
 
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/npu-operator:tag
+### Option 2: Install via Helm Chart
+```bash
+helm install npu-operator ./helm/npu-operator -n npu-operator-system --create-namespace
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+---
 
-2. Using the installer
+## 🛠 Development Notes
+- CRD: `NPUClusterPolicy (npu.ai/v1alpha1)`
+- Controller: `NPUClusterPolicyReconciler`
+- 관리 대상:  
+  - DaemonSet (Furiosa, NVIDIA Device Plugin)  
+  - ConfigMap (Furiosa 설정)  
+- RBAC: DaemonSet, ConfigMap 생성 권한 필요  
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+---
 
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/npu-operator/<tag or branch>/dist/install.yaml
-```
+## 🤝 Contributing
+1. Fork the repo  
+2. Create feature branch  
+3. Submit PR with 테스트 결과  
 
-### By providing a Helm Chart
+---
 
-1. Build the chart using the optional helm plugin
+## 📚 References
+- [Kubebuilder Book](https://book.kubebuilder.io)  
+- [Operator SDK](https://sdk.operatorframework.io)  
+- [NVIDIA k8s-device-plugin](https://github.com/NVIDIA/k8s-device-plugin)  
+- [FuriosaAI Device Plugin](https://github.com/furiosa-ai/furiosa-device-plugin)  
 
-```sh
-operator-sdk edit --plugins=helm/v1-alpha
-```
+---
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+## 📄 License
+Apache License 2.0
