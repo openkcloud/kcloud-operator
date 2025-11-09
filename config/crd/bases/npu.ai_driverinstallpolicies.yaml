@@ -1,0 +1,83 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: driverinstallpolicies.npu.ai
+spec:
+  group: npu.ai
+  names:
+    kind: DriverInstallPolicy
+    listKind: DriverInstallPolicyList
+    plural: driverinstallpolicies
+    shortNames:
+    - dip
+    singular: driverinstallpolicy
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              containerdMinVersion:
+                description: 최소 containerd 버전 (semver)
+                type: string
+              driver:
+                description: 설치할 드라이버 사양
+                properties:
+                  image:
+                    description: '예: "REGISTRY/path/furiosa-driver-installer:2.1.x"'
+                    type: string
+                  version:
+                    description: '예: "2.1.x"'
+                    type: string
+                required:
+                - image
+                - version
+                type: object
+              kernelAllowlist:
+                description: '허용 커널 버전 패턴 (예: ["5.15.*","6.8.*"])'
+                items:
+                  type: string
+                type: array
+              model:
+                description: '예: "warboy"'
+                type: string
+              rebootStrategy:
+                description: 재부팅 전략
+                enum:
+                - Require
+                - IfNeeded
+                - Never
+                type: string
+              vendor:
+                description: '예: "furiosa"'
+                type: string
+            required:
+            - driver
+            - model
+            - vendor
+            type: object
+        type: object
+    served: true
+    storage: true
