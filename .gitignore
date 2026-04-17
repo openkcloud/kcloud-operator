@@ -25,3 +25,9 @@ go.work
 *.swp
 *.swo
 *~
+
+# undeploy script
+cleanup.sh
+
+# Generated embed bundle for apply-crds subcommand (populated by `make embed-crds`)
+internal/crdapply/crd/*.yaml
