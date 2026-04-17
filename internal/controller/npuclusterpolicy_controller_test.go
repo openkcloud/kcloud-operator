@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	npuv1alpha1 "npu-operator/api/v1alpha1"
+	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
 
 var _ = Describe("NPUClusterPolicy Controller", func() {
