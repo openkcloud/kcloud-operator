@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -37,8 +38,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	npuv1alpha1 "npu-operator/api/v1alpha1"
-	"npu-operator/internal/controller"
+	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/controller"
+	"kcloud-operator/internal/crdapply"
+	"kcloud-operator/internal/upgrade"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +59,18 @@ func init() {
 
 // nolint:gocyclo
 func main() {
+	// === apply-crds 서브명령 분기 (반드시 flag.Parse() 이전) ===
+	if len(os.Args) > 1 && os.Args[1] == "apply-crds" {
+		ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
+		setupLog.Info("apply-crds 서브명령 시작")
+		if err := crdapply.Run(context.Background()); err != nil {
+			setupLog.Error(err, "apply-crds 실패")
+			os.Exit(1)
+		}
+		setupLog.Info("apply-crds 완료")
+		return
+	}
+	// === 기존 manager 로직 (변경 없음) ===
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -203,18 +218,43 @@ func main() {
 	}
 
 	if err = (&controller.DriverInstallReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("driverinstall-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DriverInstall")
 		os.Exit(1)
 	}
 
 	if err := (&controller.NPUClusterPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("npuclusterpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NPUClusterPolicy")
+		os.Exit(1)
+	}
+
+	if err := (&controller.DriverDaemonSetReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("driverdaemonset-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DriverDaemonSet")
+		os.Exit(1)
+	}
+
+	sm := &upgrade.UpgradeStateMachine{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorderFor("driver-upgrade-statemachine"),
+	}
+	if err := (&controller.DriverUpgradeReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorderFor("driverupgrade-controller"),
+		StateMachine: sm,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DriverUpgrade")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
