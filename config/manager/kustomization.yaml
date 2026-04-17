@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: 129.254.202.88:5100/npu-operator
-  newTag: driver_v1.1
+  newTag: "1.0"
