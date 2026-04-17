@@ -40,5 +40,6 @@ func init() {
 		&NPUClusterPolicy{}, &NPUClusterPolicyList{},
 		&NodeDeviceReport{}, &NodeDeviceReportList{},
 		&DriverInstallPolicy{}, &DriverInstallPolicyList{},
+		&DriverUpgradeState{}, &DriverUpgradeStateList{},
 	)
 }

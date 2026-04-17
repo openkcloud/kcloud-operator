@@ -70,6 +70,8 @@ spec:
                       type: boolean
                     driverVersion:
                       type: string
+                    driverVersionDetail:
+                      type: string
                     model:
                       type: string
                     needsReboot:

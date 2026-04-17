@@ -1,0 +1,120 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: driverupgradestates.npu.ai
+spec:
+  group: npu.ai
+  names:
+    kind: DriverUpgradeState
+    listKind: DriverUpgradeStateList
+    plural: driverupgradestates
+    shortNames:
+    - dus
+    singular: driverupgradestate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeName
+      name: NODE
+      type: string
+    - jsonPath: .spec.vendor
+      name: VENDOR
+      type: string
+    - jsonPath: .status.state
+      name: STATE
+      type: string
+    - jsonPath: .status.currentVersion
+      name: CURRENT
+      type: string
+    - jsonPath: .status.desiredVersion
+      name: DESIRED
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DriverUpgradeState는 노드별 드라이버 업그레이드 상태를 추적합니다.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DriverUpgradeStateSpec은 업그레이드 대상 노드/벤더/모델 정보를 담습니다.
+            properties:
+              model:
+                description: 'Model은 디바이스 모델 (예: "warboy", "a100")'
+                type: string
+              nodeName:
+                description: NodeName은 업그레이드 대상 노드 이름입니다.
+                type: string
+              vendor:
+                description: 'Vendor는 드라이버 벤더 (예: "furiosa", "nvidia")'
+                type: string
+            required:
+            - nodeName
+            - vendor
+            type: object
+          status:
+            description: DriverUpgradeStateStatus는 업그레이드 진행 상태를 나타냅니다.
+            properties:
+              currentVersion:
+                description: CurrentVersion은 현재 설치된 드라이버 버전입니다.
+                type: string
+              desiredVersion:
+                description: DesiredVersion은 목표 드라이버 버전입니다.
+                type: string
+              lastTransitionTime:
+                description: LastTransitionTime은 마지막 상태 전환 시각입니다.
+                format: date-time
+                type: string
+              message:
+                description: Message는 현재 상태에 대한 부가 설명입니다.
+                type: string
+              previousImage:
+                description: |-
+                  PreviousImage는 롤백 시 복구할 이전 드라이버 컨테이너 이미지 전체 레퍼런스입니다.
+                  빌드 접미사를 포함한 원본 이미지를 그대로 보존하기 위해 태그 치환 대신 원본 이미지를 저장합니다.
+                type: string
+              previousVersion:
+                description: PreviousVersion은 롤백 기준이 되는 이전 드라이버 버전입니다.
+                type: string
+              retries:
+                description: Retries는 현재 업그레이드 시도에서의 재시도 횟수입니다.
+                format: int32
+                type: integer
+              rollbackAttempts:
+                description: |-
+                  RollbackAttempts는 현재 업그레이드 사이클에서의 롤백 시도 횟수입니다.
+                  policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
+                  새 업그레이드 사이클 진입 시(handleIdle) 0으로 초기화됩니다.
+                format: int32
+                type: integer
+              state:
+                description: State는 현재 업그레이드 단계입니다. (Idle, UpgradeRequired, PreFlight,
+                  Cordoning, Draining, Upgrading, Validating, Uncordoning, Rollback)
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
