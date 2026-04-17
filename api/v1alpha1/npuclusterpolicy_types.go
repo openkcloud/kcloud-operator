@@ -23,30 +23,36 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type DetectorSpec struct {
+	Image string `json:"image,omitempty"`
+}
+
 type FuriosaSpec struct {
-	Enabled           bool   `json:"enabled"`
-	DevicePluginImage string `json:"devicePluginImage"`
-	ConfigMapName     string `json:"configMapName,omitempty"`
+	Enabled           bool              `json:"enabled"`
+	DevicePluginImage string            `json:"devicePluginImage"`
+	ConfigMapName     string            `json:"configMapName,omitempty"`
+	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 }
 
 type NvidiaSpec struct {
-	Enabled           bool   `json:"enabled"`
-	DevicePluginImage string `json:"devicePluginImage"`
+	Enabled           bool              `json:"enabled"`
+	DevicePluginImage string            `json:"devicePluginImage"`
+	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // NPUClusterPolicySpec defines the desired state of NPUClusterPolicy.
 type NPUClusterPolicySpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Nvidia  NvidiaSpec  `json:"nvidia"`
-	Furiosa FuriosaSpec `json:"furiosa"`
+	Detector *DetectorSpec `json:"detector,omitempty"`
+	Nvidia   NvidiaSpec    `json:"nvidia"`
+	Furiosa  FuriosaSpec   `json:"furiosa"`
 }
 
 // NPUClusterPolicyStatus defines the observed state of NPUClusterPolicy.
 type NPUClusterPolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	Phase string `json:"phase,omitempty"`
+	Phase      string             `json:"phase,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
