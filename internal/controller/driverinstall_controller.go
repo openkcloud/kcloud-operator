@@ -181,6 +181,12 @@ func (r *DriverInstallReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if !allowInstallForVendor(&node) {
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
+		// DIP.spec.nodeSelector 매칭 확인 (detector 오탐 2차 차단)
+		if !nodeMatchesPolicy(&node, p) {
+			logger.Info("Node does not match DriverInstallPolicy.nodeSelector, skipping upgrade",
+				"node", nodeName, "policy", p.Name, "policyNodeSelector", p.Spec.NodeSelector)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
 
 		// GPU 사용 Pod 확인 + drain 로직
 		if p.Spec.UpgradePolicy.DrainEnabled {
@@ -304,6 +310,15 @@ func (r *DriverInstallReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		p := matchPolicy(&pols, firstUnloaded(rep))
 		if p == nil {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
+		// DriverInstallPolicy.spec.nodeSelector 와 노드 라벨 매칭 확인.
+		// detector 가 실제 하드웨어가 없는 노드에서 벤더를 오보고(예: npu 모듈 leftover)
+		// 하더라도 policy 의 nodeSelector 로 2차 차단한다.
+		if !nodeMatchesPolicy(&node, p) {
+			logger.Info("Node does not match DriverInstallPolicy.nodeSelector, skipping install",
+				"node", nodeName, "policy", p.Name, "policyNodeSelector", p.Spec.NodeSelector)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
 
 		// InstallFailed 상태인 경우 Job 생성 중단
@@ -510,6 +525,23 @@ func sanitize(s string) string {
 	}
 	s = strings.TrimRight(s, "-")
 	return s
+}
+
+// nodeMatchesPolicy 는 DriverInstallPolicy.spec.nodeSelector 가 설정된 경우
+// 대상 노드의 라벨이 전부 일치하는지 확인한다. nodeSelector 가 비어있으면 true.
+func nodeMatchesPolicy(node *corev1.Node, p *npuv1alpha1.DriverInstallPolicy) bool {
+	if p == nil || len(p.Spec.NodeSelector) == 0 {
+		return true
+	}
+	if node == nil || node.Labels == nil {
+		return false
+	}
+	for k, v := range p.Spec.NodeSelector {
+		if node.Labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func matchPolicy(pols *npuv1alpha1.DriverInstallPolicyList, d npuv1alpha1.DeviceEntry) *npuv1alpha1.DriverInstallPolicy {
