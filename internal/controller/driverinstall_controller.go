@@ -417,7 +417,8 @@ func (r *DriverInstallReconciler) renderInstallJob(nodeName string, p *npuv1alph
 		},
 	}
 
-	// Furiosa 전용 Secret 마운트
+	// Furiosa 전용 Secret 마운트 (vendor=furiosa 이면 model 상관없이 APT 인증 재사용:
+	// warboy 와 rngd 모두 같은 furiosa-apt-auth Secret 을 사용).
 	if strings.EqualFold(p.Spec.Vendor, "furiosa") {
 		c := &j.Spec.Template.Spec.Containers[0]
 		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
@@ -669,7 +670,10 @@ func (r *DriverInstallReconciler) checkVersionMismatch(ctx context.Context, rep 
 	return false, npuv1alpha1.DeviceEntry{}
 }
 
-// hasDeviceWorkloads checks if any pods on the node are using device resources (nvidia.com/gpu, furiosa.ai/npu etc.)
+// hasDeviceWorkloads checks if any pods on the node are using device resources.
+// Recognized resource name prefixes:
+//   - nvidia.com/gpu
+//   - furiosa.ai/*  (covers "furiosa.ai/npu" for Warboy 및 "furiosa.ai/rngd" for RNGD)
 func (r *DriverInstallReconciler) hasDeviceWorkloads(ctx context.Context, nodeName string, vendor string) (bool, error) {
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.MatchingFields{"spec.nodeName": nodeName}); err != nil {
@@ -688,7 +692,10 @@ func (r *DriverInstallReconciler) hasDeviceWorkloads(ctx context.Context, nodeNa
 		for _, c := range pod.Spec.Containers {
 			for resName := range c.Resources.Limits {
 				rn := string(resName)
-				if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") {
+				if strings.Contains(rn, "nvidia.com/gpu") ||
+					strings.Contains(rn, "furiosa.ai/npu") ||
+					strings.Contains(rn, "furiosa.ai/rngd") ||
+					strings.HasPrefix(rn, "furiosa.ai/") {
 					return true, nil
 				}
 			}

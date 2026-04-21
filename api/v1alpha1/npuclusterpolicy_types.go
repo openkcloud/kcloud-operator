@@ -32,6 +32,17 @@ type FuriosaSpec struct {
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ConfigMapName     string            `json:"configMapName,omitempty"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	Rngd              RngdSpec          `json:"rngd,omitempty"`
+}
+
+// RngdSpec defines the RNGD-specific (Furiosa RNGD NPU) device plugin configuration.
+// Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
+type RngdSpec struct {
+	Enabled           bool              `json:"enabled,omitempty"`
+	DevicePluginImage string            `json:"devicePluginImage,omitempty"`
+	ResourceName      string            `json:"resourceName,omitempty"` // default "furiosa.ai/rngd"
+	ConfigMapName     string            `json:"configMapName,omitempty"`
+	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 }
 
 type NvidiaSpec struct {

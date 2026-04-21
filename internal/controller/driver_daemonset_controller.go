@@ -102,15 +102,15 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 		"npu.ai/vendor":               strings.ToLower(pol.Spec.Vendor),
 	}
 
-	// 벤더별 nodeSelector
-	nodeSelector := vendorNodeSelector(pol.Spec.Vendor)
+	// 벤더별 nodeSelector (model 포함, RNGD 분기 지원)
+	nodeSelector := vendorNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
 	// DriverInstallPolicy에 nodeSelector가 지정된 경우 우선 사용
 	if len(pol.Spec.NodeSelector) > 0 {
 		nodeSelector = pol.Spec.NodeSelector
 	}
 
-	// 벤더별 rmmod 명령
-	rmmodCmd := vendorRmmodCommand(pol.Spec.Vendor)
+	// 벤더별 rmmod 명령 (model 포함, RNGD 분기 지원)
+	rmmodCmd := vendorRmmodCommand(pol.Spec.Vendor, pol.Spec.Model)
 
 	image := pol.Spec.Driver.Image
 
@@ -269,24 +269,37 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	return ds
 }
 
-// vendorNodeSelector는 벤더별 기본 노드 셀렉터를 반환합니다.
-func vendorNodeSelector(vendor string) map[string]string {
-	switch strings.ToLower(vendor) {
+// vendorNodeSelector는 벤더/모델별 기본 노드 셀렉터를 반환합니다.
+// model 이 비어 있거나 "warboy" 인 경우 기존 Furiosa Warboy 셀렉터를 유지하고,
+// model="rngd" 인 경우 RNGD 전용 셀렉터를 반환합니다.
+func vendorNodeSelector(vendor, model string) map[string]string {
+	v := strings.ToLower(vendor)
+	m := strings.ToLower(model)
+	switch v {
 	case "nvidia":
 		return map[string]string{"nvidia.com/gpu.present": "true"}
 	case "furiosa":
+		if m == "rngd" {
+			return map[string]string{"furiosa-rngd": "true"}
+		}
 		return map[string]string{"furiosa": "true"}
 	default:
 		return map[string]string{}
 	}
 }
 
-// vendorRmmodCommand는 벤더별 커널 모듈 언로드 명령을 반환합니다.
-func vendorRmmodCommand(vendor string) string {
-	switch strings.ToLower(vendor) {
+// vendorRmmodCommand는 벤더/모델별 커널 모듈 언로드 명령을 반환합니다.
+// Furiosa RNGD 는 별도 커널 모듈(furiosa_rngd)을 사용하므로 분기합니다.
+func vendorRmmodCommand(vendor, model string) string {
+	v := strings.ToLower(vendor)
+	m := strings.ToLower(model)
+	switch v {
 	case "nvidia":
 		return "rmmod nvidia_uvm nvidia_drm nvidia || true"
 	case "furiosa":
+		if m == "rngd" {
+			return "rmmod furiosa_rngd || true"
+		}
 		return "rmmod npu_pdma npu_mgmt || true"
 	default:
 		return "true"

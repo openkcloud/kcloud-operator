@@ -59,6 +59,24 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                  rngd:
+                    description: |-
+                      RngdSpec defines the RNGD-specific (Furiosa RNGD NPU) device plugin configuration.
+                      Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
+                    properties:
+                      configMapName:
+                        type: string
+                      devicePluginImage:
+                        type: string
+                      enabled:
+                        type: boolean
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      resourceName:
+                        type: string
+                    type: object
                 required:
                 - devicePluginImage
                 - enabled
