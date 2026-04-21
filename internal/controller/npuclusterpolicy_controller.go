@@ -163,6 +163,17 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	//-- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
+	if policy.Spec.Furiosa.Rngd.Enabled {
+		logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
+		if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy); err != nil {
+			logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
+			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
+			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
+			return ctrl.Result{}, err
+		}
+	}
+
 	// -- All ensureXxx succeeded: set Ready=True and record success event
 	r.setReadyCondition(ctx, &policy, metav1.ConditionTrue, "AllResourcesReady", "All resources reconciled successfully")
 	r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "Reconciled", "Successfully reconciled all resources")
@@ -382,6 +393,94 @@ interval: 10`,
 		return err
 	}
 	log.Info("Furiosa device plugin daemonset ensured")
+	return nil
+}
+
+// -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device plugin.
+// NodeSelector uses NFD PCI label feature.node.kubernetes.io/pci-1200_1ed2.present=true by default;
+// override via Spec.Furiosa.Rngd.NodeSelector.
+//
+// Pod spec는 Furiosa 공식 helm chart (furiosa-device-plugin:2026.1.0) 의 DaemonSet 템플릿을 따른다:
+//   - entrypoint: ./main (working dir 기준). 바이너리가 PCI scan 으로 RNGD 디바이스를 자동 인식하므로
+//     --resource-name 등 인자는 불필요.
+//   - /dev 전체 + /sys + device-plugin 소켓 디렉토리를 마운트.
+//   - Privileged=false, drop=ALL capabilities, priorityClassName=system-node-critical.
+//
+// Spec.Furiosa.Rngd.ResourceName / ConfigMapName 필드는 CRD 에 남아 있지만, 현재 공식 이미지가
+// 이를 자동 처리하므로 이 함수에서 참조하지 않는다 (backward-compat: 필드 존재는 허용).
+func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	log := logf.FromContext(ctx)
+
+	rngd := policy.Spec.Furiosa.Rngd
+
+	// Image (default to upstream release tag when unset; registry path 은 `furiosaai`, 하이픈 없음)
+	image := rngd.DevicePluginImage
+	if image == "" {
+		image = "docker.io/furiosaai/furiosa-device-plugin:2026.1.0"
+	}
+
+	// nodeSelector: NFD PCI label by default; allow override via Spec.Furiosa.Rngd.NodeSelector
+	sel := map[string]string{"feature.node.kubernetes.io/pci-1200_1ed2.present": "true"}
+	if len(rngd.NodeSelector) > 0 {
+		sel = rngd.NodeSelector
+	}
+
+	labels := map[string]string{"app.kubernetes.io/name": "npu-op-furiosa-rngd-device-plugin"}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "npu-op-furiosa-rngd-device-plugin",
+			Namespace: "kube-system",
+			Labels:    labels,
+		},
+	}
+	setOwnerAnnotation(&ds.ObjectMeta, policy)
+	ds.Spec = appsv1.DaemonSetSpec{
+		Selector: &metav1.LabelSelector{MatchLabels: labels},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				NodeSelector:      sel,
+				Tolerations:       []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+				PriorityClassName: "system-node-critical",
+				Containers: []corev1.Container{{
+					Name:            "furiosa-device-plugin",
+					Image:           image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"./main"},
+					Env: []corev1.EnvVar{
+						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+						}},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						Privileged:               boolPtr(false),
+						AllowPrivilegeEscalation: boolPtr(false),
+						Capabilities: &corev1.Capabilities{
+							Drop: []corev1.Capability{"ALL"},
+						},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "kubelet-socket", MountPath: "/var/lib/kubelet/device-plugins"},
+						{Name: "dev-fs", MountPath: "/dev"},
+						{Name: "sys-fs", MountPath: "/sys"},
+					},
+				}},
+				Volumes: []corev1.Volume{
+					{Name: "kubelet-socket", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kubelet/device-plugins"}}},
+					{Name: "dev-fs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
+					{Name: "sys-fs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+				},
+			},
+		},
+	}
+
+	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+
+	if err := r.createOrUpdateDS(ctx, ds); err != nil {
+		log.Error(err, "failed to ensure furiosa rngd device plugin daemonset")
+		return err
+	}
+	log.Info("Furiosa RNGD device plugin daemonset ensured")
 	return nil
 }
 

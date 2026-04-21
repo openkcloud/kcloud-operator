@@ -229,6 +229,22 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
 					logger.Error(err, "DriverUpgradeState 상태 패치 실패", "name", dusName)
 				}
+				continue
+			}
+
+			// currentVersion 동기화: Idle 상태에서 NDR이 갱신되었지만 버전이 일치하는 경우
+			// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)
+			if existing.Status.State == v1alpha1.UpgradeStateIdle &&
+				device.DriverVersion != "" &&
+				existing.Status.CurrentVersion != device.DriverVersion {
+
+				patch := client.MergeFrom(existing.DeepCopy())
+				existing.Status.CurrentVersion = device.DriverVersion
+				existing.Status.LastTransitionTime = metav1.Now()
+				existing.Status.Message = fmt.Sprintf("NDR 버전 동기화: %s", device.DriverVersion)
+				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
+					logger.Error(err, "DriverUpgradeState currentVersion 동기화 실패", "name", dusName)
+				}
 			}
 		}
 	}
@@ -355,8 +371,8 @@ func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *
 		if p.Spec.Model == model {
 			return p
 		}
-		// model이 비어있거나, 어느 쪽이든 "generic"이면 fallback 매칭
-		if p.Spec.Model == "" || model == "generic" || p.Spec.Model == "generic" {
+		// model이 비어있거나, 어느 쪽이든 "generic"이면 fallback 매칭 (처음 찾은 것만 사용)
+		if fallback == nil && (p.Spec.Model == "" || model == "generic" || p.Spec.Model == "generic") {
 			fallback = p
 		}
 	}
