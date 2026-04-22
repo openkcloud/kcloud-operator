@@ -276,11 +276,11 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-nvidia-device-plugin"}
+	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-nvidia"}
 	nvidiaRuntime := "nvidia"
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-nvidia-device-plugin",
+			Name:      "npu-op-device-plugin-nvidia",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -352,10 +352,10 @@ interval: 10`,
 		}
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-furiosa-device-plugin"}
+	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-furiosa"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-furiosa-device-plugin",
+			Name:      "npu-op-device-plugin-furiosa",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -458,10 +458,10 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 		sel = rngd.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-furiosa-rngd-device-plugin"}
+	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-furiosa-rngd"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-furiosa-rngd-device-plugin",
+			Name:      "npu-op-device-plugin-furiosa-rngd",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -529,7 +529,7 @@ const (
 	rbllnsServiceAccountName   = "npu-op-rbln-device-plugin"
 	rbllnsClusterRoleName      = "npu-op-rbln-device-plugin"
 	rbllnsConfigMapNameDefault = "npu-op-rbln-device-plugin-config"
-	rbllnsDaemonSetName        = "npu-op-rbln-device-plugin"
+	rbllnsDaemonSetName        = "npu-op-device-plugin-rbln"
 	rbllnsResourceNameDefault  = "ATOM"
 	rbllnsResourcePrefixDfault = "rebellions.ai"
 	rbllnsDevicePluginImage    = "<your-registry>/rebellions/k8s-device-plugin:v0.3.6"
