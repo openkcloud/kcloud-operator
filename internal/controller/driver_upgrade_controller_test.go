@@ -10,6 +10,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/upgrade"
 )
 
 func newTestScheme() *runtime.Scheme {
@@ -92,7 +94,36 @@ func newReconciler(objs ...client.Object) *DriverUpgradeReconciler {
 		WithObjects(objs...).
 		WithStatusSubresource(&v1alpha1.DriverUpgradeState{}).
 		Build()
-	return &DriverUpgradeReconciler{Client: c, Scheme: s}
+	return &DriverUpgradeReconciler{
+		Client:       c,
+		Scheme:       s,
+		StateMachine: &upgrade.UpgradeStateMachine{Client: c},
+	}
+}
+
+// nodeWithUpgradingLabel 은 driver-upgrading 라벨이 붙은 워커 노드를 반환합니다.
+func nodeWithUpgradingLabel(name string) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{upgrade.DriverUpgradingLabelKey: "true"},
+		},
+	}
+}
+
+// dusWithTransition 는 임의의 LastTransitionTime 을 가진 DUS 를 만든다.
+func dusWithTransition(name, nodeName, vendor, state string, ago time.Duration) *v1alpha1.DriverUpgradeState {
+	return &v1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: v1alpha1.DriverUpgradeStateSpec{
+			NodeName: nodeName,
+			Vendor:   vendor,
+		},
+		Status: v1alpha1.DriverUpgradeStateStatus{
+			State:              state,
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-ago)),
+		},
+	}
 }
 
 // TestEnsureUpgradeStates_CurrentVersionSyncFromNDR 는 P0-2 버그를 직접 재현합니다.
@@ -319,5 +350,172 @@ func TestEnsureUpgradeStates_SkipsControlPlaneNode(t *testing.T) {
 	err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got)
 	if err == nil {
 		t.Error("control-plane 노드에 DUS가 생성되어서는 안 됨")
+	}
+}
+
+// ─────────────────────────────────────────────
+// L4 stuck-label sweep / defer cleanup 시나리오
+// ─────────────────────────────────────────────
+
+// hasUpgradingLabel 은 노드의 driver-upgrading 라벨 보유 여부를 반환합니다.
+func hasUpgradingLabel(t *testing.T, r *DriverUpgradeReconciler, nodeName string) bool {
+	t.Helper()
+	var node corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: nodeName}, &node); err != nil {
+		t.Fatalf("노드 조회 실패: %v", err)
+	}
+	_, ok := node.Labels[upgrade.DriverUpgradingLabelKey]
+	return ok
+}
+
+// TestSweepStuckUpgradingLabels_RemovesIdleStuckLabel 는 6일 invariant root cause 재현 시나리오:
+// 사이클 mid-flight 에서 reconcile 이 panic 등으로 중단되어 DUS state 가 Idle 로 복귀했지만
+// 노드에 driver-upgrading 라벨이 남아있는 경우, sweep 이 자동 제거하는지 검증한다.
+func TestSweepStuckUpgradingLabels_RemovesIdleStuckLabel(t *testing.T) {
+	const (
+		nodeName = "worker-stuck"
+		vendor   = "furiosa"
+		dusName  = "worker-stuck-furiosa"
+	)
+	node := nodeWithUpgradingLabel(nodeName)
+	dus := dusWithTransition(dusName, nodeName, vendor, v1alpha1.UpgradeStateIdle, 5*time.Minute)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("Idle + grace 경과 stuck 라벨이 제거되지 않음 (root cause 재발)")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_RemovesFailedStuckLabel 는 Failed 종료 상태 + grace 경과 시
+// 라벨이 제거되는지 검증한다.
+func TestSweepStuckUpgradingLabels_RemovesFailedStuckLabel(t *testing.T) {
+	const (
+		nodeName = "worker-failed"
+		vendor   = "furiosa"
+		dusName  = "worker-failed-furiosa"
+	)
+	node := nodeWithUpgradingLabel(nodeName)
+	dus := dusWithTransition(dusName, nodeName, vendor, "Failed", 5*time.Minute)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("Failed + grace 경과 stuck 라벨이 제거되지 않음")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_PreservesActiveCycleLabel 는 mid-cycle (Cordoning, Draining,
+// Upgrading, Validating, Uncordoning, Rollback, PreFlight, UpgradeRequired) 라벨은
+// grace 경과와 무관하게 절대 제거하지 않음을 검증한다 — 정상 사이클 보호 invariant.
+func TestSweepStuckUpgradingLabels_PreservesActiveCycleLabel(t *testing.T) {
+	activeStates := []string{
+		v1alpha1.UpgradeStateRequired,
+		v1alpha1.UpgradeStatePreFlight,
+		v1alpha1.UpgradeStateCordoning,
+		v1alpha1.UpgradeStateDraining,
+		v1alpha1.UpgradeStateUpgrading,
+		v1alpha1.UpgradeStateValidating,
+		v1alpha1.UpgradeStateUncordoning,
+		v1alpha1.UpgradeStateRollback,
+	}
+	for _, st := range activeStates {
+		t.Run(st, func(t *testing.T) {
+			const (
+				nodeName = "worker-active"
+				vendor   = "furiosa"
+				dusName  = "worker-active-furiosa"
+			)
+			node := nodeWithUpgradingLabel(nodeName)
+			// 일부러 grace 를 한참 넘긴 시각 — mid-cycle 이므로 절대 제거되어선 안 됨
+			dus := dusWithTransition(dusName, nodeName, vendor, st, 30*time.Minute)
+			r := newReconciler(node, dus)
+
+			if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+				t.Fatalf("sweep 오류: %v", err)
+			}
+			if !hasUpgradingLabel(t, r, nodeName) {
+				t.Errorf("mid-cycle (%s) 라벨이 잘못 제거됨 — 정상 사이클 invariant 위반", st)
+			}
+		})
+	}
+}
+
+// TestSweepStuckUpgradingLabels_PreservesWithinGracePeriod 는 DUS 가 종료 상태이지만
+// grace period 이내인 경우 transient 보호를 위해 라벨을 제거하지 않음을 검증한다.
+func TestSweepStuckUpgradingLabels_PreservesWithinGracePeriod(t *testing.T) {
+	const (
+		nodeName = "worker-fresh"
+		vendor   = "furiosa"
+		dusName  = "worker-fresh-furiosa"
+	)
+	node := nodeWithUpgradingLabel(nodeName)
+	dus := dusWithTransition(dusName, nodeName, vendor, v1alpha1.UpgradeStateIdle, 5*time.Second)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("grace period (30s) 이내 라벨이 잘못 제거됨 — transient 보호 위반")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_PreservesUnknownOwner 는 노드에 라벨이 있지만
+// 매칭되는 DUS 가 하나도 없는 경우 (다른 컨트롤러 소유 가능성) 라벨을 보존함을 검증한다.
+func TestSweepStuckUpgradingLabels_PreservesUnknownOwner(t *testing.T) {
+	const nodeName = "worker-orphan"
+	node := nodeWithUpgradingLabel(nodeName)
+	r := newReconciler(node) // DUS 없음
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("DUS 부재 노드의 라벨이 잘못 제거됨 — 미상 소유 보호 위반")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_MixedDUSStateOnSameNode 는 같은 노드에 vendor 가 다른
+// 두 DUS 가 있고 한쪽이 mid-cycle 인 경우 보수적으로 라벨을 보존하는지 검증한다.
+// (다른 vendor 가 사이클 진행 중이면 그 라벨은 정상 사용 중)
+func TestSweepStuckUpgradingLabels_MixedDUSStateOnSameNode(t *testing.T) {
+	const nodeName = "worker-mixed"
+	node := nodeWithUpgradingLabel(nodeName)
+	idleDUS := dusWithTransition("worker-mixed-furiosa", nodeName, "furiosa",
+		v1alpha1.UpgradeStateIdle, 10*time.Minute)
+	activeDUS := dusWithTransition("worker-mixed-nvidia", nodeName, "nvidia",
+		v1alpha1.UpgradeStateUpgrading, 10*time.Minute)
+	r := newReconciler(node, idleDUS, activeDUS)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("mid-cycle DUS 가 공존하는 노드의 라벨이 잘못 제거됨")
+	}
+}
+
+// TestEnsureUpgradingLabelRemoved_Idempotent 는 라벨이 이미 없을 때 EnsureUpgradingLabelRemoved
+// 가 에러 없이 no-op 으로 동작하는지 검증한다 (defer cleanup 의 안전성 보장).
+func TestEnsureUpgradingLabelRemoved_Idempotent(t *testing.T) {
+	const nodeName = "worker-clean"
+	node := workerNode(nodeName) // 라벨 없음
+	r := newReconciler(node)
+
+	if err := r.StateMachine.EnsureUpgradingLabelRemoved(context.Background(), nodeName); err != nil {
+		t.Fatalf("idempotent 호출 실패: %v", err)
+	}
+}
+
+// TestEnsureUpgradingLabelRemoved_NodeNotFound 는 노드가 없는 경우 에러 없이 무시함을 검증한다.
+func TestEnsureUpgradingLabelRemoved_NodeNotFound(t *testing.T) {
+	r := newReconciler() // 노드 없음
+	if err := r.StateMachine.EnsureUpgradingLabelRemoved(context.Background(), "nonexistent"); err != nil {
+		t.Fatalf("NotFound 무시 실패: %v", err)
 	}
 }

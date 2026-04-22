@@ -20,8 +20,11 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -31,6 +34,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -41,6 +45,7 @@ import (
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/controller"
 	"kcloud-operator/internal/crdapply"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/upgrade"
 	// +kubebuilder:scaffold:imports
 )
@@ -193,6 +198,8 @@ func main() {
 		})
 	}
 
+	// syncPeriod: 캐시 re-sync 주기. 60s 로 단축하여 stale informer 조기 감지.
+	syncPeriod := 60 * time.Second
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -211,6 +218,7 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
+		Cache: cache.Options{SyncPeriod: &syncPeriod},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -277,6 +285,21 @@ func main() {
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	// reconcile-alive: 마지막 reconcile 이후 5분 초과 시 liveness 실패 처리.
+	// stale informer / zombie controller 감지를 위한 추가 헬스 체크.
+	if err := mgr.AddHealthzCheck("reconcile-alive", func(_ *http.Request) error {
+		last := metrics.GetLastReconcileTime()
+		if last.IsZero() {
+			return nil // 기동 직후 grace period
+		}
+		if d := time.Since(last); d > 5*time.Minute {
+			return fmt.Errorf("no reconcile in %v", d)
+		}
+		return nil
+	}); err != nil {
+		setupLog.Error(err, "unable to set up reconcile-alive check")
 		os.Exit(1)
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {

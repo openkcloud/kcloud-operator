@@ -33,6 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -105,6 +106,7 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desir
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	metrics.RecordReconcile() // reconcile 호출 시각 기록 (liveness probe 용)
 	logger := logf.FromContext(ctx)
 	logger.Info("Reconciling NPUClusterPolicy", "name", req.NamespacedName)
 

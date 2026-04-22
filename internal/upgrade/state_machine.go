@@ -32,6 +32,10 @@ import (
 
 const driverUpgradingLabelKey = "npu.ai/driver-upgrading"
 
+// DriverUpgradingLabelKey 는 외부 패키지(controller 의 stuck-label sweep / defer cleanup)가
+// 동일한 라벨을 가리키도록 노출하는 상수다. 절대 다른 키와 혼용 금지.
+const DriverUpgradingLabelKey = driverUpgradingLabelKey
+
 // UpgradeStateMachine은 노드별 드라이버 업그레이드 상태 전이를 담당합니다.
 type UpgradeStateMachine struct {
 	client.Client
@@ -906,4 +910,39 @@ func replaceImageTag(image string, newTag string) string {
 		return image + ":" + newTag
 	}
 	return image[:idx+1] + newTag
+}
+
+// EnsureUpgradingLabelRemoved 는 노드에서 npu.ai/driver-upgrading 라벨을 idempotent 하게 제거한다.
+// controller 의 defer cleanup / stuck-label sweep 가 호출하기 위한 외부 진입점.
+//
+// 동작:
+//   - 라벨 없으면 no-op (라벨 patch 호출 없음 → API 부하 0)
+//   - 라벨 있으면 MergeFrom patch 로 제거. Conflict 발생 시 최대 3회 재시도.
+//   - reconcile context cancel 와 무관하게 cleanup 이 진행되도록 호출자가 별도 ctx 를 주입할 책임.
+func (m *UpgradeStateMachine) EnsureUpgradingLabelRemoved(ctx context.Context, nodeName string) error {
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		var node corev1.Node
+		if err := m.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if _, ok := node.Labels[driverUpgradingLabelKey]; !ok {
+			return nil
+		}
+		base := node.DeepCopy()
+		delete(node.Labels, driverUpgradingLabelKey)
+		if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
+			if apierrors.IsConflict(err) {
+				lastErr = err
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("%d회 conflict 재시도 후 라벨 제거 실패: %w", maxRetries, lastErr)
 }
