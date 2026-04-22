@@ -559,7 +559,6 @@ func matchPolicy(pols *npuv1alpha1.DriverInstallPolicyList, d npuv1alpha1.Device
 	return nil
 }
 
-
 // getAttemptCount는 Job annotation에서 재시도 횟수를 읽는다.
 func getAttemptCount(j *batchv1.Job) int {
 	if j.Annotations == nil {
