@@ -277,6 +277,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 	}
 
 	labels := map[string]string{"app.kubernetes.io/name": "npu-op-nvidia-device-plugin"}
+	nvidiaRuntime := "nvidia"
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "npu-op-nvidia-device-plugin",
@@ -288,12 +289,17 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					NodeSelector: sel,
-					Tolerations:  []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+					NodeSelector:     sel,
+					RuntimeClassName: &nvidiaRuntime,
+					Tolerations:      []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Containers: []corev1.Container{{
 						Name:            "nvidia-device-plugin",
 						Image:           policy.Spec.Nvidia.DevicePluginImage,
 						ImagePullPolicy: corev1.PullIfNotPresent,
+						Env: []corev1.EnvVar{
+							{Name: "NVIDIA_VISIBLE_DEVICES", Value: "all"},
+							{Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "all"},
+						},
 						SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: boolPtr(false)},
 						VolumeMounts:    []corev1.VolumeMount{{Name: "device-plugin", MountPath: "/var/lib/kubelet/device-plugins"}},
 					}},
