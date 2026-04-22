@@ -95,6 +95,28 @@ spec:
                 - devicePluginImage
                 - enabled
                 type: object
+              rebellions:
+                description: |-
+                  RebellionsSpec defines the Rebellions ATOM+ device plugin configuration.
+                  Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
+                properties:
+                  configMapName:
+                    type: string
+                  devicePluginImage:
+                    type: string
+                  enabled:
+                    type: boolean
+                  namespace:
+                    type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  resourceName:
+                    type: string
+                  resourcePrefix:
+                    type: string
+                type: object
             required:
             - furiosa
             - nvidia

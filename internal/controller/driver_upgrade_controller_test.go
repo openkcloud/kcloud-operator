@@ -97,14 +97,15 @@ func newReconciler(objs ...client.Object) *DriverUpgradeReconciler {
 
 // TestEnsureUpgradeStates_CurrentVersionSyncFromNDR 는 P0-2 버그를 직접 재현합니다.
 // 시나리오: DUS가 Idle 상태이고 currentVersion이 빈 문자열인데
-//           NDR이 desiredVersion과 동일한 버전을 보고하는 경우 → currentVersion이 채워져야 한다.
+//
+//	NDR이 desiredVersion과 동일한 버전을 보고하는 경우 → currentVersion이 채워져야 한다.
 func TestEnsureUpgradeStates_CurrentVersionSyncFromNDR(t *testing.T) {
 	const (
-		nodeName      = "worker-1"
-		vendor        = "furiosa"
-		model         = "warboy"
-		version       = "1.9.8-3"
-		dusName       = "worker-1-furiosa"
+		nodeName = "worker-1"
+		vendor   = "furiosa"
+		model    = "warboy"
+		version  = "1.9.8-3"
+		dusName  = "worker-1-furiosa"
 	)
 
 	node := workerNode(nodeName)
@@ -171,12 +172,12 @@ func TestEnsureUpgradeStates_CreatesDUSWhenAbsent(t *testing.T) {
 // DUS가 UpgradeRequired 상태로 전이하는지 검증합니다.
 func TestEnsureUpgradeStates_UpgradeRequiredOnVersionMismatch(t *testing.T) {
 	const (
-		nodeName       = "worker-3"
-		vendor         = "furiosa"
-		model          = "warboy"
-		installedVer   = "1.8.0"
-		desiredVer     = "1.9.8-3"
-		dusName        = "worker-3-furiosa"
+		nodeName     = "worker-3"
+		vendor       = "furiosa"
+		model        = "warboy"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-3-furiosa"
 	)
 
 	node := workerNode(nodeName)

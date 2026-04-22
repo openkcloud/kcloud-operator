@@ -378,4 +378,3 @@ func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *
 	}
 	return fallback
 }
-

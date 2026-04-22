@@ -51,13 +51,26 @@ type NvidiaSpec struct {
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 }
 
+// RebellionsSpec defines the Rebellions ATOM+ device plugin configuration.
+// Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
+type RebellionsSpec struct {
+	Enabled           bool              `json:"enabled,omitempty"`
+	DevicePluginImage string            `json:"devicePluginImage,omitempty"`
+	ResourceName      string            `json:"resourceName,omitempty"`   // default "ATOM"
+	ResourcePrefix    string            `json:"resourcePrefix,omitempty"` // default "rebellions.ai"
+	Namespace         string            `json:"namespace,omitempty"`      // default "rbln-system"
+	ConfigMapName     string            `json:"configMapName,omitempty"`  // default "rbln-device-plugin-config"
+	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+}
+
 // NPUClusterPolicySpec defines the desired state of NPUClusterPolicy.
 type NPUClusterPolicySpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Detector *DetectorSpec `json:"detector,omitempty"`
-	Nvidia   NvidiaSpec    `json:"nvidia"`
-	Furiosa  FuriosaSpec   `json:"furiosa"`
+	Detector   *DetectorSpec  `json:"detector,omitempty"`
+	Nvidia     NvidiaSpec     `json:"nvidia"`
+	Furiosa    FuriosaSpec    `json:"furiosa"`
+	Rebellions RebellionsSpec `json:"rebellions,omitempty"`
 }
 
 // NPUClusterPolicyStatus defines the observed state of NPUClusterPolicy.

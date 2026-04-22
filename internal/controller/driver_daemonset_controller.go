@@ -283,6 +283,10 @@ func vendorNodeSelector(vendor, model string) map[string]string {
 			return map[string]string{"furiosa-rngd": "true"}
 		}
 		return map[string]string{"furiosa": "true"}
+	case "rebellions":
+		// Rebellions ATOM+ 는 DriverInstallPolicy 를 생성하지 않음 (host-managed driver).
+		// 호출 경로가 실제로 도달하지 않지만 분기 완전성을 위해 셀렉터 반환.
+		return map[string]string{"rebellions-atom": "true"}
 	default:
 		return map[string]string{}
 	}
@@ -301,6 +305,9 @@ func vendorRmmodCommand(vendor, model string) string {
 			return "rmmod furiosa_rngd || true"
 		}
 		return "rmmod npu_pdma npu_mgmt || true"
+	case "rebellions":
+		// Rebellions 드라이버는 호스트에서 관리되므로 rmmod 금지 (no-op).
+		return "true"
 	default:
 		return "true"
 	}
