@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/upgrade"
 )
 
@@ -50,7 +51,17 @@ type DriverUpgradeReconciler struct {
 }
 
 func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	metrics.RecordReconcile() // reconcile 호출 시각 기록 (liveness probe 용)
 	logger := logf.FromContext(ctx).WithValues("driverupgradestate", req.Name)
+
+	// 0. Stuck-label sweep — 6일 stuck invariant root cause 재발 방지.
+	// 사이클이 비정상 종료(panic, ctx cancel, controller 재시작 도중 crash)되어
+	// `npu.ai/driver-upgrading` 라벨이 노드에 남으면 detector DS nodeAffinity 가
+	// 영구 차단 → NDR stale → 모든 사이클 zombie. 매 reconcile 진입마다 점검.
+	if err := r.sweepStuckUpgradingLabels(ctx); err != nil {
+		// 비치명적 오류: 본 reconcile 흐름은 계속 진행
+		logger.Error(err, "stuck driver-upgrading 라벨 sweep 실패")
+	}
 
 	// 1. NodeDeviceReport 기반 DUS 자동 생성/동기화 (부트스트랩 포함 — Get 이전에 실행)
 	if err := r.ensureUpgradeStates(ctx); err != nil {
@@ -66,6 +77,25 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{}, err
 	}
+
+	// Defer cleanup — Reconcile 함수가 panic 으로 중단되거나 ctx 가 cancel 된 직후라도
+	// 사이클 종료 상태(Idle / Failed / "")에서는 라벨이 절대 남지 않도록 보장한다.
+	// reconcile ctx 와 분리된 background ctx 를 사용해야 ctx cancel 시에도 cleanup 이 실행됨.
+	defer func() {
+		// 패닉 자체는 그대로 전파하되, 라벨 cleanup 은 시도한다.
+		if state.Spec.NodeName == "" {
+			return
+		}
+		switch state.Status.State {
+		case v1alpha1.UpgradeStateIdle, "", "Failed":
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, state.Spec.NodeName); err != nil {
+				logger.Error(err, "defer cleanup: driver-upgrading 라벨 제거 실패",
+					"node", state.Spec.NodeName, "state", state.Status.State)
+			}
+		}
+	}()
 
 	// 3. 매칭 DriverInstallPolicy 조회 (vendor/model 기준)
 	policy, err := r.findMatchingPolicy(ctx, state.Spec.Vendor, state.Spec.Model)
@@ -195,6 +225,7 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 			// Bug #7 fix: desiredVersion이 정책과 다르면 업데이트 (상태에 무관)
 			desiredVersion := policy.Spec.Driver.Version
 			if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion {
+				oldDesired := existing.Status.DesiredVersion
 				patch := client.MergeFrom(existing.DeepCopy())
 				existing.Status.DesiredVersion = desiredVersion
 				existing.Status.CurrentVersion = device.DriverVersion
@@ -204,7 +235,7 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 					existing.Status.PreviousImage = ""
 				}
 				existing.Status.LastTransitionTime = metav1.Now()
-				existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", existing.Status.DesiredVersion, desiredVersion)
+				existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", oldDesired, desiredVersion)
 				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
 					logger.Error(err, "DriverUpgradeState 상태 패치 실패 (desiredVersion 변경)", "name", dusName)
 				}
@@ -357,6 +388,95 @@ func nodeMatchesSelector(node *corev1.Node, selector map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// stuckLabelGracePeriod 는 라벨이 stuck 으로 간주되기 전 허용되는 시간이다.
+// 정상 사이클의 transient 상태 변화(transitionTo 직후 다음 reconcile 사이의 작은 틈)에서
+// 잘못 sweep 하는 것을 방지하기 위한 안전 마진.
+const stuckLabelGracePeriod = 30 * time.Second
+
+// sweepStuckUpgradingLabels 는 모든 노드를 점검하여 사이클이 비정상 종료된 채
+// `npu.ai/driver-upgrading` 라벨만 남아있는 경우 자동으로 제거한다.
+//
+// CRITICAL invariant — 정상 mid-cycle 라벨은 절대 건드리지 않는다:
+//  1. 노드의 라벨이 있어야 함
+//  2. 해당 노드+vendor 의 DUS state ∈ {Idle, "", Failed} (사이클 종료 상태)
+//  3. DUS LastTransitionTime 이 stuckLabelGracePeriod 이상 경과 (transient 보호)
+//  4. 매칭 DUS 가 하나도 없으면 (vendor 미상) 라벨 보존 — 다른 컨트롤러 소유 가능성
+//
+// 위 4 조건을 모두 만족할 때만 cleanup 시도. mid-cycle (PreFlight ~ Uncordoning) 라벨은
+// 어떤 경우에도 제거하지 않는다.
+func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context) error {
+	logger := logf.FromContext(ctx)
+
+	var nodeList corev1.NodeList
+	if err := r.List(ctx, &nodeList); err != nil {
+		return fmt.Errorf("노드 리스트 조회 실패: %w", err)
+	}
+
+	var dusList v1alpha1.DriverUpgradeStateList
+	if err := r.List(ctx, &dusList); err != nil {
+		return fmt.Errorf("DriverUpgradeState 리스트 조회 실패: %w", err)
+	}
+
+	dusByNode := map[string][]v1alpha1.DriverUpgradeState{}
+	for _, dus := range dusList.Items {
+		dusByNode[dus.Spec.NodeName] = append(dusByNode[dus.Spec.NodeName], dus)
+	}
+
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		if _, ok := node.Labels[upgrade.DriverUpgradingLabelKey]; !ok {
+			continue
+		}
+
+		nodeDUS, found := dusByNode[node.Name]
+		if !found || len(nodeDUS) == 0 {
+			// DUS 부재: 다른 컨트롤러/벤더 소유 라벨일 수 있음 → 보존
+			continue
+		}
+
+		// 모든 DUS 가 종료 상태이고 grace 경과한 경우에만 stuck 으로 판정
+		allTerminal := true
+		oldestTransition := time.Now()
+		for _, dus := range nodeDUS {
+			switch dus.Status.State {
+			case v1alpha1.UpgradeStateIdle, "", "Failed":
+				// 종료 상태
+			default:
+				// mid-cycle — 절대 건드리지 않음
+				allTerminal = false
+			}
+			if !dus.Status.LastTransitionTime.IsZero() &&
+				dus.Status.LastTransitionTime.Time.Before(oldestTransition) {
+				oldestTransition = dus.Status.LastTransitionTime.Time
+			}
+		}
+		if !allTerminal {
+			continue
+		}
+		if time.Since(oldestTransition) < stuckLabelGracePeriod {
+			// transient — 다음 reconcile 까지 대기
+			continue
+		}
+
+		// 안전 조건 모두 충족 — sweep 실행
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, node.Name)
+		cancel()
+		if err != nil {
+			logger.Error(err, "stuck 라벨 sweep 실패", "node", node.Name)
+			continue
+		}
+		logger.Info("stuck driver-upgrading 라벨 자동 제거", "node", node.Name,
+			"dusCount", len(nodeDUS), "ageSeconds", time.Since(oldestTransition).Seconds())
+		if r.Recorder != nil && len(nodeDUS) > 0 {
+			r.Recorder.Eventf(&nodeDUS[0], corev1.EventTypeWarning, "StuckUpgradeLabelSwept",
+				"노드 %s 의 stuck npu.ai/driver-upgrading 라벨 자동 제거 (DUS state 종료 + %ds 경과)",
+				node.Name, int(time.Since(oldestTransition).Seconds()))
+		}
+	}
+	return nil
 }
 
 // findPolicy는 vendor/model이 일치하는 정책을 찾습니다.

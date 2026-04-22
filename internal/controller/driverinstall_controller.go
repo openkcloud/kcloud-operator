@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 )
 
 const (
@@ -63,6 +64,7 @@ func allowInstallForVendor(node *corev1.Node) bool {
 }
 
 func (r *DriverInstallReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	metrics.RecordReconcile() // reconcile 호출 시각 기록 (liveness probe 용)
 	logger := log.FromContext(ctx)
 
 	// 1) NodeDeviceReport 조회

@@ -2,7 +2,7 @@
  * driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
  * 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
  *       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
- * 생성일: 2026-04-13 | 수정일: 2026-04-15
+ * 생성일: 2026-04-13 | 수정일: 2026-04-27
  */
 
 package controller
@@ -26,6 +26,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 )
 
 // DriverDaemonSetReconciler는 Mode="daemonset"인 DriverInstallPolicy에 대해
@@ -41,6 +42,7 @@ type DriverDaemonSetReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DriverDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	metrics.RecordReconcile() // reconcile 호출 시각 기록 (liveness probe 용)
 	logger := logf.FromContext(ctx)
 	logger.Info("Reconciling DriverDaemonSet", "name", req.NamespacedName)
 
@@ -132,6 +134,26 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 					HostNetwork:  true,
 					NodeSelector: nodeSelector,
 					Tolerations:  []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+					// operator pod 와 같은 노드에 driver pod 가 spawn 되지 않도록 유도.
+					// 단일 노드 클러스터 호환을 위해 required 대신 preferred 사용.
+					Affinity: &corev1.Affinity{
+						PodAntiAffinity: &corev1.PodAntiAffinity{
+							PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+								{
+									Weight: 100,
+									PodAffinityTerm: corev1.PodAffinityTerm{
+										LabelSelector: &metav1.LabelSelector{
+											MatchLabels: map[string]string{
+												"app.kubernetes.io/name":      "npu-operator",
+												"app.kubernetes.io/component": "controller",
+											},
+										},
+										TopologyKey: "kubernetes.io/hostname",
+									},
+								},
+							},
+						},
+					},
 					InitContainers: []corev1.Container{
 						{
 							Name:    "driver-manager",
