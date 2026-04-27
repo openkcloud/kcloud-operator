@@ -134,6 +134,9 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 					HostNetwork:  true,
 					NodeSelector: nodeSelector,
 					Tolerations:  []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+					// PreStop 의 rmmod 가 GPU 워크로드 잔재로 hang 될 가능성에 대비한 grace period.
+					// kubelet 은 grace 만료 시 SIGKILL 로 종료하므로 PreStop timeout(30s)+여유 30s = 60s.
+					TerminationGracePeriodSeconds: int64Ptr(60),
 					// operator pod 와 같은 노드에 driver pod 가 spawn 되지 않도록 유도.
 					// 단일 노드 클러스터 호환을 위해 required 대신 preferred 사용.
 					Affinity: &corev1.Affinity{
@@ -219,10 +222,13 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 								FailureThreshold: 3,
 							},
 							Lifecycle: &corev1.Lifecycle{
+								// PreStop 은 timeout 으로 강제 종료 한도를 두어 rmmod hang 시에도
+								// kubelet grace(60s) 안에 반드시 종료되도록 한다. timeout 종료(124)
+								// 이후에도 컨테이너 SIGTERM 처리 시간이 남아야 하므로 timeout 30s.
 								PreStop: &corev1.LifecycleHandler{
 									Exec: &corev1.ExecAction{
 										Command: []string{"/bin/sh", "-c",
-											"rm -f /var/lib/npu-operator/driver.ready /tmp/driver-ready; " + rmmodCmd},
+											"timeout 30 sh -c 'rm -f /var/lib/npu-operator/driver.ready /tmp/driver-ready; " + rmmodCmd + "' || true"},
 									},
 								},
 							},
