@@ -40,6 +40,14 @@ type UpgradePolicy struct {
 	// +kubebuilder:default=3
 	// +kubebuilder:validation:Minimum=1
 	MaxRollbackAttempts int32 `json:"maxRollbackAttempts,omitempty"`
+
+	// RollbackTarget 은 롤백 시 어떤 image 로 되돌릴지 결정합니다.
+	// previousValidated : 직전 사이클에서 검증된 PreviousImage 가 있을 때만 롤백 (없으면 Failed).
+	//                     plain tag 치환으로 인한 broken image 회귀 (architectural plan §3.4) 차단.
+	// spec              : 현재 동작 — PreviousImage 가 없으면 태그만 치환하여 복구 (legacy, unsafe).
+	// 비워두면 spec 과 동일하게 처리되어 backward compat 유지. 신규 클러스터는 previousValidated 권장.
+	// +kubebuilder:validation:Enum=previousValidated;spec
+	RollbackTarget string `json:"rollbackTarget,omitempty"`
 }
 
 // DriverInstallPolicySpec 은 벤더/모델별 드라이버 설치 정책을 담습니다.
