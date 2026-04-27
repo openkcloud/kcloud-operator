@@ -444,9 +444,29 @@ func (m *UpgradeStateMachine) handleRollback(
 
 	// 이미지를 이전 버전으로 복구
 	// PreviousImage가 저장되어 있으면 전체 이미지 레퍼런스를 그대로 복구 (빌드 접미사 보존).
-	// 저장되지 않았다면 하위 호환을 위해 태그만 치환 (image:currentTag → image:prevVersion).
-	base := ds.DeepCopy()
+	// 저장되지 않았다면 RollbackTarget 정책에 따라 처리:
+	//   previousValidated : 검증된 image 가 없으므로 Failed 로 전이 (안전).
+	//   spec / "" (기본)  : 하위 호환 — 태그만 치환 (legacy, broken image 가능).
 	prevImage := state.Status.PreviousImage
+	if prevImage == "" {
+		safeRollback := ""
+		if policy.Spec.UpgradePolicy != nil {
+			safeRollback = policy.Spec.UpgradePolicy.RollbackTarget
+		}
+		if safeRollback == "previousValidated" {
+			metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
+			m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackRefused",
+				"RollbackTarget=previousValidated 인데 PreviousImage 미보유: 수동 조치 필요 (node=%s)", state.Spec.NodeName)
+			if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
+				logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+				m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
+					"Failed 전이 중 라벨 제거 실패: node=%s err=%v", state.Spec.NodeName, err)
+			}
+			return m.transitionTo(ctx, state, "Failed",
+				"RollbackTarget=previousValidated: PreviousImage 미보유로 안전 롤백 불가", 0)
+		}
+	}
+	base := ds.DeepCopy()
 	for i := range ds.Spec.Template.Spec.Containers {
 		if prevImage != "" {
 			ds.Spec.Template.Spec.Containers[i].Image = prevImage
