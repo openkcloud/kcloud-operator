@@ -28,6 +28,7 @@ import (
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/validator"
 )
 
 const driverUpgradingLabelKey = "npu.ai/driver-upgrading"
@@ -312,60 +313,105 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateValidating, "DaemonSet 이미지 업데이트 완료", 20*time.Second)
 }
 
-// handleValidating: 새 드라이버 Pod Ready 확인 후 Uncordoning으로 전이 (requeue 10s)
+// validators 는 handleValidating 이 순차 실행할 Validator 체인이다.
+// architectural plan §4.4.3 에 따라 단일 NDR 대기였던 단계를 단계별 책임으로 분리:
+//   1) DriverModule  : 노드의 드라이버 커널 모듈 로드 (NDR.driverVersion 매칭)
+//   2) DevicePlugin  : kube-system 의 device-plugin Pod ContainersReady
+//   3) Workload      : sample 워크로드 ResourceAllocated (skeleton — 후속 PR 에서 활성)
+//
+// 변수로 두어 테스트에서 주입 가능 — 단, 본 작업에서는 stub 미사용.
+var defaultValidators = []validator.Validator{
+	&validator.DriverModuleValidator{},
+	&validator.DevicePluginValidator{},
+	// &validator.WorkloadValidator{}, // 후속 PR 에서 활성
+}
+
+// handleValidating 은 validator 체인을 순차 실행해 새 드라이버가 정상 동작하는지 검증한다.
+//
+// 각 validator 의 의미:
+//   - Run 이 (Passed=true) 면 다음 validator 로 진행.
+//   - (Passed=false) 면 caller wall-clock budget 안에서 재시도 (requeueAfter 10s).
+//   - error 는 controller-runtime 으로 전파 (재시도 가능 API 오류).
+//
+// 추가 안전장치:
+//   - 전체 ValidationTimeout 초과 → Rollback (정책에 따라) / Failed.
+//   - 드라이버 Pod CrashLoopBackOff 즉시 감지 → Rollback / Failed (재시도 무의미).
 func (m *UpgradeStateMachine) handleValidating(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
-	// validation timeout 체크
+	logger := logf.FromContext(ctx)
+
+	// ─── 1. 전체 validation timeout 체크 ─────────────────────
 	validationTimeout := parseDuration("", 15*time.Minute)
 	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.ValidationTimeout != "" {
 		validationTimeout = parseDuration(policy.Spec.UpgradePolicy.ValidationTimeout, 15*time.Minute)
 	}
-
 	if !state.Status.LastTransitionTime.IsZero() &&
 		time.Since(state.Status.LastTransitionTime.Time) > validationTimeout {
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "검증 타임아웃: 롤백 시작", 0)
 		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
-			logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+			logger.Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
 		return m.transitionTo(ctx, state, "Failed", "검증 타임아웃: 수동 조치 필요", 0)
 	}
 
-	// 드라이버 Pod Ready 상태 확인
+	// ─── 2. CrashLoop 즉시 감지 (재시도 무의미한 hard failure) ───
+	// driver-installer Pod 가 CrashLoopBackOff 라면 어떤 validator 도 통과 못 하므로
+	// 빠르게 Rollback / Failed 로 전이한다 (legacy 동작 보존).
 	dsName := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(state.Spec.Vendor), strings.ToLower(state.Spec.Model))
 	if state.Spec.Model == "" {
 		dsName = fmt.Sprintf("npu-op-driver-%s", strings.ToLower(state.Spec.Vendor))
 	}
-
 	desiredImage := policy.Spec.Driver.Image
-	ready, crashLoop, err := m.isDriverPodReadyOnNode(ctx, dsName, state.Spec.NodeName, desiredImage)
+	_, crashLoop, err := m.isDriverPodReadyOnNode(ctx, dsName, state.Spec.NodeName, desiredImage)
 	if err != nil {
 		return false, 0, fmt.Errorf("드라이버 Pod 상태 확인 실패: %w", err)
 	}
-
 	if crashLoop {
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "드라이버 Pod CrashLoopBackOff: 롤백 시작", 0)
 		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
-			logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+			logger.Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
 		return m.transitionTo(ctx, state, "Failed", "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
 	}
 
-	if !ready {
-		return true, 10 * time.Second, nil
+	// ─── 3. validator 체인 순차 실행 ─────────────────────────
+	desiredVersion := state.Status.DesiredVersion
+	for _, v := range defaultValidators {
+		// validator 시작 Event (재시도마다 발행되지 않도록 "처음" 진입 시점만 emit 하기 어렵기에
+		// per-attempt event 로 발행 — 운영자에 진행 상황 가시성 우선).
+		m.Recorder.Eventf(state, corev1.EventTypeNormal,
+			fmt.Sprintf("UpgradeValidator-%s-Started", v.Name()),
+			"validator 실행: %s (timeout=%s, node=%s)", v.Name(), v.Timeout(), state.Spec.NodeName)
+
+		res, err := v.Run(ctx, m.Client, state.Spec.NodeName, state.Spec.Vendor, desiredVersion)
+		if err != nil {
+			// 재시도 가능한 API 오류 — controller-runtime 으로 전파.
+			return false, 0, fmt.Errorf("validator %s 실행 실패: %w", v.Name(), err)
+		}
+		if !res.Passed {
+			// 검증 미통과 — 상위 ValidationTimeout 안에서 재시도.
+			m.Recorder.Eventf(state, corev1.EventTypeNormal,
+				fmt.Sprintf("UpgradeValidator-%s-Failed", v.Name()),
+				"validator %s 미통과 (재시도 대기): %s", v.Name(), res.Message)
+			return true, 10 * time.Second, nil
+		}
+		m.Recorder.Eventf(state, corev1.EventTypeNormal,
+			fmt.Sprintf("UpgradeValidator-%s-Passed", v.Name()),
+			"validator %s 통과: %s", v.Name(), res.Message)
 	}
 
-	// 검증 성공
+	// ─── 4. 모든 validator 통과 → 검증 성공 ──────────────────
 	state.Status.CurrentVersion = state.Status.DesiredVersion
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "UpgradeValidated",
 		"노드 %s 드라이버 검증 성공: %s", state.Spec.NodeName, state.Status.DesiredVersion)
