@@ -33,9 +33,21 @@ import (
 
 const driverUpgradingLabelKey = "npu.ai/driver-upgrading"
 
+// driverUpgradingBlockingLabelKey 는 detector / device-plugin 등 driver pod 의 rmmod 와
+// 충돌할 수 있는 워크로드의 spawn 을 차단하는 좁은 lifecycle 의 라벨이다.
+// driver-upgrading 라벨이 사이클 전체 (Cordoning ~ Uncordoning) 에 걸친 추적용이라면,
+// 이 라벨은 Cordoning 진입 시 추가되고 Validating 진입 시점에 제거된다 (architectural plan §4.4
+// 옵션 A). Validating 부터 detector 가 다시 spawn 가능 → NDR 갱신 → DriverModuleValidator
+// 통과 → Validating 데드락 차단.
+const driverUpgradingBlockingLabelKey = "npu.ai/driver-upgrading-blocking"
+
 // DriverUpgradingLabelKey 는 외부 패키지(controller 의 stuck-label sweep / defer cleanup)가
 // 동일한 라벨을 가리키도록 노출하는 상수다. 절대 다른 키와 혼용 금지.
 const DriverUpgradingLabelKey = driverUpgradingLabelKey
+
+// DriverUpgradingBlockingLabelKey 는 좁은 lifecycle 의 detector 차단 라벨을 외부 패키지에
+// 노출한다. detector DS nodeAffinity / sweep / defer cleanup 가 이 키를 참조한다.
+const DriverUpgradingBlockingLabelKey = driverUpgradingBlockingLabelKey
 
 // UpgradeStateMachine은 노드별 드라이버 업그레이드 상태 전이를 담당합니다.
 type UpgradeStateMachine struct {
@@ -342,6 +354,14 @@ func (m *UpgradeStateMachine) handleValidating(
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
 	logger := logf.FromContext(ctx)
+
+	// architectural plan §4.4 옵션 A: Validating 진입 시점에 detector 차단 라벨만 제거.
+	// driver-upgrading 라벨은 사이클 추적용으로 보존 (Uncordoning 단계에서 함께 제거).
+	// 이로써 detector 가 worker 노드에 다시 spawn → NDR 갱신 → DriverModuleValidator 통과 가능.
+	if err := m.removeBlockingLabelIfPresent(ctx, state.Spec.NodeName, state); err != nil {
+		// 비치명적 — 로깅 후 계속. 다음 reconcile 에서 재시도.
+		logger.Error(err, "Validating 진입 시 driver-upgrading-blocking 라벨 제거 실패", "node", state.Spec.NodeName)
+	}
 
 	// ─── 1. 전체 validation timeout 체크 ─────────────────────
 	validationTimeout := parseDuration("", 15*time.Minute)
@@ -662,6 +682,12 @@ func (m *UpgradeStateMachine) cordonNode(ctx context.Context, nodeName string, s
 		node.Labels[driverUpgradingLabelKey] = "true"
 		changed = true
 	}
+	// 좁은 lifecycle 의 차단 라벨도 같이 추가. Validating 진입 시점에 제거되어
+	// detector 가 다시 spawn 가능하게 된다.
+	if node.Labels[driverUpgradingBlockingLabelKey] != "true" {
+		node.Labels[driverUpgradingBlockingLabelKey] = "true"
+		changed = true
+	}
 	if !changed {
 		return nil
 	}
@@ -669,7 +695,7 @@ func (m *UpgradeStateMachine) cordonNode(ctx context.Context, nodeName string, s
 		return err
 	}
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUpgradeLabelApplied",
-		"노드 %s에 npu.ai/driver-upgrading 라벨 추가 (device-plugin 스케줄 차단)", nodeName)
+		"노드 %s에 npu.ai/driver-upgrading 및 driver-upgrading-blocking 라벨 추가 (device-plugin 스케줄 차단)", nodeName)
 	return nil
 }
 
@@ -689,6 +715,10 @@ func (m *UpgradeStateMachine) uncordonNode(ctx context.Context, nodeName string,
 		delete(node.Labels, driverUpgradingLabelKey)
 		changed = true
 	}
+	if _, ok := node.Labels[driverUpgradingBlockingLabelKey]; ok {
+		delete(node.Labels, driverUpgradingBlockingLabelKey)
+		changed = true
+	}
 	if !changed {
 		return nil
 	}
@@ -696,27 +726,35 @@ func (m *UpgradeStateMachine) uncordonNode(ctx context.Context, nodeName string,
 		return err
 	}
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUpgradeLabelRemoved",
-		"노드 %s에서 npu.ai/driver-upgrading 라벨 제거 (device-plugin 재스케줄 허용)", nodeName)
+		"노드 %s에서 npu.ai/driver-upgrading + driver-upgrading-blocking 라벨 모두 제거 (device-plugin 재스케줄 허용)", nodeName)
 	return nil
 }
 
 // clearUpgradingLabel은 Failed 전이 시 device-plugin 재스케줄이 가능하도록
-// npu.ai/driver-upgrading 라벨만 제거한다. unschedulable은 수동 조치를 위해 보존.
+// driver-upgrading 라벨과 driver-upgrading-blocking 라벨을 모두 제거한다.
+// unschedulable은 수동 조치를 위해 보존.
 func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName string, state *v1alpha1.DriverUpgradeState) error {
 	var node corev1.Node
 	if err := m.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
 		return err
 	}
-	if _, ok := node.Labels[driverUpgradingLabelKey]; !ok {
+	_, hasMain := node.Labels[driverUpgradingLabelKey]
+	_, hasBlocking := node.Labels[driverUpgradingBlockingLabelKey]
+	if !hasMain && !hasBlocking {
 		return nil
 	}
 	base := node.DeepCopy()
-	delete(node.Labels, driverUpgradingLabelKey)
+	if hasMain {
+		delete(node.Labels, driverUpgradingLabelKey)
+	}
+	if hasBlocking {
+		delete(node.Labels, driverUpgradingBlockingLabelKey)
+	}
 	if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
 		return err
 	}
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUpgradeLabelRemoved",
-		"노드 %s에서 npu.ai/driver-upgrading 라벨 제거 (device-plugin 재스케줄 허용)", nodeName)
+		"노드 %s에서 driver-upgrading + driver-upgrading-blocking 라벨 제거 (device-plugin 재스케줄 허용)", nodeName)
 	return nil
 }
 
@@ -978,6 +1016,27 @@ func replaceImageTag(image string, newTag string) string {
 	return image[:idx+1] + newTag
 }
 
+// removeBlockingLabelIfPresent 는 노드에서 driver-upgrading-blocking 라벨만 제거한다.
+// driver-upgrading (사이클 추적용) 은 보존. handleValidating 진입 시 호출되어 detector 차단 해제.
+// 라벨 부재 시 no-op (API patch 안 함).
+func (m *UpgradeStateMachine) removeBlockingLabelIfPresent(ctx context.Context, nodeName string, state *v1alpha1.DriverUpgradeState) error {
+	var node corev1.Node
+	if err := m.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
+		return err
+	}
+	if _, ok := node.Labels[driverUpgradingBlockingLabelKey]; !ok {
+		return nil
+	}
+	base := node.DeepCopy()
+	delete(node.Labels, driverUpgradingBlockingLabelKey)
+	if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
+		return err
+	}
+	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeBlockingLabelRemoved",
+		"노드 %s에서 driver-upgrading-blocking 라벨 제거 (Validating 진입 — detector 재spawn 허용)", nodeName)
+	return nil
+}
+
 // EnsureUpgradingLabelRemoved 는 노드에서 npu.ai/driver-upgrading 라벨을 idempotent 하게 제거한다.
 // controller 의 defer cleanup / stuck-label sweep 가 호출하기 위한 외부 진입점.
 //
@@ -986,6 +1045,18 @@ func replaceImageTag(image string, newTag string) string {
 //   - 라벨 있으면 MergeFrom patch 로 제거. Conflict 발생 시 최대 3회 재시도.
 //   - reconcile context cancel 와 무관하게 cleanup 이 진행되도록 호출자가 별도 ctx 를 주입할 책임.
 func (m *UpgradeStateMachine) EnsureUpgradingLabelRemoved(ctx context.Context, nodeName string) error {
+	return m.ensureLabelRemoved(ctx, nodeName, driverUpgradingLabelKey)
+}
+
+// EnsureUpgradingBlockingLabelRemoved 는 노드에서 driver-upgrading-blocking 라벨을 idempotent
+// 하게 제거한다. controller 의 stuck-label sweep 가 좁은 lifecycle 의 라벨을 빨리 정리하기 위해 호출.
+func (m *UpgradeStateMachine) EnsureUpgradingBlockingLabelRemoved(ctx context.Context, nodeName string) error {
+	return m.ensureLabelRemoved(ctx, nodeName, driverUpgradingBlockingLabelKey)
+}
+
+// ensureLabelRemoved 는 지정한 키의 라벨을 idempotent 하게 제거한다.
+// Conflict 시 최대 3회 재시도. 라벨 미존재 시 no-op (API patch 호출 0).
+func (m *UpgradeStateMachine) ensureLabelRemoved(ctx context.Context, nodeName, labelKey string) error {
 	const maxRetries = 3
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -996,11 +1067,11 @@ func (m *UpgradeStateMachine) EnsureUpgradingLabelRemoved(ctx context.Context, n
 			}
 			return err
 		}
-		if _, ok := node.Labels[driverUpgradingLabelKey]; !ok {
+		if _, ok := node.Labels[labelKey]; !ok {
 			return nil
 		}
 		base := node.DeepCopy()
-		delete(node.Labels, driverUpgradingLabelKey)
+		delete(node.Labels, labelKey)
 		if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
 			if apierrors.IsConflict(err) {
 				lastErr = err
@@ -1010,5 +1081,5 @@ func (m *UpgradeStateMachine) EnsureUpgradingLabelRemoved(ctx context.Context, n
 		}
 		return nil
 	}
-	return fmt.Errorf("%d회 conflict 재시도 후 라벨 제거 실패: %w", maxRetries, lastErr)
+	return fmt.Errorf("%d회 conflict 재시도 후 라벨 %s 제거 실패: %w", maxRetries, labelKey, lastErr)
 }
