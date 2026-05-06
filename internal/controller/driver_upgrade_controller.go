@@ -390,22 +390,29 @@ func nodeMatchesSelector(node *corev1.Node, selector map[string]string) bool {
 	return true
 }
 
-// stuckLabelGracePeriod 는 라벨이 stuck 으로 간주되기 전 허용되는 시간이다.
-// 정상 사이클의 transient 상태 변화(transitionTo 직후 다음 reconcile 사이의 작은 틈)에서
-// 잘못 sweep 하는 것을 방지하기 위한 안전 마진.
+// stuckLabelGracePeriod 는 driver-upgrading 라벨 (사이클 추적용) 의 stuck grace 마진이다.
+// 정상 사이클의 transient 상태 변화에서 잘못 sweep 하는 것을 방지.
 const stuckLabelGracePeriod = 30 * time.Second
 
+// stuckBlockingLabelGracePeriod 는 driver-upgrading-blocking 라벨 (Validating 진입 시 자동 제거되는
+// 좁은 lifecycle) 의 grace. 일반 라벨보다 짧음 — Validating 진입 후에는 빨리 풀려야 detector
+// 차단 해제까지 시간이 줄어듦.
+const stuckBlockingLabelGracePeriod = 15 * time.Second
+
 // sweepStuckUpgradingLabels 는 모든 노드를 점검하여 사이클이 비정상 종료된 채
-// `npu.ai/driver-upgrading` 라벨만 남아있는 경우 자동으로 제거한다.
+// driver-upgrading 또는 driver-upgrading-blocking 라벨만 남아있는 경우 자동으로 제거한다.
 //
 // CRITICAL invariant — 정상 mid-cycle 라벨은 절대 건드리지 않는다:
 //  1. 노드의 라벨이 있어야 함
 //  2. 해당 노드+vendor 의 DUS state ∈ {Idle, "", Failed} (사이클 종료 상태)
-//  3. DUS LastTransitionTime 이 stuckLabelGracePeriod 이상 경과 (transient 보호)
+//  3. DUS LastTransitionTime 이 grace period 이상 경과 (transient 보호)
 //  4. 매칭 DUS 가 하나도 없으면 (vendor 미상) 라벨 보존 — 다른 컨트롤러 소유 가능성
 //
 // 위 4 조건을 모두 만족할 때만 cleanup 시도. mid-cycle (PreFlight ~ Uncordoning) 라벨은
 // 어떤 경우에도 제거하지 않는다.
+//
+// driver-upgrading-blocking 라벨은 좁은 lifecycle (Cordoning ~ Validating 진입) 이라
+// 더 짧은 grace (15s) 를 적용 — Validating 진입했는데도 라벨이 남아있으면 즉시 sweep.
 func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context) error {
 	logger := logf.FromContext(ctx)
 
@@ -426,7 +433,9 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
-		if _, ok := node.Labels[upgrade.DriverUpgradingLabelKey]; !ok {
+		_, hasMain := node.Labels[upgrade.DriverUpgradingLabelKey]
+		_, hasBlocking := node.Labels[upgrade.DriverUpgradingBlockingLabelKey]
+		if !hasMain && !hasBlocking {
 			continue
 		}
 
@@ -455,25 +464,42 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 		if !allTerminal {
 			continue
 		}
-		if time.Since(oldestTransition) < stuckLabelGracePeriod {
-			// transient — 다음 reconcile 까지 대기
-			continue
+		age := time.Since(oldestTransition)
+
+		// blocking 라벨: 더 짧은 grace 로 빠르게 sweep
+		if hasBlocking && age >= stuckBlockingLabelGracePeriod {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := r.StateMachine.EnsureUpgradingBlockingLabelRemoved(cleanupCtx, node.Name)
+			cancel()
+			if err != nil {
+				logger.Error(err, "stuck driver-upgrading-blocking 라벨 sweep 실패", "node", node.Name)
+			} else {
+				logger.Info("stuck driver-upgrading-blocking 라벨 자동 제거", "node", node.Name,
+					"dusCount", len(nodeDUS), "ageSeconds", age.Seconds())
+				if r.Recorder != nil && len(nodeDUS) > 0 {
+					r.Recorder.Eventf(&nodeDUS[0], corev1.EventTypeWarning, "StuckBlockingLabelSwept",
+						"노드 %s 의 stuck driver-upgrading-blocking 라벨 자동 제거 (DUS 종료 + %ds 경과)",
+						node.Name, int(age.Seconds()))
+				}
+			}
 		}
 
-		// 안전 조건 모두 충족 — sweep 실행
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, node.Name)
-		cancel()
-		if err != nil {
-			logger.Error(err, "stuck 라벨 sweep 실패", "node", node.Name)
-			continue
-		}
-		logger.Info("stuck driver-upgrading 라벨 자동 제거", "node", node.Name,
-			"dusCount", len(nodeDUS), "ageSeconds", time.Since(oldestTransition).Seconds())
-		if r.Recorder != nil && len(nodeDUS) > 0 {
-			r.Recorder.Eventf(&nodeDUS[0], corev1.EventTypeWarning, "StuckUpgradeLabelSwept",
-				"노드 %s 의 stuck npu.ai/driver-upgrading 라벨 자동 제거 (DUS state 종료 + %ds 경과)",
-				node.Name, int(time.Since(oldestTransition).Seconds()))
+		// 메인 라벨: 기존 grace (30s)
+		if hasMain && age >= stuckLabelGracePeriod {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, node.Name)
+			cancel()
+			if err != nil {
+				logger.Error(err, "stuck driver-upgrading 라벨 sweep 실패", "node", node.Name)
+				continue
+			}
+			logger.Info("stuck driver-upgrading 라벨 자동 제거", "node", node.Name,
+				"dusCount", len(nodeDUS), "ageSeconds", age.Seconds())
+			if r.Recorder != nil && len(nodeDUS) > 0 {
+				r.Recorder.Eventf(&nodeDUS[0], corev1.EventTypeWarning, "StuckUpgradeLabelSwept",
+					"노드 %s 의 stuck npu.ai/driver-upgrading 라벨 자동 제거 (DUS state 종료 + %ds 경과)",
+					node.Name, int(age.Seconds()))
+			}
 		}
 	}
 	return nil

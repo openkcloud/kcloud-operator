@@ -519,3 +519,126 @@ func TestEnsureUpgradingLabelRemoved_NodeNotFound(t *testing.T) {
 		t.Fatalf("NotFound 무시 실패: %v", err)
 	}
 }
+
+// ─────────────────────────────────────────────
+// 옵션 A: detector phase-aware blocking label 시나리오
+// ─────────────────────────────────────────────
+
+// nodeWithBothUpgradingLabels 는 driver-upgrading + driver-upgrading-blocking 라벨 둘 다 붙은
+// 워커 노드를 반환한다. cordonNode() 가 추가하는 mid-cycle 상태를 시뮬레이트.
+func nodeWithBothUpgradingLabels(name string) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				upgrade.DriverUpgradingLabelKey:         "true",
+				upgrade.DriverUpgradingBlockingLabelKey: "true",
+			},
+		},
+	}
+}
+
+// hasBlockingLabel 은 노드의 driver-upgrading-blocking 라벨 보유 여부를 반환합니다.
+func hasBlockingLabel(t *testing.T, r *DriverUpgradeReconciler, nodeName string) bool {
+	t.Helper()
+	var node corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: nodeName}, &node); err != nil {
+		t.Fatalf("노드 조회 실패: %v", err)
+	}
+	_, ok := node.Labels[upgrade.DriverUpgradingBlockingLabelKey]
+	return ok
+}
+
+// TestEnsureUpgradingBlockingLabelRemoved_RemovesOnlyBlocking 는 EnsureUpgradingBlockingLabelRemoved
+// 가 driver-upgrading-blocking 라벨만 제거하고 driver-upgrading 라벨은 보존하는지 검증한다.
+// (handleValidating 진입 시점의 핵심 동작 — detector 만 풀어주고 사이클 추적은 유지)
+func TestEnsureUpgradingBlockingLabelRemoved_RemovesOnlyBlocking(t *testing.T) {
+	const nodeName = "worker-validating-entry"
+	node := nodeWithBothUpgradingLabels(nodeName)
+	r := newReconciler(node)
+
+	if err := r.StateMachine.EnsureUpgradingBlockingLabelRemoved(context.Background(), nodeName); err != nil {
+		t.Fatalf("EnsureUpgradingBlockingLabelRemoved 실패: %v", err)
+	}
+	if hasBlockingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading-blocking 라벨이 제거되지 않음 (옵션 A 핵심 동작 깨짐)")
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading 라벨이 잘못 제거됨 — 사이클 추적 라벨은 보존되어야 함")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_BothLabels 는 두 라벨이 모두 stuck 인 노드에서 sweep 가
+// 둘 다 정리하는지 검증한다.
+func TestSweepStuckUpgradingLabels_BothLabels(t *testing.T) {
+	const (
+		nodeName = "worker-both-stuck"
+		vendor   = "furiosa"
+		dusName  = "worker-both-stuck-furiosa"
+	)
+	node := nodeWithBothUpgradingLabels(nodeName)
+	// Idle 상태 + 5min 경과 — 두 라벨 grace (15s, 30s) 모두 초과
+	dus := dusWithTransition(dusName, nodeName, vendor, v1alpha1.UpgradeStateIdle, 5*time.Minute)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading 라벨이 제거되지 않음")
+	}
+	if hasBlockingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading-blocking 라벨이 제거되지 않음")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_BlockingShorterGrace 는 driver-upgrading-blocking 라벨이
+// 더 짧은 grace (15s) 로 빠르게 sweep 되는지 검증한다.
+//
+// 시나리오: DUS 종료 상태로 20s 경과 → blocking grace (15s) 초과 + main grace (30s) 미달
+// 기대: blocking 만 제거, main 은 보존 (다음 sweep 에서 풀림)
+func TestSweepStuckUpgradingLabels_BlockingShorterGrace(t *testing.T) {
+	const (
+		nodeName = "worker-blocking-only"
+		vendor   = "furiosa"
+		dusName  = "worker-blocking-only-furiosa"
+	)
+	node := nodeWithBothUpgradingLabels(nodeName)
+	// 20s 경과 — blocking grace(15s) 초과 + main grace(30s) 미달
+	dus := dusWithTransition(dusName, nodeName, vendor, v1alpha1.UpgradeStateIdle, 20*time.Second)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if hasBlockingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading-blocking 라벨이 짧은 grace 후에도 제거되지 않음")
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("driver-upgrading 라벨이 30s 미달인데 잘못 제거됨")
+	}
+}
+
+// TestSweepStuckUpgradingLabels_PreservesActiveCycleBothLabels 는 두 라벨이 모두 있는 mid-cycle
+// 노드에서 sweep 가 둘 다 보존하는지 검증한다.
+func TestSweepStuckUpgradingLabels_PreservesActiveCycleBothLabels(t *testing.T) {
+	const (
+		nodeName = "worker-active-both"
+		vendor   = "furiosa"
+		dusName  = "worker-active-both-furiosa"
+	)
+	node := nodeWithBothUpgradingLabels(nodeName)
+	// mid-cycle (Cordoning) — grace 무관하게 절대 제거되어선 안 됨
+	dus := dusWithTransition(dusName, nodeName, vendor, v1alpha1.UpgradeStateCordoning, 30*time.Minute)
+	r := newReconciler(node, dus)
+
+	if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+		t.Fatalf("sweep 오류: %v", err)
+	}
+	if !hasUpgradingLabel(t, r, nodeName) {
+		t.Errorf("mid-cycle (Cordoning) driver-upgrading 라벨이 잘못 제거됨")
+	}
+	if !hasBlockingLabel(t, r, nodeName) {
+		t.Errorf("mid-cycle (Cordoning) driver-upgrading-blocking 라벨이 잘못 제거됨")
+	}
+}

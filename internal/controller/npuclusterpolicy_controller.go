@@ -34,6 +34,7 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/upgrade"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -955,10 +956,13 @@ func hostPathFilePtr() *corev1.HostPathType {
 }
 
 // applyDriverUpgradeAntiAffinity는 기존 Affinity를 보존하면서
-// driver-upgrading 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다.
+// driver-upgrading-blocking 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다.
+// architectural plan §4.4 옵션 A: 좁은 lifecycle 의 blocking 라벨로 phase-aware 차단.
+// Cordoning ~ Upgrading 단계: 라벨 활성 → detector / device-plugin 차단 (rmmod 보호).
+// Validating 단계: 라벨 자동 제거 → detector spawn 가능 → NDR 갱신 → Validator 통과.
 func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
 	req := corev1.NodeSelectorRequirement{
-		Key:      "npu.ai/driver-upgrading",
+		Key:      upgrade.DriverUpgradingBlockingLabelKey,
 		Operator: corev1.NodeSelectorOpDoesNotExist,
 	}
 	if spec.Affinity == nil {
