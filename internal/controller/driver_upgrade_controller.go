@@ -94,6 +94,13 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				logger.Error(err, "defer cleanup: driver-upgrading 라벨 제거 실패",
 					"node", state.Spec.NodeName, "state", state.Status.State)
 			}
+			// 옵션 A: 두 라벨 모두 제거 invariant — defer 도 동일하게 처리.
+			// blocking 라벨이 잔류하면 detector 가 spawn 안 되므로 sweep 15s 까지의 window
+			// 가 생김. 이 호출로 window 를 0 에 가깝게 줄임.
+			if err := r.StateMachine.EnsureUpgradingBlockingLabelRemoved(cleanupCtx, state.Spec.NodeName); err != nil {
+				logger.Error(err, "defer cleanup: driver-upgrading-blocking 라벨 제거 실패",
+					"node", state.Spec.NodeName, "state", state.Status.State)
+			}
 		}
 	}()
 
