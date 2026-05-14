@@ -48,6 +48,14 @@ type UpgradePolicy struct {
 	// 비워두면 spec 과 동일하게 처리되어 backward compat 유지. 신규 클러스터는 previousValidated 권장.
 	// +kubebuilder:validation:Enum=previousValidated;spec
 	RollbackTarget string `json:"rollbackTarget,omitempty"`
+
+	// IdleCooldownSeconds 는 Idle 진입 후 다음 upgrade 트리거를 받지 않을 최소 기간(초).
+	// 미지정(nil) 시 default 10s 적용. 0 또는 음수는 cooldown 비활성화 (legacy 동작).
+	// rolling-update 테스트에서 연속 trigger 가 mid-state 로 오인되거나 관측되지 않은 채
+	// 신규 사이클이 시작되는 것을 차단하는 안전장치 (followup plan §F3).
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=0
+	IdleCooldownSeconds *int32 `json:"idleCooldownSeconds,omitempty"`
 }
 
 // DriverInstallPolicySpec 은 벤더/모델별 드라이버 설치 정책을 담습니다.
@@ -84,6 +92,13 @@ type DriverInstallPolicySpec struct {
 
 	// Upgrade policy for driver version changes
 	UpgradePolicy *UpgradePolicy `json:"upgradePolicy,omitempty"`
+
+	// VerifiedVersions 검증된 driver version 화이트리스트.
+	// non-empty 이면 spec.driver.version 이 이 목록에 없을 경우 업그레이드를 거부하고
+	// DUS 를 "UnverifiedVersion" 상태로 전이합니다 (NVIDIA GPU Operator validateDriver 동등).
+	// 비어있으면 버전 검증을 skip 하여 기존 동작을 유지합니다 (backward compat).
+	// +optional
+	VerifiedVersions []string `json:"verifiedVersions,omitempty"`
 }
 
 // DriverSpec은 드라이버 버전/이미지 및 설치 방법을 정의합니다.
@@ -94,6 +109,16 @@ type DriverSpec struct {
 
 	// 인스톨러 컨테이너 이미지
 	// 예: "129.254.202.88:5100/furiosa-driver-installer:1.7.8" 또는 "ghcr.io/you/nvidia-apt-installer:latest"
+	//
+	// CRD 는 docker reference 의 syntax 만 검증한다 (tag 부에 invalid char 차단). 의미론적
+	// 검증 — broken plain tag 가 mode=daemonset 환경에서 entrypoint 누락된 broken image 로
+	// 작동하는 결함을 차단 (architectural plan §3.4 defense-in-depth) — 은 state_machine 의
+	// isVerifiedBuildTag 가드 가 담당한다 (followup plan §F4).
+	//
+	// 허용 (registry/host:port/repo 부 + ":" + tag 부):
+	//   - registry 부: alphanumerics, `.`, `_`, `:`, `/`, `-` (port 표기 호환)
+	//   - tag 부:      alphanumerics, `.`, `_`, `+`, `-` (sub-version 예: "580.142-v17.1")
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._:/-]+:[a-zA-Z0-9._+-]+$`
 	Image string `json:"image"`
 
 	// 설치 방식

@@ -86,6 +86,16 @@ spec:
                     description: |-
                       인스톨러 컨테이너 이미지
                       예: "129.254.202.88:5100/furiosa-driver-installer:1.7.8" 또는 "ghcr.io/you/nvidia-apt-installer:latest"
+
+                      CRD 는 docker reference 의 syntax 만 검증한다 (tag 부에 invalid char 차단). 의미론적
+                      검증 — broken plain tag 가 mode=daemonset 환경에서 entrypoint 누락된 broken image 로
+                      작동하는 결함을 차단 (architectural plan §3.4 defense-in-depth) — 은 state_machine 의
+                      isVerifiedBuildTag 가드 가 담당한다 (followup plan §F4).
+
+                      허용 (registry/host:port/repo 부 + ":" + tag 부):
+                        - registry 부: alphanumerics, `.`, `_`, `:`, `/`, `-` (port 표기 호환)
+                        - tag 부:      alphanumerics, `.`, `_`, `+`, `-` (sub-version 예: "580.142-v17.1")
+                    pattern: ^[a-zA-Z0-9._:/-]+:[a-zA-Z0-9._+-]+$
                     type: string
                   installer:
                     description: |-
@@ -267,6 +277,16 @@ spec:
                     description: ForceUpgrade allows drain --force when pods cannot
                       be evicted gracefully
                     type: boolean
+                  idleCooldownSeconds:
+                    default: 10
+                    description: |-
+                      IdleCooldownSeconds 는 Idle 진입 후 다음 upgrade 트리거를 받지 않을 최소 기간(초).
+                      미지정(nil) 시 default 10s 적용. 0 또는 음수는 cooldown 비활성화 (legacy 동작).
+                      rolling-update 테스트에서 연속 trigger 가 mid-state 로 오인되거나 관측되지 않은 채
+                      신규 사이클이 시작되는 것을 차단하는 안전장치 (followup plan §F3).
+                    format: int32
+                    minimum: 0
+                    type: integer
                   maxParallelUpgrades:
                     description: MaxParallelUpgrades is the maximum number of nodes
                       being upgraded in parallel
@@ -312,6 +332,15 @@ spec:
                   예: "furiosa", "nvidia"
                   컨트롤러에서 NodeDeviceReport.status.devices[].vendor 와 매칭
                 type: string
+              verifiedVersions:
+                description: |-
+                  VerifiedVersions 검증된 driver version 화이트리스트.
+                  non-empty 이면 spec.driver.version 이 이 목록에 없을 경우 업그레이드를 거부하고
+                  DUS 를 "UnverifiedVersion" 상태로 전이합니다 (NVIDIA GPU Operator validateDriver 동등).
+                  비어있으면 버전 검증을 skip 하여 기존 동작을 유지합니다 (backward compat).
+                items:
+                  type: string
+                type: array
             required:
             - driver
             - vendor

@@ -87,7 +87,7 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return
 		}
 		switch state.Status.State {
-		case v1alpha1.UpgradeStateIdle, "", "Failed":
+		case v1alpha1.UpgradeStateIdle, "", v1alpha1.UpgradeStateFailed:
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, state.Spec.NodeName); err != nil {
@@ -457,7 +457,7 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 		oldestTransition := time.Now()
 		for _, dus := range nodeDUS {
 			switch dus.Status.State {
-			case v1alpha1.UpgradeStateIdle, "", "Failed":
+			case v1alpha1.UpgradeStateIdle, "", v1alpha1.UpgradeStateFailed:
 				// 종료 상태
 			default:
 				// mid-cycle — 절대 건드리지 않음

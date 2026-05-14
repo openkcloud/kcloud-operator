@@ -2,13 +2,14 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27
+// 생성일: 2026-04-27 | 수정일: 2026-04-28
 // ============================================================
 
 package validator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -203,6 +204,84 @@ func TestWorkloadValidator_SkeletonAlwaysPass(t *testing.T) {
 	}
 	if !res.Passed {
 		t.Fatalf("skeleton 은 항상 PASS 여야 함: %s", res.Message)
+	}
+}
+
+// TestDriverModule_HostMismatch_ActionableMessage 는 host kernel module 이
+// desiredVersion 과 다를 때 fail 메시지에 host/desired 버전과 actionable 조치
+// (ssh + rmmod) 가 포함되는지 검증한다 (R3 fix, plan 2026-04-28).
+func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
+	const (
+		nodeName = "k8s-worker1"
+		vendor   = "nvidia"
+		hostVer  = "595.58.03"
+		desired  = "590.48.01"
+	)
+	ndr := makeNDR(nodeName, vendor, hostVer, true)
+	c := newFakeClient(t, ndr)
+
+	v := &DriverModuleValidator{}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil {
+		t.Fatalf("예상치 못한 에러: %v", err)
+	}
+	if res.Passed {
+		t.Fatalf("FAIL 기대, 실제 PASS: %s", res.Message)
+	}
+	for _, want := range []string{hostVer, desired, "rmmod", "ssh", nodeName} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("Message 에 %q 포함 기대, 실제: %s", want, res.Message)
+		}
+	}
+}
+
+// TestDriverModule_HostMatch_Pass 는 host kernel module 이 desiredVersion 과
+// 일치할 때 PASS 를 반환하는지 검증한다.
+func TestDriverModule_HostMatch_Pass(t *testing.T) {
+	const (
+		nodeName = "k8s-worker1"
+		vendor   = "nvidia"
+		desired  = "590.48.01"
+	)
+	ndr := makeNDR(nodeName, vendor, desired, true)
+	c := newFakeClient(t, ndr)
+
+	v := &DriverModuleValidator{}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil {
+		t.Fatalf("예상치 못한 에러: %v", err)
+	}
+	if !res.Passed {
+		t.Fatalf("PASS 기대, 실제 FAIL: %s", res.Message)
+	}
+}
+
+// TestDriverModule_NDRNotReported_GenericMessage 는 NDR 의 driverVersion 이
+// 비어 있거나 vendor 가 매칭되지 않을 때 generic "미보고" 메시지를 반환하는지 확인.
+//   - host 정보가 없으므로 actionable rmmod 메시지를 출력하지 않는다.
+func TestDriverModule_NDRNotReported_GenericMessage(t *testing.T) {
+	const (
+		nodeName = "k8s-worker1"
+		vendor   = "nvidia"
+		desired  = "590.48.01"
+	)
+	// driverVersion="" 이고 DriverLoaded=true 라도 hostVer 캡처는 ""이라 generic 분기로 떨어짐.
+	ndr := makeNDR(nodeName, vendor, "", true)
+	c := newFakeClient(t, ndr)
+
+	v := &DriverModuleValidator{}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil {
+		t.Fatalf("예상치 못한 에러: %v", err)
+	}
+	if res.Passed {
+		t.Fatalf("FAIL 기대, 실제 PASS: %s", res.Message)
+	}
+	if res.Message != "NDR.driverVersion 미보고" {
+		t.Errorf("generic 미보고 메시지 기대, 실제: %s", res.Message)
+	}
+	if strings.Contains(res.Message, "rmmod") || strings.Contains(res.Message, "ssh") {
+		t.Errorf("host 정보가 없을 때 actionable 조치는 포함되지 않아야 함, 실제: %s", res.Message)
 	}
 }
 

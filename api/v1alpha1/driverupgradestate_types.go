@@ -1,7 +1,7 @@
 /**
  * driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
  * 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
- * 생성일: 2026-04-13
+ * 생성일: 2026-04-13 | 수정일: 2026-04-29
  */
 
 package v1alpha1
@@ -21,6 +21,14 @@ const (
 	UpgradeStateValidating  = "Validating"
 	UpgradeStateUncordoning = "Uncordoning"
 	UpgradeStateRollback    = "Rollback"
+	// UpgradeStateFailed 는 rollback exhaustion 등으로 인해 자동 복구가 불가능한
+	// 터미널 상태이다. 이 상태에서는 reconcile 이 추가 transition / DS image patch
+	// 를 수행하지 않고 즉시 반환한다 (수동 조치 필요).
+	UpgradeStateFailed = "Failed"
+	// UpgradeStateUnverifiedVersion 은 DIP.spec.verifiedVersions 화이트리스트에 없는
+	// driver version 이 지정된 경우 진입하는 terminal 상태입니다.
+	// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구합니다.
+	UpgradeStateUnverifiedVersion = "UnverifiedVersion"
 )
 
 // +kubebuilder:object:root=true
@@ -74,6 +82,22 @@ type DriverUpgradeStateStatus struct {
 	RollbackAttempts int32 `json:"rollbackAttempts,omitempty"`
 	// Message는 현재 상태에 대한 부가 설명입니다.
 	Message string `json:"message,omitempty"`
+	// QuiescedDeployments 는 Cordoning 진입 시 scale=0 으로 patch 한 Deployment 목록입니다.
+	// Idle/Failed 진입 시 원래 replicas 로 복구하기 위한 backup 이며,
+	// `npu.ai/quiesce-on-driver-upgrade=true` 라벨이 붙은 Deployment 만 대상입니다.
+	// (architectural plan §A6.1 — opt-in quiesce on driver upgrade)
+	QuiescedDeployments []QuiescedDeployment `json:"quiescedDeployments,omitempty"`
+}
+
+// QuiescedDeployment 는 driver upgrade cycle 동안 일시적으로 scale=0 으로 quiesce 된
+// Deployment 의 backup 정보입니다. cycle 종료(Idle/Failed) 시 원래 replicas 로 복구됩니다.
+type QuiescedDeployment struct {
+	// Namespace 는 quiesce 된 Deployment 의 네임스페이스입니다.
+	Namespace string `json:"namespace"`
+	// Name 은 quiesce 된 Deployment 의 이름입니다.
+	Name string `json:"name"`
+	// OriginalReplicas 는 quiesce 직전의 spec.replicas 값입니다 (복구 기준).
+	OriginalReplicas int32 `json:"originalReplicas"`
 }
 
 // +kubebuilder:object:root=true
