@@ -356,11 +356,13 @@ func (m *UpgradeStateMachine) handleValidating(
 	logger := logf.FromContext(ctx)
 
 	// architectural plan §4.4 옵션 A: Validating 진입 시점에 detector 차단 라벨만 제거.
-	// driver-upgrading 라벨은 사이클 추적용으로 보존 (Uncordoning 단계에서 함께 제거).
-	// 이로써 detector 가 worker 노드에 다시 spawn → NDR 갱신 → DriverModuleValidator 통과 가능.
-	if err := m.removeBlockingLabelIfPresent(ctx, state.Spec.NodeName, state); err != nil {
-		// 비치명적 — 로깅 후 계속. 다음 reconcile 에서 재시도.
-		logger.Error(err, "Validating 진입 시 driver-upgrading-blocking 라벨 제거 실패", "node", state.Spec.NodeName)
+	// driver-upgrading 라벨은 사이클 추적용으로 보존 (Uncordoning 에서 함께 제거).
+	// detector 재spawn → NDR 갱신 → DriverModuleValidator 통과를 가능케 함.
+	if err := m.EnsureUpgradingBlockingLabelRemoved(ctx, state.Spec.NodeName); err != nil {
+		logger.Error(err, "Validating 진입 시 blocking 라벨 제거 실패", "node", state.Spec.NodeName)
+	} else {
+		m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeBlockingLabelRemoved",
+			"노드 %s 의 driver-upgrading-blocking 라벨 제거 (Validating 진입)", state.Spec.NodeName)
 	}
 
 	// ─── 1. 전체 validation timeout 체크 ─────────────────────
@@ -1014,27 +1016,6 @@ func replaceImageTag(image string, newTag string) string {
 		return image + ":" + newTag
 	}
 	return image[:idx+1] + newTag
-}
-
-// removeBlockingLabelIfPresent 는 노드에서 driver-upgrading-blocking 라벨만 제거한다.
-// driver-upgrading (사이클 추적용) 은 보존. handleValidating 진입 시 호출되어 detector 차단 해제.
-// 라벨 부재 시 no-op (API patch 안 함).
-func (m *UpgradeStateMachine) removeBlockingLabelIfPresent(ctx context.Context, nodeName string, state *v1alpha1.DriverUpgradeState) error {
-	var node corev1.Node
-	if err := m.Get(ctx, types.NamespacedName{Name: nodeName}, &node); err != nil {
-		return err
-	}
-	if _, ok := node.Labels[driverUpgradingBlockingLabelKey]; !ok {
-		return nil
-	}
-	base := node.DeepCopy()
-	delete(node.Labels, driverUpgradingBlockingLabelKey)
-	if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
-		return err
-	}
-	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeBlockingLabelRemoved",
-		"노드 %s에서 driver-upgrading-blocking 라벨 제거 (Validating 진입 — detector 재spawn 허용)", nodeName)
-	return nil
 }
 
 // EnsureUpgradingLabelRemoved 는 노드에서 npu.ai/driver-upgrading 라벨을 idempotent 하게 제거한다.
