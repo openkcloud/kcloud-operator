@@ -5,13 +5,14 @@
 //       각 Validator 는 controller-runtime client 와 기본 식별자만 받아
 //       단일 검증 시도(Run)를 수행한다. caller 는 timeout 내에서 재시도하고
 //       Event/Metric 을 발행한다.
-// 생성일: 2026-04-27
+// 생성일: 2026-04-27 | 수정일: 2026-04-28
 // ============================================================
 
 package validator
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -92,6 +93,10 @@ func (v *DriverModuleValidator) Run(
 		return Result{}, err
 	}
 
+	// host 의 (loaded) driver 버전을 캡처해 actionable error 메시지에 사용한다.
+	// 동일 vendor 의 device 가 여러 개여도 driverVersion 은 동일하다고 가정 — 첫 발견값을 사용.
+	hostVer := ""
+	hostDetail := ""
 	for _, d := range ndr.Status.Devices {
 		if !strings.EqualFold(d.Vendor, vendor) {
 			continue
@@ -99,13 +104,31 @@ func (v *DriverModuleValidator) Run(
 		if !d.DriverLoaded {
 			continue
 		}
+		if hostVer == "" {
+			hostVer = d.DriverVersion
+			hostDetail = d.DriverVersionDetail
+		}
 		if d.DriverVersion == desiredVersion {
 			return Result{Passed: true, Message: "NDR.driverVersion 이 desiredVersion 과 일치"}, nil
 		}
 	}
+	if hostVer != "" && hostVer != desiredVersion {
+		// host kernel module 이 desiredVersion 과 다르면 driver-ds Pod 의 init container
+		// (driver-manager) 가 모듈 swap 에 실패했음을 의미. 운영자에게 직접 조치 절차를 제공한다.
+		msg := fmt.Sprintf(
+			"host kernel module=%s ≠ desired=%s — driver-ds Pod 의 driver-manager init container 가 swap 실패. "+
+				"조치: ssh kcloud@%s; sudo systemctl stop dcgm-exporter; "+
+				"sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia; 그 후 driver-ds Pod 재시작",
+			hostVer, desiredVersion, nodeName,
+		)
+		if hostDetail != "" {
+			msg = fmt.Sprintf("%s (detail=%s)", msg, hostDetail)
+		}
+		return Result{Passed: false, Message: msg}, nil
+	}
 	return Result{
 		Passed:  false,
-		Message: "NDR.driverVersion 이 desiredVersion 과 불일치 또는 미보고",
+		Message: "NDR.driverVersion 미보고",
 	}, nil
 }
 

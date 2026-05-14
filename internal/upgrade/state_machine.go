@@ -3,7 +3,8 @@
 // 상세: NVIDIA GPU Operator 참조, 노드별 드라이버 업그레이드 상태 전이를 관리
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
-// 생성일: 2026-04-13 | 수정일: 2026-04-15
+//       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
+// 생성일: 2026-04-13 | 수정일: 2026-04-29
 // ============================================================
 
 package upgrade
@@ -12,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +51,32 @@ const DriverUpgradingLabelKey = driverUpgradingLabelKey
 // 노출한다. detector DS nodeAffinity / sweep / defer cleanup 가 이 키를 참조한다.
 const DriverUpgradingBlockingLabelKey = driverUpgradingBlockingLabelKey
 
+// quiesceOnDriverUpgradeLabelKey 는 driver upgrade cycle 동안 자동으로 scale=0 으로 quiesce
+// 하고 cycle 종료 시 원래 replicas 로 복구할 Deployment 를 식별하는 opt-in 라벨 키이다.
+// gpu-stress 같은 NodeAffinity reject 로 Failed Pod 가 누적되는 테스트/내부 워크로드만 라벨을
+// 붙이고 production critical workload 는 PDB + drain 표준 흐름을 따른다 (architectural plan §A6.1).
+const quiesceOnDriverUpgradeLabelKey = "npu.ai/quiesce-on-driver-upgrade"
+
+// QuiesceOnDriverUpgradeLabelKey 는 외부 패키지(test/manifest)가 동일한 라벨을 가리키도록
+// 노출하는 상수다.
+const QuiesceOnDriverUpgradeLabelKey = quiesceOnDriverUpgradeLabelKey
+
+// QuiesceReplicasBackupAnnotation 은 quiesce 시 Deployment 의 원래 replicas 값을 dual-write
+// 하는 annotation 키다 (followup plan §F2). DUS.Status.QuiescedDeployments 백업과 함께
+// 저장되어 operator restart 후 status 손실 시 fallback 복구 경로로 활용된다.
+// 값은 base-10 정수 문자열 (예: "3").
+const QuiesceReplicasBackupAnnotation = "npu.ai/replicas-backup"
+
+// hostnameLabelKey 는 deploymentTargetsNode 가 nodeSelector / nodeAffinity 매칭에 사용하는
+// Kubernetes 표준 노드 hostname 라벨 키다.
+const hostnameLabelKey = "kubernetes.io/hostname"
+
+// defaultIdleCooldown 은 UpgradePolicy.IdleCooldownSeconds 가 nil 일 때 적용되는 기본값이다.
+// Idle 진입 후 이 시간 동안은 신규 upgrade trigger 를 거부 (requeue) 하여
+// rolling-update 테스트에서 연속 trigger 가 mid-state 로 오인되는 것을 막는다.
+// IdleCooldownSeconds 를 0 또는 음수로 두면 cooldown 비활성화.
+const defaultIdleCooldown = 10 * time.Second
+
 // UpgradeStateMachine은 노드별 드라이버 업그레이드 상태 전이를 담당합니다.
 type UpgradeStateMachine struct {
 	client.Client
@@ -68,6 +96,17 @@ func (m *UpgradeStateMachine) TransitionState(
 		"state", state.Status.State,
 	)
 	logger.Info("TransitionState 호출")
+
+	// reconcile 진입 시 broken PreviousImage 를 안전하게 정리한다.
+	// operator restart / 이전 버전 배포로 인해 plain tag (예: ":580.142") 가
+	// PreviousImage 에 잔류하는 경우 rollback 시 broken Pod 으로 회귀하는 것을 방지.
+	if state.Status.PreviousImage != "" && !isVerifiedBuildTag(state.Status.PreviousImage) {
+		logger.Info("Broken PreviousImage cleared for safety", "previousImage", state.Status.PreviousImage)
+		state.Status.PreviousImage = ""
+		if err := m.Status().Update(ctx, state); err != nil {
+			return false, 0, err
+		}
+	}
 
 	// 현재 상태를 Prometheus 메트릭에 기록
 	metrics.SetUpgradeState(state.Spec.NodeName, state.Spec.Vendor, state.Status.State)
@@ -91,6 +130,12 @@ func (m *UpgradeStateMachine) TransitionState(
 		return m.handleUncordoning(ctx, state, policy)
 	case v1alpha1.UpgradeStateRollback:
 		return m.handleRollback(ctx, state, policy)
+	case v1alpha1.UpgradeStateFailed:
+		// 터미널 상태 — 자동 복구 중단. 추가 transition / DS image patch / requeue 없음.
+		// 사용자가 수동으로 DUS 를 정리하거나 신규 업그레이드 cycle 을 트리거할 때까지
+		// 어떠한 자동 동작도 수행하지 않는다 (rollback infinite-loop 방지, plan §R1).
+		logger.Info("Failed 터미널 상태 — 추가 transition 없이 즉시 반환 (수동 조치 필요)")
+		return false, 0, nil
 	default:
 		logger.Info("알 수 없는 상태, Idle로 리셋", "state", state.Status.State)
 		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle, "알 수 없는 상태 리셋", 60*time.Second)
@@ -120,6 +165,40 @@ func (m *UpgradeStateMachine) handleIdle(
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeAvailable",
 			"드라이버 버전 불일치: current=%s desired=%s (autoUpgrade 비활성화)", currentVersion, desiredVersion)
 		return true, 60 * time.Second, nil
+	}
+
+	// IdleCooldown 가드 — Idle 진입 직후 (default 10s) 연속 trigger 거부.
+	// rolling-update 테스트에서 사용자가 trigger 를 빠르게 두 번 던지면 첫 사이클의
+	// Uncordoning→Idle 직후 다시 Cordoning 으로 진입하여 05_verify 가 mid-state 를
+	// PASS 로 오인하는 결함 (followup plan §F3) 을 차단한다.
+	// IdleCooldownSeconds 가 nil 이면 default, 0/음수면 비활성화.
+	cooldown := defaultIdleCooldown
+	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.IdleCooldownSeconds != nil {
+		s := *policy.Spec.UpgradePolicy.IdleCooldownSeconds
+		if s <= 0 {
+			cooldown = 0
+		} else {
+			cooldown = time.Duration(s) * time.Second
+		}
+	}
+	if cooldown > 0 && !state.Status.LastTransitionTime.IsZero() {
+		elapsed := time.Since(state.Status.LastTransitionTime.Time)
+		if elapsed < cooldown {
+			remaining := cooldown - elapsed
+			logger := logf.FromContext(ctx)
+			logger.Info("Idle cooldown 미충족, 트리거 연기",
+				"elapsed", elapsed.Round(time.Second),
+				"cooldown", cooldown,
+				"remaining", remaining.Round(time.Second),
+				"node", state.Spec.NodeName)
+			if m.Recorder != nil {
+				m.Recorder.Eventf(state, corev1.EventTypeNormal, "IdleCooldownDeferred",
+					"Idle 진입 후 %s 미만 (cooldown=%s) — %s 후 재시도",
+					elapsed.Round(time.Second), cooldown, remaining.Round(time.Second))
+			}
+			// state 변경 없이 잔여 시간 후 재시도 (transitionTo 미호출 → LastTransitionTime 보존)
+			return true, remaining, nil
+		}
 	}
 
 	// 버전 불일치 + autoUpgrade: UpgradeRequired로 전이
@@ -205,6 +284,14 @@ func (m *UpgradeStateMachine) handleCordoning(
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeCordoned",
 		"업그레이드를 위해 노드 %s cordon 완료", state.Spec.NodeName)
 
+	// architectural plan §A6.1: opt-in 라벨이 붙은 Deployment 를 노드별로 quiesce(scale=0).
+	// gpu-stress 등 NodeAffinity reject 로 Failed Pod 가 누적되는 결함을 차단한다.
+	// 실패 시 사이클은 계속 진행 (best-effort) — backup 이 비어 있으면 restore 도 no-op.
+	if err := m.QuiesceLabeledDeployments(ctx, state); err != nil {
+		logf.FromContext(ctx).Error(err, "quiesceLabeledDeployments 실패 (사이클은 계속 진행)",
+			"node", state.Spec.NodeName)
+	}
+
 	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateDraining, "노드 cordon 완료", 0)
 }
 
@@ -226,12 +313,15 @@ func (m *UpgradeStateMachine) handleDraining(
 		if policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "drain 타임아웃: 롤백 시작", 0)
 		}
+		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 			logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, "Failed", "drain 타임아웃: 수동 조치 필요", 0)
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "drain 타임아웃: 수동 조치 필요", 0)
 	}
 
 	// nvidia-persistenced 종료 요청 (실제 중지는 driver-manager initContainer에서 수행)
@@ -305,9 +395,21 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	}
 
 	if updated {
-		// 롤백 시 빌드 접미사 포함 원본 이미지를 복구하기 위해 패치 직전에 기록
+		// 롤백 시 빌드 접미사 포함 원본 이미지를 복구하기 위해 패치 직전에 기록.
+		// architectural plan §3 (defense-in-depth): broken plain tag (예: ":580.126.09") 이
+		// PreviousImage 로 캡처되어 rollback 시 broken Pod 으로 회귀하는 것을 차단.
+		// isVerifiedBuildTag 가 true 인 (-v<N> 접미사 또는 검증된) 태그만 저장.
 		if state.Status.PreviousImage == "" && prevImage != "" && prevImage != desiredImage {
-			state.Status.PreviousImage = prevImage
+			if isVerifiedBuildTag(prevImage) {
+				state.Status.PreviousImage = prevImage
+			} else {
+				logger := logf.FromContext(ctx)
+				logger.Info("plain tag 감지 — PreviousImage 저장 skip (broken image rollback 차단)",
+					"prevImage", prevImage, "node", state.Spec.NodeName)
+				m.Recorder.Eventf(state, corev1.EventTypeWarning, "PreviousImagePlainTagSkipped",
+					"plain tag (%s) 감지: PreviousImage 저장을 skip 했습니다 (rollback 시 broken image 회귀 방지). "+
+						"DIP.spec.driver.image 를 -v<N> 접미사 빌드 태그로 변경하세요.", prevImage)
+			}
 		}
 		if err := m.Patch(ctx, &ds, client.MergeFrom(base)); err != nil {
 			return false, 0, fmt.Errorf("DaemonSet 이미지 업데이트 실패: %w", err)
@@ -327,9 +429,9 @@ func (m *UpgradeStateMachine) handleUpgrading(
 
 // validators 는 handleValidating 이 순차 실행할 Validator 체인이다.
 // architectural plan §4.4.3 에 따라 단일 NDR 대기였던 단계를 단계별 책임으로 분리:
-//   1) DriverModule  : 노드의 드라이버 커널 모듈 로드 (NDR.driverVersion 매칭)
-//   2) DevicePlugin  : kube-system 의 device-plugin Pod ContainersReady
-//   3) Workload      : sample 워크로드 ResourceAllocated (skeleton — 후속 PR 에서 활성)
+//  1. DriverModule  : 노드의 드라이버 커널 모듈 로드 (NDR.driverVersion 매칭)
+//  2. DevicePlugin  : kube-system 의 device-plugin Pod ContainersReady
+//  3. Workload      : sample 워크로드 ResourceAllocated (skeleton — 후속 PR 에서 활성)
 //
 // 변수로 두어 테스트에서 주입 가능 — 단, 본 작업에서는 stub 미사용.
 var defaultValidators = []validator.Validator{
@@ -375,12 +477,15 @@ func (m *UpgradeStateMachine) handleValidating(
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "검증 타임아웃: 롤백 시작", 0)
 		}
+		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+			logger.Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 			logger.Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, "Failed", "검증 타임아웃: 수동 조치 필요", 0)
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "검증 타임아웃: 수동 조치 필요", 0)
 	}
 
 	// ─── 2. CrashLoop 즉시 감지 (재시도 무의미한 hard failure) ───
@@ -391,7 +496,7 @@ func (m *UpgradeStateMachine) handleValidating(
 		dsName = fmt.Sprintf("npu-op-driver-%s", strings.ToLower(state.Spec.Vendor))
 	}
 	desiredImage := policy.Spec.Driver.Image
-	_, crashLoop, err := m.isDriverPodReadyOnNode(ctx, dsName, state.Spec.NodeName, desiredImage)
+	ready, crashLoop, err := m.isDriverPodReadyOnNode(ctx, dsName, state.Spec.NodeName, desiredImage)
 	if err != nil {
 		return false, 0, fmt.Errorf("드라이버 Pod 상태 확인 실패: %w", err)
 	}
@@ -399,12 +504,23 @@ func (m *UpgradeStateMachine) handleValidating(
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "드라이버 Pod CrashLoopBackOff: 롤백 시작", 0)
 		}
+		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+			logger.Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 			logger.Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, "Failed", "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
+	}
+
+	// 새 Pod 이 아직 준비되지 않은 경우 (wrong-image 캐시 / NotReady 등) 단순 requeue.
+	// ValidationTimeout 안에 안정되지 않으면 §1 의 timeout 가드가 Rollback / Failed 로 전이한다.
+	if !ready {
+		logger.Info("Validating: 새 Pod 미준비 (이미지 불일치 또는 NotReady)",
+			"node", state.Spec.NodeName)
+		return true, 10 * time.Second, nil
 	}
 
 	// ─── 3. validator 체인 순차 실행 ─────────────────────────
@@ -453,6 +569,13 @@ func (m *UpgradeStateMachine) handleUncordoning(
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUncordoned",
 		"노드 %s uncordon 완료, 업그레이드 성공", state.Spec.NodeName)
 
+	// architectural plan §A6.1: 사이클 정상 종료 시 quiesce 된 Deployment 복구.
+	// uncordon 후 Idle 진입 직전이 가장 안전한 시점 (노드 schedulable + 새 driver 준비 완료).
+	if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+		logf.FromContext(ctx).Error(err, "restoreQuiescedDeployments 실패 (수동 조치 필요)",
+			"node", state.Spec.NodeName)
+	}
+
 	metrics.RecordUpgradeComplete(state.Spec.Vendor, "success")
 
 	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
@@ -477,12 +600,15 @@ func (m *UpgradeStateMachine) handleRollback(
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackExhausted",
 			"롤백 %d회 초과 (max=%d): 수동 조치 필요 (node=%s)",
 			state.Status.RollbackAttempts-1, maxRollbacks, state.Spec.NodeName)
+		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 			logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패: node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, "Failed",
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed,
 			fmt.Sprintf("롤백 %d회 초과: 수동 조치 필요", maxRollbacks), 0)
 	}
 
@@ -492,12 +618,15 @@ func (m *UpgradeStateMachine) handleRollback(
 		metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackFailed",
 			"롤백할 이전 버전 없음: 수동 조치 필요")
+		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+		}
 		if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 			logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, "Failed", "이전 버전 없음: 수동 조치 필요", 0)
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
 	}
 
 	dsName := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(state.Spec.Vendor), strings.ToLower(state.Spec.Model))
@@ -525,13 +654,28 @@ func (m *UpgradeStateMachine) handleRollback(
 			metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackRefused",
 				"RollbackTarget=previousValidated 인데 PreviousImage 미보유: 수동 조치 필요 (node=%s)", state.Spec.NodeName)
+			if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
+				logf.FromContext(ctx).Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
+			}
 			if err := m.clearUpgradingLabel(ctx, state.Spec.NodeName, state); err != nil {
 				logf.FromContext(ctx).Error(err, "Failed 전이 중 라벨 제거 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
 				m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 					"Failed 전이 중 라벨 제거 실패: node=%s err=%v", state.Spec.NodeName, err)
 			}
-			return m.transitionTo(ctx, state, "Failed",
+			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed,
 				"RollbackTarget=previousValidated: PreviousImage 미보유로 안전 롤백 불가", 0)
+		}
+		// PreviousImage 미보유 + RollbackTarget != previousValidated:
+		// DIP.spec.driver.image 의 variant 접미사를 추출해 prevVersion 과 결합한 정상 image 를 구성한다.
+		// 이렇게 하면 legacy plain-tag 폴백 (예: ":580.142") 으로 ImagePullBackOff 가 발생하는 것을 방지.
+		if dipImage := policy.Spec.Driver.Image; dipImage != "" {
+			if variant := extractImageVariantSuffix(dipImage); variant != "" {
+				if idx := strings.LastIndex(dipImage, ":"); idx >= 0 {
+					prevImage = dipImage[:idx+1] + prevVersion + variant
+					logf.FromContext(ctx).Info("PreviousImage 미보유 — DIP image variant 로 폴백 구성",
+						"previousImage", prevImage, "variant", variant, "dipImage", dipImage)
+				}
+			}
 		}
 	}
 	base := ds.DeepCopy()
@@ -1010,12 +1154,59 @@ func parseDuration(s string, defaultDur time.Duration) time.Duration {
 
 // replaceImageTag는 이미지 문자열의 태그를 newTag로 교체합니다.
 // 예: "registry/img:oldTag" → "registry/img:newTag"
+// imageVariantSuffixRe 는 verified build tag 의 variant 접미사를 매치한다.
+// 예: "580.142-v172" → "-v172", "1.7.8-v2" → "-v2".
+var imageVariantSuffixRe = regexp.MustCompile(`-v[0-9]+(\.[0-9]+)?$`)
+
+// extractImageVariantSuffix 는 image reference 의 tag 부분에서 variant 접미사를 추출한다.
+// 매치되지 않으면 빈 문자열 반환.
+func extractImageVariantSuffix(image string) string {
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 {
+		return ""
+	}
+	return imageVariantSuffixRe.FindString(image[idx+1:])
+}
+
+// replaceImageTag 는 image reference 의 tag 만 newTag 로 치환한다.
+// newTag 가 plain (variant 없음) 이고 기존 tag 에 variant 가 있으면, variant 를 보존하여
+// rollback 시 broken plain tag (예: ":580.142") 가 생성되는 것을 차단한다.
 func replaceImageTag(image string, newTag string) string {
 	idx := strings.LastIndex(image, ":")
 	if idx == -1 {
 		return image + ":" + newTag
 	}
+	// newTag 가 이미 variant 포함 (예: "580.142-v172") 이면 그대로 사용
+	if !strings.Contains(newTag, "-v") {
+		if v := imageVariantSuffixRe.FindString(image[idx+1:]); v != "" {
+			newTag = newTag + v
+		}
+	}
 	return image[:idx+1] + newTag
+}
+
+// verifiedBuildTagRegexp 는 검증된 빌드 태그 패턴을 정의한다.
+// 허용:
+//   - "vN"           : v1, v16
+//   - ".+-vN"        : 1.9.8-3-v2, 580.126.09-v16, 1.7.8-v3
+//   - "latest"       : latest 태그 (개발 환경)
+//
+// 거부:
+//   - plain semver   : 580.126.09, 1.9.8-3, 590.48.01 — broken plain tag (architectural plan §3)
+//
+// architectural plan §3.4: rollback 시 broken plain tag 가 PreviousImage 로 저장되어
+// rollback 발동 시 broken Pod 으로 회귀하는 결함을 defense-in-depth 로 차단.
+var verifiedBuildTagRegexp = regexp.MustCompile(`:(v[0-9]+|.+-v[0-9]+|latest)$`)
+
+// isVerifiedBuildTag 는 image reference 의 태그가 검증된 빌드 태그인지 확인한다.
+// "<registry>/<repo>:<tag>" 형태의 image reference 에서 tag 부분을 추출해 검사.
+// tag 가 없는 reference (e.g., "alpine") 는 false 반환.
+func isVerifiedBuildTag(image string) bool {
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 {
+		return false
+	}
+	return verifiedBuildTagRegexp.MatchString(image[idx:])
 }
 
 // EnsureUpgradingLabelRemoved 는 노드에서 npu.ai/driver-upgrading 라벨을 idempotent 하게 제거한다.
@@ -1063,4 +1254,244 @@ func (m *UpgradeStateMachine) ensureLabelRemoved(ctx context.Context, nodeName, 
 		return nil
 	}
 	return fmt.Errorf("%d회 conflict 재시도 후 라벨 %s 제거 실패: %w", maxRetries, labelKey, lastErr)
+}
+
+// ─────────────────────────────────────────────
+// A6.1 Quiesce-on-Driver-Upgrade (opt-in label)
+// ─────────────────────────────────────────────
+
+// QuiesceLabeledDeployments 는 cordon 직후 호출되어 노드별로 quiesce-on-driver-upgrade 라벨이
+// 붙은 Deployment 를 spec.replicas=0 으로 patch 하고, 원래 replicas 를
+// state.Status.QuiescedDeployments backup 에 기록한다 (architectural plan §A6.1).
+//
+// 매칭 기준 (deploymentTargetsNode):
+//   - PodTemplate 의 nodeSelector["kubernetes.io/hostname"] == 노드명, 또는
+//   - PodTemplate 의 nodeAffinity required term 의 hostname In 매칭
+//
+// 다른 라벨 기반 selector (예: app=workload + nodeAffinity 가 GPU 라벨) 은 1차 구현 범위
+// 밖이며, follow-up 으로 확장한다. quiesce 실패는 best-effort 로 사이클 진행을 막지 않는다.
+func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+) error {
+	logger := logf.FromContext(ctx)
+
+	var deploys appsv1.DeploymentList
+	if err := m.List(ctx, &deploys, client.MatchingLabels{
+		quiesceOnDriverUpgradeLabelKey: "true",
+	}); err != nil {
+		return fmt.Errorf("quiesce 후보 Deployment list 실패: %w", err)
+	}
+
+	var quiesced []v1alpha1.QuiescedDeployment
+	for i := range deploys.Items {
+		d := &deploys.Items[i]
+		if !deploymentTargetsNode(d, state.Spec.NodeName) {
+			continue
+		}
+		if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
+			// 이미 0 (다른 controller 가 scale 한 상태) — 복구 대상 아님.
+			continue
+		}
+		original := *d.Spec.Replicas
+		base := d.DeepCopy()
+		// dual-write (followup plan §F2): annotation 으로도 backup 저장 →
+		// DUS.Status 손실 시 (operator restart 등) annotation 으로 fallback 복구 가능.
+		if d.Annotations == nil {
+			d.Annotations = make(map[string]string)
+		}
+		d.Annotations[QuiesceReplicasBackupAnnotation] = strconv.Itoa(int(original))
+		zero := int32(0)
+		d.Spec.Replicas = &zero
+		if err := m.Patch(ctx, d, client.MergeFrom(base)); err != nil {
+			logger.Error(err, "Deployment quiesce 실패",
+				"deploy", d.Name, "namespace", d.Namespace, "node", state.Spec.NodeName)
+			continue
+		}
+		quiesced = append(quiesced, v1alpha1.QuiescedDeployment{
+			Namespace:        d.Namespace,
+			Name:             d.Name,
+			OriginalReplicas: original,
+		})
+		logger.Info("Deployment quiesced for driver upgrade",
+			"deploy", d.Name, "namespace", d.Namespace, "from", original, "to", 0,
+			"node", state.Spec.NodeName)
+		if m.Recorder != nil {
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "DeploymentQuiesced",
+				"Deployment %s/%s scaled %d → 0 for driver upgrade (node=%s)",
+				d.Namespace, d.Name, original, state.Spec.NodeName)
+		}
+	}
+	state.Status.QuiescedDeployments = quiesced
+
+	// followup plan §F2: status backup 을 즉시 영구 저장 — handleCordoning 이 transitionTo
+	// 로 다음 상태(Draining)로 넘어가기 전에 commit 해야 operator restart resilience 가 보장됨.
+	// 외부 Reconcile 의 최종 Status.Update 가 bumped ResourceVersion 을 받아도 conflict 시
+	// requeue 로 처리되므로 race 안전.
+	if err := m.Status().Update(ctx, state); err != nil {
+		logger.Error(err, "quiesce status backup 영구 저장 실패",
+			"node", state.Spec.NodeName, "count", len(quiesced))
+		return fmt.Errorf("failed to persist quiesce status backup: %w", err)
+	}
+	return nil
+}
+
+// RestoreQuiescedDeployments 는 cycle 종료(Idle/Failed) 시 호출되어 backup 의 OriginalReplicas
+// 로 Deployment.spec.replicas 를 복구하고 backup 을 비운다 (architectural plan §A6.1).
+//
+// 안전성:
+//   - backup 이 비어 있으면 annotation fallback 으로 복구 시도 (followup plan §F2 — operator
+//     restart 시 status 손실에 대한 방어).
+//   - Deployment NotFound (이미 삭제됨) 는 graceful skip — 이벤트만 발행.
+//   - 개별 patch 실패는 로그/이벤트로 보고하지만 다른 entry 처리는 계속.
+//   - 모든 entry 처리 후 backup 을 nil 로 비워 다음 cycle 에 누수되지 않게 한다.
+func (m *UpgradeStateMachine) RestoreQuiescedDeployments(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+) error {
+	logger := logf.FromContext(ctx)
+	if len(state.Status.QuiescedDeployments) == 0 {
+		// followup plan §F2: status 손실 시 annotation 기반 fallback 복구 시도.
+		// 정상 흐름에서는 backup 이 채워져 있으므로 no-op 으로 끝남.
+		return m.restoreFromAnnotationFallback(ctx, state)
+	}
+	for _, q := range state.Status.QuiescedDeployments {
+		var d appsv1.Deployment
+		if err := m.Get(ctx, types.NamespacedName{Namespace: q.Namespace, Name: q.Name}, &d); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("restore: deployment 미발견 (이미 삭제됨)",
+					"deploy", q.Name, "namespace", q.Namespace)
+				if m.Recorder != nil {
+					m.Recorder.Eventf(state, corev1.EventTypeWarning, "DeploymentRestoreSkipped",
+						"Deployment %s/%s 미발견 (이미 삭제됨) — restore skip",
+						q.Namespace, q.Name)
+				}
+				continue
+			}
+			logger.Error(err, "restore: deployment Get 실패",
+				"deploy", q.Name, "namespace", q.Namespace)
+			continue
+		}
+		base := d.DeepCopy()
+		original := q.OriginalReplicas
+		d.Spec.Replicas = &original
+		// dual-write annotation cleanup (followup plan §F2): restore 와 동시에 backup
+		// annotation 을 제거하여 다음 cycle 의 fallback 이 stale 값을 사용하지 않게 한다.
+		if d.Annotations != nil {
+			delete(d.Annotations, QuiesceReplicasBackupAnnotation)
+		}
+		if err := m.Patch(ctx, &d, client.MergeFrom(base)); err != nil {
+			logger.Error(err, "restore patch 실패",
+				"deploy", q.Name, "namespace", q.Namespace)
+			if m.Recorder != nil {
+				m.Recorder.Eventf(state, corev1.EventTypeWarning, "DeploymentRestoreFailed",
+					"Deployment %s/%s 복구 실패 (수동 조치 필요): %v",
+					q.Namespace, q.Name, err)
+			}
+			continue
+		}
+		logger.Info("Deployment restored after driver upgrade",
+			"deploy", q.Name, "namespace", q.Namespace, "replicas", original)
+		if m.Recorder != nil {
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "DeploymentRestored",
+				"Deployment %s/%s scaled 0 → %d after driver upgrade",
+				q.Namespace, q.Name, original)
+		}
+	}
+	state.Status.QuiescedDeployments = nil
+	return nil
+}
+
+// restoreFromAnnotationFallback 은 DUS.Status.QuiescedDeployments 가 비어있는 상황 (operator
+// restart 후 status 손실 등) 에서 Deployment annotation (npu.ai/replicas-backup) 으로부터
+// replicas 를 복구하는 fallback 경로다 (followup plan §F2).
+//
+// 매칭: quiesce 라벨 + node hostname 매칭 + annotation 존재. 동작은 idempotent —
+// annotation 이 없거나 값이 invalid 한 Deployment 는 graceful skip.
+func (m *UpgradeStateMachine) restoreFromAnnotationFallback(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+) error {
+	logger := logf.FromContext(ctx)
+
+	var deploys appsv1.DeploymentList
+	if err := m.List(ctx, &deploys, client.MatchingLabels{
+		quiesceOnDriverUpgradeLabelKey: "true",
+	}); err != nil {
+		return fmt.Errorf("annotation fallback: deployment list 실패: %w", err)
+	}
+
+	for i := range deploys.Items {
+		d := &deploys.Items[i]
+		if !deploymentTargetsNode(d, state.Spec.NodeName) {
+			continue
+		}
+		backupVal, ok := d.Annotations[QuiesceReplicasBackupAnnotation]
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(backupVal)
+		if err != nil || n < 0 {
+			logger.Info("annotation fallback: invalid backup value — skip",
+				"deploy", d.Name, "namespace", d.Namespace, "value", backupVal)
+			continue
+		}
+		original := int32(n)
+		base := d.DeepCopy()
+		d.Spec.Replicas = &original
+		delete(d.Annotations, QuiesceReplicasBackupAnnotation)
+		if err := m.Patch(ctx, d, client.MergeFrom(base)); err != nil {
+			logger.Error(err, "annotation fallback patch 실패",
+				"deploy", d.Name, "namespace", d.Namespace)
+			continue
+		}
+		logger.Info("Deployment restored via annotation fallback",
+			"deploy", d.Name, "namespace", d.Namespace, "replicas", original,
+			"node", state.Spec.NodeName)
+		if m.Recorder != nil {
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "DeploymentRestoredFromAnnotation",
+				"Deployment %s/%s scaled 0 → %d via annotation backup (status was lost)",
+				d.Namespace, d.Name, original)
+		}
+	}
+	return nil
+}
+
+// deploymentTargetsNode 는 Deployment 의 PodTemplate 이 특정 노드를 대상으로 함을 표시하는지
+// 확인한다 (architectural plan §A6.1 1차 구현 — hostname 기반만 매칭).
+//
+// 매칭 규칙:
+//  1. spec.template.spec.nodeSelector["kubernetes.io/hostname"] == nodeName
+//  2. spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution
+//     의 NodeSelectorTerms 중 하나의 MatchExpressions 가 hostname In [...nodeName...]
+//
+// preferredDuringScheduling / 다른 라벨 기반은 false 반환 (false negative 보수적 처리).
+// 잘못된 quiesce 위험을 피하기 위함이며, follow-up 으로 확장 가능.
+func deploymentTargetsNode(d *appsv1.Deployment, nodeName string) bool {
+	if d == nil || nodeName == "" {
+		return false
+	}
+	podSpec := d.Spec.Template.Spec
+	// 1. nodeSelector hostname 직접 매칭
+	if v, ok := podSpec.NodeSelector[hostnameLabelKey]; ok && v == nodeName {
+		return true
+	}
+	// 2. nodeAffinity required term 의 hostname In 매칭
+	if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil ||
+		podSpec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return false
+	}
+	for _, term := range podSpec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		for _, expr := range term.MatchExpressions {
+			if expr.Key != hostnameLabelKey || expr.Operator != corev1.NodeSelectorOpIn {
+				continue
+			}
+			for _, val := range expr.Values {
+				if val == nodeName {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

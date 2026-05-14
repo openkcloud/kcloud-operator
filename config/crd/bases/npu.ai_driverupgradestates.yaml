@@ -97,6 +97,34 @@ spec:
               previousVersion:
                 description: PreviousVersion은 롤백 기준이 되는 이전 드라이버 버전입니다.
                 type: string
+              quiescedDeployments:
+                description: |-
+                  QuiescedDeployments 는 Cordoning 진입 시 scale=0 으로 patch 한 Deployment 목록입니다.
+                  Idle/Failed 진입 시 원래 replicas 로 복구하기 위한 backup 이며,
+                  `npu.ai/quiesce-on-driver-upgrade=true` 라벨이 붙은 Deployment 만 대상입니다.
+                  (architectural plan §A6.1 — opt-in quiesce on driver upgrade)
+                items:
+                  description: |-
+                    QuiescedDeployment 는 driver upgrade cycle 동안 일시적으로 scale=0 으로 quiesce 된
+                    Deployment 의 backup 정보입니다. cycle 종료(Idle/Failed) 시 원래 replicas 로 복구됩니다.
+                  properties:
+                    name:
+                      description: Name 은 quiesce 된 Deployment 의 이름입니다.
+                      type: string
+                    namespace:
+                      description: Namespace 는 quiesce 된 Deployment 의 네임스페이스입니다.
+                      type: string
+                    originalReplicas:
+                      description: OriginalReplicas 는 quiesce 직전의 spec.replicas 값입니다
+                        (복구 기준).
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  - namespace
+                  - originalReplicas
+                  type: object
+                type: array
               retries:
                 description: Retries는 현재 업그레이드 시도에서의 재시도 횟수입니다.
                 format: int32

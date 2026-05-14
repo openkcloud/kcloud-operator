@@ -914,6 +914,9 @@ func renderDetectorDS(image string) *appsv1.DaemonSet {
 							{Name: "host-dev", MountPath: "/host/dev", ReadOnly: true},
 							{Name: "host-var", MountPath: "/host/var", ReadOnly: true},
 							{Name: "host-sys", MountPath: "/host/sys", ReadOnly: true},
+							// detector binary 가 /usr/bin/nvidia-smi 검사로 nvidia userland 존재 판단.
+							// /host/usr mount 없으면 nvidiaUserlandPresent()=false → driverVersion="" 보고.
+							{Name: "host-usr", MountPath: "/host/usr", ReadOnly: true},
 						},
 					}},
 					Volumes: []corev1.Volume{
@@ -921,6 +924,7 @@ func renderDetectorDS(image string) *appsv1.DaemonSet {
 						{Name: "host-dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
 						{Name: "host-var", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var"}}},
 						{Name: "host-sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+						{Name: "host-usr", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr"}}},
 					},
 				},
 			},
