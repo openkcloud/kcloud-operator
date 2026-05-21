@@ -14,6 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// ============================================================
+// npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
+// 상세: Detector/Nvidia/Furiosa/Rebellions vendor spec 포함
+// 생성일: 2025-01-01 | 수정일: 2026-04-29
+// ============================================================
+
 package v1alpha1
 
 import (
@@ -43,6 +49,11 @@ type RngdSpec struct {
 	ResourceName      string            `json:"resourceName,omitempty"` // default "furiosa.ai/rngd"
 	ConfigMapName     string            `json:"configMapName,omitempty"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// PartitionPolicy: "none" (default, 1 instance/card), "single-core" (8), "dual-core" (4), "quad-core" (2).
+	// Furiosa libfuriosa-kubernetes PartitioningPolicy 와 1:1 매핑.
+	// +kubebuilder:validation:Enum=none;single-core;dual-core;quad-core
+	// +optional
+	PartitionPolicy string `json:"partitionPolicy,omitempty"`
 }
 
 type NvidiaSpec struct {

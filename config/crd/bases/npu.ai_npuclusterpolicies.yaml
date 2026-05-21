@@ -74,6 +74,16 @@ spec:
                         additionalProperties:
                           type: string
                         type: object
+                      partitionPolicy:
+                        description: |-
+                          PartitionPolicy: "none" (default, 1 instance/card), "single-core" (8), "dual-core" (4), "quad-core" (2).
+                          Furiosa libfuriosa-kubernetes PartitioningPolicy 와 1:1 매핑.
+                        enum:
+                        - none
+                        - single-core
+                        - dual-core
+                        - quad-core
+                        type: string
                       resourceName:
                         type: string
                     type: object
