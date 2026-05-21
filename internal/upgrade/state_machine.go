@@ -136,6 +136,12 @@ func (m *UpgradeStateMachine) TransitionState(
 		// 어떠한 자동 동작도 수행하지 않는다 (rollback infinite-loop 방지, plan §R1).
 		logger.Info("Failed 터미널 상태 — 추가 transition 없이 즉시 반환 (수동 조치 필요)")
 		return false, 0, nil
+	case v1alpha1.UpgradeStateUnverifiedVersion:
+		// terminal: verifiedVersions 화이트리스트에 없는 버전 — DS image patch 없이 대기.
+		// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구한다.
+		logger.Info("UnverifiedVersion 터미널 상태 — DIP.spec.verifiedVersions 수정 필요 (수동 조치)",
+			"node", state.Spec.NodeName, "desiredVersion", state.Status.DesiredVersion)
+		return true, 60 * time.Second, nil
 	default:
 		logger.Info("알 수 없는 상태, Idle로 리셋", "state", state.Status.State)
 		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle, "알 수 없는 상태 리셋", 60*time.Second)
@@ -199,6 +205,23 @@ func (m *UpgradeStateMachine) handleIdle(
 			// state 변경 없이 잔여 시간 후 재시도 (transitionTo 미호출 → LastTransitionTime 보존)
 			return true, remaining, nil
 		}
+	}
+
+	// verifiedVersions 화이트리스트 검사 (non-empty 시에만 검사, backward compat 유지).
+	// DIP.spec.verifiedVersions 가 설정되어 있고 desiredVersion 이 목록에 없으면
+	// 업그레이드를 거부하고 UnverifiedVersion 터미널 상태로 전이한다.
+	// DS image patch 를 수행하지 않으므로 실제 드라이버 변경 없음.
+	if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
+		msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
+			desiredVersion, policy.Spec.VerifiedVersions)
+		logger := logf.FromContext(ctx)
+		logger.Info("verifiedVersions 검증 실패 — 업그레이드 거부",
+			"node", state.Spec.NodeName,
+			"desiredVersion", desiredVersion,
+			"verifiedVersions", policy.Spec.VerifiedVersions)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UnverifiedVersion", "%s", msg)
+		state.Status.DesiredVersion = desiredVersion
+		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
 	}
 
 	// 버전 불일치 + autoUpgrade: UpgradeRequired로 전이
@@ -1491,6 +1514,16 @@ func deploymentTargetsNode(d *appsv1.Deployment, nodeName string) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// containsString 는 slice 에 s 가 포함되어 있으면 true 를 반환한다.
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
 		}
 	}
 	return false
