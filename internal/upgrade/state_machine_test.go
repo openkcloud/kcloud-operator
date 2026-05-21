@@ -172,6 +172,127 @@ func TestExtractImageVariantSuffix(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────
+// verifiedVersions 화이트리스트 검증 테스트
+// ─────────────────────────────────────────────
+
+func int32Ptr(v int32) *int32 { return &v }
+
+// makeDIPWithVerifiedVersions 는 autoUpgrade=true + verifiedVersions 가 지정된 DIP 를 반환한다.
+func makeDIPWithVerifiedVersions(name, vendor, version string, verifiedVersions []string) *v1alpha1.DriverInstallPolicy {
+	return &v1alpha1.DriverInstallPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: v1alpha1.DriverInstallPolicySpec{
+			Vendor: vendor,
+			Driver: v1alpha1.DriverSpec{
+				Version: version,
+				Image:   "registry/driver:" + version,
+			},
+			UpgradePolicy: &v1alpha1.UpgradePolicy{
+				AutoUpgrade:         true,
+				IdleCooldownSeconds: int32Ptr(0), // cooldown 비활성화 (즉시 trigger)
+			},
+			VerifiedVersions: verifiedVersions,
+		},
+	}
+}
+
+// makeIdleDUSWithCurrentVersion 은 지정한 currentVersion 으로 Idle 상태인 DUS 를 반환한다.
+func makeIdleDUSWithCurrentVersion(name, nodeName, vendor, currentVersion string) *v1alpha1.DriverUpgradeState {
+	return &v1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: v1alpha1.DriverUpgradeStateSpec{
+			NodeName: nodeName,
+			Vendor:   vendor,
+		},
+		Status: v1alpha1.DriverUpgradeStateStatus{
+			State:          v1alpha1.UpgradeStateIdle,
+			CurrentVersion: currentVersion,
+		},
+	}
+}
+
+// TestVerifiedVersions_Reject 는 DIP.spec.verifiedVersions 에 없는 버전이
+// desiredVersion 으로 지정된 경우 DUS 가 UnverifiedVersion 터미널 상태로 전이함을 검증한다.
+func TestVerifiedVersions_Reject(t *testing.T) {
+	const (
+		nodeName       = "worker-vv-reject"
+		vendor         = "nvidia"
+		currentVersion = "535.288.01"
+		desiredVersion = "999.0.0" // 화이트리스트에 없는 버전
+		dusName        = "worker-vv-reject-nvidia"
+	)
+	verifiedVersions := []string{"535.288.01", "580.126.09", "580.142", "595.58.03"}
+
+	dus := makeIdleDUSWithCurrentVersion(dusName, nodeName, vendor, currentVersion)
+	dip := makeDIPWithVerifiedVersions("nvidia-generic-reject", vendor, desiredVersion, verifiedVersions)
+
+	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	ctx := context.Background()
+
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+
+	if dus.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Errorf("verifiedVersions 외 버전: UnverifiedVersion 상태 기대, got %q", dus.Status.State)
+	}
+}
+
+// TestVerifiedVersions_Pass 는 DIP.spec.verifiedVersions 에 포함된 버전이
+// desiredVersion 으로 지정된 경우 DUS 가 UpgradeRequired 로 정상 전이함을 검증한다.
+func TestVerifiedVersions_Pass(t *testing.T) {
+	const (
+		nodeName       = "worker-vv-pass"
+		vendor         = "nvidia"
+		currentVersion = "535.288.01"
+		desiredVersion = "580.142" // 화이트리스트에 있는 버전
+		dusName        = "worker-vv-pass-nvidia"
+	)
+	verifiedVersions := []string{"535.288.01", "580.126.09", "580.142", "595.58.03"}
+
+	dus := makeIdleDUSWithCurrentVersion(dusName, nodeName, vendor, currentVersion)
+	dip := makeDIPWithVerifiedVersions("nvidia-generic-pass", vendor, desiredVersion, verifiedVersions)
+
+	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	ctx := context.Background()
+
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+
+	if dus.Status.State != v1alpha1.UpgradeStateRequired {
+		t.Errorf("verifiedVersions 내 버전: UpgradeRequired 상태 기대, got %q", dus.Status.State)
+	}
+}
+
+// TestVerifiedVersions_Empty_Skip 는 DIP.spec.verifiedVersions 가 비어있을 때
+// 버전 검증을 skip 하고 기존 동작(UpgradeRequired 전이)을 유지함을 검증한다 (backward compat).
+func TestVerifiedVersions_Empty_Skip(t *testing.T) {
+	const (
+		nodeName       = "worker-vv-empty"
+		vendor         = "furiosa"
+		currentVersion = "1.7.8"
+		desiredVersion = "1.9.8-3"
+		dusName        = "worker-vv-empty-furiosa"
+	)
+
+	dus := makeIdleDUSWithCurrentVersion(dusName, nodeName, vendor, currentVersion)
+	// verifiedVersions 없음 → 검증 skip
+	dip := makeDIPWithVerifiedVersions("furiosa-warboy-empty", vendor, desiredVersion, nil)
+
+	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	ctx := context.Background()
+
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+
+	if dus.Status.State != v1alpha1.UpgradeStateRequired {
+		t.Errorf("verifiedVersions 비어있으면 UpgradeRequired 기대 (backward compat), got %q", dus.Status.State)
+	}
+}
+
 // makeRollbackDIP 는 maxRollbackAttempts 가 명시된 DIP 를 반환한다.
 // MaxRollbackAttempts 초과 시 Failed 전이 검증용.
 func makeRollbackDIP(name, vendor string, maxRollback int32) *v1alpha1.DriverInstallPolicy {
