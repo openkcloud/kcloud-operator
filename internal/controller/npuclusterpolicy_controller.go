@@ -174,7 +174,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	//-- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
 	if policy.Spec.Furiosa.Rngd.Enabled {
 		logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
-		if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy); err != nil {
+		if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
 			logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
 			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
 			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
@@ -432,6 +432,19 @@ interval: 10`,
 	return nil
 }
 
+// rngdDevicePluginArgs returns the binary args for the Furiosa RNGD device plugin DaemonSet.
+// 빈 문자열 또는 "none" 이면 --policy flag 미추가 (회귀 0). 그 외 (single-core/dual-core/quad-core)
+// 면 `--policy=<value>` 를 append 한다 (libfuriosa-kubernetes PartitioningPolicy enum 과 1:1).
+// upstream v2026.1.0 image 는 --policy flag 를 노출하지 않으므로, 비-none 정책은
+// partition-aware custom image (helm values.furiosa.rngd.devicePluginImage 로 override) 필요.
+func rngdDevicePluginArgs(partitionPolicy string) []string {
+	args := []string{"--debugMode"}
+	if partitionPolicy != "" && partitionPolicy != "none" {
+		args = append(args, "--policy="+partitionPolicy)
+	}
+	return args
+}
+
 // -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device plugin.
 // NodeSelector uses NFD PCI label feature.node.kubernetes.io/pci-1200_1ed2.present=true by default;
 // override via Spec.Furiosa.Rngd.NodeSelector.
@@ -444,7 +457,18 @@ interval: 10`,
 //
 // Spec.Furiosa.Rngd.ResourceName / ConfigMapName 필드는 CRD 에 남아 있지만, 현재 공식 이미지가
 // 이를 자동 처리하므로 이 함수에서 참조하지 않는다 (backward-compat: 필드 존재는 허용).
-func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+//
+// partitionPolicy: NPUClusterPolicy.Spec.Furiosa.Rngd.PartitionPolicy 의 string 값
+// ("none"/"single-core"/"dual-core"/"quad-core"/"" 중 하나).
+// 빈 문자열 또는 "none" 이면 args 변경 없이 기존 1:1 카드 동작 유지 (회귀 0).
+// 그 외 값이면 `--policy=<value>` 가 binary args 에 append 된다.
+//
+// 주의 (2026-04-29 worker-pa 분석): upstream image `docker.io/furiosaai/furiosa-device-plugin:2026.1.0`
+// 는 cobra binary 가 `--debugMode` flag 만 노출 — `--policy` flag 미지원. cobra 는 unknown flag 거부.
+// 따라서 v2026.1.0 image 로 partitionPolicy="dual-core" 운영 시 binary 시작 자체 실패.
+// dual-core/single-core/quad-core 운영을 위해서는 별도 빌드된 partition-aware device plugin image
+// (helm values.furiosa.rngd.devicePluginImage 로 override) 가 필요하다.
+func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, partitionPolicy string) error {
 	log := logf.FromContext(ctx)
 
 	rngd := policy.Spec.Furiosa.Rngd
@@ -486,7 +510,11 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 					// --debugMode 는 Furiosa device plugin 이 device 를 인식·등록하는 데
 					// 필요 (기본 모드에서는 "couldn't recognize any furiosa devices" 출력
 					// 후 종료됨. v1.5 follow-up F-1 반영.
-					Args: []string{"--debugMode"},
+					// partitionPolicy 가 비어있거나 "none" 이면 --policy flag 미추가 (기존 동작).
+					// 그 외 (single-core/dual-core/quad-core) 면 partition-aware image 가
+					// libfuriosa-kubernetes 의 PartitioningPolicy 와 1:1 매핑되는 flag 로 받는다.
+					// (upstream v2026.1.0 image 는 미지원 — partition-aware custom image 필요)
+					Args: rngdDevicePluginArgs(partitionPolicy),
 					Env: []corev1.EnvVar{
 						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
 							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
