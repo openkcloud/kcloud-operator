@@ -80,29 +80,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - npu.ai
   resources:
   - driverinstallpolicies
   - nodedevicereports
-  - nodedevicereports/status
   verbs:
-  - create
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - npu.ai

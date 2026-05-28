@@ -225,15 +225,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.DriverInstallReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("driverinstall-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DriverInstall")
-		os.Exit(1)
-	}
-
 	if err := (&controller.NPUClusterPolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
