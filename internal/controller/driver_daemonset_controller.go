@@ -348,3 +348,8 @@ func (r *DriverDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("driverdaemonset").
 		Complete(r)
 }
+
+// sanitize는 모델명을 Kubernetes 리소스 이름에 사용 가능한 형태로 변환합니다.
+func sanitize(s string) string {
+	return strings.ToLower(s)
+}

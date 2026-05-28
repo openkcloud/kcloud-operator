@@ -129,10 +129,9 @@ type DriverSpec struct {
 	Installer string `json:"installer,omitempty"`
 
 	// Mode는 드라이버 설치 방식을 결정합니다.
-	// job      : 일회성 Kubernetes Job으로 드라이버 설치 (기본값)
-	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버)
-	// +kubebuilder:validation:Enum=job;daemonset
-	// +kubebuilder:default=job
+	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버, 유일 지원 방식)
+	// +kubebuilder:validation:Enum=daemonset
+	// +kubebuilder:default=daemonset
 	Mode string `json:"mode,omitempty"`
 
 	// (선택) 인스톨러 환경변수

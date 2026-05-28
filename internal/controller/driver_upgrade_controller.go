@@ -114,11 +114,6 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// daemonset 모드만 업그레이드 상태 머신 적용
-	if policy.Spec.Driver.Mode != "daemonset" {
-		return ctrl.Result{}, nil
-	}
-
 	// 4. 상태 머신 실행
 	requeue, requeueAfter, smErr := r.StateMachine.TransitionState(ctx, &state, policy)
 
@@ -184,10 +179,6 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 			if policy == nil {
 				continue
 			}
-			if policy.Spec.Driver.Mode != "daemonset" {
-				continue
-			}
-
 			// nodeSelector 매칭 확인
 			if !nodeMatchesSelector(&node, policy.Spec.NodeSelector) {
 				continue
