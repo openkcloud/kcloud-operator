@@ -182,7 +182,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	//-- Rebellions ATOM+ (separate namespace rbln-system + PSA privileged + ClusterRole/Binding)
+	// -- Rebellions ATOM+ (separate namespace rbln-system + PSA privileged + ClusterRole/Binding)
 	if policy.Spec.Rebellions.Enabled {
 		logger.Info("Ensuring Rebellions ATOM+ Device Plugin")
 		for _, step := range []struct {
