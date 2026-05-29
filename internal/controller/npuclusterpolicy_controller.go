@@ -58,8 +58,8 @@ type NPUClusterPolicyReconciler struct {
 func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desired *appsv1.DaemonSet) error {
 	var cur appsv1.DaemonSet
 	key := types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}
-	if err := r.Client.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
-		return r.Client.Create(ctx, desired)
+	if err := r.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desir
 		cur.Spec = desired.Spec
 		cur.ObjectMeta.Labels = desired.ObjectMeta.Labels
 		cur.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
-		return r.Client.Update(ctx, &cur)
+		return r.Update(ctx, &cur)
 	}
 	return nil
 }
@@ -78,14 +78,14 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desir
 func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desired *corev1.ConfigMap) error {
 	var cur corev1.ConfigMap
 	key := types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}
-	if err := r.Client.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
-		return r.Client.Create(ctx, desired)
+	if err := r.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
 	}
 	if !equality.Semantic.DeepEqual(cur.Data, desired.Data) {
 		cur.Data = desired.Data
-		return r.Client.Update(ctx, &cur)
+		return r.Update(ctx, &cur)
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	logger := logf.FromContext(ctx)
 	logger.Info("Reconciling NPUClusterPolicy", "name", req.NamespacedName)
 
-	//-- Get CR
+	// -- Get CR
 	var policy npuv1alpha1.NPUClusterPolicy
 	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
 		logger.Error(err, "unable to fetch NPUClusterPolicy")
@@ -149,7 +149,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	//-- NVIDIA
+	// -- NVIDIA
 	if policy.Spec.Nvidia.Enabled {
 		logger.Info("Ensuring NVIDIA Device Plugin DaemonSet")
 		if err := r.ensureNvidiaDevicePlugin(ctx, &policy); err != nil {
@@ -160,7 +160,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	//-- Furiosa
+	// -- Furiosa
 	if policy.Spec.Furiosa.Enabled {
 		logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
 		if err := r.ensureFuriosaDevicePlugin(ctx, &policy); err != nil {
@@ -171,7 +171,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	//-- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
+	// -- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
 	if policy.Spec.Furiosa.Rngd.Enabled {
 		logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
 		if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
@@ -275,7 +275,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 
 	// 기본 selector (수동 라벨 전략)
 	sel := map[string]string{"nvidia.com/gpu.present": "true"}
-	if policy.Spec.Nvidia.NodeSelector != nil && len(policy.Spec.Nvidia.NodeSelector) > 0 {
+	if len(policy.Spec.Nvidia.NodeSelector) > 0 {
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
 
@@ -331,7 +331,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaDevicePlugin(ctx context.Conte
 
 	// nodeSelector
 	sel := map[string]string{"furiosa": "true"}
-	if policy.Spec.Furiosa.NodeSelector != nil && len(policy.Spec.Furiosa.NodeSelector) > 0 {
+	if len(policy.Spec.Furiosa.NodeSelector) > 0 {
 		sel = policy.Spec.Furiosa.NodeSelector
 	}
 

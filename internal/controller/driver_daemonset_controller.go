@@ -79,8 +79,8 @@ func (r *DriverDaemonSetReconciler) createOrUpdateDriverDS(ctx context.Context, 
 func (r *DriverDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desired *appsv1.DaemonSet) error {
 	var cur appsv1.DaemonSet
 	key := types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}
-	if err := r.Client.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
-		return r.Client.Create(ctx, desired)
+	if err := r.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (r *DriverDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desire
 		cur.Spec = desired.Spec
 		cur.ObjectMeta.Labels = desired.ObjectMeta.Labels
 		cur.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
-		return r.Client.Update(ctx, &cur)
+		return r.Update(ctx, &cur)
 	}
 	return nil
 }
