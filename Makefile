@@ -97,7 +97,7 @@ help: ## Display this help.
 # 어느 디렉토리에서 `make -C` 또는 CI 상의 다른 cwd로 실행해도 동일 위치를 가리킴.
 # (kcloud-operator는 자체 git repo이므로 git-toplevel로는 상위 operator repo에 도달 불가.)
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
-HELM_CRDS_DIR ?= $(MAKEFILE_DIR)/../helm/kcloud-operator/crds
+HELM_CRDS_DIR ?= $(MAKEFILE_DIR)/deploy/helm/crds
 
 .PHONY: embed-crds
 embed-crds: ## Copy generated CRDs into internal/crdapply/crd/ for go:embed bundling.
