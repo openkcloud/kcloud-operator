@@ -1,0 +1,79 @@
+{{/*
+pre-upgrade-cleanup-old-ds.yaml: helm upgrade 시 구 이름 device-plugin DaemonSet 5종을 사전 삭제하는 pre-upgrade Job.
+상세: DS 이름이 npu-op-<vendor>-device-plugin → npu-op-device-plugin-<vendor> 로 변경되어
+      upgrade 전에 구 이름 DS가 남아 있으면 충돌이 발생하므로 hook으로 사전 정리함.
+      kubectl 이미지는 airgap 대응으로 사설 레지스트리(<your-registry>) 미러 사용.
+      --ignore-not-found 삭제를 실행하여 이미 없는 경우에도 안전.
+생성일: 2026-04-22 | 수정일: 2026-04-23
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: npu-op-cleanup-old-ds
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: npu-op-cleanup-old-ds
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: npu-op-cleanup-old-ds
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: npu-op-cleanup-old-ds
+subjects:
+  - kind: ServiceAccount
+    name: npu-op-cleanup-old-ds
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: npu-op-cleanup-old-ds
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      serviceAccountName: npu-op-cleanup-old-ds
+      restartPolicy: OnFailure
+      containers:
+        - name: cleanup-old-ds
+          image: <your-registry>/bitnami/kubectl:1.28
+          command: ["kubectl"]
+          args:
+            - "-n"
+            - "kube-system"
+            - "delete"
+            - "ds"
+            - "--ignore-not-found"
+            - "npu-op-nvidia-device-plugin"
+            - "npu-op-furiosa-device-plugin"
+            - "npu-op-furiosa-rngd-device-plugin"
+            - "npu-op-rbln-device-plugin"
