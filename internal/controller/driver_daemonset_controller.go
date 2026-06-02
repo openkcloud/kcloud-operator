@@ -86,10 +86,13 @@ func (r *DriverDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desire
 	}
 	if !equality.Semantic.DeepEqual(cur.Spec, desired.Spec) ||
 		!equality.Semantic.DeepEqual(cur.ObjectMeta.Labels, desired.ObjectMeta.Labels) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.Annotations, desired.ObjectMeta.Annotations) {
+		!equality.Semantic.DeepEqual(cur.ObjectMeta.Annotations, desired.ObjectMeta.Annotations) ||
+		!equality.Semantic.DeepEqual(cur.ObjectMeta.OwnerReferences, desired.ObjectMeta.OwnerReferences) {
 		cur.Spec = desired.Spec
 		cur.ObjectMeta.Labels = desired.ObjectMeta.Labels
 		cur.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
+		// OwnerReferences 동기화 — 기존(ownerRef 없이 생성된) DS 도 업그레이드 시 owner 부여.
+		cur.ObjectMeta.OwnerReferences = desired.ObjectMeta.OwnerReferences
 		return r.Update(ctx, &cur)
 	}
 	return nil
@@ -121,6 +124,17 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 			Name:      name,
 			Namespace: "kube-system",
 			Labels:    labels,
+			// DIP(cluster-scoped) 를 owner 로 지정 → DIP 삭제 시 K8s GC 가
+			// driver DaemonSet 을 cascade 삭제(orphan 방지). cluster-scoped owner +
+			// namespaced dependent 조합은 허용됨. BlockOwnerDeletion 은 생략하여
+			// driverinstallpolicies/finalizers RBAC 의존을 피한다.
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "npu.ai/v1alpha1",
+				Kind:       "DriverInstallPolicy",
+				Name:       pol.Name,
+				UID:        pol.UID,
+				Controller: boolPtr(true),
+			}},
 		},
 		Spec: appsv1.DaemonSetSpec{
 			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
@@ -345,6 +359,7 @@ func vendorRmmodCommand(vendor, model string) string {
 func (r *DriverDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&npuv1alpha1.DriverInstallPolicy{}).
+		Owns(&appsv1.DaemonSet{}). // owner=DIP 인 driver DS 변경 감시 → 수동 삭제 시 재생성
 		Named("driverdaemonset").
 		Complete(r)
 }

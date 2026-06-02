@@ -50,9 +50,15 @@ furiosa:
   # ─────────────────────────────────────────────────────────────────────
   rngd:
     enabled: true
-    devicePluginImage: "<your-registry>/furiosaai/furiosa-device-plugin:2026.1.0"
+    # ⚠️ partitionPolicy != "none" 은 operator 가 device-plugin 에 `--policy <값>` 을
+    #    전달하므로, 그 flag 를 지원하는 파티션 가능 이미지(`furiosa-device-plugin-mi`)가
+    #    반드시 필요하다. 일반 `furiosaai/furiosa-device-plugin` 이미지는 `--policy` 미지원
+    #    → CrashLoopBackOff(unknown flag). 아래 기본값은 production(4 instance/card) 재현용.
+    devicePluginImage: "<your-registry>/kcloud/furiosa-device-plugin-mi:v0.1.0"
     resourceName: "furiosa.ai/rngd"
-    partitionPolicy: "none"   # 신규. dual-core 로 override 시 4 instance/card
+    # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
+    # "none" 으로 바꾸면 위 -mi 이미지든 일반 이미지든 동작(--policy 미전달).
+    partitionPolicy: "dual-core"
     # 직접 라벨링 방식 (Warboy/NVIDIA 와 일관). NFD 의존 제거.
     # rngd-1 노드에 수동/Operator 로 `furiosa-rngd=true` 부여 필요.
     nodeSelector:
