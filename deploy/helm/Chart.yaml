@@ -4,5 +4,5 @@ apiVersion: v2
 name: npu-operator
 description: Kubernetes Operator for unified NPU/GPU accelerator management
 type: application
-version: 0.5.12
-appVersion: "v0.5.21"
+version: 0.5.13
+appVersion: "v0.5.22"
