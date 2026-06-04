@@ -1,10 +1,14 @@
 {{/*
-pre-upgrade-cleanup-old-ds.yaml: helm upgrade 시 구 이름 device-plugin DaemonSet 5종을 사전 삭제하는 pre-upgrade Job.
-상세: DS 이름이 npu-op-<vendor>-device-plugin → npu-op-device-plugin-<vendor> 로 변경되어
-      upgrade 전에 구 이름 DS가 남아 있으면 충돌이 발생하므로 hook으로 사전 정리함.
-      kubectl 이미지는 airgap 대응으로 사설 레지스트리(<your-registry>) 미러 사용.
-      --ignore-not-found 삭제를 실행하여 이미 없는 경우에도 안전.
-생성일: 2026-04-22 | 수정일: 2026-04-23
+pre-upgrade-cleanup-old-ds.yaml: helm upgrade 시 구 이름 DaemonSet 전체를 사전 삭제하는 pre-upgrade Job.
+상세: DS selector 가 immutable 이므로 이름 변경 시 구 DS 를 삭제 후 신 DS 를 재생성해야 함.
+      삭제 목록에는 v0.5.23 이전의 모든 구 이름이 포함되어 있어 복수 세대 업그레이드도 안전.
+        - (pre-v0.5.7) npu-op-<vendor>-device-plugin  → 5종
+        - (v0.5.7~v0.5.22) npu-op-detector, npu-op-device-plugin-<vendor> → 6종,
+                            npu-op-driver-<vendor>-<model> → 4종
+      --ignore-not-found 로 이미 없는 경우도 안전하게 처리.
+      kubectl 이미지는 .Values.crdUpgrade.kubectlImage (기본 public "bitnami/kubectl:1.28").
+      airgap 환경은 해당 값을 사설 미러 경로로 override.
+생성일: 2026-04-22 | 수정일: 2026-06-02
 */}}
 ---
 apiVersion: v1
@@ -65,15 +69,27 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: cleanup-old-ds
-          image: <your-registry>/bitnami/kubectl:1.28
-          command: ["kubectl"]
+          image: "{{ .Values.crdUpgrade.kubectlImage | default (include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.crdUpgrade.kubectlRepository "tag" .Values.crdUpgrade.kubectlTag)) }}"
+          command: ["/bin/sh", "-c"]
           args:
-            - "-n"
-            - "kube-system"
-            - "delete"
-            - "ds"
-            - "--ignore-not-found"
-            - "npu-op-nvidia-device-plugin"
-            - "npu-op-furiosa-device-plugin"
-            - "npu-op-furiosa-rngd-device-plugin"
-            - "npu-op-rbln-device-plugin"
+            - |
+              set -e
+              # (1) pre-v0.5.7 구 이름: npu-op-<vendor>-device-plugin
+              kubectl -n kube-system delete ds --ignore-not-found \
+                npu-op-nvidia-device-plugin \
+                npu-op-furiosa-device-plugin \
+                npu-op-furiosa-rngd-device-plugin \
+                npu-op-rbln-device-plugin \
+              # (2) v0.5.7~v0.5.22 구 이름: detector / npu-op-device-plugin-<vendor>
+              kubectl -n kube-system delete ds --ignore-not-found \
+                npu-op-detector \
+                npu-op-device-plugin-nvidia \
+                npu-op-device-plugin-furiosa \
+                npu-op-device-plugin-furiosa-rngd \
+                npu-op-device-plugin-rbln \
+              # (3) v0.5.7~v0.5.22 구 이름: npu-op-driver-<vendor>-<model>
+              kubectl -n kube-system delete ds --ignore-not-found \
+                npu-op-driver-nvidia-generic \
+                npu-op-driver-furiosa-warboy \
+                npu-op-driver-furiosa-rngd \
+              echo "pre-upgrade cleanup done"

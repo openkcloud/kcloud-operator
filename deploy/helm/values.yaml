@@ -1,9 +1,21 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25
+# 생성일: 2026-03-25 | 수정일: 2026-06-02
 
+# ─────────────────────────────────────────────────────────────────────────────
+# global.registry: 사설 이미지(operator/detector/device-plugin/driver)의 레지스트리.
+#   기본값은 placeholder("<your-registry>") 이므로 그대로 두면 사설 IP 가 노출되지 않음.
+#   설치 시 한 줄로 주입:  --set global.registry=<host:port>  또는  -f values-airgap.example.yaml
+#   비어있으면("") 사설 이미지는 registry-relative(repo:tag, Docker Hub 기본)로 렌더됨.
+#   public device-plugin 이미지(nvcr.io / ghcr.io)는 이 prefix 가 적용되지 않음.
+#   (bitnami/kubectl 은 crdUpgrade 블록에서 global.registry 로 미러 조립됨 — airgap 대응)
+# ─────────────────────────────────────────────────────────────────────────────
+global:
+  registry: "<your-registry>"
+
+# operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
-  repository: <your-registry>/npu-operator
-  tag: v0.5.22
+  repository: npu-operator
+  tag: v0.5.24
   pullPolicy: IfNotPresent
 
 serviceAccount:
@@ -24,7 +36,9 @@ clusterPolicy:
   namespace: ""
 
 detector:
-  image: "<your-registry>/npu-detector:0.4.3"
+  # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  repository: "npu-detector"
+  tag: "0.4.3"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +68,9 @@ furiosa:
     #    전달하므로, 그 flag 를 지원하는 파티션 가능 이미지(`furiosa-device-plugin-mi`)가
     #    반드시 필요하다. 일반 `furiosaai/furiosa-device-plugin` 이미지는 `--policy` 미지원
     #    → CrashLoopBackOff(unknown flag). 아래 기본값은 production(4 instance/card) 재현용.
-    devicePluginImage: "<your-registry>/kcloud/furiosa-device-plugin-mi:v0.1.0"
+    # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+    devicePluginRepository: "kcloud/furiosa-device-plugin-mi"
+    devicePluginTag: "v0.1.0"
     resourceName: "furiosa.ai/rngd"
     # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
     # "none" 으로 바꾸면 위 -mi 이미지든 일반 이미지든 동작(--policy 미전달).
@@ -66,13 +82,15 @@ furiosa:
 
 rebellions:
   enabled: true
-  devicePluginImage: "<your-registry>/rebellions/k8s-device-plugin:v0.3.6"
+  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  devicePluginRepository: "rebellions/k8s-device-plugin"
+  devicePluginTag: "v0.3.6"
   resourceName: "ATOM"
   resourcePrefix: "rebellions.ai"
   # 2026-04-22: Warboy/RNGD/NVIDIA 와 동일하게 kube-system 으로 통일.
-  # DS/SA/ConfigMap 이름 prefix 도 `npu-op-rbln-` 로 변경 (operator 상수 참조).
+  # 2026-06-02: DS/SA/ConfigMap 이름 prefix 를 `rbln-device-plugin` 으로 변경 (§1 리네임).
   namespace: "kube-system"
-  configMapName: "npu-op-rbln-device-plugin-config"
+  configMapName: "rbln-device-plugin-config"
   nodeSelector:
     rebellions-atom: "true"
     kubernetes.io/arch: "amd64"
@@ -80,6 +98,8 @@ rebellions:
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
   enabled: true
+  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  devicePluginTag: "v0.1.0"
   nodeSelector:
 
 runtimeClass:
@@ -121,7 +141,9 @@ driverInstallPolicies:
       # 상세: docs/05 §4.2.7 알려진 이슈
       mode: daemonset
       version: "1.9.8-3"
-      image: "<your-registry>/furiosa-driver-ds:1.9.8-3-v2"
+      # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+      repository: "furiosa-driver-ds"
+      tag: "1.9.8-3-v2"
       installer: apt
     upgradePolicy:
       autoUpgrade: true
@@ -162,7 +184,9 @@ driverInstallPolicies:
       # 2026-06-01: worker1 실설치=580.159.03 고정. 580.142-v173 → 580.159.03-v173 교정
       #             (라이브 무중단 복구, idempotent skip 경로). 상세: docs/05 §4.2.7 알려진 이슈
       version: "580.159.03"
-      image: "<your-registry>/nvidia-driver-ds:580.159.03-v173"
+      # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+      repository: "nvidia-driver-ds"
+      tag: "580.159.03-v173"
       installer: apt
       env:
         - name: NVIDIA_DRIVER_CHOICE
@@ -200,7 +224,9 @@ driverInstallPolicies:
     driver:
       mode: daemonset
       version: "2026.1.0"
-      image: "<your-registry>/furiosa-rngd-driver-installer:2026.1.0"
+      # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+      repository: "furiosa-rngd-driver-installer"
+      tag: "2026.1.0"
       installer: apt
     upgradePolicy:
       autoUpgrade: true
@@ -220,6 +246,8 @@ driverInstallPolicies:
     driver:
       mode: daemonset
       version: "0.1.1"
+      # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+      tag: "0.1.1"
       installer: apt
     upgradePolicy:
       autoUpgrade: true
@@ -242,6 +270,14 @@ rollingUpdate:
 # ─────────────────────────────────────────────────────────────────────────────
 crdUpgrade:
   enabled: true
+  # pre-upgrade cleanup Job(구 이름 DaemonSet 삭제)이 사용하는 kubectl 이미지.
+  # 기본 동작: 다른 사설 이미지와 동일하게 global.registry 로 조립됨
+  #   - global.registry 설정 시 → <registry>/bitnami/kubectl:1.28 (사설 미러, airgap 정상)
+  #   - global.registry 가 비어("") 있으면 → bitnami/kubectl:1.28 (public Docker Hub)
+  # kubectlImage 를 명시하면 global.registry 를 무시하고 그 값을 그대로 사용(full override).
+  kubectlRepository: bitnami/kubectl
+  kubectlTag: "1.28"
+  kubectlImage: ""
 
 # Leader election (controller-runtime Lease-based)
 leaderElection:

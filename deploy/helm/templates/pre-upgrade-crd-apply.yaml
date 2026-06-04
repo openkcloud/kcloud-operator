@@ -65,7 +65,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: apply-crds
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.image.repository "tag" .Values.image.tag) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["apply-crds"]
 {{- end }}

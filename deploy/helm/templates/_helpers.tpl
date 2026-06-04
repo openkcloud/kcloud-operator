@@ -34,3 +34,15 @@ Common selector labels
 app.kubernetes.io/name: {{ include "npu-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{/*
+Assemble a fully-qualified image string from a registry-relative repo + tag.
+Input dict keys: registry (may be empty), repo, tag.
+- registry 가 비어있지 않으면 "<registry>/<repo>:<tag>" 로 prefix.
+- 비어있으면 "<repo>:<tag>" (registry-relative, e.g. Docker Hub 기본).
+사설 IP 를 values 기본값에서 제거하고 install 시 global.registry 로 1줄 주입하기 위함.
+*/}}
+{{- define "kcloud-operator.image" -}}
+{{- $reg := .registry | default "" -}}
+{{- if $reg -}}{{ $reg }}/{{ .repo }}:{{ .tag }}{{- else -}}{{ .repo }}:{{ .tag }}{{- end -}}
+{{- end -}}
