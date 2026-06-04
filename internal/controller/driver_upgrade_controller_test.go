@@ -700,9 +700,9 @@ func TestUpgrading_PreviousImage_RejectsPlainTag(t *testing.T) {
 		nodeName   = "worker-rollback-guard"
 		vendor     = "nvidia"
 		dusName    = "worker-rollback-guard-nvidia"
-		dsName     = "npu-op-driver-nvidia"
-		plainImage = "<your-registry>/nvidia-driver-ds:580.126.09" // broken plain tag
-		desiredImg = "<your-registry>/nvidia-driver-ds:590.48.01-v16"
+		dsName     = "kcloud-nvidia-driver"
+		plainImage = "registry.example.com/nvidia-driver-ds:580.126.09" // broken plain tag
+		desiredImg = "registry.example.com/nvidia-driver-ds:590.48.01-v16"
 		desiredVer = "590.48.01"
 		policyName = "nvidia-generic"
 	)
@@ -734,9 +734,9 @@ func TestUpgrading_PreviousImage_AcceptsVerifiedTag(t *testing.T) {
 		nodeName     = "worker-rollback-ok"
 		vendor       = "nvidia"
 		dusName      = "worker-rollback-ok-nvidia"
-		dsName       = "npu-op-driver-nvidia"
-		verifiedPrev = "<your-registry>/nvidia-driver-ds:580.126.09-v16"
-		desiredImg   = "<your-registry>/nvidia-driver-ds:590.48.01-v16"
+		dsName       = "kcloud-nvidia-driver"
+		verifiedPrev = "registry.example.com/nvidia-driver-ds:580.126.09-v16"
+		desiredImg   = "registry.example.com/nvidia-driver-ds:590.48.01-v16"
 		desiredVer   = "590.48.01"
 		policyName   = "nvidia-generic"
 	)

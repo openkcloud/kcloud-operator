@@ -66,7 +66,7 @@ type NvidiaSpec struct {
 // Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
 type RebellionsSpec struct {
 	Enabled           bool              `json:"enabled,omitempty"`
-	DevicePluginImage string            `json:"devicePluginImage,omitempty"`
+	DevicePluginImage string            `json:"devicePluginImage"`
 	ResourceName      string            `json:"resourceName,omitempty"`   // default "ATOM"
 	ResourcePrefix    string            `json:"resourcePrefix,omitempty"` // default "rebellions.ai"
 	Namespace         string            `json:"namespace,omitempty"`      // default "rbln-system"
