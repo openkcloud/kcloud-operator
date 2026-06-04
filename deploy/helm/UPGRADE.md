@@ -98,7 +98,7 @@ kubectl delete crd driverinstallpolicies.npu.ai
 
 ```bash
 cd kcloud-operator
-REGISTRY=<your-registry>  # 예: <your-registry>
+REGISTRY=<your-registry>  # 예: <your-registry>/kcloud  (Harbor 프로젝트 포함)
 sudo docker build -t $REGISTRY/npu-operator:v0.3.1-rename .
 sudo docker push $REGISTRY/npu-operator:v0.3.1-rename
 ```
