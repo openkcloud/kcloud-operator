@@ -95,13 +95,6 @@ rebellions:
     rebellions-atom: "true"
     kubernetes.io/arch: "amd64"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-  enabled: true
-  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-  devicePluginTag: "v0.1.0"
-  nodeSelector:
-
 runtimeClass:
   nvidia:
     enabled: true
@@ -227,27 +220,6 @@ driverInstallPolicies:
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-rngd-driver-installer"
       tag: "2026.1.0"
-      installer: apt
-    upgradePolicy:
-      autoUpgrade: true
-      drainEnabled: true
-      rollbackOnFailure: true
-      maxUnavailable: 1
-      validationTimeout: "10m"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # ─────────────────────────────────────────────────────────────────────
-    enabled: true
-    rebootStrategy: IfNeeded
-    kernelAllowlist: ["5.15.*", "6.8.*"]
-    containerdMinVersion: "1.7.0"
-    verifiedVersions: ["0.1.1"]
-    nodeSelector:
-    driver:
-      mode: daemonset
-      version: "0.1.1"
-      # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-      tag: "0.1.1"
       installer: apt
     upgradePolicy:
       autoUpgrade: true

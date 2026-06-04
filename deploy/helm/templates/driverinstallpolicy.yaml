@@ -136,31 +136,3 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
----
-apiVersion: npu.ai/v1alpha1
-kind: DriverInstallPolicy
-metadata:
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation
-spec:
-  kernelAllowlist:
-  driver:
-    mode: {{ . }}
-    {{- end }}
-    installer: {{ . }}
-    {{- end }}
-    env:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-  verifiedVersions:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  nodeSelector:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  upgradePolicy:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-{{- end }}

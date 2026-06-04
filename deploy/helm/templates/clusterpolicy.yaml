@@ -48,8 +48,4 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
   {{- end }}
-  {{- /*
-    이유: main HEAD 4aa36d2 TT-less 코드/CRD(npuclusterpolicies.npu.ai)에는
-    NPUClusterPolicy에는 렌더하지 않음.
-  */}}
 {{- end }}

@@ -79,17 +79,17 @@ spec:
                 npu-op-nvidia-device-plugin \
                 npu-op-furiosa-device-plugin \
                 npu-op-furiosa-rngd-device-plugin \
-                npu-op-rbln-device-plugin \
+                npu-op-rbln-device-plugin
               # (2) v0.5.7~v0.5.22 구 이름: detector / npu-op-device-plugin-<vendor>
               kubectl -n kube-system delete ds --ignore-not-found \
                 npu-op-detector \
                 npu-op-device-plugin-nvidia \
                 npu-op-device-plugin-furiosa \
                 npu-op-device-plugin-furiosa-rngd \
-                npu-op-device-plugin-rbln \
+                npu-op-device-plugin-rbln
               # (3) v0.5.7~v0.5.22 구 이름: npu-op-driver-<vendor>-<model>
               kubectl -n kube-system delete ds --ignore-not-found \
                 npu-op-driver-nvidia-generic \
                 npu-op-driver-furiosa-warboy \
-                npu-op-driver-furiosa-rngd \
+                npu-op-driver-furiosa-rngd
               echo "pre-upgrade cleanup done"
