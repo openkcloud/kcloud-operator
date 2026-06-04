@@ -8,7 +8,7 @@ metadata:
   namespace: {{ .Values.clusterPolicy.namespace | default .Release.Namespace }}
 spec:
   detector:
-    image: "{{ .Values.detector.image }}"
+    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.detector.repository "tag" .Values.detector.tag) }}"
   nvidia:
     enabled: {{ .Values.nvidia.enabled }}
     devicePluginImage: "{{ .Values.nvidia.devicePluginImage }}"
@@ -27,7 +27,7 @@ spec:
     {{- if .Values.furiosa.rngd }}
     rngd:
       enabled: {{ .Values.furiosa.rngd.enabled }}
-      devicePluginImage: "{{ .Values.furiosa.rngd.devicePluginImage }}"
+      devicePluginImage: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.rngd.devicePluginRepository "tag" .Values.furiosa.rngd.devicePluginTag) }}"
       resourceName: "{{ .Values.furiosa.rngd.resourceName }}"
       partitionPolicy: {{ .Values.furiosa.rngd.partitionPolicy | default "none" | quote }}
       {{- if .Values.furiosa.rngd.nodeSelector }}
@@ -38,7 +38,7 @@ spec:
   {{- if .Values.rebellions }}
   rebellions:
     enabled: {{ .Values.rebellions.enabled }}
-    devicePluginImage: {{ .Values.rebellions.devicePluginImage | quote }}
+    devicePluginImage: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.rebellions.devicePluginRepository "tag" .Values.rebellions.devicePluginTag) | quote }}
     resourceName: {{ .Values.rebellions.resourceName | quote }}
     resourcePrefix: {{ .Values.rebellions.resourcePrefix | quote }}
     namespace: {{ .Values.rebellions.namespace | quote }}

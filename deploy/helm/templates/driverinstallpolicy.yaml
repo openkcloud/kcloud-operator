@@ -25,7 +25,7 @@ spec:
     mode: {{ . }}
     {{- end }}
     version: "{{ .Values.driverInstallPolicies.furiosa.driver.version }}"
-    image: "{{ .Values.driverInstallPolicies.furiosa.driver.image }}"
+    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.driverInstallPolicies.furiosa.driver.repository "tag" .Values.driverInstallPolicies.furiosa.driver.tag) }}"
     {{- with .Values.driverInstallPolicies.furiosa.driver.installer }}
     installer: {{ . }}
     {{- end }}
@@ -68,7 +68,7 @@ spec:
     mode: {{ . }}
     {{- end }}
     version: "{{ .Values.driverInstallPolicies.nvidia.driver.version }}"
-    image: "{{ .Values.driverInstallPolicies.nvidia.driver.image }}"
+    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.driverInstallPolicies.nvidia.driver.repository "tag" .Values.driverInstallPolicies.nvidia.driver.tag) }}"
     {{- with .Values.driverInstallPolicies.nvidia.driver.installer }}
     installer: {{ . }}
     {{- end }}
@@ -115,7 +115,7 @@ spec:
     mode: {{ . }}
     {{- end }}
     version: "{{ .Values.driverInstallPolicies.rngd.driver.version }}"
-    image: "{{ .Values.driverInstallPolicies.rngd.driver.image }}"
+    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.driverInstallPolicies.rngd.driver.repository "tag" .Values.driverInstallPolicies.rngd.driver.tag) }}"
     {{- with .Values.driverInstallPolicies.rngd.driver.installer }}
     installer: {{ . }}
     {{- end }}
