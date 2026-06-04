@@ -1,5 +1,6 @@
 # npu-operator (Helm Chart)
 
+NVIDIA GPU + Furiosa(Warboy/RNGD) + Rebellions ATOM+ 를 단일 Operator 로
 관리하는 Kubernetes NPU/GPU Operator 의 Helm 차트.
 
 차트가 배포하는 것:
@@ -95,6 +96,7 @@ kubectl delete crd npuclusterpolicies.npu.ai driverinstallpolicies.npu.ai \
 | `leaderElection.enabled` | `true` | controller-runtime Lease |
 | `resources` | 100m/128Mi ~ 500m/256Mi | operator 리소스 |
 
+벤더 `<vendor>` = `nvidia` / `furiosa`(Warboy) / `rngd`.
 
 ## 레지스트리 구성 (Registry Configuration)
 
@@ -166,7 +168,9 @@ helm upgrade npu-operator deploy/helm -n npu-operator --reuse-values \
 ## Examples
 
 ```bash
+# 특정 벤더만 끄기 (예: Rebellions 비활성)
 helm install npu-operator deploy/helm -n npu-operator --create-namespace \
+  --set rebellions.enabled=false --set driverInstallPolicies.rebellions.enabled=false
 
 # RNGD 파티션 변경 (1 instance/card)
 helm upgrade npu-operator deploy/helm -n npu-operator --reuse-values \
