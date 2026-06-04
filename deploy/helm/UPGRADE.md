@@ -98,8 +98,9 @@ kubectl delete crd driverinstallpolicies.npu.ai
 
 ```bash
 cd kcloud-operator
-sudo docker build -t <your-registry>/npu-operator:v0.3.1-rename .
-sudo docker push <your-registry>/npu-operator:v0.3.1-rename
+REGISTRY=<your-registry>  # 예: <your-registry>
+sudo docker build -t $REGISTRY/npu-operator:v0.3.1-rename .
+sudo docker push $REGISTRY/npu-operator:v0.3.1-rename
 ```
 
 #### 2단계: CRD 적용 (안전을 위해)
@@ -505,3 +506,139 @@ helm upgrade npu-operator ./helm/kcloud-operator \
 
 ### 변경 내용
 
+
+---
+
+## v0.5.22 → v0.5.23 (chart 0.5.13 → 0.5.14, 2026-06-02)
+
+### 변경 내용 — 관리 리소스 이름 + values 스키마 전면 변경
+
+operator 가 생성·관리하는 DaemonSet / SA / ClusterRole / ConfigMap 이름이 아래 표와 같이 변경됩니다.
+네이밍 원칙: detector/driver 는 `kcloud-` prefix, device-plugin 은 vendor 명(TT만 `kcloud-tt-`).
+
+| 종류 | 구 이름 (≤v0.5.22) | 신 이름 (v0.5.23+) |
+|------|-------------------|-------------------|
+| detector | `npu-op-detector` | `kcloud-detector` |
+| DP nvidia | `npu-op-device-plugin-nvidia` | `nvidia-device-plugin` |
+| DP furiosa(warboy) | `npu-op-device-plugin-furiosa` | `furiosa-device-plugin` |
+| DP furiosa-rngd | `npu-op-device-plugin-furiosa-rngd` | `furiosa-rngd-device-plugin` |
+| DP rebellions | `npu-op-device-plugin-rbln` | `rbln-device-plugin` |
+| driver nvidia | `npu-op-driver-nvidia-generic` | `kcloud-nvidia-driver` |
+| driver furiosa-warboy | `npu-op-driver-furiosa-warboy` | `kcloud-furiosa-warboy-driver` |
+| driver furiosa-rngd | `npu-op-driver-furiosa-rngd` | `kcloud-furiosa-rngd-driver` |
+| rbln SA/ClusterRole/ConfigMap | `npu-op-rbln-device-plugin*` | `rbln-device-plugin*` |
+
+
+### 값 스키마 변경 (Values Schema)
+
+**`global.registry`를 통한 일괄 레지스트리 prefix 지원**
+
+- **신규**: `values.yaml` 상단에 `global.registry: "<your-registry>"` 필드 추가
+- **효과**: operator/detector/device-plugin/driver 이미지의 repository 필드가 모두 이 prefix를 공유
+  ```yaml
+  global:
+    registry: "<your-registry>"  # 또는 "" (비어있으면 registry-relative path 사용)
+  
+  image:
+    repository: npu-operator      # → 최종: <global.registry>/npu-operator:<tag>
+    tag: v0.5.23
+  
+  detector:
+    repository: "npu-detector"    # → 최종: <global.registry>/npu-detector:<tag>
+  ```
+- **업그레이드 시**: 레지스트리 변경 후 다시 배포하려면 한 줄로 충분
+  ```bash
+  helm upgrade npu-operator deploy/helm -n npu-operator --reuse-values \
+    --set global.registry=new-registry.internal:5000
+  ```
+- **airgap 배포**: `values-airgap.example.yaml` 참조 (모든 public 이미지도 full 경로로 override)
+
+### Breaking Changes ⚠️
+
+- **DaemonSet selector immutable**: 구 DS 를 그대로 두고 upgrade 하면 신 이름 DS 신규 생성 시 충돌 발생.
+  pre-upgrade hook Job 이 구 이름 DS 전체를 자동 삭제 후 신 이름 DS 를 재생성함.
+- **전체 클린(clean slate) 권장**: 기존 클러스터가 있으면 `helm uninstall` → 잔존 DS 완전 삭제 → `helm install` 순서를 권장.
+- **values.yaml** `rebellions.configMapName` 이 `npu-op-rbln-device-plugin-config` → `rbln-device-plugin-config` 로 변경.
+  커스텀 override 가 있으면 함께 갱신 필요.
+
+### Pre-upgrade Hook (자동 정리)
+
+`helm upgrade` 시 pre-upgrade Job 이 구 이름 DS 전체를 `--ignore-not-found` 로 안전 삭제합니다.
+
+### Upgrade Procedure
+
+#### 방법 A: Full Clean + Fresh Install (권장)
+
+```bash
+# 1. NPUClusterPolicy/DIP 삭제 (operator finalizer 정리)
+kubectl delete npuclusterpolicy --all -A
+kubectl delete driverinstallpolicy --all -A
+
+# 2. Helm uninstall
+helm uninstall npu-operator -n npu-operator
+
+# 3. 잔존 구 이름 DS 완전 삭제
+kubectl -n kube-system delete ds --ignore-not-found \
+  npu-op-detector \
+  npu-op-device-plugin-nvidia npu-op-device-plugin-furiosa \
+  npu-op-device-plugin-furiosa-rngd npu-op-device-plugin-rbln \
+  npu-op-driver-nvidia-generic npu-op-driver-furiosa-warboy \
+
+# 4. 구 이름 보조 리소스(rebellions) 삭제
+kubectl delete sa,clusterrole,clusterrolebinding,configmap \
+  -l app.kubernetes.io/name=npu-op-rbln-device-plugin --ignore-not-found -A
+
+# 5. CRD 적용
+kubectl apply -f ./crds/
+
+# 6. Fresh install (신 이름으로 모든 리소스 자동 생성)
+helm install npu-operator deploy/helm -n npu-operator --create-namespace \
+  -f <values.yaml>
+```
+
+#### 방법 B: Helm Upgrade (pre-upgrade hook 자동 실행)
+
+```bash
+# 1. CRD 적용
+kubectl apply -f ./crds/
+
+# 2. Helm upgrade (pre-upgrade hook 이 구 DS 자동 삭제)
+helm upgrade npu-operator deploy/helm \
+  -n npu-operator \
+  --reuse-values \
+  --set image.tag=v0.5.23 \
+  --wait --timeout 10m
+```
+
+### 검증
+
+```bash
+# 구 이름 DS 잔존 0 확인 (0 lines expected)
+kubectl -n kube-system get ds | grep "npu-op-"
+
+# 신 이름 DS 확인
+kubectl -n kube-system get ds | grep -E "kcloud-detector|device-plugin|kcloud-.*-driver"
+
+# 예상 출력:
+# kcloud-detector                         1/1   ...
+# nvidia-device-plugin                    1/1   ...
+# furiosa-device-plugin                   1/1   ...
+# furiosa-rngd-device-plugin              1/1   ...
+# rbln-device-plugin                      1/1   ...
+# kcloud-nvidia-driver                    1/1   ...
+# kcloud-furiosa-warboy-driver            1/1   ...
+# kcloud-furiosa-rngd-driver              1/1   ...
+
+# allocatable 복원 확인
+kubectl get node -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu,RNGD:.status.allocatable.furiosa\.ai/rngd'
+
+# DUS(DriverUpgradeState) Idle 확인 (드라이버 상태머신이 신규 DS명 인식)
+kubectl get driverupgradestate -A
+```
+
+### Rollback
+
+```bash
+helm rollback npu-operator -n npu-operator
+# 이후 구 DS 수동 정리 + helm upgrade 재시도
+```
