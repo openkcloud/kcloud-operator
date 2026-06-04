@@ -92,6 +92,7 @@ func TestDriverDSName_MixedCaseNormalization(t *testing.T) {
 // 이중 하이픈("--")이 결과에 포함되지 않음을 검증한다 (빈 model 안전성).
 func TestDriverDSName_NoDoubleHyphen(t *testing.T) {
 	vendors := []string{
+		"furiosa", "nvidia", "rebellions", "custom",
 	}
 	for _, vendor := range vendors {
 		got := DriverDSName(vendor, "")

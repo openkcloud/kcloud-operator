@@ -4,6 +4,7 @@
 
 `kcloud operator`는 Kubernetes 환경에서 **NPU/GPU 가속기 장치의 드라이버 및 디바이스 플러그인 배포를 자동화**하기 위한 Kubernetes Operator입니다.
 
+단일 CRD(`NPUClusterPolicy`)를 통해 4개 벤더(NVIDIA, Furiosa Warboy, Furiosa RNGD, Rebellions ATOM)의 디바이스 플러그인을 통합 관리합니다.
 
 **핵심 기능:**
 - 노드 라벨 기반 자동 감지 및 벤더별 DaemonSet 자동 생성
@@ -196,7 +197,6 @@ spec:
   rebellions:
     enabled: true
     devicePluginRepository: "rebellions/k8s-device-plugin"
-    enabled: true
 ```
 
 ### DriverInstallPolicy

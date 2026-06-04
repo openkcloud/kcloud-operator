@@ -63,13 +63,13 @@ kubectl delete ds -n kube-system \
 kubectl delete ds -n kube-system --ignore-not-found \
   npu-op-driver-nvidia-generic \
   npu-op-driver-furiosa-warboy \
-  npu-op-driver-furiosa-rngd \
+  npu-op-driver-furiosa-rngd || true
 
 # 이름 기반 — 신규(kcloud-*) v0.5.23+ driver DS
 kubectl delete ds -n kube-system --ignore-not-found \
   kcloud-nvidia-driver \
   kcloud-furiosa-warboy-driver \
-  kcloud-furiosa-rngd-driver \
+  kcloud-furiosa-rngd-driver || true
 
 # ── [3/4] Helm uninstall ─────────────────────────────────────
 echo ""
