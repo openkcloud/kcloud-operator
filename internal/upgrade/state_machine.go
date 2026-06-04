@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/validator"
 )
 
@@ -162,7 +163,15 @@ func (m *UpgradeStateMachine) handleIdle(
 	currentVersion := state.Status.CurrentVersion
 
 	if desiredVersion == "" || desiredVersion == currentVersion {
-		// 버전 일치: Idle 유지, 60s 후 재확인
+		// 버전 일치: Idle 유지, 60s 후 재확인.
+		// 신규 DUS(state="")는 호스트 드라이버가 이미 목표 버전이면 업그레이드 사이클을
+		// 거치지 않으므로 status.state 가 빈 문자열로 남는다. 여기서 1회 Idle 로 정규화하여
+		// `kubectl get dus` STATE 와 메트릭이 Idle 을 명확히 보고하도록 한다.
+		// 이미 Idle 이면 재기록하지 않아 LastTransitionTime/IdleCooldown churn 을 피한다.
+		if state.Status.State == "" {
+			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle,
+				"초기 상태 정규화 (버전 일치)", 60*time.Second)
+		}
 		return true, 60 * time.Second, nil
 	}
 
@@ -387,10 +396,7 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
 	// DaemonSet 이름 결정 (driver_daemonset_controller.go line 98 패턴과 일치)
-	dsName := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(state.Spec.Vendor), strings.ToLower(state.Spec.Model))
-	if state.Spec.Model == "" {
-		dsName = fmt.Sprintf("npu-op-driver-%s", strings.ToLower(state.Spec.Vendor))
-	}
+	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 
 	var ds appsv1.DaemonSet
 	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: "kube-system"}, &ds); err != nil {
@@ -514,10 +520,7 @@ func (m *UpgradeStateMachine) handleValidating(
 	// ─── 2. CrashLoop 즉시 감지 (재시도 무의미한 hard failure) ───
 	// driver-installer Pod 가 CrashLoopBackOff 라면 어떤 validator 도 통과 못 하므로
 	// 빠르게 Rollback / Failed 로 전이한다 (legacy 동작 보존).
-	dsName := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(state.Spec.Vendor), strings.ToLower(state.Spec.Model))
-	if state.Spec.Model == "" {
-		dsName = fmt.Sprintf("npu-op-driver-%s", strings.ToLower(state.Spec.Vendor))
-	}
+	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 	desiredImage := policy.Spec.Driver.Image
 	ready, crashLoop, err := m.isDriverPodReadyOnNode(ctx, dsName, state.Spec.NodeName, desiredImage)
 	if err != nil {
@@ -652,10 +655,7 @@ func (m *UpgradeStateMachine) handleRollback(
 		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
 	}
 
-	dsName := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(state.Spec.Vendor), strings.ToLower(state.Spec.Model))
-	if state.Spec.Model == "" {
-		dsName = fmt.Sprintf("npu-op-driver-%s", strings.ToLower(state.Spec.Vendor))
-	}
+	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 
 	var ds appsv1.DaemonSet
 	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: "kube-system"}, &ds); err != nil {

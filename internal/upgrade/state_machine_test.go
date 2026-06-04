@@ -83,7 +83,7 @@ func TestPreviousImage_BrokenTag_Cleared(t *testing.T) {
 		vendor      = "nvidia"
 		version     = "580.142"
 		dusName     = "worker-sanitize-broken-nvidia"
-		brokenImage = "<your-registry>/nvidia-driver-ds:580.142" // plain tag — no -v<N>
+		brokenImage = "registry.example.com/nvidia-driver-ds:580.142" // plain tag — no -v<N>
 	)
 
 	dus := makeIdleDUSWithPreviousImage(dusName, nodeName, vendor, version, brokenImage)
@@ -110,7 +110,7 @@ func TestPreviousImage_VerifiedTag_Kept(t *testing.T) {
 		vendor        = "nvidia"
 		version       = "580.142"
 		dusName       = "worker-sanitize-verified-nvidia"
-		verifiedImage = "<your-registry>/nvidia-driver-ds:580.142-v172" // -v<N> suffix
+		verifiedImage = "registry.example.com/nvidia-driver-ds:580.142-v172" // -v<N> suffix
 	)
 
 	dus := makeIdleDUSWithPreviousImage(dusName, nodeName, vendor, version, verifiedImage)
@@ -127,6 +127,42 @@ func TestPreviousImage_VerifiedTag_Kept(t *testing.T) {
 	if dus.Status.PreviousImage != verifiedImage {
 		t.Errorf("verified build tag 가 의도치 않게 제거됨: got %q, want %q",
 			dus.Status.PreviousImage, verifiedImage)
+	}
+}
+
+// TestHandleIdle_EmptyState_NormalizedToIdle 는 state="" 인 신규 DUS 가 현재버전==목표버전
+// 이어서 업그레이드 사이클을 거치지 않을 때, handleIdle 이 status.state 를 Idle 로 1회
+// 정규화함을 검증한다. (라이브 재배포 시 DUS state 가 빈 문자열로 남던 cosmetic nit 회귀 방지)
+func TestHandleIdle_EmptyState_NormalizedToIdle(t *testing.T) {
+	const (
+		nodeName = "worker-empty-normalize"
+		vendor   = "nvidia"
+		version  = "580.159.03"
+		dusName  = "worker-empty-normalize-nvidia"
+	)
+
+	dus := &v1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: dusName},
+		Spec: v1alpha1.DriverUpgradeStateSpec{
+			NodeName: nodeName,
+			Vendor:   vendor,
+		},
+		Status: v1alpha1.DriverUpgradeStateStatus{
+			State:          "", // 신규 DUS: 미초기화 상태
+			CurrentVersion: version,
+		},
+	}
+	dip := makeIdleDIP("nvidia-generic", vendor, version) // desired == current
+
+	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	ctx := context.Background()
+
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("빈 상태 정규화 실패: state = %q, want %q", dus.Status.State, v1alpha1.UpgradeStateIdle)
 	}
 }
 
