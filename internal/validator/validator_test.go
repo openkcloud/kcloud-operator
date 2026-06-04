@@ -63,7 +63,7 @@ func makeDPPod(name, nodeName, vendor string, ready bool) *corev1.Pod {
 			Name:      name,
 			Namespace: "kube-system",
 			Labels: map[string]string{
-				"app.kubernetes.io/name": "npu-op-device-plugin-" + vendor,
+				"app.kubernetes.io/name": vendor + "-device-plugin",
 			},
 		},
 		Spec: corev1.PodSpec{NodeName: nodeName},
@@ -147,7 +147,7 @@ func TestDevicePluginValidator_PassWhenPodReady(t *testing.T) {
 		nodeName = "worker-1"
 		vendor   = "nvidia"
 	)
-	pod := makeDPPod("npu-op-device-plugin-nvidia-abc", nodeName, vendor, true)
+	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor,true)
 	c := newFakeClient(t, pod)
 
 	v := &DevicePluginValidator{}
@@ -167,7 +167,7 @@ func TestDevicePluginValidator_FailWhenPodPending(t *testing.T) {
 		nodeName = "worker-1"
 		vendor   = "nvidia"
 	)
-	pod := makeDPPod("npu-op-device-plugin-nvidia-abc", nodeName, vendor, false)
+	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor,false)
 	c := newFakeClient(t, pod)
 
 	v := &DevicePluginValidator{}

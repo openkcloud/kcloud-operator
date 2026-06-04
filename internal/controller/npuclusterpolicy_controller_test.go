@@ -57,7 +57,7 @@ var _ = Describe("NPUClusterPolicy Controller", func() {
 						// reconcile 이 에러 경로로 진입한다. 벤더(nvidia/furiosa/rebellions)는
 						// 기본 Enabled=false 라 reconcile 에서 skip 되어 성공 경로에 도달한다.
 						Detector: &npuv1alpha1.DetectorSpec{
-							Image: "<your-registry>/npu-op-detector:test",
+							Image: "registry.example.com/npu-op-detector:test",
 						},
 					},
 				}

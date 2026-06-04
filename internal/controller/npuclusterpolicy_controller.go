@@ -279,11 +279,11 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-nvidia"}
+	labels := map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin"}
 	nvidiaRuntime := "nvidia"
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-device-plugin-nvidia",
+			Name:      "nvidia-device-plugin",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -355,10 +355,10 @@ interval: 10`,
 		}
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-furiosa"}
+	labels := map[string]string{"app.kubernetes.io/name": "furiosa-device-plugin"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-device-plugin-furiosa",
+			Name:      "furiosa-device-plugin",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -485,10 +485,10 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 		sel = rngd.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-device-plugin-furiosa-rngd"}
+	labels := map[string]string{"app.kubernetes.io/name": "furiosa-rngd-device-plugin"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-device-plugin-furiosa-rngd",
+			Name:      "furiosa-rngd-device-plugin",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},
@@ -557,13 +557,12 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 // Rebellions 공식 default `rbln-system/rbln-device-plugin` 대신 Warboy/RNGD/NVIDIA 와 동일 위치.
 const (
 	rbllnsNamespaceDefault     = "kube-system"
-	rbllnsServiceAccountName   = "npu-op-rbln-device-plugin"
-	rbllnsClusterRoleName      = "npu-op-rbln-device-plugin"
-	rbllnsConfigMapNameDefault = "npu-op-rbln-device-plugin-config"
-	rbllnsDaemonSetName        = "npu-op-device-plugin-rbln"
+	rbllnsServiceAccountName   = "rbln-device-plugin"
+	rbllnsClusterRoleName      = "rbln-device-plugin"
+	rbllnsConfigMapNameDefault = "rbln-device-plugin-config"
+	rbllnsDaemonSetName        = "rbln-device-plugin"
 	rbllnsResourceNameDefault  = "ATOM"
 	rbllnsResourcePrefixDfault = "rebellions.ai"
-	rbllnsDevicePluginImage    = "<your-registry>/rebellions/k8s-device-plugin:v0.3.6"
 )
 
 // rbllnsResolveNamespace returns the configured Rebellions namespace or default.
@@ -800,9 +799,6 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 		cmName = rbllnsConfigMapNameDefault
 	}
 	image := policy.Spec.Rebellions.DevicePluginImage
-	if image == "" {
-		image = rbllnsDevicePluginImage
-	}
 
 	sel := map[string]string{
 		"kubernetes.io/arch": "amd64",
@@ -915,10 +911,10 @@ func (r *NPUClusterPolicyReconciler) ensureDetector(ctx context.Context, pol *np
 }
 
 func renderDetectorDS(image string) *appsv1.DaemonSet {
-	labels := map[string]string{"app.kubernetes.io/name": "npu-op-detector"}
+	labels := map[string]string{"app.kubernetes.io/name": "kcloud-detector"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "npu-op-detector",
+			Name:      "kcloud-detector",
 			Namespace: "kube-system",
 			Labels:    labels,
 		},

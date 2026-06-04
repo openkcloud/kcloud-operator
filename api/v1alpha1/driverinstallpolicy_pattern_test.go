@@ -35,8 +35,8 @@ func TestDIPPattern_AllowsSubVersion(t *testing.T) {
 		"foo:590.48.01-v17",
 		"foo:590.48.01-v17.1",
 		"foo:latest",
-		"<your-registry>/nvidia-driver-ds:580.142-v17.1",
-		"<your-registry>/nvidia-driver-ds:580.142-v172",
+		"registry.example.com/nvidia-driver-ds:580.142-v17.1",
+		"registry.example.com/nvidia-driver-ds:580.142-v172",
 		"ghcr.io/you/repo:1.7.8",
 		"129.254.202.88:5100/furiosa-driver-installer:1.7.8",
 	}

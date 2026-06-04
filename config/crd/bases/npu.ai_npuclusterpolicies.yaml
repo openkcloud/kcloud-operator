@@ -126,6 +126,8 @@ spec:
                     type: string
                   resourcePrefix:
                     type: string
+                required:
+                - devicePluginImage
                 type: object
             required:
             - furiosa

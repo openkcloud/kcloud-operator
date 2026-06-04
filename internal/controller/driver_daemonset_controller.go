@@ -9,7 +9,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -27,6 +26,7 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/naming"
 )
 
 // DriverDaemonSetReconciler는 Mode="daemonset"인 DriverInstallPolicy에 대해
@@ -100,9 +100,9 @@ func (r *DriverDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desire
 
 // renderDriverDaemonSet은 DriverInstallPolicy 스펙을 기반으로 드라이버 DaemonSet을 빌드합니다.
 func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonSet {
-	name := fmt.Sprintf("npu-op-driver-%s-%s", strings.ToLower(pol.Spec.Vendor), sanitize(pol.Spec.Model))
+	name := naming.DriverDSName(pol.Spec.Vendor, pol.Spec.Model)
 	labels := map[string]string{
-		"app.kubernetes.io/name":      "npu-op-driver",
+		"app.kubernetes.io/name":      "kcloud-driver",
 		"app.kubernetes.io/component": "driver",
 		"npu.ai/vendor":               strings.ToLower(pol.Spec.Vendor),
 	}
@@ -362,9 +362,4 @@ func (r *DriverDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.DaemonSet{}). // owner=DIP 인 driver DS 변경 감시 → 수동 삭제 시 재생성
 		Named("driverdaemonset").
 		Complete(r)
-}
-
-// sanitize는 모델명을 Kubernetes 리소스 이름에 사용 가능한 형태로 변환합니다.
-func sanitize(s string) string {
-	return strings.ToLower(s)
 }
