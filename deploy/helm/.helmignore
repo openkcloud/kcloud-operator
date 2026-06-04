@@ -21,3 +21,7 @@
 .idea/
 *.tmproj
 .vscode/
+# OMC agent state (배포물에 포함 금지)
+.omc/
+# 환경/시크릿 (커밋·패키징 금지 — example 만 배포)
+deploy.env
