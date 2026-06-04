@@ -43,7 +43,7 @@
 make docker-build docker-push IMG=<registry>/npu-operator:v0.5.24 CONTAINER_TOOL="sudo docker"
 ```
 
-- `IMG`: 완전한 레지스트리 경로 (예: `<your-registry>/npu-operator:v0.5.24`)
+- `IMG`: 완전한 레지스트리 경로 (예: `<your-registry>/kcloud/npu-operator:v0.5.24`)
 - `CONTAINER_TOOL`: 기본값 `docker` (필요시 `sudo docker` 또는 `podman`)
 
 ---

@@ -112,7 +112,7 @@ kubectl delete crd npuclusterpolicies.npu.ai driverinstallpolicies.npu.ai \
 
 ```bash
 helm install npu-operator deploy/helm -n npu-operator --create-namespace \
-  --set global.registry=<your-registry>
+  --set global.registry=<your-registry>/kcloud
 ```
 
 #### 옵션 B: deploy.env + install.sh (권장 — 반복 배포)
