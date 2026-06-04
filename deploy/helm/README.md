@@ -40,7 +40,8 @@ helm install npu-operator oci://<registry>/charts/npu-operator \
 helm list -n npu-operator
 kubectl get pod -n npu-operator                       # controller-manager 1/1 Running
 kubectl get npuclusterpolicy -A                       # Ready=True
-kubectl get ds -n kube-system | grep npu-op           # detector + device-plugin + driver
+# v0.5.23+: 신 이름 — kcloud-detector / {nvidia,furiosa,furiosa-rngd,rbln}-device-plugin / kcloud-*-driver
+kubectl get ds -n kube-system | grep -E "kcloud-|device-plugin"
 kubectl get nodes -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu,RNGD:.status.allocatable.furiosa\.ai/rngd'
 kubectl get driverupgradestate                        # 각 노드 Idle 이어야 정상
 ```
@@ -74,7 +75,7 @@ kubectl delete crd npuclusterpolicies.npu.ai driverinstallpolicies.npu.ai \
 
 | 파라미터 | 기본값 | 설명 |
 |----------|--------|------|
-| `image.repository` / `image.tag` | `…/npu-operator` / `v0.5.22` | operator 이미지 |
+| `image.repository` / `image.tag` | `…/npu-operator` / `v0.5.23` | operator 이미지 |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | 사설 레지스트리 인증 시 |
 | `deployClusterPolicy` | `true` | NPUClusterPolicy CR 자동 생성 |
@@ -94,6 +95,73 @@ kubectl delete crd npuclusterpolicies.npu.ai driverinstallpolicies.npu.ai \
 | `leaderElection.enabled` | `true` | controller-runtime Lease |
 | `resources` | 100m/128Mi ~ 500m/256Mi | operator 리소스 |
 
+
+## 레지스트리 구성 (Registry Configuration)
+
+### 개요
+
+차트는 **한 줄로 레지스트리 주소를 바꾸는** `global.registry` 메커니즘을 지원합니다.
+
+- **기본값**: `<your-registry>` (placeholder — 실제 IP 노출 없음)
+- **사설 클러스터 배포**: `--set global.registry=<host:port>` 또는 `deploy.env` + `install.sh` 사용
+- **공개 이미지** (nvcr.io, ghcr.io, bitnami/kubectl): `global.registry` prefix 미적용 (그대로 두면 public 레지스트리 사용)
+
+### 빠른 시작 (Quick Install)
+
+#### 옵션 A: 한 줄 --set (CLI)
+
+```bash
+helm install npu-operator deploy/helm -n npu-operator --create-namespace \
+  --set global.registry=<your-registry>
+```
+
+#### 옵션 B: deploy.env + install.sh (권장 — 반복 배포)
+
+1. `deploy.env` 파일 준비:
+```bash
+cp deploy/helm/deploy.env.example deploy.env
+vi deploy.env    # REGISTRY=<host:port> 설정 필수
+```
+
+2. `install.sh` 실행:
+```bash
+bash deploy/helm/install.sh            # 실제 설치
+bash deploy/helm/install.sh --dry-run  # 미리보기
+```
+
+`install.sh`는 `deploy.env`에서 `REGISTRY` 값을 읽어 `--set global.registry=...` 로 자동 주입합니다.
+
+#### 옵션 C: airgap/사설 미러 (모든 이미지 단일 미러)
+
+`values-airgap.example.yaml` 사용:
+
+```bash
+cp deploy/helm/values-airgap.example.yaml values-airgap.yaml
+# <your-registry> 를 실제 미러 주소(예: registry.internal:5000)로 치환
+vi values-airgap.yaml
+
+helm install npu-operator deploy/helm -n npu-operator --create-namespace \
+  -f values-airgap.yaml
+```
+
+> 또는 `deploy.env` 에서 EXTRA_ARGS 로 override:
+> ```bash
+> REGISTRY=registry.internal:5000
+> EXTRA_ARGS="-f values-airgap.yaml"
+> bash deploy/helm/install.sh
+> ```
+
+### 업그레이드 시 레지스트리 변경
+
+```bash
+# 방법 1: --set (한 줄)
+helm upgrade npu-operator deploy/helm -n npu-operator --reuse-values \
+  --set global.registry=new-registry.internal:5000
+
+# 방법 2: deploy.env (권장)
+# 1. deploy.env 의 REGISTRY 변경
+# 2. bash deploy/helm/install.sh --reuse-values
+```
 
 ## Examples
 
