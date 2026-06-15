@@ -1,8 +1,6 @@
-/**
- * driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
- * 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
- * 생성일: 2026-04-13 | 수정일: 2026-04-29
- */
+// driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
+// 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
+// 생성일: 2026-04-13 | 수정일: 2026-06-15
 
 package v1alpha1
 
