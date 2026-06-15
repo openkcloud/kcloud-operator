@@ -36,15 +36,15 @@ func newScheme(t *testing.T) *runtime.Scheme {
 }
 
 // makeNDR 는 단일 device 항목을 가진 NodeDeviceReport 를 만든다.
-func makeNDR(nodeName, vendor, driverVersion string, loaded bool) *v1alpha1.NodeDeviceReport {
+func makeNDR(nodeName, driverVersion string) *v1alpha1.NodeDeviceReport {
 	return &v1alpha1.NodeDeviceReport{
 		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
 		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: nodeName},
 		Status: v1alpha1.NodeDeviceReportStatus{
 			Devices: []v1alpha1.DeviceEntry{
 				{
-					Vendor:        vendor,
-					DriverLoaded:  loaded,
+					Vendor:        "nvidia",
+					DriverLoaded:  true,
 					DriverVersion: driverVersion,
 				},
 			},
@@ -91,7 +91,7 @@ func TestDriverModuleValidator_PassWhenNDRMatches(t *testing.T) {
 		vendor   = "nvidia"
 		desired  = "575.64.03"
 	)
-	ndr := makeNDR(nodeName, vendor, desired, true)
+	ndr := makeNDR(nodeName, desired)
 	c := newFakeClient(t, ndr)
 
 	v := &DriverModuleValidator{}
@@ -113,7 +113,7 @@ func TestDriverModuleValidator_FailWhenNDRStale(t *testing.T) {
 		desired  = "575.64.03"
 		stale    = "550.54.15"
 	)
-	ndr := makeNDR(nodeName, vendor, stale, true)
+	ndr := makeNDR(nodeName, stale)
 	c := newFakeClient(t, ndr)
 
 	v := &DriverModuleValidator{}
@@ -147,7 +147,7 @@ func TestDevicePluginValidator_PassWhenPodReady(t *testing.T) {
 		nodeName = "worker-1"
 		vendor   = "nvidia"
 	)
-	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor,true)
+	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor, true)
 	c := newFakeClient(t, pod)
 
 	v := &DevicePluginValidator{}
@@ -167,7 +167,7 @@ func TestDevicePluginValidator_FailWhenPodPending(t *testing.T) {
 		nodeName = "worker-1"
 		vendor   = "nvidia"
 	)
-	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor,false)
+	pod := makeDPPod("nvidia-device-plugin-abc", nodeName, vendor, false)
 	c := newFakeClient(t, pod)
 
 	v := &DevicePluginValidator{}
@@ -217,7 +217,7 @@ func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 		hostVer  = "595.58.03"
 		desired  = "590.48.01"
 	)
-	ndr := makeNDR(nodeName, vendor, hostVer, true)
+	ndr := makeNDR(nodeName, hostVer)
 	c := newFakeClient(t, ndr)
 
 	v := &DriverModuleValidator{}
@@ -243,7 +243,7 @@ func TestDriverModule_HostMatch_Pass(t *testing.T) {
 		vendor   = "nvidia"
 		desired  = "590.48.01"
 	)
-	ndr := makeNDR(nodeName, vendor, desired, true)
+	ndr := makeNDR(nodeName, desired)
 	c := newFakeClient(t, ndr)
 
 	v := &DriverModuleValidator{}
@@ -266,7 +266,7 @@ func TestDriverModule_NDRNotReported_GenericMessage(t *testing.T) {
 		desired  = "590.48.01"
 	)
 	// driverVersion="" 이고 DriverLoaded=true 라도 hostVer 캡처는 ""이라 generic 분기로 떨어짐.
-	ndr := makeNDR(nodeName, vendor, "", true)
+	ndr := makeNDR(nodeName, "")
 	c := newFakeClient(t, ndr)
 
 	v := &DriverModuleValidator{}

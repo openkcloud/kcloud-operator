@@ -44,14 +44,14 @@ func workerNode(name string) *corev1.Node {
 	}
 }
 
-func makeNDR(nodeName, vendor, model, driverVersion string) *v1alpha1.NodeDeviceReport {
+func makeNDR(nodeName, model, driverVersion string) *v1alpha1.NodeDeviceReport {
 	return &v1alpha1.NodeDeviceReport{
 		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
 		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: nodeName},
 		Status: v1alpha1.NodeDeviceReportStatus{
 			Devices: []v1alpha1.DeviceEntry{
 				{
-					Vendor:        vendor,
+					Vendor:        "furiosa",
 					Model:         model,
 					DriverVersion: driverVersion,
 				},
@@ -60,15 +60,15 @@ func makeNDR(nodeName, vendor, model, driverVersion string) *v1alpha1.NodeDevice
 	}
 }
 
-func makeDIP(name, vendor, model, version, mode string) *v1alpha1.DriverInstallPolicy {
+func makeDIP(name, model, version string) *v1alpha1.DriverInstallPolicy {
 	return &v1alpha1.DriverInstallPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: v1alpha1.DriverInstallPolicySpec{
-			Vendor: vendor,
+			Vendor: "furiosa",
 			Model:  model,
 			Driver: v1alpha1.DriverSpec{
 				Version: version,
-				Mode:    mode,
+				Mode:    "daemonset",
 			},
 		},
 	}
@@ -143,8 +143,8 @@ func TestEnsureUpgradeStates_CurrentVersionSyncFromNDR(t *testing.T) {
 	)
 
 	node := workerNode(nodeName)
-	ndr := makeNDR(nodeName, vendor, model, version)
-	dip := makeDIP("furiosa-warboy", vendor, model, version, "daemonset")
+	ndr := makeNDR(nodeName, model, version)
+	dip := makeDIP("furiosa-warboy", model, version)
 	// DUS는 이미 존재하지만 currentVersion이 비어있음 (버그 재현 상태)
 	dus := makeDUS(dusName, nodeName, vendor, model, v1alpha1.UpgradeStateIdle, "", version)
 
@@ -178,8 +178,8 @@ func TestEnsureUpgradeStates_CreatesDUSWhenAbsent(t *testing.T) {
 	)
 
 	node := workerNode(nodeName)
-	ndr := makeNDR(nodeName, vendor, model, version)
-	dip := makeDIP("furiosa-warboy", vendor, model, version, "daemonset")
+	ndr := makeNDR(nodeName, model, version)
+	dip := makeDIP("furiosa-warboy", model, version)
 
 	r := newReconciler(node, ndr, dip)
 
@@ -215,8 +215,8 @@ func TestEnsureUpgradeStates_UpgradeRequiredOnVersionMismatch(t *testing.T) {
 	)
 
 	node := workerNode(nodeName)
-	ndr := makeNDR(nodeName, vendor, model, installedVer)
-	dip := makeDIP("furiosa-warboy", vendor, model, desiredVer, "daemonset")
+	ndr := makeNDR(nodeName, model, installedVer)
+	dip := makeDIP("furiosa-warboy", model, desiredVer)
 	dus := makeDUS(dusName, nodeName, vendor, model, v1alpha1.UpgradeStateIdle, installedVer, desiredVer)
 
 	r := newReconciler(node, ndr, dip, dus)
@@ -271,8 +271,8 @@ func TestFindPolicy_FallbackFirstWins(t *testing.T) {
 // vendor=furiosa, model=rngd 요청에 rngd DIP 가 정확히 매칭되는지 검증합니다.
 // (B-5 RNGD 호환성 확인: findPolicy 가 model 기반 분기를 지원해야 함)
 func TestFindPolicy_RngdModelMatch(t *testing.T) {
-	warboy := *makeDIP("furiosa-warboy", "furiosa", "warboy", "1.9.8-3", "daemonset")
-	rngd := *makeDIP("furiosa-rngd", "furiosa", "rngd", "2026.1.0", "daemonset")
+	warboy := *makeDIP("furiosa-warboy", "warboy", "1.9.8-3")
+	rngd := *makeDIP("furiosa-rngd", "rngd", "2026.1.0")
 
 	// rngd 요청 → rngd DIP 반환
 	got := findPolicy([]v1alpha1.DriverInstallPolicy{warboy, rngd}, "furiosa", "rngd")
@@ -304,8 +304,8 @@ func TestEnsureUpgradeStates_RngdCreatesDUS(t *testing.T) {
 	)
 
 	node := workerNode(nodeName)
-	ndr := makeNDR(nodeName, vendor, model, version)
-	dip := makeDIP("furiosa-rngd", vendor, model, version, "daemonset")
+	ndr := makeNDR(nodeName, model, version)
+	dip := makeDIP("furiosa-rngd", model, version)
 
 	r := newReconciler(node, ndr, dip)
 
@@ -338,8 +338,8 @@ func TestEnsureUpgradeStates_SkipsControlPlaneNode(t *testing.T) {
 			Labels: map[string]string{"node-role.kubernetes.io/control-plane": ""},
 		},
 	}
-	ndr := makeNDR(nodeName, "furiosa", "warboy", "1.9.8-3")
-	dip := makeDIP("furiosa-warboy", "furiosa", "warboy", "1.9.8-3", "daemonset")
+	ndr := makeNDR(nodeName, "warboy", "1.9.8-3")
+	dip := makeDIP("furiosa-warboy", "warboy", "1.9.8-3")
 
 	r := newReconciler(node, ndr, dip)
 
@@ -928,11 +928,11 @@ func TestSweepStuckUpgradingLabels_PreservesActiveCycleBothLabels(t *testing.T) 
 
 // makeQuiesceLabeledDeploy 는 quiesce-on-driver-upgrade 라벨이 붙고 nodeSelector 의 hostname
 // 으로 특정 노드를 타겟하는 Deployment 를 만든다 (gpu-stress 와 동일한 형태).
-func makeQuiesceLabeledDeploy(name, namespace, nodeName string, replicas int32) *appsv1.Deployment {
+func makeQuiesceLabeledDeploy(name, nodeName string, replicas int32) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "npu-operator",
 			Labels: map[string]string{
 				upgrade.QuiesceOnDriverUpgradeLabelKey: "true",
 				"app":                                  name,
@@ -1000,7 +1000,7 @@ func TestQuiesce_LabelMatched_Scaled0(t *testing.T) {
 		deployNM  = "gpu-stress-single"
 		origScale = int32(2)
 	)
-	deploy := makeQuiesceLabeledDeploy(deployNM, deployNS, nodeName, origScale)
+	deploy := makeQuiesceLabeledDeploy(deployNM, nodeName, origScale)
 	dus := makeCordoningDUS(dusName, nodeName, vendor)
 
 	sm, c := newSMWithRecorder(deploy, dus)
@@ -1086,7 +1086,7 @@ func TestRestore_OriginalReplicas(t *testing.T) {
 	)
 	// 이미 quiesce 된 상태 (replicas=0) + backup 보유 시뮬레이션
 	zero := int32(0)
-	deploy := makeQuiesceLabeledDeploy(deployNM, deployNS, nodeName, origScale)
+	deploy := makeQuiesceLabeledDeploy(deployNM, nodeName, origScale)
 	deploy.Spec.Replicas = &zero
 
 	dus := &v1alpha1.DriverUpgradeState{
@@ -1189,7 +1189,7 @@ func TestQuiesce_AnnotationBackup_Persisted(t *testing.T) {
 		deployNM  = "gpu-stress-anno"
 		origScale = int32(3)
 	)
-	deploy := makeQuiesceLabeledDeploy(deployNM, deployNS, nodeName, origScale)
+	deploy := makeQuiesceLabeledDeploy(deployNM, nodeName, origScale)
 	dus := makeCordoningDUS(dusName, nodeName, vendor)
 
 	sm, c := newSMWithRecorder(deploy, dus)
@@ -1251,7 +1251,7 @@ func TestRestore_FromAnnotation_Fallback(t *testing.T) {
 	//   - Deployment 는 replicas=0 으로 quiesce 된 상태 + annotation 에 backup "2" 보유
 	//   - DUS.Status.QuiescedDeployments 는 empty (Status.Update 직전에 crash)
 	zero := int32(0)
-	deploy := makeQuiesceLabeledDeploy(deployNM, deployNS, nodeName, origScale)
+	deploy := makeQuiesceLabeledDeploy(deployNM, nodeName, origScale)
 	deploy.Spec.Replicas = &zero
 	if deploy.Annotations == nil {
 		deploy.Annotations = make(map[string]string)

@@ -32,7 +32,7 @@ func newUpgradeTestScheme() *runtime.Scheme {
 }
 
 // newUpgradeSMWithRecorder 는 Recorder 가 부착된 UpgradeStateMachine 과 fake client 를 반환한다.
-func newUpgradeSMWithRecorder(objs ...client.Object) (*UpgradeStateMachine, client.Client) {
+func newUpgradeSMWithRecorder(objs ...client.Object) *UpgradeStateMachine {
 	s := newUpgradeTestScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -42,7 +42,7 @@ func newUpgradeSMWithRecorder(objs ...client.Object) (*UpgradeStateMachine, clie
 	return &UpgradeStateMachine{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(64),
-	}, c
+	}
 }
 
 // makeIdleDUSWithPreviousImage 는 Idle 상태에서 PreviousImage 가 지정된 DUS 를 반환한다.
@@ -89,7 +89,7 @@ func TestPreviousImage_BrokenTag_Cleared(t *testing.T) {
 	dus := makeIdleDUSWithPreviousImage(dusName, nodeName, vendor, version, brokenImage)
 	dip := makeIdleDIP("nvidia-generic", vendor, version)
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -116,7 +116,7 @@ func TestPreviousImage_VerifiedTag_Kept(t *testing.T) {
 	dus := makeIdleDUSWithPreviousImage(dusName, nodeName, vendor, version, verifiedImage)
 	dip := makeIdleDIP("nvidia-generic-v", vendor, version)
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -154,7 +154,7 @@ func TestHandleIdle_EmptyState_NormalizedToIdle(t *testing.T) {
 	}
 	dip := makeIdleDIP("nvidia-generic", vendor, version) // desired == current
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -263,7 +263,7 @@ func TestVerifiedVersions_Reject(t *testing.T) {
 	dus := makeIdleDUSWithCurrentVersion(dusName, nodeName, vendor, currentVersion)
 	dip := makeDIPWithVerifiedVersions("nvidia-generic-reject", vendor, desiredVersion, verifiedVersions)
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -290,7 +290,7 @@ func TestVerifiedVersions_Pass(t *testing.T) {
 	dus := makeIdleDUSWithCurrentVersion(dusName, nodeName, vendor, currentVersion)
 	dip := makeDIPWithVerifiedVersions("nvidia-generic-pass", vendor, desiredVersion, verifiedVersions)
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -317,7 +317,7 @@ func TestVerifiedVersions_Empty_Skip(t *testing.T) {
 	// verifiedVersions 없음 → 검증 skip
 	dip := makeDIPWithVerifiedVersions("furiosa-warboy-empty", vendor, desiredVersion, nil)
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip)
+	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -378,7 +378,7 @@ func TestRollbackExhaustion_TransitionsToFailed(t *testing.T) {
 	dip := makeRollbackDIP("nvidia-generic", vendor, 3)
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip, node)
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
 	ctx := context.Background()
 
 	// 1 회 호출 → Failed 전이가 발생해야 한다.
@@ -421,7 +421,7 @@ func TestFailedState_IsTerminal_NoFurtherTransition(t *testing.T) {
 	dip := makeRollbackDIP("nvidia-generic", vendor, 3)
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
 
-	sm, _ := newUpgradeSMWithRecorder(dus, dip, node)
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
 	ctx := context.Background()
 
 	// Failed 상태에서 reconcile 을 여러 번 호출해도 state 가 변하지 않아야 한다.

@@ -48,6 +48,9 @@ const finalizerName = "npu.ai/cleanup"
 // ownerAnnotation is used to track ownership across namespaces (cross-namespace OwnerReference is not allowed).
 const ownerAnnotation = "npu.ai/owner"
 
+// vendorNvidia is the NVIDIA vendor identifier used across the controller package.
+const vendorNvidia = "nvidia"
+
 // NPUClusterPolicyReconciler reconciles a NPUClusterPolicy object
 type NPUClusterPolicyReconciler struct {
 	client.Client
@@ -64,11 +67,11 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desir
 		return err
 	}
 	if !equality.Semantic.DeepEqual(cur.Spec, desired.Spec) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.Labels, desired.ObjectMeta.Labels) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.Annotations, desired.ObjectMeta.Annotations) {
+		!equality.Semantic.DeepEqual(cur.Labels, desired.Labels) ||
+		!equality.Semantic.DeepEqual(cur.Annotations, desired.Annotations) {
 		cur.Spec = desired.Spec
-		cur.ObjectMeta.Labels = desired.ObjectMeta.Labels
-		cur.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
+		cur.Labels = desired.Labels
+		cur.Annotations = desired.Annotations
 		return r.Update(ctx, &cur)
 	}
 	return nil
@@ -280,7 +283,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 	}
 
 	labels := map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin"}
-	nvidiaRuntime := "nvidia"
+	nvidiaRuntime := vendorNvidia
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nvidia-device-plugin",
@@ -577,13 +580,13 @@ func rbllnsResolveNamespace(policy *npuv1alpha1.NPUClusterPolicy) string {
 // Security Admission (PSA) privileged labels when a dedicated namespace is configured.
 //
 // 2026-04-22: `kube-system` 및 기타 시스템 네임스페이스는 early-return 한다. 이유:
-//   1) kube-system 은 이미 존재하며 kubelet/kube-proxy 등 시스템 컴포넌트를 위한 PSA
-//      설정이 클러스터 운영자에 의해 관리됨. operator 가 PSA 라벨을 덮어쓰면 전체
-//      클러스터 보안 경계가 흔들림.
-//   2) PSA 가 기본 `privileged` 가 아닌 `baseline`/`restricted` 로 설정된 환경이라도,
-//      kube-system 에 배포되는 DS/DaemonSet 들은 대개 예외 규칙 (system-node-critical
-//      priority, legitimate privileged) 으로 허용된다. 별도 namespace label 갱신이
-//      필요하지 않다.
+//  1. kube-system 은 이미 존재하며 kubelet/kube-proxy 등 시스템 컴포넌트를 위한 PSA
+//     설정이 클러스터 운영자에 의해 관리됨. operator 가 PSA 라벨을 덮어쓰면 전체
+//     클러스터 보안 경계가 흔들림.
+//  2. PSA 가 기본 `privileged` 가 아닌 `baseline`/`restricted` 로 설정된 환경이라도,
+//     kube-system 에 배포되는 DS/DaemonSet 들은 대개 예외 규칙 (system-node-critical
+//     priority, legitimate privileged) 으로 허용된다. 별도 namespace label 갱신이
+//     필요하지 않다.
 func (r *NPUClusterPolicyReconciler) ensureRbllnsNamespace(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 	name := rbllnsResolveNamespace(policy)

@@ -1,9 +1,7 @@
-/**
- * driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
- * 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
- *       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
- * 생성일: 2026-04-13 | 수정일: 2026-04-27
- */
+// driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
+// 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
+//       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
+// 생성일: 2026-04-13 | 수정일: 2026-06-15
 
 package controller
 
@@ -85,14 +83,14 @@ func (r *DriverDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desire
 		return err
 	}
 	if !equality.Semantic.DeepEqual(cur.Spec, desired.Spec) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.Labels, desired.ObjectMeta.Labels) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.Annotations, desired.ObjectMeta.Annotations) ||
-		!equality.Semantic.DeepEqual(cur.ObjectMeta.OwnerReferences, desired.ObjectMeta.OwnerReferences) {
+		!equality.Semantic.DeepEqual(cur.Labels, desired.Labels) ||
+		!equality.Semantic.DeepEqual(cur.Annotations, desired.Annotations) ||
+		!equality.Semantic.DeepEqual(cur.OwnerReferences, desired.OwnerReferences) {
 		cur.Spec = desired.Spec
-		cur.ObjectMeta.Labels = desired.ObjectMeta.Labels
-		cur.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
+		cur.Labels = desired.Labels
+		cur.Annotations = desired.Annotations
 		// OwnerReferences 동기화 — 기존(ownerRef 없이 생성된) DS 도 업그레이드 시 owner 부여.
-		cur.ObjectMeta.OwnerReferences = desired.ObjectMeta.OwnerReferences
+		cur.OwnerReferences = desired.OwnerReferences
 		return r.Update(ctx, &cur)
 	}
 	return nil
@@ -318,7 +316,7 @@ func vendorNodeSelector(vendor, model string) map[string]string {
 	v := strings.ToLower(vendor)
 	m := strings.ToLower(model)
 	switch v {
-	case "nvidia":
+	case vendorNvidia:
 		return map[string]string{"nvidia.com/gpu.present": "true"}
 	case "furiosa":
 		if m == "rngd" {
@@ -340,7 +338,7 @@ func vendorRmmodCommand(vendor, model string) string {
 	v := strings.ToLower(vendor)
 	m := strings.ToLower(model)
 	switch v {
-	case "nvidia":
+	case vendorNvidia:
 		return "rmmod nvidia_uvm nvidia_drm nvidia || true"
 	case "furiosa":
 		if m == "rngd" {

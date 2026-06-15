@@ -72,6 +72,9 @@ const QuiesceReplicasBackupAnnotation = "npu.ai/replicas-backup"
 // Kubernetes 표준 노드 hostname 라벨 키다.
 const hostnameLabelKey = "kubernetes.io/hostname"
 
+// labelValueTrue 는 boolean 라벨/어노테이션 값으로 사용하는 "true" 문자열이다.
+const labelValueTrue = "true"
+
 // defaultIdleCooldown 은 UpgradePolicy.IdleCooldownSeconds 가 nil 일 때 적용되는 기본값이다.
 // Idle 진입 후 이 시간 동안은 신규 upgrade trigger 를 거부 (requeue) 하여
 // rolling-update 테스트에서 연속 trigger 가 mid-state 로 오인되는 것을 막는다.
@@ -120,7 +123,7 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStatePreFlight:
 		return m.handlePreFlight(ctx, state, policy)
 	case v1alpha1.UpgradeStateCordoning:
-		return m.handleCordoning(ctx, state, policy)
+		return m.handleCordoning(ctx, state)
 	case v1alpha1.UpgradeStateDraining:
 		return m.handleDraining(ctx, state, policy)
 	case v1alpha1.UpgradeStateUpgrading:
@@ -128,7 +131,7 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateValidating:
 		return m.handleValidating(ctx, state, policy)
 	case v1alpha1.UpgradeStateUncordoning:
-		return m.handleUncordoning(ctx, state, policy)
+		return m.handleUncordoning(ctx, state)
 	case v1alpha1.UpgradeStateRollback:
 		return m.handleRollback(ctx, state, policy)
 	case v1alpha1.UpgradeStateFailed:
@@ -145,7 +148,7 @@ func (m *UpgradeStateMachine) TransitionState(
 		return true, 60 * time.Second, nil
 	default:
 		logger.Info("알 수 없는 상태, Idle로 리셋", "state", state.Status.State)
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle, "알 수 없는 상태 리셋", 60*time.Second)
+		return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "알 수 없는 상태 리셋", 60*time.Second)
 	}
 }
 
@@ -169,7 +172,7 @@ func (m *UpgradeStateMachine) handleIdle(
 		// `kubectl get dus` STATE 와 메트릭이 Idle 을 명확히 보고하도록 한다.
 		// 이미 Idle 이면 재기록하지 않아 LastTransitionTime/IdleCooldown churn 을 피한다.
 		if state.Status.State == "" {
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle,
+			return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
 				"초기 상태 정규화 (버전 일치)", 60*time.Second)
 		}
 		return true, 60 * time.Second, nil
@@ -230,7 +233,7 @@ func (m *UpgradeStateMachine) handleIdle(
 			"verifiedVersions", policy.Spec.VerifiedVersions)
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UnverifiedVersion", "%s", msg)
 		state.Status.DesiredVersion = desiredVersion
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
 	}
 
 	// 버전 불일치 + autoUpgrade: UpgradeRequired로 전이
@@ -241,7 +244,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	state.Status.PreviousVersion = currentVersion
 	state.Status.PreviousImage = ""
 	state.Status.RollbackAttempts = 0
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRequired,
+	return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
 		fmt.Sprintf("버전 불일치 감지: %s → %s", currentVersion, desiredVersion), 0)
 }
 
@@ -269,7 +272,7 @@ func (m *UpgradeStateMachine) handleUpgradeRequired(
 	}
 
 	// 슬롯 확보: PreFlight로 전이
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStatePreFlight, "업그레이드 슬롯 확보", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStatePreFlight, "업그레이드 슬롯 확보", 0)
 }
 
 // handlePreFlight: 커널 버전 allowlist 검사 후 Cordoning으로 전이
@@ -291,7 +294,7 @@ func (m *UpgradeStateMachine) handlePreFlight(
 		if !matchesKernelAllowlist(kernelVersion, allowlist) {
 			msg := fmt.Sprintf("커널 버전 %s이 allowlist에 없음: %v", kernelVersion, allowlist)
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "PreFlightFailed", msg)
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, msg, 0)
+			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, msg, 0)
 		}
 	}
 
@@ -300,14 +303,13 @@ func (m *UpgradeStateMachine) handlePreFlight(
 		return true, 10 * time.Second, nil
 	}
 
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateCordoning, "PreFlight 검사 통과", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStateCordoning, "PreFlight 검사 통과", 0)
 }
 
 // handleCordoning: 노드를 Unschedulable로 설정 후 Draining으로 전이
 func (m *UpgradeStateMachine) handleCordoning(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
-	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
 	if err := m.cordonNode(ctx, state.Spec.NodeName, state); err != nil {
 		return false, 0, fmt.Errorf("노드 cordon 실패: %w", err)
@@ -324,7 +326,7 @@ func (m *UpgradeStateMachine) handleCordoning(
 			"node", state.Spec.NodeName)
 	}
 
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateDraining, "노드 cordon 완료", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStateDraining, "노드 cordon 완료", 0)
 }
 
 // handleDraining: GPU/NPU 워크로드 Pod 삭제 후 Upgrading으로 전이
@@ -335,7 +337,7 @@ func (m *UpgradeStateMachine) handleDraining(
 ) (bool, time.Duration, error) {
 	// drainEnabled가 false면 즉시 Upgrading으로
 	if policy.Spec.UpgradePolicy == nil || !policy.Spec.UpgradePolicy.DrainEnabled {
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateUpgrading, "drain 비활성화, 즉시 업그레이드", 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateUpgrading, "drain 비활성화, 즉시 업그레이드", 0)
 	}
 
 	// drain timeout 체크
@@ -343,7 +345,7 @@ func (m *UpgradeStateMachine) handleDraining(
 	if !state.Status.LastTransitionTime.IsZero() &&
 		time.Since(state.Status.LastTransitionTime.Time) > drainTimeout {
 		if policy.Spec.UpgradePolicy.RollbackOnFailure {
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "drain 타임아웃: 롤백 시작", 0)
+			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "drain 타임아웃: 롤백 시작", 0)
 		}
 		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
 			logf.FromContext(ctx).Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
@@ -353,7 +355,7 @@ func (m *UpgradeStateMachine) handleDraining(
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "drain 타임아웃: 수동 조치 필요", 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "drain 타임아웃: 수동 조치 필요", 0)
 	}
 
 	// nvidia-persistenced 종료 요청 (실제 중지는 driver-manager initContainer에서 수행)
@@ -363,13 +365,13 @@ func (m *UpgradeStateMachine) handleDraining(
 
 	// device-plugin Pod 삭제 (커널 모듈 참조 해제를 위해)
 	logger := logf.FromContext(ctx)
-	if err := m.deleteDevicePluginPods(ctx, state.Spec.NodeName, state.Spec.Vendor); err != nil {
+	if err := m.deleteDevicePluginPods(ctx, state.Spec.NodeName); err != nil {
 		logger.Error(err, "device-plugin Pod 삭제 실패")
 		// 비치명적: 계속 진행
 	}
 
 	// 디바이스 워크로드 확인
-	hasWorkloads, err := m.hasDeviceWorkloads(ctx, state.Spec.NodeName, state.Spec.Vendor)
+	hasWorkloads, err := m.hasDeviceWorkloads(ctx, state.Spec.NodeName)
 	if err != nil {
 		return false, 0, fmt.Errorf("디바이스 워크로드 확인 실패: %w", err)
 	}
@@ -386,7 +388,7 @@ func (m *UpgradeStateMachine) handleDraining(
 
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeDrained",
 		"노드 %s drain 완료", state.Spec.NodeName)
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateUpgrading, "drain 완료", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStateUpgrading, "drain 완료", 0)
 }
 
 // handleUpgrading: DaemonSet 이미지 업데이트 후 Validating으로 전이 (requeue 20s)
@@ -453,7 +455,7 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "UpgradeStarted",
 		"노드 %s 드라이버 업그레이드 시작: %s", state.Spec.NodeName, state.Status.DesiredVersion)
 
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateValidating, "DaemonSet 이미지 업데이트 완료", 20*time.Second)
+	return m.transitionTo(state, v1alpha1.UpgradeStateValidating, "DaemonSet 이미지 업데이트 완료", 20*time.Second)
 }
 
 // validators 는 handleValidating 이 순차 실행할 Validator 체인이다.
@@ -504,7 +506,7 @@ func (m *UpgradeStateMachine) handleValidating(
 	if !state.Status.LastTransitionTime.IsZero() &&
 		time.Since(state.Status.LastTransitionTime.Time) > validationTimeout {
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "검증 타임아웃: 롤백 시작", 0)
+			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "검증 타임아웃: 롤백 시작", 0)
 		}
 		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
 			logger.Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
@@ -514,7 +516,7 @@ func (m *UpgradeStateMachine) handleValidating(
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "검증 타임아웃: 수동 조치 필요", 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "검증 타임아웃: 수동 조치 필요", 0)
 	}
 
 	// ─── 2. CrashLoop 즉시 감지 (재시도 무의미한 hard failure) ───
@@ -528,7 +530,7 @@ func (m *UpgradeStateMachine) handleValidating(
 	}
 	if crashLoop {
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateRollback, "드라이버 Pod CrashLoopBackOff: 롤백 시작", 0)
+			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "드라이버 Pod CrashLoopBackOff: 롤백 시작", 0)
 		}
 		if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
 			logger.Error(err, "Failed 전이 중 quiesce 복구 실패 (수동 조치 필요)", "node", state.Spec.NodeName)
@@ -538,7 +540,7 @@ func (m *UpgradeStateMachine) handleValidating(
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
 	}
 
 	// 새 Pod 이 아직 준비되지 않은 경우 (wrong-image 캐시 / NotReady 등) 단순 requeue.
@@ -579,14 +581,13 @@ func (m *UpgradeStateMachine) handleValidating(
 	state.Status.CurrentVersion = state.Status.DesiredVersion
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "UpgradeValidated",
 		"노드 %s 드라이버 검증 성공: %s", state.Spec.NodeName, state.Status.DesiredVersion)
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateUncordoning, "검증 성공", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStateUncordoning, "검증 성공", 0)
 }
 
 // handleUncordoning: 노드를 Schedulable로 복구 후 Idle로 전이
 func (m *UpgradeStateMachine) handleUncordoning(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
-	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
 	if err := m.uncordonNode(ctx, state.Spec.NodeName, state); err != nil {
 		return false, 0, fmt.Errorf("노드 uncordon 실패: %w", err)
@@ -604,7 +605,7 @@ func (m *UpgradeStateMachine) handleUncordoning(
 
 	metrics.RecordUpgradeComplete(state.Spec.Vendor, "success")
 
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
+	return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
 }
 
 // handleRollback: 이전 버전으로 DaemonSet 복구 후 Upgrading으로 전이
@@ -634,7 +635,7 @@ func (m *UpgradeStateMachine) handleRollback(
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패: node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed,
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed,
 			fmt.Sprintf("롤백 %d회 초과: 수동 조치 필요", maxRollbacks), 0)
 	}
 
@@ -652,7 +653,7 @@ func (m *UpgradeStateMachine) handleRollback(
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 				"Failed 전이 중 라벨 제거 실패 (수동 조치 필요): node=%s err=%v", state.Spec.NodeName, err)
 		}
-		return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
 	}
 
 	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
@@ -685,7 +686,7 @@ func (m *UpgradeStateMachine) handleRollback(
 				m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeLabelCleanupFailed",
 					"Failed 전이 중 라벨 제거 실패: node=%s err=%v", state.Spec.NodeName, err)
 			}
-			return m.transitionTo(ctx, state, v1alpha1.UpgradeStateFailed,
+			return m.transitionTo(state, v1alpha1.UpgradeStateFailed,
 				"RollbackTarget=previousValidated: PreviousImage 미보유로 안전 롤백 불가", 0)
 		}
 		// PreviousImage 미보유 + RollbackTarget != previousValidated:
@@ -702,14 +703,14 @@ func (m *UpgradeStateMachine) handleRollback(
 		}
 	}
 	base := ds.DeepCopy()
-	for i := range ds.Spec.Template.Spec.Containers {
+	if len(ds.Spec.Template.Spec.Containers) > 0 {
+		i := 0
 		if prevImage != "" {
 			ds.Spec.Template.Spec.Containers[i].Image = prevImage
 		} else {
 			img := ds.Spec.Template.Spec.Containers[i].Image
 			ds.Spec.Template.Spec.Containers[i].Image = replaceImageTag(img, prevVersion)
 		}
-		break
 	}
 
 	if err := m.Patch(ctx, &ds, client.MergeFrom(base)); err != nil {
@@ -730,7 +731,7 @@ func (m *UpgradeStateMachine) handleRollback(
 	metrics.RecordRollback(state.Spec.Vendor)
 	metrics.RecordUpgradeComplete(state.Spec.Vendor, "rollback")
 
-	return m.transitionTo(ctx, state, v1alpha1.UpgradeStateValidating, fmt.Sprintf("롤백 시작: %s", prevVersion), 20*time.Second)
+	return m.transitionTo(state, v1alpha1.UpgradeStateValidating, fmt.Sprintf("롤백 시작: %s", prevVersion), 20*time.Second)
 }
 
 // logPersistencedStop은 nvidia-persistenced 종료가 필요함을 로깅합니다.
@@ -748,7 +749,6 @@ func (m *UpgradeStateMachine) logPersistencedStop(ctx context.Context, nodeName 
 // requeueAfter=0이면 즉시 requeue (Requeue=true).
 // 상태 전이 시 Prometheus 메트릭을 기록합니다.
 func (m *UpgradeStateMachine) transitionTo(
-	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 	nextState string,
 	message string,
@@ -847,14 +847,14 @@ func (m *UpgradeStateMachine) cordonNode(ctx context.Context, nodeName string, s
 	if node.Labels == nil {
 		node.Labels = map[string]string{}
 	}
-	if node.Labels[driverUpgradingLabelKey] != "true" {
-		node.Labels[driverUpgradingLabelKey] = "true"
+	if node.Labels[driverUpgradingLabelKey] != labelValueTrue {
+		node.Labels[driverUpgradingLabelKey] = labelValueTrue
 		changed = true
 	}
 	// 좁은 lifecycle 의 차단 라벨도 같이 추가. Validating 진입 시점에 제거되어
 	// detector 가 다시 spawn 가능하게 된다.
-	if node.Labels[driverUpgradingBlockingLabelKey] != "true" {
-		node.Labels[driverUpgradingBlockingLabelKey] = "true"
+	if node.Labels[driverUpgradingBlockingLabelKey] != labelValueTrue {
+		node.Labels[driverUpgradingBlockingLabelKey] = labelValueTrue
 		changed = true
 	}
 	if !changed {
@@ -928,7 +928,7 @@ func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName 
 }
 
 // hasDeviceWorkloads는 노드에 GPU/NPU 리소스를 사용하는 Running Pod가 있는지 확인합니다.
-func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName string, vendor string) (bool, error) {
+func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName string) (bool, error) {
 	var podList corev1.PodList
 	if err := m.List(ctx, &podList); err != nil {
 		return false, err
@@ -1024,7 +1024,7 @@ func podUsesDevice(pod *corev1.Pod) bool {
 // deleteDevicePluginPods는 해당 노드의 device-plugin Pod를 삭제합니다.
 // device-plugin은 GPU 리소스를 요청하지 않지만 /dev/nvidia*를 직접 마운트하여
 // 커널 모듈 참조를 잡으므로, drain 시 삭제해야 rmmod가 가능합니다.
-func (m *UpgradeStateMachine) deleteDevicePluginPods(ctx context.Context, nodeName string, vendor string) error {
+func (m *UpgradeStateMachine) deleteDevicePluginPods(ctx context.Context, nodeName string) error {
 	var podList corev1.PodList
 	if err := m.List(ctx, &podList, client.InNamespace("kube-system")); err != nil {
 		return err
@@ -1301,12 +1301,12 @@ func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
 
 	var deploys appsv1.DeploymentList
 	if err := m.List(ctx, &deploys, client.MatchingLabels{
-		quiesceOnDriverUpgradeLabelKey: "true",
+		quiesceOnDriverUpgradeLabelKey: labelValueTrue,
 	}); err != nil {
 		return fmt.Errorf("quiesce 후보 Deployment list 실패: %w", err)
 	}
 
-	var quiesced []v1alpha1.QuiescedDeployment
+	quiesced := make([]v1alpha1.QuiescedDeployment, 0, len(deploys.Items))
 	for i := range deploys.Items {
 		d := &deploys.Items[i]
 		if !deploymentTargetsNode(d, state.Spec.NodeName) {
@@ -1439,7 +1439,7 @@ func (m *UpgradeStateMachine) restoreFromAnnotationFallback(
 
 	var deploys appsv1.DeploymentList
 	if err := m.List(ctx, &deploys, client.MatchingLabels{
-		quiesceOnDriverUpgradeLabelKey: "true",
+		quiesceOnDriverUpgradeLabelKey: labelValueTrue,
 	}); err != nil {
 		return fmt.Errorf("annotation fallback: deployment list 실패: %w", err)
 	}
