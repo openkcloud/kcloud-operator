@@ -9,8 +9,8 @@
 **핵심 기능:**
 - 노드 라벨 기반 자동 감지 및 벤더별 DaemonSet 자동 생성
 - CRD 기반 드라이버 설치 정책(`DriverInstallPolicy`)으로 버전 검증 및 자동 업그레이드
-- 사설 레지스트리 지원 (`global.registry` 한 줄 주입)
-- Helm Chart 기반 설치 (`deploy/helm`, Chart v0.5.15, appVersion v0.5.24)
+- 사설 레지스트리 지원 (`global.registry` 설정으로 이미지 경로 prefix 지정)
+- Helm Chart 기반 설치 (`deploy/helm`, Chart v0.5.16, appVersion v0.5.24)
 
 ---
 
@@ -23,7 +23,7 @@
 - **Go**: 1.24+ (소스 빌드 시)
 - **Docker**: 17.03+ (이미지 빌드 시)
 
-**Node labels** (보유 가속기에 맞게 부여):
+**Node labels**:
 
 | 가속기 | 라벨 |
 |--------|------|
@@ -55,14 +55,14 @@ make docker-build docker-push IMG=<registry>/npu-operator:v0.5.24 CONTAINER_TOOL
 
 operator는 `deploy/helm` 에 Helm 차트를 포함합니다.
 
-#### 옵션 A: 한 줄 (직접)
+#### 옵션 A: helm 직접 실행
 
 ```bash
 helm upgrade --install npu-operator deploy/helm -n npu-operator --create-namespace \
   --set global.registry=<host:port>
 ```
 
-#### 옵션 B: 래퍼 스크립트 (권장 — 반복 배포)
+#### 옵션 B: 래퍼 스크립트 (반복 배포 시 권장)
 
 ```bash
 # 1. 환경 파일 준비
@@ -189,14 +189,13 @@ spec:
   furiosa:
     enabled: true
     devicePluginImage: "ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1"
-  furiosa:
     rngd:
       enabled: true
-      devicePluginRepository: "kcloud/furiosa-device-plugin-mi"
+      devicePluginImage: "<your-registry>/furiosa-device-plugin-mi:v0.1.0"
       partitionPolicy: "dual-core"
   rebellions:
     enabled: true
-    devicePluginRepository: "rebellions/k8s-device-plugin"
+    devicePluginImage: "<your-registry>/rebellions/k8s-device-plugin:v0.3.6"
 ```
 
 ### DriverInstallPolicy
