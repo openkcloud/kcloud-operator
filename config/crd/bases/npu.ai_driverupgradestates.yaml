@@ -125,6 +125,25 @@ spec:
                   - originalReplicas
                   type: object
                 type: array
+              rebootAttempts:
+                description: |-
+                  RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다(S2-5).
+                  UpgradePolicy.MaxReboots(기본 1) 초과 시 Failed 로 전이하여 무한 재부팅 루프를 방지합니다.
+                  새 사이클(handleIdle) 진입 시 0 으로 초기화됩니다.
+                format: int32
+                type: integer
+              rebootBootID:
+                description: |-
+                  RebootBootID 는 reboot Job 생성 직전에 캡처한 node.status.nodeInfo.bootID 입니다(P2 premature-Ready 가드).
+                  Rebooting 상태에서 node 가 Ready 로 보여도 bootID 가 이 값과 동일하면 실제 재부팅 전이므로 전진을 보류합니다.
+                  캡처 실패(빈 값) 시에는 기존 isNodeReady 기반으로 보수 전진합니다(교착 방지 fallback).
+                type: string
+              rebootRequestedTime:
+                description: |-
+                  RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다(S2-5).
+                  Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
+                format: date-time
+                type: string
               retries:
                 description: Retries는 현재 업그레이드 시도에서의 재시도 횟수입니다.
                 format: int32

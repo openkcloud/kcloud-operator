@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 )
 
@@ -26,6 +28,44 @@ func renderTestPolicy(vendor, model, version string) *v1alpha1.DriverInstallPoli
 				Mode:    "daemonset",
 			},
 		},
+	}
+}
+
+// hasFuriosaAuthMount 는 DS pod spec 에 furiosa-auth secret 볼륨/마운트가 존재하는지 반환한다.
+func hasFuriosaAuthMount(ds *appsv1.DaemonSet) bool {
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == "furiosa-auth" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRenderDriverDaemonSet_FuriosaAuthWarboyOnly 는 furiosa-apt-auth secret 마운트가
+// Warboy(사설 repo 인증 필수)에만 부착되고 RNGD(공개 repo)에는 부착되지 않음을 검증한다.
+// 회귀 시나리오: RNGD 가 warboy 전제를 상속받아 secret 부재 클러스터에서 파드 스케줄 실패
+// (service 클러스터 실측 버그). Warboy 는 하위호환으로 마운트 유지.
+func TestRenderDriverDaemonSet_FuriosaAuthWarboyOnly(t *testing.T) {
+	cases := []struct {
+		name      string
+		vendor    string
+		model     string
+		wantMount bool
+	}{
+		{"warboy has auth", "furiosa", "warboy", true},
+		{"furiosa empty model = warboy", "furiosa", "", true},
+		{"rngd no auth (public repo)", "furiosa", "rngd", false},
+		{"rngd mixed case no auth", "Furiosa", "RNGD", false},
+		{"nvidia no auth", "nvidia", "generic", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := renderDriverDaemonSet(renderTestPolicy(tc.vendor, tc.model, "1.0.0"))
+			if got := hasFuriosaAuthMount(ds); got != tc.wantMount {
+				t.Errorf("furiosa-auth 마운트=%v, want %v (vendor=%s model=%s)",
+					got, tc.wantMount, tc.vendor, tc.model)
+			}
+		})
 	}
 }
 

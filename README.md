@@ -41,10 +41,10 @@
 소스에서 operator 이미지를 빌드하려면:
 
 ```bash
-make docker-build docker-push IMG=<registry>/npu-operator:v0.5.24 CONTAINER_TOOL="sudo docker"
+make docker-build docker-push IMG=<registry>/kcloud-operator:v0.5.43 CONTAINER_TOOL="sudo docker"
 ```
 
-- `IMG`: 완전한 레지스트리 경로 (예: `<your-registry>/kcloud/npu-operator:v0.5.24`)
+- `IMG`: 완전한 레지스트리 경로 (예: `<your-registry>/kcloud/kcloud-operator:v0.5.43`)
 - `CONTAINER_TOOL`: 기본값 `docker` (필요시 `sudo docker` 또는 `podman`)
 
 ---
@@ -58,7 +58,7 @@ operator는 `deploy/helm` 에 Helm 차트를 포함합니다.
 #### 옵션 A: helm 직접 실행
 
 ```bash
-helm upgrade --install npu-operator deploy/helm -n npu-operator --create-namespace \
+helm upgrade --install kcloud-operator deploy/helm -n kcloud --create-namespace \
   --set global.registry=<host:port>
 ```
 
@@ -81,7 +81,7 @@ bash deploy/helm/install.sh
 cp deploy/helm/values-airgap.example.yaml values-airgap.yaml
 vi values-airgap.yaml    # <your-registry> 를 실제 주소로 변경
 
-helm upgrade --install npu-operator deploy/helm -n npu-operator --create-namespace \
+helm upgrade --install kcloud-operator deploy/helm -n kcloud --create-namespace \
   -f values-airgap.yaml
 ```
 
@@ -95,7 +95,7 @@ helm upgrade --install npu-operator deploy/helm -n npu-operator --create-namespa
 
 ```bash
 # Operator pod 확인 (1/1 Running)
-kubectl get pod -n npu-operator
+kubectl get pod -n kcloud
 
 # NPUClusterPolicy CR 확인 (Ready=True)
 kubectl get npuclusterpolicy -A

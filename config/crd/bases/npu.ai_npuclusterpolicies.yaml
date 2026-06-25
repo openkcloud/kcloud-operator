@@ -87,10 +87,44 @@ spec:
                       resourceName:
                         type: string
                     type: object
+                  unified:
+                    description: |-
+                      Unified: true 면 Warboy/RNGD 를 두 개의 개별 DaemonSet 대신 하나의 통합 DaemonSet 으로
+                      배포한다(A' 방안 — 동봉 바이너리 + PCI 감지 exec). 기본 false = 기존 2-DS 경로(fallback).
+                      통합 DS 는 자립 라벨(kcloud.ai/furiosa-family.present, node-manager 부여)로 양 노드에 스케줄되며,
+                      리소스명(beta.furiosa.ai/npu / furiosa.ai/rngd)은 각 바이너리가 광고하므로 불변.
+                    type: boolean
+                  unifiedDevicePluginImage:
+                    description: 'UnifiedDevicePluginImage: 통합 DS 가 사용할 동봉 이미지. Unified=true
+                      일 때만 사용.'
+                    type: string
                 required:
                 - devicePluginImage
                 - enabled
                 type: object
+              imagePullSecrets:
+                description: |-
+                  ImagePullSecrets 는 operator 가 런타임 생성하는 모든 자식 DaemonSet
+                  (detector/device-plugin) pod spec 및 생성 ServiceAccount 에 부착되는
+                  pull secret 목록입니다. helm `imagePullSecrets` 값이 CR 을 통해 전파됩니다.
+                  미지정 시 빈 목록 — 노드레벨(containerd) 인증 경로를 유지하는 하위호환 동작입니다.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
               nvidia:
                 properties:
                   devicePluginImage:
@@ -128,6 +162,22 @@ spec:
                     type: string
                 required:
                 - devicePluginImage
+                type: object
+              tenstorrent:
+                description: |-
+                  TenstorrentSpec defines the Tenstorrent Blackhole NPU device plugin configuration.
+                  Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
+                properties:
+                  devicePluginImage:
+                    type: string
+                  enabled:
+                    type: boolean
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  resourceName:
+                    type: string
                 type: object
             required:
             - furiosa

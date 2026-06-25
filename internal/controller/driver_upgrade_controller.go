@@ -41,6 +41,7 @@ import (
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // DriverUpgradeReconciler는 DriverUpgradeState CR을 감시하고 업그레이드 상태 머신을 구동합니다.
 type DriverUpgradeReconciler struct {
@@ -184,98 +185,181 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 				continue
 			}
 
-			dusName := driverUpgradeStateName(nodeName, device.Vendor)
-
-			var existing v1alpha1.DriverUpgradeState
-			err := r.Get(ctx, types.NamespacedName{Name: dusName}, &existing)
-			if apierrors.IsNotFound(err) {
-				// 신규 생성: 버전 비교로 초기 State 결정
-				initialState := v1alpha1.UpgradeStateIdle
-				if policy.Spec.Driver.Version != "" && device.DriverVersion != policy.Spec.Driver.Version {
-					initialState = v1alpha1.UpgradeStateRequired
-				}
-				dus := v1alpha1.DriverUpgradeState{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: dusName,
-					},
-					Spec: v1alpha1.DriverUpgradeStateSpec{
-						NodeName: nodeName,
-						Vendor:   device.Vendor,
-						Model:    device.Model,
-					},
-					Status: v1alpha1.DriverUpgradeStateStatus{
-						State:              initialState,
-						CurrentVersion:     device.DriverVersion,
-						DesiredVersion:     policy.Spec.Driver.Version,
-						LastTransitionTime: metav1.Now(),
-					},
-				}
-				if err := r.Create(ctx, &dus); err != nil && !apierrors.IsAlreadyExists(err) {
-					logger.Error(err, "DriverUpgradeState 생성 실패", "name", dusName)
-				}
-				continue
-			}
-			if err != nil {
-				logger.Error(err, "DriverUpgradeState 조회 실패", "name", dusName)
-				continue
-			}
-
-			// Bug #7 fix: desiredVersion이 정책과 다르면 업데이트 (상태에 무관)
-			desiredVersion := policy.Spec.Driver.Version
-			if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion {
-				oldDesired := existing.Status.DesiredVersion
-				patch := client.MergeFrom(existing.DeepCopy())
-				existing.Status.DesiredVersion = desiredVersion
-				existing.Status.CurrentVersion = device.DriverVersion
-				if existing.Status.State == v1alpha1.UpgradeStateIdle {
-					existing.Status.State = v1alpha1.UpgradeStateRequired
-					// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
-					existing.Status.PreviousImage = ""
-				}
-				existing.Status.LastTransitionTime = metav1.Now()
-				existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", oldDesired, desiredVersion)
-				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
-					logger.Error(err, "DriverUpgradeState 상태 패치 실패 (desiredVersion 변경)", "name", dusName)
+			// TrackOnly 정책: DUS 를 Idle 로 추적만 한다(설치/업그레이드 전이 없음).
+			// installer 이미지 미비 벤더(예: Tenstorrent, 실제 설치는 DKMS 2차)의 버전 관측용.
+			if policy.Spec.Driver.TrackOnly {
+				if err := r.ensureTrackOnlyState(ctx, nodeName, device, policy); err != nil {
+					logger.Error(err, "TrackOnly DUS 동기화 실패", "node", nodeName, "vendor", device.Vendor)
 				}
 				continue
 			}
 
-			// 버전 불일치 감지: Idle 상태에서만 UpgradeRequired 전이
-			if existing.Status.State == v1alpha1.UpgradeStateIdle &&
-				desiredVersion != "" &&
-				device.DriverVersion != desiredVersion &&
-				existing.Status.CurrentVersion != desiredVersion {
-
-				patch := client.MergeFrom(existing.DeepCopy())
-				existing.Status.State = v1alpha1.UpgradeStateRequired
-				existing.Status.CurrentVersion = device.DriverVersion
-				existing.Status.DesiredVersion = desiredVersion
-				existing.Status.PreviousVersion = device.DriverVersion
-				// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
-				existing.Status.PreviousImage = ""
-				existing.Status.LastTransitionTime = metav1.Now()
-				existing.Status.Message = fmt.Sprintf("버전 불일치: %s → %s", device.DriverVersion, desiredVersion)
-				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
-					logger.Error(err, "DriverUpgradeState 상태 패치 실패", "name", dusName)
-				}
-				continue
-			}
-
-			// currentVersion 동기화: Idle 상태에서 NDR이 갱신되었지만 버전이 일치하는 경우
-			// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)
-			if existing.Status.State == v1alpha1.UpgradeStateIdle &&
-				device.DriverVersion != "" &&
-				existing.Status.CurrentVersion != device.DriverVersion {
-
-				patch := client.MergeFrom(existing.DeepCopy())
-				existing.Status.CurrentVersion = device.DriverVersion
-				existing.Status.LastTransitionTime = metav1.Now()
-				existing.Status.Message = fmt.Sprintf("NDR 버전 동기화: %s", device.DriverVersion)
-				if err := r.Status().Patch(ctx, &existing, patch); err != nil {
-					logger.Error(err, "DriverUpgradeState currentVersion 동기화 실패", "name", dusName)
-				}
-			}
+			r.syncUpgradeState(ctx, nodeName, device, policy)
 		}
+	}
+	return nil
+}
+
+// resetRebootTracking 은 새 업그레이드 사이클 진입 시 이전 사이클의 재부팅 추적 상태를 초기화한다.
+// RebootAttempts 가 stale 이면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀
+// cross-major 자연 재부팅이 발화하지 않는다(P2-2 결함). RequestedTime/BootID 는 handleRebootRequired 가
+// 재부팅 트리거 시 덮어쓰지만 사이클 경계에서 함께 리셋해 stale 관측을 없앤다.
+func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
+	s.RebootAttempts = 0
+	s.RebootRequestedTime = metav1.Time{}
+	s.RebootBootID = ""
+}
+
+// syncUpgradeState 는 설치형(비-TrackOnly) 정책에 대해 device 하나의 DUS 를 생성/전이합니다.
+// 신규 생성(버전 비교로 초기 State), 정책 버전 변경, 버전 불일치→UpgradeRequired,
+// currentVersion 동기화를 처리합니다. 에러는 로깅 후 skip(기존 동작 보존).
+func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName string, device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy) {
+	logger := logf.FromContext(ctx)
+	dusName := driverUpgradeStateName(nodeName, device.Vendor)
+
+	var existing v1alpha1.DriverUpgradeState
+	err := r.Get(ctx, types.NamespacedName{Name: dusName}, &existing)
+	if apierrors.IsNotFound(err) {
+		// 신규 생성: 버전 비교로 초기 State 결정
+		initialState := v1alpha1.UpgradeStateIdle
+		if policy.Spec.Driver.Version != "" && device.DriverVersion != policy.Spec.Driver.Version {
+			initialState = v1alpha1.UpgradeStateRequired
+		}
+		dus := v1alpha1.DriverUpgradeState{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: dusName,
+			},
+			Spec: v1alpha1.DriverUpgradeStateSpec{
+				NodeName: nodeName,
+				Vendor:   device.Vendor,
+				Model:    device.Model,
+			},
+			Status: v1alpha1.DriverUpgradeStateStatus{
+				State:              initialState,
+				CurrentVersion:     device.DriverVersion,
+				DesiredVersion:     policy.Spec.Driver.Version,
+				LastTransitionTime: metav1.Now(),
+			},
+		}
+		if err := r.Create(ctx, &dus); err != nil && !apierrors.IsAlreadyExists(err) {
+			logger.Error(err, "DriverUpgradeState 생성 실패", "name", dusName)
+		}
+		return
+	}
+	if err != nil {
+		logger.Error(err, "DriverUpgradeState 조회 실패", "name", dusName)
+		return
+	}
+
+	// Bug #7 fix: desiredVersion이 정책과 다르면 업데이트 (상태에 무관)
+	desiredVersion := policy.Spec.Driver.Version
+	if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion {
+		oldDesired := existing.Status.DesiredVersion
+		patch := client.MergeFrom(existing.DeepCopy())
+		existing.Status.DesiredVersion = desiredVersion
+		existing.Status.CurrentVersion = device.DriverVersion
+		if existing.Status.State == v1alpha1.UpgradeStateIdle {
+			existing.Status.State = v1alpha1.UpgradeStateRequired
+			// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
+			existing.Status.PreviousImage = ""
+		}
+		// 새 사이클 진입: 이전 사이클의 재부팅 카운터/마커를 리셋(durable persist).
+		// handleIdle 의 리셋(state_machine.go)은 이 sync 경로가 이미 Idle→Required 로 전이시키면
+		// 실행되지 않으므로, cross-major 재부팅 게이트(need && RebootAttempts==0)가 stale 값에 막히지 않도록
+		// 여기서도 리셋한다(P2-2 stale RebootAttempts 하드닝).
+		resetRebootTracking(&existing.Status)
+		existing.Status.LastTransitionTime = metav1.Now()
+		existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", oldDesired, desiredVersion)
+		if err := r.Status().Patch(ctx, &existing, patch); err != nil {
+			logger.Error(err, "DriverUpgradeState 상태 패치 실패 (desiredVersion 변경)", "name", dusName)
+		}
+		return
+	}
+
+	// 버전 불일치 감지: Idle 상태에서만 UpgradeRequired 전이
+	if existing.Status.State == v1alpha1.UpgradeStateIdle &&
+		desiredVersion != "" &&
+		device.DriverVersion != desiredVersion &&
+		existing.Status.CurrentVersion != desiredVersion {
+
+		patch := client.MergeFrom(existing.DeepCopy())
+		existing.Status.State = v1alpha1.UpgradeStateRequired
+		existing.Status.CurrentVersion = device.DriverVersion
+		existing.Status.DesiredVersion = desiredVersion
+		existing.Status.PreviousVersion = device.DriverVersion
+		// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
+		existing.Status.PreviousImage = ""
+		// 새 사이클 진입: 재부팅 카운터/마커 리셋(P2-2 stale RebootAttempts 하드닝) — 위 정책변경 경로와 동일.
+		resetRebootTracking(&existing.Status)
+		existing.Status.LastTransitionTime = metav1.Now()
+		existing.Status.Message = fmt.Sprintf("버전 불일치: %s → %s", device.DriverVersion, desiredVersion)
+		if err := r.Status().Patch(ctx, &existing, patch); err != nil {
+			logger.Error(err, "DriverUpgradeState 상태 패치 실패", "name", dusName)
+		}
+		return
+	}
+
+	// currentVersion 동기화: Idle 상태에서 NDR이 갱신되었지만 버전이 일치하는 경우
+	// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)
+	if existing.Status.State == v1alpha1.UpgradeStateIdle &&
+		device.DriverVersion != "" &&
+		existing.Status.CurrentVersion != device.DriverVersion {
+
+		patch := client.MergeFrom(existing.DeepCopy())
+		existing.Status.CurrentVersion = device.DriverVersion
+		existing.Status.LastTransitionTime = metav1.Now()
+		existing.Status.Message = fmt.Sprintf("NDR 버전 동기화: %s", device.DriverVersion)
+		if err := r.Status().Patch(ctx, &existing, patch); err != nil {
+			logger.Error(err, "DriverUpgradeState currentVersion 동기화 실패", "name", dusName)
+		}
+	}
+}
+
+// ensureTrackOnlyState 는 TrackOnly 정책에 대해 DUS 를 Idle 상태로만 유지합니다.
+// 설치/업그레이드 전이 없이 currentVersion(NDR) 과 desiredVersion(정책)만 동기화하여
+// 버전 관측·verifiedVersions 게이트 용도로 추적합니다(installer 미비 벤더 임시 편입).
+func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, nodeName string, device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy) error {
+	const trackMsg = "TrackOnly: 버전 관측 전용(설치 경로 없음)"
+	dusName := driverUpgradeStateName(nodeName, device.Vendor)
+
+	var existing v1alpha1.DriverUpgradeState
+	err := r.Get(ctx, types.NamespacedName{Name: dusName}, &existing)
+	if apierrors.IsNotFound(err) {
+		dus := v1alpha1.DriverUpgradeState{
+			ObjectMeta: metav1.ObjectMeta{Name: dusName},
+			Spec: v1alpha1.DriverUpgradeStateSpec{
+				NodeName: nodeName,
+				Vendor:   device.Vendor,
+				Model:    device.Model,
+			},
+			Status: v1alpha1.DriverUpgradeStateStatus{
+				State:              v1alpha1.UpgradeStateIdle,
+				CurrentVersion:     device.DriverVersion,
+				DesiredVersion:     policy.Spec.Driver.Version,
+				LastTransitionTime: metav1.Now(),
+				Message:            trackMsg,
+			},
+		}
+		if createErr := r.Create(ctx, &dus); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+			return createErr
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	// 기존 DUS: currentVersion/desiredVersion 동기화, State 는 항상 Idle 로 강제.
+	if existing.Status.State != v1alpha1.UpgradeStateIdle ||
+		existing.Status.CurrentVersion != device.DriverVersion ||
+		existing.Status.DesiredVersion != policy.Spec.Driver.Version {
+		patch := client.MergeFrom(existing.DeepCopy())
+		existing.Status.State = v1alpha1.UpgradeStateIdle
+		existing.Status.CurrentVersion = device.DriverVersion
+		existing.Status.DesiredVersion = policy.Spec.Driver.Version
+		existing.Status.LastTransitionTime = metav1.Now()
+		existing.Status.Message = trackMsg
+		return r.Status().Patch(ctx, &existing, patch)
 	}
 	return nil
 }

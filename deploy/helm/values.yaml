@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-06-02
+# 생성일: 2026-03-25 | 수정일: 2026-07-20
 
 # ─────────────────────────────────────────────────────────────────────────────
 # global.registry: 사설 이미지(operator/detector/device-plugin/driver)의 레지스트리.
@@ -14,9 +14,14 @@ global:
 
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
-  repository: npu-operator
-  tag: v0.5.24
+  repository: kcloud-operator
+  tag: v0.5.52
   pullPolicy: IfNotPresent
+
+# fullnameOverride: operator Deployment/SA/RBAC 리소스명(파드 prefix). 릴리스명과 분리.
+#   #28(2026-07-20): npu-operator-controller-manager → kcloud-operator-controller (가시성).
+#   selector 라벨은 chart/release 이름 기반이라 불변 → immutable selector 함정 없음. 릴리스명(npu-operator) 유지.
+fullnameOverride: kcloud-operator-controller
 
 serviceAccount:
   create: true
@@ -37,8 +42,8 @@ clusterPolicy:
 
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-  repository: "npu-detector"
-  tag: "0.4.3"
+  repository: "kcloud-node-manager"
+  tag: "0.6.1"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,15 +54,17 @@ detector:
 nvidia:
   enabled: true
   devicePluginImage: "nvcr.io/nvidia/k8s-device-plugin:v0.17.1"
+  # 자립 셀렉터(node-manager 가 감지 시 부여). NFD/gpu-operator 라벨 비의존.
   nodeSelector:
-    nvidia.com/gpu.present: "true"
+    kcloud.ai/nvidia.present: "true"
 
 furiosa:
   enabled: true
   devicePluginImage: "ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1"
   configMapName: "npu-device-plugin"
+  # 자립 셀렉터(node-manager 가 Warboy 감지 시 부여). NFD/수동 라벨 비의존.
   nodeSelector:
-    furiosa: "true"
+    kcloud.ai/furiosa.present: "true"
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin (Phase 1, 2026-04-21)
   # spec.furiosa.rngd 필드 — omitempty 이므로 enabled=false 시 CR에서 생략됨.
@@ -75,10 +82,20 @@ furiosa:
     # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
     # "none" 으로 바꾸면 위 -mi 이미지든 일반 이미지든 동작(--policy 미전달).
     partitionPolicy: "dual-core"
-    # 직접 라벨링 방식 (Warboy/NVIDIA 와 일관). NFD 의존 제거.
-    # rngd-1 노드에 수동/Operator 로 `furiosa-rngd=true` 부여 필요.
+    # 자립 셀렉터(node-manager 가 RNGD 감지 시 부여). 수동/NFD 라벨 비의존.
     nodeSelector:
-      furiosa-rngd: "true"
+      kcloud.ai/rngd.present: "true"
+  # ─────────────────────────────────────────────────────────────────────
+  # Furiosa 통합 device-plugin (S3-8, A' 방안, 2026-07-20)
+  # enabled=true 면 Warboy/RNGD 를 위 두 개의 개별 DS 대신 하나의 통합 DS 로 배포.
+  # 통합 이미지에 두 벤더 바이너리를 동봉하고 entrypoint 가 PCI(0x1ed2 device ID)로
+  # 모델을 감지해 해당 바이너리를 exec 한다(proxy 없음). 리소스명·버전핀 불변.
+  # 기본 false = 기존 2-DS 경로(fallback 보존). registry 는 global.registry 로 조립.
+  # ─────────────────────────────────────────────────────────────────────
+  unified:
+    enabled: false
+    devicePluginRepository: "kcloud/furiosa-unified-device-plugin"
+    devicePluginTag: "0.1.0"
 
 rebellions:
   enabled: true
@@ -91,13 +108,50 @@ rebellions:
   # 2026-06-02: DS/SA/ConfigMap 이름 prefix 를 `rbln-device-plugin` 으로 변경 (§1 리네임).
   namespace: "kube-system"
   configMapName: "rbln-device-plugin-config"
+  # 자립 셀렉터(node-manager 가 감지 시 부여). 수동 라벨 비의존.
   nodeSelector:
-    rebellions-atom: "true"
+    kcloud.ai/rebellions.present: "true"
     kubernetes.io/arch: "amd64"
+
+tenstorrent:
+  enabled: true
+  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  # Harbor 에 kcloud/tenstorrent/k8s-device-plugin:v0.1.0 로 push 예정.
+  devicePluginRepository: "tenstorrent/k8s-device-plugin"
+  devicePluginTag: "v0.1.0"
+  resourceName: "tenstorrent.com/blackhole"
+  # 자립 셀렉터(node-manager 가 Blackhole 감지 시 부여). 수동 라벨 비의존.
+  nodeSelector:
+    kcloud.ai/tenstorrent.present: "true"
 
 runtimeClass:
   nvidia:
     enabled: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admission webhook (S4-1): DIP/NCP validating + opt-in Pod mutating.
+# 기본 opt-in(enabled=false) — 라이브 검증 시에만 true 로 전환.
+# cert 는 helm lookup 으로 최초 1회만 발급하고 upgrade 마다 재사용(멱등).
+# failurePolicy=Ignore: webhook 장애가 클러스터 admission 을 막지 않게(최우선 안전).
+# ─────────────────────────────────────────────────────────────────────────────
+webhook:
+  enabled: false
+  # 서버 포트(operator 컨테이너 내부). controller-runtime 기본 9443.
+  port: 9443
+  failurePolicy: Ignore
+  # Pod mutating 대상 opt-in 라벨. 이 라벨이 없는 Pod 는 무개입.
+  injectLabel: "kcloud.ai/inject"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 관리 REST API (S5-3-②): kubeconfig 없는 외부 관리툴/대시보드용 HTTP API.
+# operator pod 내 별도 HTTPS listener(:9444). 인증=TokenReview, 인가=SubjectAccessReview.
+# 기본 opt-in(enabled=false) — 라이브 검증 시에만 true 로 전환. cert 는 lookup 멱등(upgrade 재수행에도 불변).
+# Service kcloud-operator-controller-api(ClusterIP, 443→9444). control 은 전부 CR patch 로 귀결.
+# ─────────────────────────────────────────────────────────────────────────────
+api:
+  enabled: false
+  # 서버 포트(operator 컨테이너 내부). metrics(:8443)·webhook(:9443)와 겹치지 않게 :9444.
+  port: 9444
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DriverInstallPolicy CR 자동 생성 설정 (driverInstallPolicies와 nvidia/furiosa 구분)
@@ -124,20 +178,25 @@ driverInstallPolicies:
       - "1.7.8"
       - "1.9.8-3"
       - "1.9.9-3"
-    # Furiosa installer DaemonSet 은 furiosa=true 라벨이 붙은 노드에만 스케줄된다.
+    # Furiosa installer DaemonSet 은 node-manager 가 부여한 자립 셀렉터 노드에만 스케줄.
     # detector 오탐으로 NVIDIA-only 노드에서 Furiosa 가 보고되더라도 nodeSelector 로 2차 차단.
     nodeSelector:
-      furiosa: "true"
+      kcloud.ai/furiosa.present: "true"
     driver:
-      # mode=daemonset 은 /usr/local/bin/entrypoint.sh 가 포함된 containerized driver 이미지 필요.
-      # plain 태그 (e.g. 1.9.8-3) 는 entrypoint 누락된 broken image — 반드시 -v2 접미사 사용.
-      # 상세: docs/05 §4.2.7 알려진 이슈
-      mode: daemonset
+      # #13 완전 전환: Warboy Mode=job 기본화(privileged driver DS 상주 0). 설치=일회성 install Job,
+      # RUN_MODE=job 지원 이미지(-v5) 필요. daemonset 코드 경로는 fallback 보존(회귀 시 mode=daemonset 복귀).
+      mode: job
       version: "1.9.8-3"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-driver-ds"
-      tag: "1.9.8-3-v2"
+      tag: "1.9.8-3-v5"
       installer: apt
+      # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
+      allowDowngrade: false
+      # 버전 출처: Policy(CR 명세 사용) | Node(노드 자동 감지)
+      versionSource: "Policy"
+      # Passthrough 모드 노드에서 드라이버 설치 건너뜀
+      skipOnPassthrough: true
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -166,10 +225,14 @@ driverInstallPolicies:
       - "580.142"
       - "580.159.03"
       - "595.58.03"
+    # 자립 셀렉터(node-manager 부여). 드라이버 install DS/Job + toolkit DS 공용.
     nodeSelector:
-      nvidia.com/gpu.present: "true"
+      kcloud.ai/nvidia.present: "true"
     driver:
-      mode: daemonset
+      # #13 완전 전환: NVIDIA Mode=job 기본화(마지막 — kubelet restart 리스크 격리).
+      # 런타임 lifecycle 은 상주 toolkit DS 소유(driver=install Job / 런타임=toolkit 분리, #7 경계).
+      # v176(a1: v17→v16 위임, MANAGE_CONTAINER_TOOLKIT=false)이 RUN_MODE=job 지원. daemonset fallback 보존.
+      mode: job
       # plain 태그 (e.g. 580.126.09) 는 entrypoint 누락된 broken image —
       # idempotent skip + race-safe host module pool 재검사 + 강화된 NVRM regex
       # 가 적용된 -v173 (v17.3) 사용 권장. -v16 (legacy host install) 는 deprecated.
@@ -179,14 +242,31 @@ driverInstallPolicies:
       version: "580.159.03"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "nvidia-driver-ds"
-      tag: "580.159.03-v173"
+      tag: "580.159.03-v179"
       installer: apt
+      # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
+      allowDowngrade: false
+      # 버전 출처: Policy(CR 명세 사용) | Node(노드 자동 감지)
+      versionSource: "Policy"
+      # Passthrough 모드 노드에서 드라이버 설치 건너뜀
+      skipOnPassthrough: true
       env:
         - name: NVIDIA_DRIVER_CHOICE
           value: "recommended"
     toolkit:
-      enabled: true
+      # enabled=true 시 ToolkitDaemonSet reconciler 가 nvidia-container-toolkit DS 를
+      # 생성하여 containerd 에 nvidia runtime 을 등록한다(nvidia-ctk, idempotent).
+      # ⚠️ containerd 변경은 노드 전체 영향 — 이미 host-managed 로 runtime 이 등록된
+      #    노드에서는 no-op. image 미지정 시 코드 기본값(nvcr.io/.../container-toolkit)을
+      #    사용하므로, 내부/air-gap 클러스터에서는 아래 image 를 Harbor 미러 경로로 override.
+      #
+      # ⛔ 기본값 disabled: toolkit DS 가 containerd 를 건드리므로 opt-in 으로만 켠다.
+      #    host-managed 로 runtime 이 이미 등록된 클러스터(예: 개발 .91 worker1)나
+      #    toolkit 이미지 미러가 없는 air-gap 에서 자동 활성화되면 회귀(ImagePullBackOff)
+      #    또는 불필요한 containerd 재시작 위험. runtime 미등록 fresh 노드에서만 true 로.
+      enabled: false
       method: apt
+      # image: "registry.example.com:5000/kcloud/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -196,6 +276,11 @@ driverInstallPolicies:
       drainTimeout: "5m"
       validationTimeout: "10m"
       rollbackOnFailure: true
+      # S2-5 cross-major reboot: rmmod 불가로 재부팅이 필요한 NVIDIA 메이저 교체(예 535→580) 대응.
+      # 미지정 시 CRD 기본값(maxReboots=1, rebootTimeout 15m) 적용. cross-major 는 통상 1회 재부팅이면 충분.
+      maxReboots: 1
+      rebootTimeout: "15m"
+      # driver.rebootExecutor 는 CRD 기본 Job(operator 가 privileged reboot Job 생성). kured 는 1차 미구현.
 
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD (mode=daemonset)
@@ -212,17 +297,73 @@ driverInstallPolicies:
     # verifiedVersions: 검증된 driver version 화이트리스트.
     verifiedVersions:
       - "2026.1.0"
+    # 자립 셀렉터(node-manager 부여). 수동/NFD 라벨 비의존.
     nodeSelector:
-      furiosa-rngd: "true"
+      kcloud.ai/rngd.present: "true"
     driver:
-      mode: daemonset
+      # #13 완전 전환: RNGD Mode=job 기본화. RUN_MODE=job 지원 이미지(-v1) 필요.
+      # daemonset 코드 경로 fallback 보존(회귀 시 mode=daemonset 복귀).
+      mode: job
       version: "2026.1.0"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-rngd-driver-installer"
-      tag: "2026.1.0"
+      tag: "2026.1.0-v1"
       installer: apt
+      # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
+      allowDowngrade: false
+      # 버전 출처: Policy(CR 명세 사용) | Node(노드 자동 감지)
+      versionSource: "Policy"
+      # Passthrough 모드 노드에서 드라이버 설치 건너뜀
+      skipOnPassthrough: true
     upgradePolicy:
       autoUpgrade: true
+      drainEnabled: true
+      rollbackOnFailure: true
+      maxUnavailable: 1
+      validationTimeout: "10m"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Tenstorrent Blackhole (mode=job, trackOnly) — 2026-07-16 버전관리 편입 (#15 Phase 2)
+  # worker3 p150. TT 를 DIP→DUS 버전 관리 체계에 편입한다.
+  # ⚠️ trackOnly=true — DUS 추적(버전 관측 + verifiedVersions 게이트)만 수행하고
+  #    설치 Job/DaemonSet 은 생성하지 않는다(mode=job 이나 설치 경로 자체가 비활성).
+  #    NDR 이 이미 driverVersion 2.8.0 을 보고 중이므로 DUS 는 Idle 로 수렴한다.
+  #    tt-kmd 실제 설치(DKMS)는 job 모드 2차(#15 2단계)로 이관.
+  # driver.image 는 실존 installer 이미지(kcloud/tenstorrent-driver-ds:0.1.1)를 지정한다.
+  #    trackOnly 로 평시엔 pull 되지 않지만, self-heal 엣지에서 Job 이 뜨더라도
+  #    ImagePullBackOff 없이 정상 스케줄되도록 실존 태그를 둔다.
+  # ─────────────────────────────────────────────────────────────────────
+  tenstorrent:
+    enabled: true
+    name: tenstorrent-blackhole-ds
+    vendor: tenstorrent
+    model: blackhole-p150
+    rebootStrategy: IfNeeded
+    kernelAllowlist: ["5.15.*", "6.8.*"]
+    containerdMinVersion: "1.7.0"
+    # verifiedVersions: 검증된 tt-kmd 버전 화이트리스트.
+    verifiedVersions:
+      - "2.8.0"
+      - "2.9.0"
+    # 자립 셀렉터(node-manager 부여). 수동 라벨 비의존.
+    nodeSelector:
+      kcloud.ai/tenstorrent.present: "true"
+    driver:
+      mode: job
+      # trackOnly=false: 실설치 활성(#26). installer 이미지가 tt-kmd 소스를 baked 하여
+      # DKMS 로 빌드/설치(air-gap). RUN_MODE=job → 설치 후 exit 0.
+      trackOnly: false
+      version: "2.8.0"
+      versionSource: "Policy"
+      # job모드 실설치 이미지(Harbor kcloud/tenstorrent-driver-ds:0.2.0-kmd<ver>).
+      # tag 의 kmd 버전과 version 을 함께 bump 한다(이미지↔버전 1:1 baked).
+      repository: "tenstorrent-driver-ds"
+      tag: "0.2.0-kmd2.8.0"
+      installer: script
+      allowDowngrade: false
+      skipOnPassthrough: true
+    upgradePolicy:
+      autoUpgrade: false
       drainEnabled: true
       rollbackOnFailure: true
       maxUnavailable: 1
@@ -256,6 +397,12 @@ leaderElection:
   enabled: true
 
 # Pod placement & runtime tuning
+# imagePullSecrets 는 operator Deployment 뿐 아니라 CR(NPUClusterPolicy/DriverInstallPolicy)을
+# 통해 컨트롤러가 런타임 생성하는 전 자식 DaemonSet(detector/device-plugin/driver) 및
+# 생성 ServiceAccount(kcloud-node-manager/rbln-device-plugin)에도 전파된다. private 레지스트리에서
+# `--set imagePullSecrets[0].name=<secret>` 한 줄로 전 파드 pull 이 가능하다.
+# 미지정([]) 시 노드레벨(containerd) 인증 경로를 유지한다(하위호환). imagePullPolicy 는
+# 변경하지 않으므로 air-gap 프리로드(IfNotPresent 캐시 hit) 경로도 그대로 성립한다.
 imagePullSecrets: []
 nodeSelector: {}
 tolerations: []

@@ -7,6 +7,11 @@ metadata:
   name: {{ .Values.clusterPolicy.name }}
   namespace: {{ .Values.clusterPolicy.namespace | default .Release.Namespace }}
 spec:
+  {{- with .Values.imagePullSecrets }}
+  # 컨트롤러가 detector/device-plugin 자식 DS + 생성 SA 에 전파한다 (G2).
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   detector:
     image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.detector.repository "tag" .Values.detector.tag) }}"
   nvidia:
@@ -23,6 +28,10 @@ spec:
     {{- if .Values.furiosa.nodeSelector }}
     nodeSelector:
       {{- toYaml .Values.furiosa.nodeSelector | nindent 6 }}
+    {{- end }}
+    {{- if .Values.furiosa.unified }}
+    unified: {{ .Values.furiosa.unified.enabled }}
+    unifiedDevicePluginImage: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.unified.devicePluginRepository "tag" .Values.furiosa.unified.devicePluginTag) }}"
     {{- end }}
     {{- if .Values.furiosa.rngd }}
     rngd:
@@ -44,6 +53,16 @@ spec:
     namespace: {{ .Values.rebellions.namespace | quote }}
     configMapName: {{ .Values.rebellions.configMapName | quote }}
     {{- with .Values.rebellions.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.tenstorrent }}
+  tenstorrent:
+    enabled: {{ .Values.tenstorrent.enabled }}
+    devicePluginImage: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.tenstorrent.devicePluginRepository "tag" .Values.tenstorrent.devicePluginTag) | quote }}
+    resourceName: {{ .Values.tenstorrent.resourceName | quote }}
+    {{- with .Values.tenstorrent.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 6 }}
     {{- end }}

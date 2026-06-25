@@ -31,8 +31,8 @@ if [[ -z "${REGISTRY:-}" ]]; then
 fi
 
 # ── 변수 기본값 ───────────────────────────────────────────────
-NAMESPACE="${NAMESPACE:-npu-operator}"
-RELEASE="${RELEASE:-npu-operator}"
+NAMESPACE="${NAMESPACE:-kcloud}"
+RELEASE="${RELEASE:-kcloud-operator}"
 CHART="${CHART:-${SCRIPT_DIR}}"
 
 # 상대경로이면 SCRIPT_DIR 기준 절대경로로 변환 (OCI ref 제외)
@@ -46,6 +46,13 @@ HELM_CMD=(
   -n "${NAMESPACE}" --create-namespace
   --set "global.registry=${REGISTRY}"
 )
+
+# .91 dev 오버라이드 자동 적용: 커밋된 values-dev.yaml 이 있으면 -f 로 병합한다.
+# (dev 배포 경로 한정 — 차트 기본값 values.yaml 은 외부 소비자용으로 유지). nvidia toolkit
+# 등 이 클러스터에만 필요한 설정을 --set 대신 커밋된 values 로 영속시켜 upgrade 승계를 보장.
+if [[ -f "${SCRIPT_DIR}/values-dev.yaml" ]]; then
+  HELM_CMD+=(-f "${SCRIPT_DIR}/values-dev.yaml")
+fi
 
 # EXTRA_ARGS: 공백 구분 추가 인수를 배열로 분리 (word-split 의도적)
 if [[ -n "${EXTRA_ARGS:-}" ]]; then

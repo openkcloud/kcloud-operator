@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/naming"
 )
 
 var _ = Describe("NPUClusterPolicy Controller", func() {
@@ -92,3 +94,35 @@ var _ = Describe("NPUClusterPolicy Controller", func() {
 		})
 	})
 })
+
+// TestOwnedScanNamespaces: #16 detector 이동 dual-ns 스캔 고정.
+// env 미설정 → kube-system 1개(회귀 0). 설정 → kube-system + kcloud 2개(과도기 orphan 방지).
+func TestOwnedScanNamespaces(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "")
+	if got := ownedScanNamespaces(); len(got) != 1 || got[0] != naming.KubeSystemNamespace {
+		t.Errorf("env 미설정 시 %v, want [kube-system]", got)
+	}
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+	got := ownedScanNamespaces()
+	if len(got) != 2 || got[0] != naming.KubeSystemNamespace || got[1] != "kcloud" {
+		t.Errorf("env=kcloud 시 %v, want [kube-system kcloud]", got)
+	}
+}
+
+// TestIsDevicePluginResource: #19 device-plugin 보존 정책 고정.
+// 5종 device-plugin=보존(true), operator 관리(driver/toolkit/detector)=삭제 대상(false).
+func TestIsDevicePluginResource(t *testing.T) {
+	preserve := []string{"nvidia-device-plugin", "furiosa-device-plugin", "furiosa-rngd-device-plugin",
+		"kcloud-tt-device-plugin", "rbln-device-plugin", "rbln-device-plugin-config"}
+	for _, n := range preserve {
+		if !isDevicePluginResource(n) {
+			t.Errorf("%q 는 device-plugin(보존 대상)이어야 함", n)
+		}
+	}
+	del := []string{"kcloud-nvidia-driver", "kcloud-nvidia-toolkit", "kcloud-node-manager", "kcloud-furiosa-warboy-driver"}
+	for _, n := range del {
+		if isDevicePluginResource(n) {
+			t.Errorf("%q 는 operator 관리(삭제 대상)여야 함", n)
+		}
+	}
+}

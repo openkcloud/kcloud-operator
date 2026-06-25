@@ -194,6 +194,36 @@ func TestDevicePluginValidator_FailWhenPodMissing(t *testing.T) {
 	}
 }
 
+// TestDevicePluginValidator_PassWhenTTPodInKcloudNS 는 TT device-plugin 이
+// kube-system 이 아닌 kcloud 네임스페이스에 "kcloud-tt-device-plugin" 이름으로
+// 상주해도(#21) 검증이 통과하는지 확인한다. namespace 하드코딩 제거 + "tt" vendor
+// 별칭 회귀 고정.
+func TestDevicePluginValidator_PassWhenTTPodInKcloudNS(t *testing.T) {
+	const nodeName = "k8s-worker3"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kcloud-tt-device-plugin-sn9gr",
+			Namespace: "kcloud",
+			Labels:    map[string]string{"app.kubernetes.io/name": "kcloud-tt-device-plugin"},
+		},
+		Spec: corev1.PodSpec{NodeName: nodeName},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.ContainersReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	c := newFakeClient(t, pod)
+	v := &DevicePluginValidator{}
+	res, err := v.Run(context.Background(), c, nodeName, "tenstorrent", "")
+	if err != nil {
+		t.Fatalf("예상치 못한 에러: %v", err)
+	}
+	if !res.Passed {
+		t.Fatalf("PASS 기대(TT/kcloud), 실제 FAIL: %s", res.Message)
+	}
+}
+
 // TestWorkloadValidator_SkeletonAlwaysPass 는 skeleton 구현이 항상 PASS 를
 // 반환하는지 확인 (후속 PR 에서 실제 워크로드 spawn).
 func TestWorkloadValidator_SkeletonAlwaysPass(t *testing.T) {

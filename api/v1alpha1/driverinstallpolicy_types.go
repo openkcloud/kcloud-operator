@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -56,6 +57,14 @@ type UpgradePolicy struct {
 	// +kubebuilder:default=10
 	// +kubebuilder:validation:Minimum=0
 	IdleCooldownSeconds *int32 `json:"idleCooldownSeconds,omitempty"`
+
+	// MaxReboots 는 cross-major 드라이버 교체 시 노드 재부팅을 트리거할 최대 횟수입니다(S2-5).
+	// 초과 시 Failed 로 전이(무한 재부팅 방지). cross-major 는 통상 1회면 충분. 기본 1.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	MaxReboots int32 `json:"maxReboots,omitempty"`
+	// RebootTimeout 은 Rebooting 상태에서 노드 Ready 복귀를 대기할 최대 시간(e.g. "15m"). 미지정 시 15m.
+	RebootTimeout string `json:"rebootTimeout,omitempty"`
 }
 
 // DriverInstallPolicySpec 은 벤더/모델별 드라이버 설치 정책을 담습니다.
@@ -84,6 +93,12 @@ type DriverInstallPolicySpec struct {
 	// +kubebuilder:validation:Enum=Require;IfNeeded;Never
 	RebootStrategy string `json:"rebootStrategy,omitempty"`
 
+	// RebootExecutor 는 재부팅 실행 방식입니다(S2-5). Job(기본): operator 가 privileged reboot Job 생성.
+	// kured: 노드에 kured sentinel annotation 만 부착(kured 운영 클러스터용, cordon/drain 중복 억제 설정 권장).
+	// +kubebuilder:validation:Enum=Job;kured
+	// +kubebuilder:default=Job
+	RebootExecutor string `json:"rebootExecutor,omitempty"`
+
 	// (선택) 잡 템플릿 오버라이드(서비스어카운트, TTL, Backoff 등)
 	JobOverrides *JobOverrides `json:"jobOverrides,omitempty"`
 
@@ -99,6 +114,12 @@ type DriverInstallPolicySpec struct {
 	// 비어있으면 버전 검증을 skip 하여 기존 동작을 유지합니다 (backward compat).
 	// +optional
 	VerifiedVersions []string `json:"verifiedVersions,omitempty"`
+
+	// ImagePullSecrets 는 operator 가 생성하는 driver DaemonSet pod spec 에 부착되는
+	// pull secret 목록입니다. helm `imagePullSecrets` 값이 CR 을 통해 전파됩니다.
+	// 미지정 시 빈 목록 — 노드레벨 인증 경로를 유지하는 하위호환 동작입니다.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // DriverSpec은 드라이버 버전/이미지 및 설치 방법을 정의합니다.
@@ -108,7 +129,7 @@ type DriverSpec struct {
 	Version string `json:"version,omitempty"`
 
 	// 인스톨러 컨테이너 이미지
-	// 예: "129.254.202.88:5100/furiosa-driver-installer:1.7.8" 또는 "ghcr.io/you/nvidia-apt-installer:latest"
+	// 예: "registry.example.com:5000/furiosa-driver-installer:1.7.8" 또는 "ghcr.io/you/nvidia-apt-installer:latest"
 	//
 	// CRD 는 docker reference 의 syntax 만 검증한다 (tag 부에 invalid char 차단). 의미론적
 	// 검증 — broken plain tag 가 mode=daemonset 환경에서 entrypoint 누락된 broken image 로
@@ -129,8 +150,10 @@ type DriverSpec struct {
 	Installer string `json:"installer,omitempty"`
 
 	// Mode는 드라이버 설치 방식을 결정합니다.
-	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버, 유일 지원 방식)
-	// +kubebuilder:validation:Enum=daemonset
+	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버, 검증된 21초 롤링 자산 — 기본값).
+	// job:       순간 install Job 으로 설치 후 즉시 종료 (상주 pod 없음, WP-C-1). 100% opt-in.
+	//            DUS 상태머신이 install Job 의 단일 소유자이며 daemonset 경로 본문은 무변경으로 재사용된다.
+	// +kubebuilder:validation:Enum=daemonset;job
 	// +kubebuilder:default=daemonset
 	Mode string `json:"mode,omitempty"`
 
@@ -143,6 +166,32 @@ type DriverSpec struct {
 
 	// (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc, /var/lib/npu-operator 외)
 	ExtraHostMounts []HostPathMount `json:"extraHostMounts,omitempty"`
+
+	// AllowDowngrade (b) 는 호스트에 이미 설치된 드라이버가 desired 보다 상위 버전일 때
+	// 하위 버전으로의 다운그레이드 설치를 허용할지 결정합니다.
+	// 기본 false = 다운그레이드 금지(기존 상위 버전 유지, 설치 보류). true 여야 하위 버전 설치 허용.
+	// +kubebuilder:default=false
+	AllowDowngrade bool `json:"allowDowngrade,omitempty"`
+
+	// VersionSource (c) 는 effective desired 버전을 어디서 채택할지 결정합니다.
+	// Policy : 기존 동작 — spec.driver.version 을 desired 로 사용.
+	// Host   : 호스트에 설치된 버전을 desired 로 채택(기존 존중). 호스트 무드라이버면 Policy 버전으로 fallback.
+	// +kubebuilder:validation:Enum=Policy;Host
+	// +kubebuilder:default=Policy
+	VersionSource string `json:"versionSource,omitempty"`
+
+	// SkipOnPassthrough (a) 는 노드의 GPU 가 전량 vfio-pci(passthrough)에 바인딩된 경우
+	// 드라이버 설치를 보류(skip)할지 결정합니다.
+	// 기본 true = 전량 vfio 노드에서 설치 보류(passthrough 보호). false 면 기존 동작(설치 진행).
+	// +kubebuilder:default=true
+	SkipOnPassthrough bool `json:"skipOnPassthrough,omitempty"`
+
+	// TrackOnly 는 true 면 DUS 추적(버전 관측 + verifiedVersions 게이트)만 수행하고,
+	// 설치 경로(driver DaemonSet / install Job)를 생성하지 않습니다. installer 이미지가
+	// 아직 없는 벤더를 버전 관리 체계에 임시 편입할 때 사용합니다(예: Tenstorrent Blackhole —
+	// 실제 설치는 tt-kmd DKMS 로 2차). 기본 false = 기존 동작(설치 경로 활성).
+	// +kubebuilder:default=false
+	TrackOnly bool `json:"trackOnly,omitempty"`
 }
 
 // ToolkitSpec 은 NVIDIA Container Toolkit 등 런타임 툴킷 설치를 정의합니다.

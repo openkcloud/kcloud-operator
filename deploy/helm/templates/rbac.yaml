@@ -15,17 +15,27 @@ kind: ClusterRole
 metadata:
   name: {{ include "npu-operator.fullname" . }}-role
 rules:
+  # P6 최소화: NCP 는 사용자 생성 CR — operator 는 reconcile(status/finalizer)만. create/delete 미사용 제거.
   - apiGroups: ["npu.ai"]
     resources: ["npuclusterpolicies", "npuclusterpolicies/status", "npuclusterpolicies/finalizers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # P6 최소화: NDR 은 operator 가 read-only(작성은 node-manager-role). create/update/patch 제거.
   - apiGroups: ["npu.ai"]
-    resources: ["nodedevicereports", "nodedevicereports/status", "driverinstallpolicies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    resources: ["nodedevicereports", "nodedevicereports/status"]
+    verbs: ["get", "list", "watch"]
+  # P6 최소화: DIP 는 사용자 생성 CR — reconciler get/list/watch + 관리 API(pkg/npuctl)가 spec patch(upgrade/rollback/toggle). create/update 미사용 제거.
+  - apiGroups: ["npu.ai"]
+    resources: ["driverinstallpolicies"]
+    verbs: ["get", "list", "watch", "patch"]
   - apiGroups: ["npu.ai"]
     resources: ["driverupgradestates", "driverupgradestates/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # WP-C-1 Mode=job: DUS 상태머신이 install Job 을 생성/조회/삭제하고 controller-runtime 이 Job 을 watch 함
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # A6.1: quiesce-on-driver-upgrade — Cordoning 진입 시 라벨 가진 Deployment 의 replicas 를 0 으로 patch, Idle/Failed 진입 시 복구
   - apiGroups: ["apps"]
@@ -57,12 +67,22 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # P6 최소화: Rebellions RBAC 셋업은 SA 를 get(CreateOrUpdate)·create·update 만 — delete 미사용 제거.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # P6 최소화: Rebellions ClusterRole/Binding 도 create·update 만 — delete 미사용 제거.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # P4 관리 REST API(S5-3-②): 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
+  # api.enabled=false 여도 무해하며, 누락 시 모든 API 요청이 500(리뷰 생성 실패)이 되므로 항상 부여.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -79,29 +99,38 @@ subjects:
     namespace: {{ .Release.Namespace }}
 
 ---
-# npu-detector DaemonSet이 NodeDeviceReport CR을 생성/업데이트할 수 있도록 허용
+# kcloud-node-manager DaemonSet이 NodeDeviceReport CR을 생성/업데이트할 수 있도록 허용
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: npu-detector-role
+  name: kcloud-node-manager-role
 rules:
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports", "nodedevicereports/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # node-agent NFD/GFD 라벨링(§5.3, Q1=A): 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+  # node-agent Validation ③ device-plugin/allocatable 관찰용.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: npu-detector-rolebinding
+  name: kcloud-node-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: npu-detector-role
+  name: kcloud-node-manager-role
 subjects:
   - kind: ServiceAccount
-    name: npu-detector
-    namespace: {{ .Values.detector.namespace | default "kube-system" }}
+    name: kcloud-node-manager
+    # detector SA 는 operator 부속으로 release namespace(=OPERATOR_NAMESPACE, kcloud)에 생성됨(#16).
+    namespace: {{ .Release.Namespace }}
 
 ---
 # Leader election (Lease lock) — controller-runtime 기본 경로

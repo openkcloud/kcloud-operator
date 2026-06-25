@@ -27,6 +27,11 @@ const (
 	// driver version 이 지정된 경우 진입하는 terminal 상태입니다.
 	// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구합니다.
 	UpgradeStateUnverifiedVersion = "UnverifiedVersion"
+	// UpgradeStateRebootRequired 는 install 성공 후 cross-major 등으로 커널 모듈 교체에
+	// 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다(S2-5).
+	UpgradeStateRebootRequired = "RebootRequired"
+	// UpgradeStateRebooting 은 노드 재부팅을 트리거한 뒤 NotReady→Ready 복귀를 대기하는 상태입니다(S2-5).
+	UpgradeStateRebooting = "Rebooting"
 )
 
 // +kubebuilder:object:root=true
@@ -78,6 +83,17 @@ type DriverUpgradeStateStatus struct {
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
 	// 새 업그레이드 사이클 진입 시(handleIdle) 0으로 초기화됩니다.
 	RollbackAttempts int32 `json:"rollbackAttempts,omitempty"`
+	// RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다(S2-5).
+	// UpgradePolicy.MaxReboots(기본 1) 초과 시 Failed 로 전이하여 무한 재부팅 루프를 방지합니다.
+	// 새 사이클(handleIdle) 진입 시 0 으로 초기화됩니다.
+	RebootAttempts int32 `json:"rebootAttempts,omitempty"`
+	// RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다(S2-5).
+	// Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
+	RebootRequestedTime metav1.Time `json:"rebootRequestedTime,omitempty"`
+	// RebootBootID 는 reboot Job 생성 직전에 캡처한 node.status.nodeInfo.bootID 입니다(P2 premature-Ready 가드).
+	// Rebooting 상태에서 node 가 Ready 로 보여도 bootID 가 이 값과 동일하면 실제 재부팅 전이므로 전진을 보류합니다.
+	// 캡처 실패(빈 값) 시에는 기존 isNodeReady 기반으로 보수 전진합니다(교착 방지 fallback).
+	RebootBootID string `json:"rebootBootID,omitempty"`
 	// Message는 현재 상태에 대한 부가 설명입니다.
 	Message string `json:"message,omitempty"`
 	// QuiescedDeployments 는 Cordoning 진입 시 scale=0 으로 patch 한 Deployment 목록입니다.

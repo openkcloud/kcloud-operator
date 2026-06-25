@@ -1,0 +1,43 @@
+# ============================================================
+# values-dev.yaml: .91 개발클러스터 전용 배포 오버라이드 (커밋 영속)
+# 상세: install.sh 가 존재 시 자동으로 -f 로 적용한다(dev 배포 경로 한정).
+#       차트 기본값(values.yaml)은 외부 소비자용으로 유지하고, 이 클러스터에만 필요한
+#       설정을 여기서 영속시킨다. --set 은 helm upgrade 한 번에 증발하므로(2026-07-16 사건:
+#       rev19 upgrade 에서 nvidia toolkit --set 소멸→toolkit DS 소멸→worker1 containerd
+#       nvidia runtime 유실→gpu allocatable 0) 반드시 커밋된 values 로 영속한다.
+# 생성일: 2026-07-16
+# ============================================================
+driverInstallPolicies:
+  nvidia:
+    driver:
+      # #17 a1: host-install 전환 이미지(v176). Dockerfile.v17 에 INSTALL_METHOD=hostnamespace
+      # 기본값이 박혀 entrypoint-v17.sh 가 v16 entrypoint.sh 로 위임 → driver userspace 까지
+      # host 설치(⑤) + /dev 노드 보장(④) + 툴킷/런타임 설정 비활성(조건3.1, 런타임=toolkit DS).
+      # 차트 기본값 -v175(containerized 고아 경로)를 이 dev 클러스터에서 대체·영속.
+      tag: "580.159.03-v179"
+    toolkit:
+      # nvidia-container-toolkit DS 상주 = containerd nvidia runtime 의 소유자.
+      # driver 설치(Mode=job 포함)와 무관하게 항상 상주하여, drain/containerd 재구성 후에도
+      # nvidia-ctk 로 runtime 을 idempotent 재등록한다(device-plugin runtimeClass=nvidia 보장).
+      enabled: true
+      method: apt
+      image: "registry.example.com:5000/kcloud/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
+
+# ── 아래 3값은 트랙F(2026-07-20) 영속화 대상 ──────────────────────────────
+# 근본원인: 이 3키는 values.yaml 기본값이 모두 false 이며 values-dev.yaml 에 없었다.
+#   → install.sh 의 -f values-dev.yaml 로도 적용 안 되어, 라이브에서 --set 으로만 켜왔고
+#     helm upgrade 한 번에 증발(트랙D 재배포에서 furiosa.unified 가 false 로 롤백되어 P5
+#     통합 DS 가 분리 2-DS 로 되돌아감 = 사용자 "통합 유지" 결정 위반). --set 제거 위해 영속.
+
+# Furiosa 통합 device-plugin (S3-8/P5): Warboy+RNGD 를 단일 통합 DS 로 배포.
+furiosa:
+  unified:
+    enabled: true
+
+# Admission webhook (S4-1): DIP/NCP validating + opt-in Pod mutating. 라이브 검증 상시 on.
+webhook:
+  enabled: true
+
+# 관리 REST API (S5-3-②): operator pod 내 HTTPS listener(:9444). 라이브 검증 상시 on.
+api:
+  enabled: true

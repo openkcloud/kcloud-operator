@@ -20,6 +20,10 @@ spec:
   kernelAllowlist:
     {{- toYaml .Values.driverInstallPolicies.furiosa.kernelAllowlist | nindent 4 }}
   containerdMinVersion: "{{ .Values.driverInstallPolicies.furiosa.containerdMinVersion }}"
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   driver:
     {{- with .Values.driverInstallPolicies.furiosa.driver.mode }}
     mode: {{ . }}
@@ -29,6 +33,9 @@ spec:
     {{- with .Values.driverInstallPolicies.furiosa.driver.installer }}
     installer: {{ . }}
     {{- end }}
+    allowDowngrade: {{ .Values.driverInstallPolicies.furiosa.driver.allowDowngrade }}
+    versionSource: {{ .Values.driverInstallPolicies.furiosa.driver.versionSource | quote }}
+    skipOnPassthrough: {{ .Values.driverInstallPolicies.furiosa.driver.skipOnPassthrough }}
     {{- with .Values.driverInstallPolicies.furiosa.driver.env }}
     env:
       {{- toYaml . | nindent 6 }}
@@ -43,6 +50,10 @@ spec:
   {{- end }}
   {{- with .Values.driverInstallPolicies.furiosa.upgradePolicy }}
   upgradePolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.furiosa.jobOverrides }}
+  jobOverrides:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
@@ -63,6 +74,10 @@ spec:
   kernelAllowlist:
     {{- toYaml .Values.driverInstallPolicies.nvidia.kernelAllowlist | nindent 4 }}
   containerdMinVersion: "{{ .Values.driverInstallPolicies.nvidia.containerdMinVersion }}"
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   driver:
     {{- with .Values.driverInstallPolicies.nvidia.driver.mode }}
     mode: {{ . }}
@@ -72,6 +87,9 @@ spec:
     {{- with .Values.driverInstallPolicies.nvidia.driver.installer }}
     installer: {{ . }}
     {{- end }}
+    allowDowngrade: {{ .Values.driverInstallPolicies.nvidia.driver.allowDowngrade }}
+    versionSource: {{ .Values.driverInstallPolicies.nvidia.driver.versionSource | quote }}
+    skipOnPassthrough: {{ .Values.driverInstallPolicies.nvidia.driver.skipOnPassthrough }}
     {{- with .Values.driverInstallPolicies.nvidia.driver.env }}
     env:
       {{- toYaml . | nindent 6 }}
@@ -92,6 +110,10 @@ spec:
   upgradePolicy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.driverInstallPolicies.nvidia.jobOverrides }}
+  jobOverrides:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 {{- if .Values.driverInstallPolicies.rngd.enabled }}
 ---
@@ -110,6 +132,10 @@ spec:
   kernelAllowlist:
     {{- toYaml .Values.driverInstallPolicies.rngd.kernelAllowlist | nindent 4 }}
   containerdMinVersion: "{{ .Values.driverInstallPolicies.rngd.containerdMinVersion }}"
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   driver:
     {{- with .Values.driverInstallPolicies.rngd.driver.mode }}
     mode: {{ . }}
@@ -119,6 +145,9 @@ spec:
     {{- with .Values.driverInstallPolicies.rngd.driver.installer }}
     installer: {{ . }}
     {{- end }}
+    allowDowngrade: {{ .Values.driverInstallPolicies.rngd.driver.allowDowngrade }}
+    versionSource: {{ .Values.driverInstallPolicies.rngd.driver.versionSource | quote }}
+    skipOnPassthrough: {{ .Values.driverInstallPolicies.rngd.driver.skipOnPassthrough }}
     {{- with .Values.driverInstallPolicies.rngd.driver.env }}
     env:
       {{- toYaml . | nindent 6 }}
@@ -133,6 +162,65 @@ spec:
   {{- end }}
   {{- with .Values.driverInstallPolicies.rngd.upgradePolicy }}
   upgradePolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.rngd.jobOverrides }}
+  jobOverrides:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.driverInstallPolicies.tenstorrent.enabled }}
+---
+apiVersion: npu.ai/v1alpha1
+kind: DriverInstallPolicy
+metadata:
+  name: {{ .Values.driverInstallPolicies.tenstorrent.name }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  vendor: {{ .Values.driverInstallPolicies.tenstorrent.vendor }}
+  model: {{ .Values.driverInstallPolicies.tenstorrent.model }}
+  rebootStrategy: {{ .Values.driverInstallPolicies.tenstorrent.rebootStrategy }}
+  kernelAllowlist:
+    {{- toYaml .Values.driverInstallPolicies.tenstorrent.kernelAllowlist | nindent 4 }}
+  containerdMinVersion: "{{ .Values.driverInstallPolicies.tenstorrent.containerdMinVersion }}"
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  driver:
+    {{- with .Values.driverInstallPolicies.tenstorrent.driver.mode }}
+    mode: {{ . }}
+    {{- end }}
+    trackOnly: {{ .Values.driverInstallPolicies.tenstorrent.driver.trackOnly }}
+    version: "{{ .Values.driverInstallPolicies.tenstorrent.driver.version }}"
+    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.driverInstallPolicies.tenstorrent.driver.repository "tag" .Values.driverInstallPolicies.tenstorrent.driver.tag) }}"
+    {{- with .Values.driverInstallPolicies.tenstorrent.driver.installer }}
+    installer: {{ . }}
+    {{- end }}
+    allowDowngrade: {{ .Values.driverInstallPolicies.tenstorrent.driver.allowDowngrade }}
+    versionSource: {{ .Values.driverInstallPolicies.tenstorrent.driver.versionSource | quote }}
+    skipOnPassthrough: {{ .Values.driverInstallPolicies.tenstorrent.driver.skipOnPassthrough }}
+    {{- with .Values.driverInstallPolicies.tenstorrent.driver.env }}
+    env:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- with .Values.driverInstallPolicies.tenstorrent.verifiedVersions }}
+  verifiedVersions:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.tenstorrent.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.tenstorrent.upgradePolicy }}
+  upgradePolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.tenstorrent.jobOverrides }}
+  jobOverrides:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}

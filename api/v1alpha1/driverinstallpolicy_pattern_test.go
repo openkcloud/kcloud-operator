@@ -38,7 +38,7 @@ func TestDIPPattern_AllowsSubVersion(t *testing.T) {
 		"registry.example.com/nvidia-driver-ds:580.142-v17.1",
 		"registry.example.com/nvidia-driver-ds:580.142-v172",
 		"ghcr.io/you/repo:1.7.8",
-		"129.254.202.88:5100/furiosa-driver-installer:1.7.8",
+		"registry.example.com:5000/furiosa-driver-installer:1.7.8",
 	}
 	for _, img := range cases {
 		if !re.MatchString(img) {

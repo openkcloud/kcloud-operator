@@ -32,6 +32,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -43,10 +44,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/apiserver"
 	"kcloud-operator/internal/controller"
 	"kcloud-operator/internal/crdapply"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/upgrade"
+	npuwebhook "kcloud-operator/internal/webhook"
+	"kcloud-operator/pkg/npuctl"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -83,6 +87,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var apiBindAddress, apiCertPath string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -101,6 +106,10 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&apiBindAddress, "api-bind-address", "",
+		"Address for the management REST API (e.g. :9444). Empty (default) disables it.")
+	flag.StringVar(&apiCertPath, "api-cert-path", "",
+		"Directory containing the management API TLS cert (tls.crt/tls.key). Empty serves plain HTTP.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -243,6 +252,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.ToolkitDaemonSetReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("toolkitdaemonset-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ToolkitDaemonSet")
+		os.Exit(1)
+	}
+
 	sm := &upgrade.UpgradeStateMachine{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorderFor("driver-upgrade-statemachine"),
@@ -257,6 +275,37 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	// Admission webhooks(DIP/NCP validating + Pod mutating). WebhookConfiguration(helm,
+	// webhook.enabled)이 없으면 호출이 도달하지 않아 무해하게 미사용으로 남는다.
+	if err := npuwebhook.Setup(mgr); err != nil {
+		setupLog.Error(err, "unable to set up admission webhooks")
+		os.Exit(1)
+	}
+
+	// Management REST API(S5-3-②, opt-in). api-bind-address 가 비면 미기동(무영향).
+	// TokenReview/SAR 는 별도 clientset, 상태·CR patch 는 매니저의 캐시 client 를 재사용한다.
+	if apiBindAddress != "" {
+		authnClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			setupLog.Error(err, "unable to build clientset for management API auth")
+			os.Exit(1)
+		}
+		apiSrv := &apiserver.Server{
+			Addr:  apiBindAddress,
+			Authn: authnClient,
+			Ctl:   npuctl.NewFromClient(mgr.GetClient()),
+			Log:   ctrl.Log.WithName("apiserver"),
+		}
+		if len(apiCertPath) > 0 {
+			apiSrv.CertFile = filepath.Join(apiCertPath, "tls.crt")
+			apiSrv.KeyFile = filepath.Join(apiCertPath, "tls.key")
+		}
+		if err := mgr.Add(apiSrv); err != nil {
+			setupLog.Error(err, "unable to add management API server to manager")
+			os.Exit(1)
+		}
+	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")

@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -53,6 +54,12 @@ func (r *DriverDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	for i := range pols.Items {
 		pol := &pols.Items[i]
 		if pol.Spec.Driver.Mode != "daemonset" {
+			continue
+		}
+		// TrackOnly 정책은 설치 DaemonSet 을 생성하지 않는다(DUS 추적만).
+		// installer 이미지 미비 벤더(예: Tenstorrent, 실제 설치는 DKMS 2차)를 버전 관리에 편입.
+		if pol.Spec.Driver.TrackOnly {
+			logger.Info("TrackOnly 정책 — driver DaemonSet 생성 skip", "policy", pol.Name, "vendor", pol.Spec.Vendor)
 			continue
 		}
 		if err := r.createOrUpdateDriverDS(ctx, pol); err != nil {
@@ -120,7 +127,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "kube-system",
+			Namespace: naming.OperatorNamespace(),
 			Labels:    labels,
 			// DIP(cluster-scoped) 를 owner 로 지정 → DIP 삭제 시 K8s GC 가
 			// driver DaemonSet 을 cascade 삭제(orphan 방지). cluster-scoped owner +
@@ -171,13 +178,17 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 					},
 					InitContainers: []corev1.Container{
 						{
-							Name:    "driver-manager",
-							Image:   image,
-							Command: []string{"/usr/local/bin/driver-manager.sh"},
+							Name:            "driver-manager",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/usr/local/bin/driver-manager.sh"},
 							Env: []corev1.EnvVar{
 								{Name: "DRIVER_VERSION", Value: pol.Spec.Driver.Version},
 								{Name: "REBOOT_STRATEGY", Value: pol.Spec.RebootStrategy},
 								{Name: "VENDOR", Value: pol.Spec.Vendor},
+								{Name: "ALLOW_DOWNGRADE", Value: strconv.FormatBool(pol.Spec.Driver.AllowDowngrade)},
+								{Name: "VERSION_SOURCE", Value: versionSourceOrDefault(pol.Spec.Driver.VersionSource)},
+								{Name: "SKIP_ON_PASSTHROUGH", Value: strconv.FormatBool(pol.Spec.Driver.SkipOnPassthrough)},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: boolPtr(true),
@@ -188,8 +199,9 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 							},
 						},
 						{
-							Name:  "check-kernel-headers",
-							Image: image,
+							Name:            "check-kernel-headers",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command: []string{
 								"/usr/local/bin/check-kernel-headers.sh",
 							},
@@ -210,6 +222,9 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 							Env: []corev1.EnvVar{
 								{Name: "DRIVER_VERSION", Value: pol.Spec.Driver.Version},
 								{Name: "VENDOR", Value: pol.Spec.Vendor},
+								{Name: "ALLOW_DOWNGRADE", Value: strconv.FormatBool(pol.Spec.Driver.AllowDowngrade)},
+								{Name: "VERSION_SOURCE", Value: versionSourceOrDefault(pol.Spec.Driver.VersionSource)},
+								{Name: "SKIP_ON_PASSTHROUGH", Value: strconv.FormatBool(pol.Spec.Driver.SkipOnPassthrough)},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: boolPtr(true),
@@ -290,8 +305,12 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 		},
 	}
 
-	// Furiosa 전용 Secret 마운트 (APT 인증)
-	if strings.EqualFold(pol.Spec.Vendor, "furiosa") {
+	// Furiosa APT 인증 Secret 마운트 (Warboy 전용).
+	// Warboy 는 사설 archive.furiosa.ai 인증(furiosa.conf)이 필수라 secret 부재 시 fail-fast 로 설계.
+	// 반면 RNGD 는 공개 repo 를 사용하여 entrypoint 가 /secrets 를 전혀 참조하지 않으므로, secret
+	// 오브젝트(furiosa-apt-auth)를 하드코딩 마운트하면 공개 repo 클러스터에서 secret 부재 시 파드가
+	// 스케줄되지 못한다(service 클러스터 실측 버그). → RNGD 는 마운트를 부착하지 않는다.
+	if furiosaAptAuthRequired(pol.Spec.Vendor, pol.Spec.Model) {
 		ds.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 			ds.Spec.Template.Spec.Containers[0].VolumeMounts,
 			corev1.VolumeMount{Name: "furiosa-auth", MountPath: "/secrets", ReadOnly: true},
@@ -306,6 +325,14 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 		)
 	}
 
+	// private 레지스트리 pull 을 위해 policy 레벨 imagePullSecrets 를 부착.
+	// 빈 목록(미지정)이면 no-op — imagePullPolicy(IfNotPresent) 는 건드리지 않는다.
+	applyImagePullSecrets(&ds.Spec.Template.Spec, pol.Spec.ImagePullSecrets)
+
+	// control-plane/master 제외 — DS 모드 driver install 도 제어 평면은 건드리지 않는다
+	// (Job 경로는 driver_upgrade_controller 가 이미 control-plane/master 를 skip).
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+
 	return ds
 }
 
@@ -317,16 +344,16 @@ func vendorNodeSelector(vendor, model string) map[string]string {
 	m := strings.ToLower(model)
 	switch v {
 	case vendorNvidia:
-		return map[string]string{"nvidia.com/gpu.present": "true"}
+		return map[string]string{"kcloud.ai/nvidia.present": "true"}
 	case "furiosa":
 		if m == "rngd" {
-			return map[string]string{"furiosa-rngd": "true"}
+			return map[string]string{"kcloud.ai/rngd.present": "true"}
 		}
-		return map[string]string{"furiosa": "true"}
+		return map[string]string{"kcloud.ai/furiosa.present": "true"}
 	case "rebellions":
 		// Rebellions ATOM+ 는 DriverInstallPolicy 를 생성하지 않음 (host-managed driver).
 		// 호출 경로가 실제로 도달하지 않지만 분기 완전성을 위해 셀렉터 반환.
-		return map[string]string{"rebellions-atom": "true"}
+		return map[string]string{"kcloud.ai/rebellions.present": "true"}
 	default:
 		return map[string]string{}
 	}
@@ -351,6 +378,23 @@ func vendorRmmodCommand(vendor, model string) string {
 	default:
 		return "true"
 	}
+}
+
+// furiosaAptAuthRequired 는 벤더/모델이 Furiosa APT 인증 secret(furiosa-apt-auth) 마운트를
+// 필요로 하는지 반환합니다. Warboy 는 사설 repo 인증이 필수라 true, RNGD 는 공개 repo 라
+// 불필요하여 false(마운트 미부착 → secret 부재 클러스터에서도 스케줄 가능). Furiosa 이외
+// 벤더는 애초에 이 경로에 도달하지 않지만 방어적으로 false.
+func furiosaAptAuthRequired(vendor, model string) bool {
+	return strings.EqualFold(vendor, "furiosa") && !strings.EqualFold(model, "rngd")
+}
+
+// versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작인 "Policy" 를 반환합니다.
+// CRD default 가 적용되기 전(구 CR)에도 회귀 없이 Policy 로 동작하도록 보장합니다.
+func versionSourceOrDefault(vs string) string {
+	if vs == "" {
+		return "Policy"
+	}
+	return vs
 }
 
 // SetupWithManager는 DriverDaemonSetReconciler를 Manager에 등록합니다.

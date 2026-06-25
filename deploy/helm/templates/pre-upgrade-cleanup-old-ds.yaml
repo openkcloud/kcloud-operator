@@ -67,6 +67,24 @@ spec:
     spec:
       serviceAccountName: npu-op-cleanup-old-ds
       restartPolicy: OnFailure
+      # #17 ③: cordoned worker 로만 스케줄돼 pre-upgrade hook 이 hang(→ helm upgrade hang)하는
+      # 것을 방지. control-plane taint 를 tolerate 하여 workers 전량 cordon 시에도 스케줄 가능하게
+      # 하고, preferred affinity 로 control-plane 에 우선 배치(DS 삭제는 API 접근만 필요).
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       containers:
         - name: cleanup-old-ds
           image: "{{ .Values.crdUpgrade.kubectlImage | default (include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.crdUpgrade.kubectlRepository "tag" .Values.crdUpgrade.kubectlTag)) }}"

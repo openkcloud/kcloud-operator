@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -34,6 +35,7 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/upgrade"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,6 +52,31 @@ const ownerAnnotation = "npu.ai/owner"
 
 // vendorNvidia is the NVIDIA vendor identifier used across the controller package.
 const vendorNvidia = "nvidia"
+
+// Tenstorrent Blackhole device plugin 기본 상수.
+// #21: TT plugin 은 공식 벤더 plugin 이 없어 kcloud 가 자체 구현했으므로(3rd party 아님),
+// 분류 정합상 namespace 는 operator 네임스페이스(kcloud, naming.OperatorNamespace())로 배치한다.
+// DaemonSet 이름 `kcloud-tt-device-plugin`(자체 개발 표기). 타 벤더 plugin 은 3rd party 라 kube-system 유지.
+// 이미지는 Harbor(global.registry) 경유로 조립되며,
+// helm 미경유(직접 CR) 시를 위해 ttImageDefault 는 registry-relative 기본값을 둔다.
+const (
+	ttDaemonSetName   = "kcloud-tt-device-plugin"
+	ttResourceDefault = "tenstorrent.com/blackhole"
+	ttImageDefault    = "tenstorrent/k8s-device-plugin:v0.1.0"
+)
+
+// Furiosa 통합 device-plugin(A' 방안) 상수.
+// 단일 DS 가 Warboy/RNGD 양 노드에 스케줄되며(공통 PCI vendor 라벨), entrypoint 가
+// PCI device ID 로 모델을 감지해 해당 벤더 바이너리를 exec 한다.
+const (
+	furiosaLegacyWarboyDSName = "furiosa-device-plugin"
+	furiosaLegacyRngdDSName   = "furiosa-rngd-device-plugin"
+	furiosaUnifiedDSName      = "furiosa-unified-device-plugin"
+	furiosaUnifiedImgDefault  = "kcloud/furiosa-unified-device-plugin:0.1.0"
+	// 양 Furiosa 노드(Warboy/RNGD)가 공통으로 갖는 자립 라벨(node-manager 부여, PCI 0x1ed2).
+	// NFD 비의존 — 통합 DS 공통 셀렉터.
+	furiosaFamilyNodeLabel = "kcloud.ai/furiosa-family.present"
+)
 
 // NPUClusterPolicyReconciler reconciles a NPUClusterPolicy object
 type NPUClusterPolicyReconciler struct {
@@ -144,10 +171,10 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	// -- Detector
+	// -- node-manager(detector) — 리소스명은 kcloud-node-manager, 이미지/기능은 detector 그대로(#21 리네임)
 	if err := r.ensureDetector(ctx, &policy); err != nil {
-		logger.Error(err, "failed to ensure Detector")
-		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "Detector", err)
+		logger.Error(err, "failed to ensure kcloud-node-manager")
+		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "kcloud-node-manager", err)
 		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "DetectorFailed", err.Error())
 		return ctrl.Result{}, err
 	}
@@ -164,24 +191,47 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// -- Furiosa
-	if policy.Spec.Furiosa.Enabled {
-		logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
-		if err := r.ensureFuriosaDevicePlugin(ctx, &policy); err != nil {
-			logger.Error(err, "failed to ensure Furiosa Device Plugin")
-			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaDevicePlugin", err)
-			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaDevicePluginFailed", err.Error())
+	// Unified=true 면 Warboy/RNGD 를 단일 통합 DS 로(A' 방안), 기존 2-DS 는 제거(전환).
+	// Unified=false(기본) 면 기존 2-DS 경로 유지 + 통합 DS 제거(롤백).
+	if policy.Spec.Furiosa.Enabled && policy.Spec.Furiosa.Unified {
+		logger.Info("Ensuring Furiosa Unified Device Plugin DaemonSet")
+		if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, &policy); err != nil {
+			logger.Error(err, "failed to ensure Furiosa Unified Device Plugin")
+			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaUnifiedDevicePlugin", err)
+			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaUnifiedDevicePluginFailed", err.Error())
 			return ctrl.Result{}, err
 		}
-	}
+		// 전환: 기존 2-DS 제거(존재 시). 통합 DS 스케줄 후 정리해 순단 최소화.
+		if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyWarboyDSName); err != nil {
+			logger.Error(err, "failed to delete legacy Warboy DS during unified transition")
+		}
+		if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyRngdDSName); err != nil {
+			logger.Error(err, "failed to delete legacy RNGD DS during unified transition")
+		}
+	} else {
+		if policy.Spec.Furiosa.Enabled {
+			logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
+			if err := r.ensureFuriosaDevicePlugin(ctx, &policy); err != nil {
+				logger.Error(err, "failed to ensure Furiosa Device Plugin")
+				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaDevicePlugin", err)
+				r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaDevicePluginFailed", err.Error())
+				return ctrl.Result{}, err
+			}
+		}
 
-	// -- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
-	if policy.Spec.Furiosa.Rngd.Enabled {
-		logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
-		if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
-			logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
-			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
-			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
-			return ctrl.Result{}, err
+		// -- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
+		if policy.Spec.Furiosa.Rngd.Enabled {
+			logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
+			if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
+				logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
+				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
+				r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
+				return ctrl.Result{}, err
+			}
+		}
+		// 롤백: 통합 DS 가 남아있으면 제거(furiosaUnified=false 복원).
+		if err := r.deleteDaemonSetIfExists(ctx, furiosaUnifiedDSName); err != nil {
+			logger.Error(err, "failed to delete unified Furiosa DS during rollback")
 		}
 	}
 
@@ -207,6 +257,17 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	// -- Tenstorrent Blackhole (single DaemonSet; nodeSelector=kcloud.ai/tenstorrent.present 자립 라벨, /sys hostPath 감지)
+	if policy.Spec.Tenstorrent.Enabled {
+		logger.Info("Ensuring Tenstorrent Blackhole Device Plugin DaemonSet")
+		if err := r.ensureTenstorrentDevicePlugin(ctx, &policy); err != nil {
+			logger.Error(err, "failed to ensure Tenstorrent Device Plugin")
+			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "TenstorrentDevicePlugin", err)
+			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "TenstorrentDevicePluginFailed", err.Error())
+			return ctrl.Result{}, err
+		}
+	}
+
 	// -- All ensureXxx succeeded: set Ready=True and record success event
 	r.setReadyCondition(ctx, &policy, metav1.ConditionTrue, "AllResourcesReady", "All resources reconciled successfully")
 	r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "Reconciled", "Successfully reconciled all resources")
@@ -229,34 +290,58 @@ func (r *NPUClusterPolicyReconciler) setReadyCondition(ctx context.Context, poli
 	}
 }
 
+// ownedScanNamespaces 는 owner-annotation 소유 리소스를 스캔할 네임스페이스 목록을 반환한다.
+// device-plugin(kube-system) + operator 부속(detector, kcloud)이 서로 다른 ns 에 존재하므로,
+// #16 이관 과도기·정상 모두 양쪽을 스캔해야 orphan 이 남지 않는다. env 미설정(둘이 동일)이면 1개.
+func ownedScanNamespaces() []string {
+	opNS := naming.OperatorNamespace()
+	if opNS == naming.KubeSystemNamespace {
+		return []string{naming.KubeSystemNamespace}
+	}
+	return []string{naming.KubeSystemNamespace, opNS}
+}
+
+// isDevicePluginResource 는 리소스 이름으로 3rd-party device-plugin(nvidia/furiosa/rngd/tt/rbln)을 식별한다.
+// 5종 DS/CM 이름이 모두 "device-plugin" 을 포함(operator 관리 driver/toolkit/detector 는 미포함).
+// ponytail: 이름 기반. 이름 규약이 갈라지면 생성 시 보존 어노테이션(npu.ai/preserve)으로 승격.
+func isDevicePluginResource(name string) bool {
+	return strings.Contains(name, "device-plugin")
+}
+
 // cleanupOwnedResources deletes all DaemonSets and ConfigMaps with the owner annotation matching this policy.
+// device-plugin(3rd party)은 보존한다(#19 무중단 이관 — isDevicePluginResource).
 func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	ownerValue := fmt.Sprintf("%s/%s", policy.Namespace, policy.Name)
 
-	// Cleanup DaemonSets
-	var dsList appsv1.DaemonSetList
-	if err := r.List(ctx, &dsList, client.InNamespace("kube-system")); err != nil {
-		return err
-	}
-	for i := range dsList.Items {
-		ds := &dsList.Items[i]
-		if ds.Annotations[ownerAnnotation] == ownerValue {
-			if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
-				return err
+	for _, ns := range ownedScanNamespaces() {
+		// Cleanup DaemonSets
+		var dsList appsv1.DaemonSetList
+		if err := r.List(ctx, &dsList, client.InNamespace(ns)); err != nil {
+			return err
+		}
+		for i := range dsList.Items {
+			ds := &dsList.Items[i]
+			// device-plugin(3rd party, kube-system 고정)은 무중단 이관을 위해 보존 —
+			// NCP 삭제(operator 이관/제거) 시 device-plugin 을 지우면 전벤더 allocatable 순단(#16 §5).
+			if ds.Annotations[ownerAnnotation] == ownerValue && !isDevicePluginResource(ds.Name) {
+				if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
 			}
 		}
-	}
 
-	// Cleanup ConfigMaps
-	var cmList corev1.ConfigMapList
-	if err := r.List(ctx, &cmList, client.InNamespace("kube-system")); err != nil {
-		return err
-	}
-	for i := range cmList.Items {
-		cm := &cmList.Items[i]
-		if cm.Annotations[ownerAnnotation] == ownerValue {
-			if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
-				return err
+		// Cleanup ConfigMaps
+		var cmList corev1.ConfigMapList
+		if err := r.List(ctx, &cmList, client.InNamespace(ns)); err != nil {
+			return err
+		}
+		for i := range cmList.Items {
+			cm := &cmList.Items[i]
+			// device-plugin CM 도 보존(DS 가 참조하므로 함께 남긴다).
+			if cm.Annotations[ownerAnnotation] == ownerValue && !isDevicePluginResource(cm.Name) {
+				if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
 			}
 		}
 	}
@@ -272,12 +357,25 @@ func setOwnerAnnotation(obj *metav1.ObjectMeta, policy *npuv1alpha1.NPUClusterPo
 	obj.Annotations[ownerAnnotation] = fmt.Sprintf("%s/%s", policy.Namespace, policy.Name)
 }
 
+// kcloud-node-manager ServiceAccount 상수. Namespace 는 operator 부속으로 kcloud(#16)로 이동 —
+// naming.OperatorNamespace()(OPERATOR_NAMESPACE env, 미설정 시 kube-system)를 SA/DS 에 공통 사용.
+const detectorServiceAccountName = "kcloud-node-manager"
+
+// applyImagePullSecrets 는 policy 레벨 imagePullSecrets 를 pod spec 에 부착한다.
+// 빈 목록(미지정)이면 no-op — 노드레벨(containerd) 인증 경로(하위호환)를 유지한다.
+// imagePullPolicy 는 건드리지 않는다(air-gap 프리로드용 IfNotPresent 불변식 보존).
+func applyImagePullSecrets(spec *corev1.PodSpec, secrets []corev1.LocalObjectReference) {
+	if len(secrets) > 0 {
+		spec.ImagePullSecrets = secrets
+	}
+}
+
 // -- ensureNvidiaDevicePlugin creates a DaemonSet for NVIDIA
 func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
-	// 기본 selector (수동 라벨 전략)
-	sel := map[string]string{"nvidia.com/gpu.present": "true"}
+	// 기본 selector (자립 라벨 — node-manager 부여, NFD/gpu-operator 비의존)
+	sel := map[string]string{"kcloud.ai/nvidia.present": "true"}
 	if len(policy.Spec.Nvidia.NodeSelector) > 0 {
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
@@ -319,6 +417,8 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 	}
 	setOwnerAnnotation(&ds.ObjectMeta, policy)
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
 		log.Error(err, "failed to ensure nvidia device plugin daemonset")
@@ -332,8 +432,8 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 func (r *NPUClusterPolicyReconciler) ensureFuriosaDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
-	// nodeSelector
-	sel := map[string]string{"furiosa": "true"}
+	// nodeSelector (자립 라벨 — node-manager 부여, NFD/수동 라벨 비의존)
+	sel := map[string]string{"kcloud.ai/furiosa.present": "true"}
 	if len(policy.Spec.Furiosa.NodeSelector) > 0 {
 		sel = policy.Spec.Furiosa.NodeSelector
 	}
@@ -426,6 +526,8 @@ interval: 10`,
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
 		log.Error(err, "failed to ensure furiosa device plugin daemonset")
@@ -449,7 +551,7 @@ func rngdDevicePluginArgs(partitionPolicy string) []string {
 }
 
 // -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device plugin.
-// NodeSelector uses NFD PCI label feature.node.kubernetes.io/pci-1200_1ed2.present=true by default;
+// NodeSelector uses self-reliant label kcloud.ai/rngd.present=true by default (node-manager applied, NFD-free);
 // override via Spec.Furiosa.Rngd.NodeSelector.
 //
 // Pod spec는 Furiosa 공식 helm chart (furiosa-device-plugin:2026.1.0) 의 DaemonSet 템플릿을 따른다:
@@ -482,8 +584,8 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 		image = "docker.io/furiosaai/furiosa-device-plugin:2026.1.0"
 	}
 
-	// nodeSelector: NFD PCI label by default; allow override via Spec.Furiosa.Rngd.NodeSelector
-	sel := map[string]string{"feature.node.kubernetes.io/pci-1200_1ed2.present": "true"}
+	// nodeSelector: 자립 라벨(node-manager 부여, NFD 비의존); override via Spec.Furiosa.Rngd.NodeSelector
+	sel := map[string]string{"kcloud.ai/rngd.present": "true"}
 	if len(rngd.NodeSelector) > 0 {
 		sel = rngd.NodeSelector
 	}
@@ -546,12 +648,222 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
 		log.Error(err, "failed to ensure furiosa rngd device plugin daemonset")
 		return err
 	}
 	log.Info("Furiosa RNGD device plugin daemonset ensured")
+	return nil
+}
+
+// deleteDaemonSetIfExists deletes a DaemonSet in kube-system by name, ignoring NotFound.
+// 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다.
+func (r *NPUClusterPolicyReconciler) deleteDaemonSetIfExists(ctx context.Context, name string) error {
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"}}
+	if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// -- ensureFuriosaUnifiedDevicePlugin creates a single DaemonSet serving both Warboy and RNGD (A' 방안).
+// 동봉 이미지 entrypoint 가 PCI vendor 0x1ed2 + device ID(0x0000=Warboy, 0x0001=RNGD)로 모델을 감지해
+// 해당 벤더 바이너리를 exec 한다(proxy 없음, 노드당 한 모델). 리소스명은 각 바이너리가 광고하므로 불변
+// (Warboy=beta.furiosa.ai/npu, RNGD=furiosa.ai/rngd). nodeSelector 는 양 노드 공통 PCI vendor 라벨.
+// Warboy config 는 ConfigMapName(있으면 /etc/furiosa 마운트), RNGD partition 정책은 Rngd.PartitionPolicy
+// 를 RNGD_PARTITION_POLICY env 로 전달한다.
+func (r *NPUClusterPolicyReconciler) ensureFuriosaUnifiedDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	log := logf.FromContext(ctx)
+
+	image := policy.Spec.Furiosa.UnifiedDevicePluginImage
+	if image == "" {
+		image = furiosaUnifiedImgDefault
+	}
+
+	// Warboy config ConfigMap (옵션) — 통합 이미지의 Warboy 바이너리가 --config-file 로 참조.
+	cmName := policy.Spec.Furiosa.ConfigMapName
+	if cmName != "" {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: "kube-system"},
+		}
+		setOwnerAnnotation(&cm.ObjectMeta, policy)
+		cm.Data = map[string]string{
+			"config.yaml": `defaultPe: Fusion
+disabledDevices: []
+interval: 10`,
+		}
+		if err := r.createOrUpdateCM(ctx, cm); err != nil {
+			log.Error(err, "failed to ensure furiosa unified device plugin configmap")
+			return err
+		}
+	}
+
+	labels := map[string]string{"app.kubernetes.io/name": furiosaUnifiedDSName}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      furiosaUnifiedDSName,
+			Namespace: "kube-system",
+			Labels:    labels,
+		},
+	}
+	setOwnerAnnotation(&ds.ObjectMeta, policy)
+	ds.Spec = appsv1.DaemonSetSpec{
+		Selector: &metav1.LabelSelector{MatchLabels: labels},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				// 양 Furiosa 노드 공통 자립 라벨(node-manager 부여)로 스케줄. NFD 비의존.
+				NodeSelector:      map[string]string{furiosaFamilyNodeLabel: "true"},
+				Tolerations:       []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+				PriorityClassName: "system-node-critical",
+				Containers: []corev1.Container{{
+					Name:            "furiosa-device-plugin",
+					Image:           image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					// Command 미지정 — 통합 이미지 ENTRYPOINT(entrypoint.sh)가 PCI 감지 후 exec.
+					Env: []corev1.EnvVar{
+						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+						}},
+						{Name: "RUST_LOG", Value: "info"},
+						{Name: "RNGD_PARTITION_POLICY", Value: policy.Spec.Furiosa.Rngd.PartitionPolicy},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						Privileged:               boolPtr(false),
+						AllowPrivilegeEscalation: boolPtr(false),
+						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "sys", MountPath: "/sys"},
+						{Name: "dev", MountPath: "/dev"},
+						{Name: "dp", MountPath: "/var/lib/kubelet/device-plugins"},
+					},
+				}},
+				Volumes: []corev1.Volume{
+					{Name: "sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+					{Name: "dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
+					{Name: "dp", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kubelet/device-plugins"}}},
+				},
+			},
+		},
+	}
+
+	if cmName != "" {
+		ds.Spec.Template.Spec.Volumes = append(ds.Spec.Template.Spec.Volumes,
+			corev1.Volume{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+					},
+				},
+			},
+		)
+		ds.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+			ds.Spec.Template.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: "config", MountPath: "/etc/furiosa"},
+		)
+	}
+
+	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
+
+	if err := r.createOrUpdateDS(ctx, ds); err != nil {
+		log.Error(err, "failed to ensure furiosa unified device plugin daemonset")
+		return err
+	}
+	log.Info("Furiosa unified device plugin daemonset ensured")
+	return nil
+}
+
+// ensureTenstorrentDevicePlugin creates a DaemonSet for the Tenstorrent Blackhole NPU device plugin.
+// Pod spec: /dev + /sys(ReadOnly) + /var/lib/kubelet/device-plugins 마운트, privileged=true (PCIe 디바이스 직접 접근).
+// /sys 는 plugin discovery 가 /sys/class/tenstorrent 를 참조하므로 ReadOnly 로 마운트해 장치 감지 가능하게 함 (commit eddfb49).
+// NodeSelector: 기본값 tenstorrent-blackhole=true (수동 라벨 전략); Spec.Tenstorrent.NodeSelector 로 재정의 가능.
+// ResourceName: 기본값 "tenstorrent.com/blackhole"; Spec.Tenstorrent.ResourceName 으로 재정의 가능 (TT_RESOURCE_NAME env 로 주입).
+func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	log := logf.FromContext(ctx)
+
+	tt := policy.Spec.Tenstorrent
+
+	// 이미지: spec 지정 없으면 registry-relative 기본값 사용 (helm 은 global.registry 로 조립)
+	image := tt.DevicePluginImage
+	if image == "" {
+		image = ttImageDefault
+	}
+
+	// resourceName: spec 지정 없으면 기본값 사용 (device plugin 이 env 에서 읽음)
+	resourceName := tt.ResourceName
+	if resourceName == "" {
+		resourceName = ttResourceDefault
+	}
+
+	// nodeSelector: 자립 라벨 기본값(node-manager 부여, 수동 라벨 비의존); spec 지정 시 override
+	sel := map[string]string{"kcloud.ai/tenstorrent.present": "true"}
+	if len(tt.NodeSelector) > 0 {
+		sel = tt.NodeSelector
+	}
+
+	labels := map[string]string{"app.kubernetes.io/name": ttDaemonSetName}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ttDaemonSetName,
+			Namespace: naming.OperatorNamespace(),
+			Labels:    labels,
+		},
+	}
+	setOwnerAnnotation(&ds.ObjectMeta, policy)
+	ds.Spec = appsv1.DaemonSetSpec{
+		Selector: &metav1.LabelSelector{MatchLabels: labels},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				NodeSelector:      sel,
+				Tolerations:       []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+				PriorityClassName: "system-node-critical",
+				Containers: []corev1.Container{{
+					Name:            "tenstorrent-device-plugin",
+					Image:           image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Env: []corev1.EnvVar{
+						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+						}},
+						// device plugin 이 K8s 리소스 이름을 env 에서 읽을 수 있도록 주입
+						{Name: "TT_RESOURCE_NAME", Value: resourceName},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: boolPtr(true),
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "kubelet-socket", MountPath: "/var/lib/kubelet/device-plugins"},
+						{Name: "dev-fs", MountPath: "/dev"},
+						// plugin discovery 가 /sys/class/tenstorrent 를 참조 (commit eddfb49)
+						{Name: "sys-fs", MountPath: "/sys", ReadOnly: true},
+					},
+				}},
+				Volumes: []corev1.Volume{
+					{Name: "kubelet-socket", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kubelet/device-plugins"}}},
+					{Name: "dev-fs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
+					{Name: "sys-fs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+				},
+			},
+		},
+	}
+
+	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
+
+	if err := r.createOrUpdateDS(ctx, ds); err != nil {
+		log.Error(err, "failed to ensure tenstorrent device plugin daemonset")
+		return err
+	}
+	log.Info("Tenstorrent Blackhole device plugin daemonset ensured")
 	return nil
 }
 
@@ -652,6 +964,7 @@ func (r *NPUClusterPolicyReconciler) ensureRbllnsServiceAccount(ctx context.Cont
 			Name:      rbllnsServiceAccountName,
 			Namespace: ns,
 		},
+		ImagePullSecrets: policy.Spec.ImagePullSecrets,
 	}
 	setOwnerAnnotation(&sa.ObjectMeta, policy)
 
@@ -665,6 +978,14 @@ func (r *NPUClusterPolicyReconciler) ensureRbllnsServiceAccount(ctx context.Cont
 		return nil
 	} else if err != nil {
 		return err
+	}
+	// imagePullSecrets 는 spec 변경으로 갱신될 수 있으므로 기존 SA 와 동기화한다.
+	if !equality.Semantic.DeepEqual(cur.ImagePullSecrets, sa.ImagePullSecrets) {
+		cur.ImagePullSecrets = sa.ImagePullSecrets
+		if err := r.Update(ctx, &cur); err != nil {
+			log.Error(err, "failed to update rebellions serviceaccount imagePullSecrets")
+			return err
+		}
 	}
 	return nil
 }
@@ -803,9 +1124,10 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 	}
 	image := policy.Spec.Rebellions.DevicePluginImage
 
+	// 자립 라벨(node-manager 부여, 수동 라벨 비의존) + arch 게이트.
 	sel := map[string]string{
-		"kubernetes.io/arch": "amd64",
-		"rebellions-atom":    "true",
+		"kubernetes.io/arch":           "amd64",
+		"kcloud.ai/rebellions.present": "true",
 	}
 	if len(policy.Spec.Rebellions.NodeSelector) > 0 {
 		sel = policy.Spec.Rebellions.NodeSelector
@@ -893,6 +1215,8 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
 		log.Error(err, "failed to ensure rebellions device plugin daemonset")
@@ -902,40 +1226,109 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 	return nil
 }
 
+// ensureDetectorServiceAccount creates the `kcloud-node-manager` ServiceAccount referenced by
+// the detector DaemonSet. 차트는 kcloud-node-manager role/rolebinding 만 만들고 SA 객체는 만들지
+// 않으므로(fresh 클러스터에서 detector pod 가 `serviceaccount not found` 로 기동 실패),
+// 컨트롤러가 ensureRbllnsServiceAccount 와 대칭으로 SA 를 생성한다.
+// policy.Spec.ImagePullSecrets 를 SA 에 부착하여 SA 경유 private pull 을 이중 보장한다.
+func (r *NPUClusterPolicyReconciler) ensureDetectorServiceAccount(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	log := logf.FromContext(ctx)
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      detectorServiceAccountName,
+			Namespace: naming.OperatorNamespace(),
+		},
+		ImagePullSecrets: policy.Spec.ImagePullSecrets,
+	}
+	setOwnerAnnotation(&sa.ObjectMeta, policy)
+
+	var cur corev1.ServiceAccount
+	key := types.NamespacedName{Name: sa.Name, Namespace: sa.Namespace}
+	if err := r.Get(ctx, key, &cur); apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, sa); err != nil {
+			log.Error(err, "failed to create detector serviceaccount")
+			return err
+		}
+		return nil
+	} else if err != nil {
+		return err
+	}
+	// imagePullSecrets 는 spec 변경으로 갱신될 수 있으므로 기존 SA 와 동기화한다.
+	if !equality.Semantic.DeepEqual(cur.ImagePullSecrets, sa.ImagePullSecrets) {
+		cur.ImagePullSecrets = sa.ImagePullSecrets
+		if err := r.Update(ctx, &cur); err != nil {
+			log.Error(err, "failed to update detector serviceaccount imagePullSecrets")
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *NPUClusterPolicyReconciler) ensureDetector(ctx context.Context, pol *npuv1alpha1.NPUClusterPolicy) error {
 	if pol.Spec.Detector == nil || pol.Spec.Detector.Image == "" {
 		return fmt.Errorf("detector image must be specified in NPUClusterPolicy.spec.detector.image")
 	}
 
+	// detector DS 의 ServiceAccountName(kcloud-node-manager) 를 먼저 보장 — DS 보다 선행해야
+	// fresh 클러스터에서 `serviceaccount not found` 로 pod 기동이 실패하지 않는다.
+	if err := r.ensureDetectorServiceAccount(ctx, pol); err != nil {
+		return err
+	}
+
 	image := pol.Spec.Detector.Image
-	ds := renderDetectorDS(image)
+	ds := renderDetectorDS(image, pol.Spec.ImagePullSecrets)
 	setOwnerAnnotation(&ds.ObjectMeta, pol)
 	return r.createOrUpdateDS(ctx, ds)
 }
 
-func renderDetectorDS(image string) *appsv1.DaemonSet {
-	labels := map[string]string{"app.kubernetes.io/name": "kcloud-detector"}
+func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *appsv1.DaemonSet {
+	labels := map[string]string{"app.kubernetes.io/name": "kcloud-node-manager"}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kcloud-detector",
-			Namespace: "kube-system",
+			Name:      "kcloud-node-manager",
+			Namespace: naming.OperatorNamespace(),
 			Labels:    labels,
 		},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					// node-agent Metrics 능력: Prometheus 스크레이프 대상 표시(:9100/metrics).
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "9100",
+						"prometheus.io/path":   "/metrics",
+					},
+				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "npu-detector",
+					ServiceAccountName: "kcloud-node-manager",
 					Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Containers: []corev1.Container{{
 						Name:            "detector",
 						Image:           image,
 						ImagePullPolicy: corev1.PullIfNotPresent,
-						Env: []corev1.EnvVar{{
-							Name:      "NODE_NAME",
-							ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}},
-						}},
+						// node-agent Metrics 능력: /metrics 포트(비특권 로컬 서버).
+						Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9100}},
+						Env: []corev1.EnvVar{
+							{
+								Name:      "NODE_NAME",
+								ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}},
+							},
+							// NFD/GFD 라벨링 능력 활성화(node patch RBAC 는 kcloud-node-manager-role 에 부여됨).
+							{Name: "NODEAGENT_ENABLE_LABELS", Value: "true"},
+						},
+						// P6(S4-5) Pod Security: 비특권 설계 확정. detector 이미지는 distroless/static:nonroot
+						// (USER 65532)이며 드라이버 버전은 host /proc·/sys 읽기로 감지(root·device 불필요),
+						// nvidia-smi 등 host CLI exec 은 best-effort(실패 무해)라 restricted 프로파일과 양립.
+						SecurityContext: &corev1.SecurityContext{
+							RunAsNonRoot:             boolPtr(true),
+							AllowPrivilegeEscalation: boolPtr(false),
+							ReadOnlyRootFilesystem:   boolPtr(true),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "host-proc", MountPath: "/host/proc", ReadOnly: true},
 							{Name: "host-dev", MountPath: "/host/dev", ReadOnly: true},
@@ -959,7 +1352,10 @@ func renderDetectorDS(image string) *appsv1.DaemonSet {
 	}
 	// detector는 /dev를 ReadOnly로 마운트하므로, 드라이버 업그레이드 중 rmmod 간섭을 막기 위해
 	// device-plugin과 동일하게 업그레이드 라벨이 붙은 노드에는 스케줄되지 않도록 한다.
+	// detector(node-manager)는 control-plane 포함 전 노드에 상주해야 하므로
+	// applyControlPlaneExclusion 을 적용하지 않는다(감지·라벨·검증은 master 에서도 계속).
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	applyImagePullSecrets(&ds.Spec.Template.Spec, pullSecrets)
 	return ds
 }
 
@@ -986,16 +1382,16 @@ func hostPathFilePtr() *corev1.HostPathType {
 	return &t
 }
 
-// applyDriverUpgradeAntiAffinity는 기존 Affinity를 보존하면서
-// driver-upgrading-blocking 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다.
-// architectural plan §4.4 옵션 A: 좁은 lifecycle 의 blocking 라벨로 phase-aware 차단.
-// Cordoning ~ Upgrading 단계: 라벨 활성 → detector / device-plugin 차단 (rmmod 보호).
-// Validating 단계: 라벨 자동 제거 → detector spawn 가능 → NDR 갱신 → Validator 통과.
-func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
-	req := corev1.NodeSelectorRequirement{
-		Key:      upgrade.DriverUpgradingBlockingLabelKey,
-		Operator: corev1.NodeSelectorOpDoesNotExist,
-	}
+// control-plane/master 노드를 식별하는 라벨. driver_upgrade_controller 의 노드 제외
+// 로직(control-plane/master 무조건 skip)과 동일한 키를 사용해 정책 일관성을 유지한다.
+const (
+	controlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
+	masterNodeLabel       = "node-role.kubernetes.io/master"
+)
+
+// appendNodeAffinityRequirements는 기존 Affinity를 보존하면서 required nodeAffinity
+// term(들)에 match expression을 누적 추가한다. term이 없으면 하나 생성한다.
+func appendNodeAffinityRequirements(spec *corev1.PodSpec, reqs ...corev1.NodeSelectorRequirement) {
 	if spec.Affinity == nil {
 		spec.Affinity = &corev1.Affinity{}
 	}
@@ -1011,7 +1407,33 @@ func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
 	}
 	for i := range ns.NodeSelectorTerms {
 		ns.NodeSelectorTerms[i].MatchExpressions = append(
-			ns.NodeSelectorTerms[i].MatchExpressions, req)
+			ns.NodeSelectorTerms[i].MatchExpressions, reqs...)
 	}
 	spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = ns
+}
+
+// applyDriverUpgradeAntiAffinity는 기존 Affinity를 보존하면서
+// driver-upgrading-blocking 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다.
+// architectural plan §4.4 옵션 A: 좁은 lifecycle 의 blocking 라벨로 phase-aware 차단.
+// Cordoning ~ Upgrading 단계: 라벨 활성 → detector / device-plugin 차단 (rmmod 보호).
+// Validating 단계: 라벨 자동 제거 → detector spawn 가능 → NDR 갱신 → Validator 통과.
+func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
+	appendNodeAffinityRequirements(spec, corev1.NodeSelectorRequirement{
+		Key:      upgrade.DriverUpgradingBlockingLabelKey,
+		Operator: corev1.NodeSelectorOpDoesNotExist,
+	})
+}
+
+// applyControlPlaneExclusion는 GPU/NPU 스택(device-plugin·toolkit·driver installer)
+// 워크로드가 control-plane/master 노드에 스케줄되지 않게 하여, 제어 평면이 가속기
+// 리소스(예: nvidia.com/gpu)를 광고하지 않도록 한다. driver_upgrade_controller 가 이미
+// 강제하는 라벨 기반 제외(control-plane/master skip)와 동일 규칙이다. worker 노드는 두
+// 라벨이 모두 없으므로 영향 0. detector(node-manager) DS 에는 적용하지 않는다(전 노드 상주).
+// ponytail: 라벨 기반 제외(기존 driver-install 정책과 동일)이므로, control-plane taint 를
+// 제거하고 라벨만 유지하는 단일 노드 클러스터도 제외된다. 그런 형상이 필요하면 values 토글 추가.
+func applyControlPlaneExclusion(spec *corev1.PodSpec) {
+	appendNodeAffinityRequirements(spec,
+		corev1.NodeSelectorRequirement{Key: controlPlaneNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
+		corev1.NodeSelectorRequirement{Key: masterNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
+	)
 }

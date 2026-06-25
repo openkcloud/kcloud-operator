@@ -239,6 +239,47 @@ func TestEnsureUpgradeStates_UpgradeRequiredOnVersionMismatch(t *testing.T) {
 	}
 }
 
+// TestEnsureUpgradeStates_ResetsStaleRebootAttempts 는 새 cross-major 사이클 진입(버전 불일치) 시
+// 이전 사이클의 stale RebootAttempts 가 0 으로 리셋됨을 검증한다(P2-2 하드닝).
+// stale 이 남으면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀 자연 재부팅 미발화.
+func TestEnsureUpgradeStates_ResetsStaleRebootAttempts(t *testing.T) {
+	const (
+		nodeName     = "worker-1"
+		vendor       = "furiosa"
+		model        = "warboy"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-1-furiosa"
+	)
+
+	node := workerNode(nodeName)
+	ndr := makeNDR(nodeName, model, installedVer)
+	dip := makeDIP("furiosa-warboy", model, desiredVer)
+	dus := makeDUS(dusName, nodeName, vendor, model, v1alpha1.UpgradeStateIdle, installedVer, desiredVer)
+	dus.Status.RebootAttempts = 1 // 이전 사이클 잔존(stale)
+	dus.Status.RebootBootID = "stale-boot-id"
+
+	r := newReconciler(node, ndr, dip, dus)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	}
+
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateRequired {
+		t.Errorf("state: got %q, want Required", got.Status.State)
+	}
+	if got.Status.RebootAttempts != 0 {
+		t.Errorf("RebootAttempts: got %d, want 0 (새 사이클 리셋)", got.Status.RebootAttempts)
+	}
+	if got.Status.RebootBootID != "" {
+		t.Errorf("RebootBootID: got %q, want empty (새 사이클 리셋)", got.Status.RebootBootID)
+	}
+}
+
 // TestFindPolicy_FallbackFirstWins 는 DIP가 2개일 때 첫 번째 fallback이 선택되는지 검증합니다.
 func TestFindPolicy_FallbackFirstWins(t *testing.T) {
 	dip1 := v1alpha1.DriverInstallPolicy{

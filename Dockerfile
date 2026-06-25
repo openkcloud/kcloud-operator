@@ -15,6 +15,8 @@ RUN go mod download
 COPY cmd/main.go cmd/main.go
 COPY api/ api/
 COPY internal/ internal/
+# pkg/ 는 관리 API(internal/apiserver)가 재사용하는 npuctl 등 공유 패키지 — main.go 빌드에 필요.
+COPY pkg/ pkg/
 
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command

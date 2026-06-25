@@ -42,6 +42,14 @@ type DeviceEntry struct {
 	DriverVersion       string `json:"driverVersion,omitempty"`
 	DriverVersionDetail string `json:"driverVersionDetail,omitempty"` // 상세 버전 정보 (한 줄 요약)
 	NeedsReboot         bool   `json:"needsReboot,omitempty"`
+	// DriverBinding 은 해당 장치의 PCI 커널 드라이버 바인딩 상태입니다.
+	// "nvidia"=드라이버 바인딩, "vfio-pci"=passthrough 바인딩, "none"=미바인딩(free). (a) passthrough 감지용.
+	DriverBinding string `json:"driverBinding,omitempty"`
+	// GFD(S3-3) 소스 필드 — node-agent 가 스캔 시 sysfs/PCI 에서 best-effort 추출합니다(미가용 시 공란).
+	MemoryMiB         int64  `json:"memoryMiB,omitempty"`         // 디바이스 메모리(MiB)
+	ComputeCapability string `json:"computeCapability,omitempty"` // NVIDIA sm_xx / 벤더 capability 문자열
+	PCIeAddress       string `json:"pcieAddress,omitempty"`       // 대표 PCI 주소(라벨/디버깅용)
+	FirmwareVersion   string `json:"firmwareVersion,omitempty"`   // 가용 시 펌웨어/BIOS 버전
 }
 
 type Condition struct {
@@ -54,6 +62,34 @@ type Condition struct {
 type NodeDeviceReportStatus struct {
 	Devices    []DeviceEntry `json:"devices,omitempty"`
 	Conditions []Condition   `json:"conditions,omitempty"`
+	// PassthroughReserved 는 노드에 GPU 가 존재하며 전량 vfio-pci(passthrough)에 바인딩된 경우 true 입니다.
+	// (a) 관리자가 passthrough 예약 노드를 식별하고 드라이버 설치 보류 판단을 보조합니다.
+	PassthroughReserved bool `json:"passthroughReserved,omitempty"`
+	// Validation 은 node-agent 가 상시/정기 실행하는 벤더별 검증 결과입니다(S2-3).
+	Validation *ValidationStatus `json:"validation,omitempty"`
+}
+
+// ValidationStatus 는 node-agent Validation 능력의 노드 검증 결과입니다(S2-3).
+type ValidationStatus struct {
+	// Passed 는 게이트 step 전부 통과 여부입니다(AC-1).
+	Passed bool `json:"passed"`
+	// LastRunTime 은 마지막 검증 시각입니다(node-agent 가 RFC3339 로 기록).
+	LastRunTime metav1.Time `json:"lastRunTime,omitempty"`
+	// Vendor 는 검증 대상 벤더입니다(멀티벤더 노드는 콤마 구분).
+	Vendor string `json:"vendor,omitempty"`
+	// Steps 는 step 별 결과입니다(AC-3: 실패 step 식별).
+	Steps []ValidationStep `json:"steps,omitempty"`
+}
+
+// ValidationStep 은 S2-3 5단계 각각의 결과입니다.
+type ValidationStep struct {
+	// Name 은 step 이름입니다("driverModule"|"deviceNode"|"devicePlugin"|"runtime"|"sampleWorkload").
+	// 멀티벤더 노드는 "<vendor>/<step>" 접두사가 붙습니다.
+	Name string `json:"name"`
+	// Passed 는 해당 step 통과 여부입니다.
+	Passed bool `json:"passed"`
+	// Message 는 실패/보조 사유입니다(운영자 디버깅).
+	Message string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

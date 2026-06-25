@@ -18,6 +18,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,6 +30,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driverjob"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/validator"
@@ -129,7 +131,25 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateUpgrading:
 		return m.handleUpgrading(ctx, state, policy)
 	case v1alpha1.UpgradeStateValidating:
+		// S2-5: install 성공 후 cross-major 로 커널 모듈 교체에 재부팅이 필요하면(NDR.needsReboot),
+		// validator 체인 앞에서 RebootRequired 로 분기(재부팅 전엔 validator 가 구 버전을 보고 실패).
+		// 단 재부팅은 사이클당 1회(RebootAttempts==0)에서만 트리거한다: 재부팅 후 install Job 이
+		// host 마커를 소거해도 NDR 반영은 detector 스캔주기(30s)만큼 지연되어, 여기서 stale-true 를
+		// 읽으면 "재부팅이 안 먹혔다"로 오판→MaxReboots 초과→Failed 가 된다(실측 25~30s > requeue 20s).
+		// 재부팅 후 수렴 판정은 validator 체인이 권위 신호(실제 드라이버 버전/헬스): pass→Idle,
+		// 지속 실패→ValidationTimeout→Failed 로 안전 착지. needsReboot=false(기존 클러스터)는 이
+		// 분기를 절대 타지 않음(회귀 0).
+		// ponytail: maxReboots>1(현재 미사용) 지원하려면 reboot 완료시각 추적 + settle 창 필요 — 수요 시 확장.
+		if need, nerr := m.nodeNeedsReboot(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model); nerr == nil &&
+			need && state.Status.RebootAttempts == 0 {
+			return m.transitionTo(state, v1alpha1.UpgradeStateRebootRequired,
+				"cross-major: 커널 모듈 교체 위해 노드 재부팅 필요", 0)
+		}
 		return m.handleValidating(ctx, state, policy)
+	case v1alpha1.UpgradeStateRebootRequired:
+		return m.handleRebootRequired(ctx, state, policy)
+	case v1alpha1.UpgradeStateRebooting:
+		return m.handleRebooting(ctx, state, policy)
 	case v1alpha1.UpgradeStateUncordoning:
 		return m.handleUncordoning(ctx, state)
 	case v1alpha1.UpgradeStateRollback:
@@ -164,6 +184,56 @@ func (m *UpgradeStateMachine) handleIdle(
 ) (bool, time.Duration, error) {
 	desiredVersion := policy.Spec.Driver.Version
 	currentVersion := state.Status.CurrentVersion
+
+	// TrackOnly 정책: 설치/업그레이드 경로를 절대 트리거하지 않는다(버전 관측 전용).
+	// 아래 Job 모드 self-heal(driverLoaded=false) 트리거보다 먼저 차단하여, installer 미비
+	// 벤더(예: Tenstorrent — 실제 설치는 DKMS 2차)의 self-heal 엣지에서도 install Job 이
+	// 생성되지 않게 한다(DriverSpec.TrackOnly 계약: "install Job 을 생성하지 않습니다").
+	// DUS 는 driver_upgrade_controller 의 ensureTrackOnlyState 가 Idle 로 동기화하며, 여기서는
+	// state=="" 만 1회 Idle 로 정규화해 메트릭/`kubectl get dus` 가 Idle 을 보고하도록 한다.
+	if policy.Spec.Driver.TrackOnly {
+		if state.Status.State == "" {
+			return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
+				"TrackOnly: 버전 관측 전용(설치 경로 없음)", 60*time.Second)
+		}
+		return true, 60 * time.Second, nil
+	}
+
+	// WP-C-1 (Q1): Job 모드는 상주 DS 가 없어 driverLoaded=false(초기 미설치 / 재부팅·수동 rmmod
+	// 로 모듈 언로드 / 드라이버 crash) 상태를 스스로 복구할 수 없다. 따라서 desired 버전이 지정돼
+	// 있고 (a) 아직 아무 버전도 없거나(currentVersion=="") (b) NDR 이 driverLoaded=false 를 보고하면,
+	// 버전 일치 여부와 무관하게 install Job 을 트리거한다. autoUpgrade 무관(설치/복구는 기대된
+	// 동작) — daemonset 의 DS pod 가 항상 modprobe 로 재로딩하는 것과 동등성을 맞춘다(Q1).
+	// 버전 변경 업그레이드(driver 는 로드됐고 desired 만 상이)는 아래 autoUpgrade 게이트를 존중한다.
+	if isJobMode(policy) && desiredVersion != "" {
+		needInstall := currentVersion == ""
+		if !needInstall {
+			notLoaded, err := m.driverNotLoaded(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model)
+			if err != nil {
+				return false, 0, err
+			}
+			needInstall = notLoaded
+		}
+		if needInstall {
+			// verifiedVersions 화이트리스트는 설치/복구에도 적용(안전).
+			if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
+				msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
+					desiredVersion, policy.Spec.VerifiedVersions)
+				m.Recorder.Eventf(state, corev1.EventTypeWarning, "UnverifiedVersion", "%s", msg)
+				state.Status.DesiredVersion = desiredVersion
+				return m.transitionTo(state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
+			}
+			state.Status.DesiredVersion = desiredVersion
+			state.Status.PreviousVersion = ""
+			state.Status.PreviousImage = ""
+			state.Status.RollbackAttempts = 0
+			state.Status.RebootAttempts = 0 // S2-5: 새 사이클 진입 시 재부팅 카운터 초기화
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "InstallRequired",
+				"Job 모드 설치/복구 필요(driverLoaded=false): 목표 버전 %s (autoUpgrade 무관)", desiredVersion)
+			return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
+				fmt.Sprintf("Job 모드 설치/복구: %s", desiredVersion), 0)
+		}
+	}
 
 	if desiredVersion == "" || desiredVersion == currentVersion {
 		// 버전 일치: Idle 유지, 60s 후 재확인.
@@ -244,6 +314,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	state.Status.PreviousVersion = currentVersion
 	state.Status.PreviousImage = ""
 	state.Status.RollbackAttempts = 0
+	state.Status.RebootAttempts = 0 // S2-5: 새 사이클 진입 시 재부팅 카운터 초기화
 	return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
 		fmt.Sprintf("버전 불일치 감지: %s → %s", currentVersion, desiredVersion), 0)
 }
@@ -397,11 +468,16 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
+	// WP-C-1: Job 모드는 install Job 생성/재생성 경로로 분기(daemonset 본문 무변경).
+	if isJobMode(policy) {
+		return m.handleUpgradingJob(ctx, state, policy)
+	}
+
 	// DaemonSet 이름 결정 (driver_daemonset_controller.go line 98 패턴과 일치)
 	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 
 	var ds appsv1.DaemonSet
-	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: naming.OperatorNamespace()}, &ds); err != nil {
 		if apierrors.IsNotFound(err) {
 			return true, 20 * time.Second, nil
 		}
@@ -486,6 +562,11 @@ func (m *UpgradeStateMachine) handleValidating(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
+	// WP-C-1: Job 모드는 "Job 성공 종료 + NDR 일치" 검증 경로로 분기(daemonset 본문 무변경).
+	if isJobMode(policy) {
+		return m.handleValidatingJob(ctx, state, policy)
+	}
+
 	logger := logf.FromContext(ctx)
 
 	// architectural plan §4.4 옵션 A: Validating 진입 시점에 detector 차단 라벨만 제거.
@@ -614,6 +695,11 @@ func (m *UpgradeStateMachine) handleRollback(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
+	// WP-C-1: Job 모드는 "이전 버전 install Job 재실행" 경로로 분기(daemonset 본문 무변경).
+	if isJobMode(policy) {
+		return m.handleRollbackJob(ctx, state, policy)
+	}
+
 	metrics.RecordRollback(state.Spec.Vendor)
 
 	// P2: 롤백 시도 횟수 제한. 반복 실패 시 무한 루프 방지.
@@ -659,7 +745,7 @@ func (m *UpgradeStateMachine) handleRollback(
 	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 
 	var ds appsv1.DaemonSet
-	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := m.Get(ctx, types.NamespacedName{Name: dsName, Namespace: naming.OperatorNamespace()}, &ds); err != nil {
 		return false, 0, fmt.Errorf("DaemonSet 조회 실패: %w", err)
 	}
 
@@ -783,6 +869,145 @@ func (m *UpgradeStateMachine) transitionTo(
 }
 
 // stateToPhase는 UpgradeState 상수를 메트릭 phase 레이블로 변환합니다.
+// ─────────────────────────────────────────────
+// S2-5: cross-major reboot 자동화 (RebootRequired / Rebooting)
+// ─────────────────────────────────────────────
+
+// nodeNeedsReboot 는 NDR.status.devices[vendor/model].needsReboot 를 읽는다(driverNotLoaded 와 동일 패턴).
+// detector(node-agent)가 마커/버전불일치로 산출하며, operator 는 읽기만 한다(트리거/오케스트레이션 분리).
+func (m *UpgradeStateMachine) nodeNeedsReboot(ctx context.Context, nodeName, vendor, model string) (bool, error) {
+	var ndr v1alpha1.NodeDeviceReport
+	if err := m.Get(ctx, types.NamespacedName{Name: nodeName}, &ndr); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, d := range ndr.Status.Devices {
+		if !strings.EqualFold(d.Vendor, vendor) {
+			continue
+		}
+		if model != "" && !strings.EqualFold(d.Model, model) {
+			continue
+		}
+		if d.NeedsReboot {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// maxReboots 는 정책의 MaxReboots(기본 1)를 반환한다.
+func maxReboots(policy *v1alpha1.DriverInstallPolicy) int32 {
+	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.MaxReboots > 0 {
+		return policy.Spec.UpgradePolicy.MaxReboots
+	}
+	return 1
+}
+
+// handleRebootRequired 는 안전 게이트 통과 후 재부팅을 트리거하고 Rebooting 으로 전이한다.
+// cordon/drain 은 이미 선행 완료(멱등). 무한 재부팅은 MaxReboots 로 차단.
+func (m *UpgradeStateMachine) handleRebootRequired(ctx context.Context, state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy) (bool, time.Duration, error) {
+	logger := logf.FromContext(ctx)
+
+	// 게이트: needsReboot 재확인(NDR stale 로 인한 불필요 재부팅 차단).
+	need, err := m.nodeNeedsReboot(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model)
+	if err != nil {
+		return false, 0, err
+	}
+	if !need {
+		return m.transitionTo(state, v1alpha1.UpgradeStateValidating, "needsReboot 해소 — 검증으로 복귀", 0)
+	}
+
+	// kured executor 는 1차 미구현(계획 §5, 수요 시). 기본 Job 만 실행.
+	if policy.Spec.RebootExecutor == "kured" {
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RebootExecutorUnsupported",
+			"kured executor 는 1차 미구현(S2-5 후속) — DIP.driver.rebootExecutor=Job 사용")
+		return true, 60 * time.Second, nil
+	}
+
+	// 무한 재부팅 방지: 증가 후 초과 시 Failed.
+	state.Status.RebootAttempts++
+	state.Status.RebootRequestedTime = metav1.Now()
+	if state.Status.RebootAttempts > maxReboots(policy) {
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RebootLimitExceeded",
+			"재부팅 %d회 후에도 needsReboot 지속 — Failed(수동 조치)", state.Status.RebootAttempts-1)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "재부팅 한도 초과: 수동 조치 필요", 0)
+	}
+
+	// P2 premature-Ready 가드: reboot Job 생성 **이전에** 현재 node.status.nodeInfo.bootID 를
+	// DUS status 에 persist 한다(persist-then-Job). 재부팅으로 bootID 가 바뀌므로 handleRebooting 은
+	// 이 값과의 차이로 "실제 재부팅 완료"를 판정한다(kubelet 이 재부팅 직전 잠깐 Ready 를 유지하는 레이스 차단).
+	// 캡처 실패 시 빈 값을 저장 → handleRebooting 이 기존 isNodeReady 로 보수 전진(교착 방지 fallback).
+	var rbNode corev1.Node
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &rbNode); err == nil {
+		state.Status.RebootBootID = rbNode.Status.NodeInfo.BootID
+	} else {
+		logger.Error(err, "bootID 캡처 실패 — 빈 값 fallback(isNodeReady 보수 전진)", "node", state.Spec.NodeName)
+		state.Status.RebootBootID = ""
+	}
+	// persist-then-Job: Job 이 노드를 재부팅하기 전에 bootID 를 반드시 영구 저장.
+	// 실패 시 Job 을 만들지 않고 에러 반환 → outer Reconcile 재시도(RebootAttempts 증가분도 미persist 되어 재진입 시 재보정).
+	if err := m.Status().Update(ctx, state); err != nil {
+		return false, 0, fmt.Errorf("bootID persist 실패(재부팅 전 필수): %w", err)
+	}
+
+	// reboot Job 생성(결정론적 이름=de-facto lease, 중복 무해).
+	reboot := driverjob.RenderRebootJob(policy, state.Spec.NodeName, policy.Spec.Driver.Image)
+	if err := m.Create(ctx, reboot); err != nil && !apierrors.IsAlreadyExists(err) {
+		return false, 0, fmt.Errorf("reboot Job 생성 실패: %w", err)
+	}
+	m.Recorder.Eventf(state, corev1.EventTypeNormal, "RebootTriggered",
+		"노드 %s 재부팅 트리거 (attempt %d/%d)", state.Spec.NodeName, state.Status.RebootAttempts, maxReboots(policy))
+	logger.Info("노드 재부팅 트리거", "node", state.Spec.NodeName, "attempt", state.Status.RebootAttempts)
+	return m.transitionTo(state, v1alpha1.UpgradeStateRebooting, "재부팅 트리거 완료", 30*time.Second)
+}
+
+// handleRebooting 은 재부팅 후 노드 Ready 복귀를 관측해 Upgrading 으로 재진입한다(재설치로 모듈 재로드·
+// host needs-reboot 마커 소거 → 이후 Validating 재수렴). rebootTimeout 초과 시 Failed.
+// 성공 판정은 Job 결과가 아니라 노드 상태(재부팅이 pod 을 죽이므로).
+func (m *UpgradeStateMachine) handleRebooting(ctx context.Context, state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy) (bool, time.Duration, error) {
+	logger := logf.FromContext(ctx)
+
+	timeout := parseDuration("", 15*time.Minute)
+	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RebootTimeout != "" {
+		timeout = parseDuration(policy.Spec.UpgradePolicy.RebootTimeout, 15*time.Minute)
+	}
+	if !state.Status.RebootRequestedTime.IsZero() && time.Since(state.Status.RebootRequestedTime.Time) > timeout {
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RebootTimeout",
+			"재부팅 후 %s 내 Ready+모듈교체 미완 — Failed", timeout)
+		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "재부팅 타임아웃: 수동 조치 필요", 0)
+	}
+
+	var node corev1.Node
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &node); err != nil {
+		return true, 30 * time.Second, nil // 재부팅 중 API 접근 불가 가능 → 재시도
+	}
+	if !isNodeReady(&node) {
+		return true, 15 * time.Second, nil // 재부팅 중(NotReady) → 대기
+	}
+	// P2 premature-Ready 가드: bootID 가 재부팅 직전 캡처값과 아직 같으면 실제 재부팅 전(kubelet 이
+	// 잠깐 Ready 를 유지하는 레이스) → 전진 보류. bootID 캡처 실패(빈 값)면 기존 isNodeReady 로 보수 전진.
+	if state.Status.RebootBootID != "" && node.Status.NodeInfo.BootID == state.Status.RebootBootID {
+		logger.Info("노드 Ready 이나 bootID 미변경 — 재부팅 미완료로 판단, 대기",
+			"node", state.Spec.NodeName, "bootID", state.Status.RebootBootID)
+		return true, 15 * time.Second, nil
+	}
+	// Ready 복귀 — 재부팅으로 신 모듈이 로드됐다. 구 install Job 을 삭제해 재실행을 강제하고 Upgrading 재진입:
+	// 재실행 install Job(entrypoint)이 (a) 모듈 재로드 확인 (b) major 일치 시 host needs-reboot 마커 소거(WP-R2)
+	// 를 수행한다 → 이후 Validating 이 needsReboot=false 로 정상 검증. (재부팅만으로는 host 마커를 지울 주체가
+	// install Job 재실행뿐이므로 Validating 직행 시 needsReboot 잔존→RebootRequired 재진입→MaxReboots→Failed 가 된다.)
+	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
+	oldJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: driverjob.Namespace}}
+	if err := client.IgnoreNotFound(m.Delete(ctx, oldJob, client.PropagationPolicy(metav1.DeletePropagationBackground))); err != nil {
+		logger.Error(err, "구 install Job 삭제 실패(재실행 강제) — 계속", "job", jobName)
+	}
+	m.Recorder.Eventf(state, corev1.EventTypeNormal, "RebootSucceeded",
+		"노드 %s 재부팅 후 Ready — 드라이버 재설치로 모듈 재로드·마커 소거", state.Spec.NodeName)
+	logger.Info("재부팅 완료 — Upgrading 재진입(재설치로 마커 소거·재수렴)", "node", state.Spec.NodeName)
+	return m.transitionTo(state, v1alpha1.UpgradeStateUpgrading, "재부팅 후 Ready — 재설치로 재수렴", 0)
+}
+
 func stateToPhase(state string) string {
 	switch state {
 	case v1alpha1.UpgradeStatePreFlight:
@@ -795,6 +1020,10 @@ func stateToPhase(state string) string {
 		return "upgrading"
 	case v1alpha1.UpgradeStateValidating:
 		return "validating"
+	case v1alpha1.UpgradeStateRebootRequired:
+		return "rebootrequired"
+	case v1alpha1.UpgradeStateRebooting:
+		return "rebooting"
 	case v1alpha1.UpgradeStateUncordoning:
 		return "uncordoning"
 	default:
@@ -825,6 +1054,8 @@ func isActiveState(state string) bool {
 		v1alpha1.UpgradeStateDraining,
 		v1alpha1.UpgradeStateUpgrading,
 		v1alpha1.UpgradeStateValidating,
+		v1alpha1.UpgradeStateRebootRequired,
+		v1alpha1.UpgradeStateRebooting,
 		v1alpha1.UpgradeStateUncordoning,
 		v1alpha1.UpgradeStateRollback:
 		return true
@@ -943,7 +1174,7 @@ func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName s
 		for _, c := range pod.Spec.Containers {
 			for resName := range c.Resources.Limits {
 				rn := string(resName)
-				if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") {
+				if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") || strings.Contains(rn, "tenstorrent.com/") {
 					return true, nil
 				}
 			}
@@ -1013,7 +1244,7 @@ func podUsesDevice(pod *corev1.Pod) bool {
 	for _, c := range pod.Spec.Containers {
 		for resName := range c.Resources.Limits {
 			rn := string(resName)
-			if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") {
+			if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") || strings.Contains(rn, "tenstorrent.com/") {
 				return true
 			}
 		}
@@ -1025,8 +1256,10 @@ func podUsesDevice(pod *corev1.Pod) bool {
 // device-plugin은 GPU 리소스를 요청하지 않지만 /dev/nvidia*를 직접 마운트하여
 // 커널 모듈 참조를 잡으므로, drain 시 삭제해야 rmmod가 가능합니다.
 func (m *UpgradeStateMachine) deleteDevicePluginPods(ctx context.Context, nodeName string) error {
+	// device-plugin 은 벤더별로 다른 네임스페이스에 상주한다(3rd-party=kube-system,
+	// TT=kcloud, #21). 하드코딩 대신 전 네임스페이스 조회 후 nodeName+이름/라벨로 필터.
 	var podList corev1.PodList
-	if err := m.List(ctx, &podList, client.InNamespace("kube-system")); err != nil {
+	if err := m.List(ctx, &podList); err != nil {
 		return err
 	}
 	logger := logf.FromContext(ctx)
@@ -1058,7 +1291,7 @@ func (m *UpgradeStateMachine) deleteDevicePluginPods(ctx context.Context, nodeNa
 // deleteDriverPodOnNode는 해당 노드의 드라이버 DaemonSet Pod를 삭제합니다 (OnDelete 전략 트리거).
 func (m *UpgradeStateMachine) deleteDriverPodOnNode(ctx context.Context, dsName string, nodeName string) error {
 	var podList corev1.PodList
-	if err := m.List(ctx, &podList, client.InNamespace("kube-system")); err != nil {
+	if err := m.List(ctx, &podList, client.InNamespace(naming.OperatorNamespace())); err != nil {
 		return err
 	}
 	for i := range podList.Items {
@@ -1085,7 +1318,7 @@ func (m *UpgradeStateMachine) deleteDriverPodOnNode(ctx context.Context, dsName 
 // 반환값: (ready bool, crashLoop bool, err error)
 func (m *UpgradeStateMachine) isDriverPodReadyOnNode(ctx context.Context, dsName string, nodeName string, desiredImage ...string) (bool, bool, error) {
 	var podList corev1.PodList
-	if err := m.List(ctx, &podList, client.InNamespace("kube-system")); err != nil {
+	if err := m.List(ctx, &podList, client.InNamespace(naming.OperatorNamespace())); err != nil {
 		return false, false, err
 	}
 	logger := logf.FromContext(ctx)

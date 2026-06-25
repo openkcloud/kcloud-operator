@@ -117,7 +117,7 @@ func (v *DriverModuleValidator) Run(
 		// (driver-manager) 가 모듈 swap 에 실패했음을 의미. 운영자에게 직접 조치 절차를 제공한다.
 		msg := fmt.Sprintf(
 			"host kernel module=%s ≠ desired=%s — driver-ds Pod 의 driver-manager init container 가 swap 실패. "+
-				"조치: ssh kcloud@%s; sudo systemctl stop dcgm-exporter; "+
+				"조치: ssh <user>@%s; sudo systemctl stop dcgm-exporter; "+
 				"sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia; 그 후 driver-ds Pod 재시작",
 			hostVer, desiredVersion, nodeName,
 		)
@@ -163,8 +163,11 @@ func (v *DevicePluginValidator) Run(
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	// device-plugin 은 벤더별로 다른 네임스페이스에 상주한다(3rd-party=kube-system,
+	// TT=kcloud=OperatorNamespace, #21). 네임스페이스를 하드코딩하지 않고 전 네임스페이스를
+	// 조회하되 아래 nodeName + isDevicePluginPod 필터로 정확히 스코프한다(ClusterRole pods list).
 	var pods corev1.PodList
-	if err := c.List(ctx, &pods, client.InNamespace("kube-system")); err != nil {
+	if err := c.List(ctx, &pods); err != nil {
 		return Result{}, err
 	}
 	found := false
@@ -251,13 +254,25 @@ func isDevicePluginPod(pod *corev1.Pod, vendor string) bool {
 	if vendor == "" {
 		return true
 	}
-	v := strings.ToLower(vendor)
-	if strings.Contains(strings.ToLower(pod.Name), v) {
-		return true
+	// vendor 토큰 별칭: TT device-plugin 은 "kcloud-tt-device-plugin" 로 명명되어
+	// "tenstorrent" 문자열을 포함하지 않는다(#21). "tt" 를 별칭으로 허용한다.
+	// ponytail: 단일 별칭. 벤더가 늘면 map 으로 승격.
+	tokens := []string{strings.ToLower(vendor)}
+	if strings.EqualFold(vendor, "tenstorrent") {
+		tokens = append(tokens, "tt")
+	}
+	name := strings.ToLower(pod.Name)
+	for _, t := range tokens {
+		if strings.Contains(name, t) {
+			return true
+		}
 	}
 	for _, val := range pod.Labels {
-		if strings.Contains(strings.ToLower(val), v) {
-			return true
+		lv := strings.ToLower(val)
+		for _, t := range tokens {
+			if strings.Contains(lv, t) {
+				return true
+			}
 		}
 	}
 	return false
