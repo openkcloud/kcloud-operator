@@ -1,0 +1,349 @@
+<!-- index.html: kcloud accelerator console — 관리 REST API(:9444) 단일 파일 대시보드 | 생성일: 2026-07-30 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kcloud accelerator console</title>
+<style>
+:root { --bg:#fff; --fg:#16161a; --muted:#6b7280; --line:#e5e7eb; --card:#fafafa;
+        --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#111827; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0f1115; --fg:#e5e7eb; --muted:#9ca3af; --line:#262b33; --card:#161a21;
+          --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#e5e7eb; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
+header { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+         padding:12px 20px; border-bottom:1px solid var(--line); }
+h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:-0.01em; }
+input[type=password], input[type=text] { padding:6px 8px; border:1px solid var(--line);
+         border-radius:6px; background:var(--bg); color:var(--fg); min-width:260px; }
+button { padding:6px 12px; border:1px solid var(--line); border-radius:6px; cursor:pointer;
+         background:var(--accent); color:var(--bg); font-weight:500; }
+button.ghost { background:transparent; color:var(--fg); }
+nav { display:flex; gap:4px; padding:8px 20px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+nav button { background:transparent; color:var(--muted); border:1px solid transparent; }
+nav button[aria-current=page] { color:var(--fg); border-color:var(--line); background:var(--card); }
+main { padding:20px; }
+section { display:none; } section.active { display:block; }
+table { border-collapse:collapse; width:100%; margin:8px 0 20px; font-size:13px; }
+th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:500; white-space:nowrap; }
+.cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+.card { border:1px solid var(--line); border-radius:8px; padding:12px 16px; background:var(--card); min-width:150px; }
+.card b { display:block; font-size:22px; font-weight:600; }
+.card span { color:var(--muted); font-size:12px; }
+.badge { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px;
+         border:1px solid currentColor; white-space:nowrap; }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .muted { color:var(--muted); }
+pre { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:10px;
+      overflow:auto; font-size:12px; margin:8px 0; }
+#err { color:var(--bad); padding:0 20px; }
+label { color:var(--muted); font-size:12px; }
+fieldset { border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:0 0 16px; }
+legend { color:var(--muted); font-size:12px; padding:0 6px; }
+.row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>kcloud accelerator console</h1>
+  <label for="tok">Bearer 토큰</label>
+  <input id="tok" type="password" placeholder="kubectl -n kcloud create token &lt;sa&gt;" autocomplete="off">
+  <button id="save">적용</button>
+  <button id="reload" class="ghost">새로고침</button>
+  <span id="status" class="muted"></span>
+</header>
+<nav>
+  <button data-tab="dash" aria-current="page">대시보드</button>
+  <button data-tab="inv">인벤토리</button>
+  <button data-tab="cap">Capability</button>
+  <button data-tab="pol">정책</button>
+  <button data-tab="wl">워크로드</button>
+  <button data-tab="prev">미리보기</button>
+  <button data-tab="ev">이력</button>
+</nav>
+<div id="err"></div>
+<main>
+  <section id="dash" class="active"><div class="cards" id="dashCards"></div><div id="dashTable"></div></section>
+  <section id="inv"><div id="invTree"></div></section>
+  <section id="cap"><div id="capTable"></div></section>
+  <section id="pol"><div id="polTable"></div></section>
+  <section id="wl"><div id="wlTable"></div></section>
+  <section id="prev">
+    <fieldset><legend>요청</legend>
+      <div class="row">
+        <label>class</label><input id="pClass" type="text" placeholder="AcceleratorClass 이름">
+        <label>mode</label>
+        <select id="pMode"><option>exclusive</option><option>shared</option><option>partitioned</option><option>partitioned-shared</option></select>
+        <label>replicas</label><input id="pRep" type="text" value="0" style="min-width:60px">
+        <button id="pRun">미리보기</button>
+      </div>
+      <div class="muted">아무것도 만들지 않는다 — 이 요청이 지금 클러스터에서 성립하는지만 계산한다.</div>
+    </fieldset>
+    <div id="prevOut"></div>
+  </section>
+  <section id="ev"><div id="evTable"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem("kcloud-token") || "";
+$("tok").value = token;
+
+function setStatus(msg, cls) { $("status").textContent = msg; $("status").className = cls || "muted"; }
+function esc(v) { return String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+// truncated: 마지막으로 불러온 목록이 limit 에 잘렸을 때의 경고 문구. 카드 합계·표가 잘린 첫
+// 페이지를 전체인 것처럼 보여주면(리뷰 Important #5) 감사 화면이 "이게 전부" 로 읽힌다.
+let truncated = "";
+async function api(path, opts) {
+  if (!token) throw new Error("토큰이 필요하다. 상단에 Bearer 토큰을 넣고 적용을 누른다.");
+  const res = await fetch(path, Object.assign({headers: {"Authorization": "Bearer " + token,
+    "Content-Type": "application/json"}}, opts || {}));
+  const text = await res.text();
+  let body; try { body = JSON.parse(text); } catch (e) { body = {error: text}; }
+  if (!res.ok) throw new Error(res.status + " " + (body.error || text));
+  const shown = (body.items || []).length;
+  truncated = (body.total > shown) ? ` · ⚠ 전체 ${body.total}개 중 ${shown}개만 표시` : "";
+  return body;
+}
+
+// 정직성: verified 가 true 일 때만 초록. supported 만 true 면 "미검증" 으로 노란 배지다.
+// 이 함수 밖에서 지원 여부를 판단하지 않는다.
+function shareBadge(m) {
+  if (!m) return '<span class="badge muted">unknown</span>';
+  if (m.verified) return '<span class="badge ok">지원(검증됨)' + (m.maxReplicas ? " ≤" + m.maxReplicas : "") + "</span>";
+  if (m.supported) return '<span class="badge warn">미검증(' + esc(m.verification || "required") + ")</span>";
+  return '<span class="badge bad">미지원' + (m.reason ? " · " + esc(m.reason) : "") + "</span>";
+}
+function isoBadge(v) {
+  if (!v) return '<span class="badge muted">unknown</span>';
+  return '<span class="badge">' + esc(v) + "</span>";
+}
+// partitionBadge: profiles[].supportLevel 도 같은 등급의 정직성 축이다(Verified 만 검증됨).
+function partitionBadge(p) {
+  if (!p) return '<span class="badge muted">미관측</span>';
+  if (!p.hardwareSupported) {
+    // 측정해서 못 한다는 것과 아직 못 봤다는 것을 절대 같게 렌더하지 않는다(백엔드가 관측 에러도
+    // 같은 hardwareSupported:false 로 낸다 — Verification 이 둘을 가른다).
+    if (p.verification === "required" || !p.verification)
+      return '<span class="badge warn">미관측 — 판정 불가</span> <span class="muted">'
+        + esc(p.reason || "관측 실패") + "</span>";
+    return '<span class="badge muted">파티션 불가</span> <span class="muted">' + esc(p.reason || "") + "</span>";
+  }
+  if (!(p.profiles || []).length) return '<span class="badge muted">profile 없음</span>';
+  return p.profiles.map(pr => {
+    const cls = pr.supportLevel === "Verified" ? "ok" : pr.supportLevel === "Documented" ? "warn" : "muted";
+    return '<span class="badge ' + cls + '">' + esc(pr.name) + " · " + esc(pr.supportLevel || "?") + "</span>";
+  }).join(" ");
+}
+// healthBadge: stale/pending 행은 정상 행과 시각적으로 달라야 한다(같아 보이면 낡은 값을 지금
+// 사실로 오인한다) — AcceleratorView.Stale/Pending 를 위해 Task 2 가 낸 Critical fix 두 건의 이유다.
+// 세 조건은 서로 배타적이지 않다(stale 인 노드가 동시에 cordon 될 수 있다) — early-return 이면
+// 먼저 맞은 배지 하나만 남고 나머지가 조용히 사라진다. 그래서 합성한다.
+function healthBadge(x) {
+  const b = [];
+  if (x.pending) b.push('<span class="badge warn">pending</span> <span class="muted">governed·미보고</span>');
+  if (x.stale) b.push('<span class="badge bad">stale</span>'
+    + (x.staleReason ? ' <span class="muted">' + esc(x.staleReason) + "</span>" : ""));
+  // cordoned 도 "이 행을 액면 그대로 믿지 말라" 는 같은 부류다 — 장치는 있어도 스케줄되지 않는다.
+  if (!x.schedulable) b.push('<span class="badge bad">cordoned</span> <span class="muted">스케줄 불가 — 배치되지 않음</span>');
+  return b.length ? b.join(" ") : '<span class="badge ok">ok</span>';
+}
+// shareCell: 공유 상태는 stale/pending 행에서 관측값이 아니라 초기화 기본값이다 — 확정 배지로
+// 렌더하면 실제로는 시분할 중인 장치가 exclusive 로 보인다(리뷰 Important #2). 대시보드/인벤토리
+// 두 탭이 각자 렌더하다 배수 표기까지 갈라졌던 것(Medium #8)도 이 헬퍼 하나로 합친다.
+// oversubscribed(D-1): 광고 수가 물리 장치 수를 넘는다는 것만 확인됐고 원인(복제냐 벤더의
+// 하드웨어 서브유닛이냐)은 모른다 — "시분할" 이나 "격리 없음" 이라고 단정하면 안 된다(예:
+// Furiosa RNGD 의 PE 는 하드웨어 격리가 있는데 이 문구를 그대로 쓰면 거짓말이 된다).
+function shareCell(x) {
+  if (x.stale || x.pending) return '<span class="badge muted">공유 상태 미상</span>';
+  if (x.sharingMode === "oversubscribed")
+    return '<span class="badge warn">초과 광고 ×' + (x.sharingReplicas || "?") + "</span>"
+      + " <span class='muted'>원인 미확정 — 격리 여부 불명</span>";
+  if (x.sharingMode !== "timeSliced") return '<span class="badge">exclusive</span>';
+  return '<span class="badge warn">시분할 ×' + (x.sharingReplicas || "?") + "</span>"
+    + " <span class='muted'>물리 장치 1개 공유, 연산 격리 없음</span>";
+}
+function table(cols, rows) {
+  return "<table><thead><tr>" + cols.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>"
+    + rows.map(r => "<tr>" + r.map(c => "<td>" + c + "</td>").join("") + "</tr>").join("")
+    + "</tbody></table>";
+}
+
+async function loadDash() {
+  const inv = await api("/api/v1/accelerators?limit=500");
+  const items = inv.items || [];
+  const physical = items.length;
+  // partitionProfiles 는 노드 단위 값이라 장치 행마다 그대로 실린다 — 장치 수만큼 더하면 같은
+  // profile 을 노드의 장치 개수만큼 중복해서 센다(리뷰 Important #3). 노드×profile 로 중복을 없앤다.
+  const profs = new Set();
+  items.forEach(x => (x.partitionProfiles || []).forEach(p => profs.add(x.nodeName + "/" + p)));
+  // 논리 파티션 수는 profile 이름 개수가 아니라 장치당 인스턴스 수의 합이다 — 항목 1개가
+  // 4인스턴스일 수 있다. stale/pending 행은 관측 밖이므로 분모에서 조용히 빼지 않고
+  // 미상 행수로 따로 드러낸다(잘린 총계를 전체 사실처럼 보여주면 이 트랙이 고친 결함과 같다).
+  let logical = 0, unknownRows = 0;
+  items.forEach(x => {
+    if (x.stale || x.pending) { unknownRows++; return; }
+    (x.partitionInstances || []).forEach(pi => { logical += (pi.countPerDevice || 0); });
+  });
+  const replicas = items.reduce((a, x) => a + (x.sharingReplicas || 0), 0);
+  const byVendor = {};
+  items.forEach(x => { byVendor[x.vendor || "unknown"] = (byVendor[x.vendor || "unknown"] || 0) + 1; });
+  $("dashCards").innerHTML =
+      card(physical, "물리 장치")
+    + card(profs.size, "파티션 프로파일(노드×profile)")
+    + card(logical, "논리 파티션" + (unknownRows ? " (미상 " + unknownRows + "행 제외)" : ""))
+    + card(replicas, "공유 replica(광고 배수)")
+    + card(items.filter(x => !x.schedulable).length, "스케줄 불가 노드의 장치")
+    + Object.entries(byVendor).map(([v, n]) => card(n, "vendor: " + v)).join("");
+  $("dashTable").innerHTML = table(["상태", "노드", "장치", "벤더/모델", "공유", "파티션", "정책", "phase"],
+    items.map(x => [healthBadge(x), esc(x.nodeName), x.pending ? "<i class='muted'>미보고</i>" : esc(x.uid),
+      esc(x.vendor) + " / " + esc(x.model), shareCell(x),
+      esc((x.partitionProfiles || []).join(", ")), esc(x.policy), esc(x.phase)]));
+}
+function card(n, label) { return '<div class="card"><b>' + esc(n) + "</b><span>" + esc(label) + "</span></div>"; }
+
+async function loadInv() {
+  const inv = await api("/api/v1/accelerators?limit=500");
+  const byNode = {};
+  (inv.items || []).forEach(x => { (byNode[x.nodeName] = byNode[x.nodeName] || []).push(x); });
+  let html = "";
+  for (const [node, devs] of Object.entries(byNode)) {
+    const sched = devs[0].schedulable ? "" : ' <span class="badge bad">cordoned</span>';
+    html += "<h3>" + esc(node) + sched + " <span class='muted'>("
+      + esc(JSON.stringify(devs[0].nodeAdvertised || {})) + ")</span></h3><ul>";
+    for (const d of devs) {
+      const staleTag = d.stale
+        ? '<span class="badge bad">stale</span> ' + (d.staleReason ? "<span class='muted'>" + esc(d.staleReason) + "</span> " : "")
+        : "";
+      // pending: 정책이 이 노드를 타깃하지만 아직 장치를 보고하지 않았다 — uid/model 이 없으므로
+      // 일반 장치 행처럼 그리면 "빈 장치" 로 오인한다. 별도 placeholder 로 낸다. staleTag 는 pending
+      // 이어도(둘 다 true 일 수 있다) 화면에서 사라지면 안 되므로 continue 앞에 붙인다(리뷰 Critical #1).
+      if (d.pending) {
+        html += "<li>" + staleTag + "<span class='badge warn'>pending</span> 이 노드는 정책이 타깃하지만 "
+          + "아직 장치를 보고하지 않았다(governed, 수렴 중 또는 stale)</li>";
+        continue;
+      }
+      html += "<li>" + staleTag + "<b>" + esc(d.uid) + "</b> · " + esc(d.vendor) + "/" + esc(d.model)
+        + ' <span class="badge muted">' + esc(d.source) + "</span>";
+      if ((d.partitionProfiles || []).length) html += "<ul><li>파티션: " + esc(d.partitionProfiles.join(", ")) + "</li></ul>";
+      // replica 는 하위 항목으로 펼치지 않는다 — 독립 장치가 아니기 때문이다.
+      html += "<ul><li>" + shareCell(d) + "</li></ul>";
+      html += "</li>";
+    }
+    html += "</ul>";
+  }
+  $("invTree").innerHTML = html || "<p class='muted'>장치가 없다.</p>";
+}
+
+async function loadCap() {
+  const res = await api("/api/v1/capabilities?limit=500");
+  const rows = [];
+  for (const n of res.items || []) {
+    const cand = n.candidate ? '<span class="badge ok">후보</span>'
+      : '<span class="badge bad">제외</span> <span class="muted">' + esc(n.candidateReason) + "</span>";
+    if (!(n.devices || []).length) {
+      rows.push([esc(n.nodeName), "<i class='muted'>장치 정보 없음</i>", "", "", "", "", "", "", cand]);
+      continue;
+    }
+    for (const d of n.devices) {
+      const c = d.capability || {}, s = c.sharing || {}, iso = c.isolation || {};
+      rows.push([esc(n.nodeName), esc(d.uid) + " / " + esc(d.model),
+        partitionBadge(c.partition),
+        shareBadge(s.timeSlicing), shareBadge(s.multiProcess), shareBadge(s.brokered),
+        isoBadge(iso.compute) + " " + isoBadge(iso.memory) + " " + isoBadge(iso.fault),
+        esc((c.allocationAPIs || []).join(", ")), cand]);
+    }
+  }
+  $("capTable").innerHTML = table(
+    ["노드", "장치", "파티션(profile · 등급)", "time-slicing", "multi-process", "brokered",
+     "격리(compute/memory/fault)", "allocation API", "번역 후보"], rows);
+}
+
+async function loadPol() {
+  const res = await api("/api/v1/policies?limit=500");
+  $("polTable").innerHTML = table(["정책", "벤더", "phase", "수렴", "요청 프로파일", "공유", "타깃"],
+    (res.items || []).map(p => [esc(p.name), esc(p.vendor), esc(p.phase),
+      p.converged ? '<span class="badge ok">converged</span>'
+                  : '<span class="badge warn">gen ' + esc(p.observedGeneration) + "/" + esc(p.generation) + "</span>",
+      esc((p.requestedProfiles || []).join(", ")),
+      esc(p.sharingMode) + (p.sharingReplicas ? " ×" + esc(p.sharingReplicas) : ""),
+      (p.targets || []).map(t => esc(t.nodeName) + " (" + esc(t.phase) + ") "
+        + esc(JSON.stringify(t.advertised || {}))).join("<br>")]));
+}
+
+async function loadWl() {
+  const res = await api("/api/v1/workloads?limit=500");
+  $("wlTable").innerHTML = table(["네임스페이스", "이름", "클래스", "모드", "phase", "결과 / 거절"],
+    (res.items || []).map(x => [esc(x.namespace), esc(x.name), esc(x.class),
+      esc(x.mode) + (x.accessReplicas ? " ×" + esc(x.accessReplicas) : ""), esc(x.phase),
+      x.rejection ? rejectionHTML(x.rejection)
+        : (x.resolved ? esc(x.resolved.resourceName) + " ×" + esc(x.resolved.quantity)
+            + "<br><span class='muted'>" + esc(x.resolved.explanation) + "</span>" : "")]));
+}
+
+// 거절은 축을 먼저 보여주고 원문 메시지를 그대로 붙인다 — 요약하지 않는다.
+function rejectionHTML(rj) {
+  return '<span class="badge bad">' + esc(rj.reason) + "</span>"
+    + (rj.axis ? " <b>고칠 곳: " + esc(rj.axis) + "</b>" : "")
+    + "<br><span class='muted'>" + esc(rj.message) + "</span>";
+}
+
+async function loadEv() {
+  const res = await api("/api/v1/events?limit=200");
+  $("evTable").innerHTML = table(["시각", "종류", "대상", "type", "reason", "메시지"],
+    (res.items || []).map(e => [esc(e.lastTimestamp), esc(e.kind), esc(e.name),
+      e.type === "Warning" ? '<span class="badge bad">Warning</span>' : '<span class="badge">Normal</span>',
+      esc(e.reason), esc(e.message)]));
+}
+
+async function runPreview() {
+  const body = {class: $("pClass").value.trim(),
+    access: {mode: $("pMode").value, replicas: parseInt($("pRep").value, 10) || 0}};
+  const res = await api("/api/v1/preview", {method: "POST", body: JSON.stringify(body)});
+  if (res.accepted && res.resolved) {
+    const r = res.resolved;
+    $("prevOut").innerHTML = '<span class="badge ok">성립</span>'
+      + table(["벤더", "모드", "리소스", "수량", "allocation API", "후보 노드"],
+        [[esc(r.vendor), esc(r.mode), esc(r.resourceName), esc(r.quantity),
+          esc(r.allocationAPI), esc((r.nodes || []).join(", "))]])
+      + "<pre>" + esc(r.explanation) + "</pre>";
+  } else {
+    $("prevOut").innerHTML = rejectionHTML(res.rejection || {});
+  }
+}
+
+const loaders = {dash: loadDash, inv: loadInv, cap: loadCap, pol: loadPol, wl: loadWl, ev: loadEv, prev: async () => {}};
+let current = "dash";
+
+async function refresh() {
+  $("err").textContent = "";
+  try {
+    setStatus("불러오는 중…");
+    await loaders[current]();
+    setStatus("갱신 " + new Date().toLocaleTimeString() + truncated, truncated ? "warn" : "muted");
+  }
+  catch (e) { setStatus("실패", "bad"); $("err").textContent = e.message; }
+}
+
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach(x => x.removeAttribute("aria-current"));
+  b.setAttribute("aria-current", "page");
+  document.querySelectorAll("section").forEach(s => s.classList.remove("active"));
+  current = b.dataset.tab;
+  $(current).classList.add("active");
+  refresh();
+}));
+$("save").addEventListener("click", () => {
+  token = $("tok").value.trim();
+  sessionStorage.setItem("kcloud-token", token);
+  refresh();
+});
+$("reload").addEventListener("click", refresh);
+$("pRun").addEventListener("click", () => runPreview().catch(e => { $("prevOut").innerHTML = ""; $("err").textContent = e.message; }));
+if (token) refresh(); else setStatus("Bearer 토큰을 넣어 시작한다.");
+</script>
+</body>
+</html>

@@ -100,6 +100,38 @@ webhooks:
     operations: ["CREATE", "UPDATE"]
     resources: ["npuclusterpolicies"]
     scope: "*"
+- name: vacceleratorclass.npu.ai
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  clientConfig:
+    service:
+      name: {{ $svcName }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-npu-ai-v1alpha1-acceleratorclass
+    caBundle: {{ $caCert }}
+  rules:
+  - apiGroups: ["npu.ai"]
+    apiVersions: ["v1alpha1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["acceleratorclasses"]
+    scope: "*"
+- name: vacceleratorworkload.npu.ai
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  clientConfig:
+    service:
+      name: {{ $svcName }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-npu-ai-v1alpha1-acceleratorworkload
+    caBundle: {{ $caCert }}
+  rules:
+  - apiGroups: ["npu.ai"]
+    apiVersions: ["v1alpha1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["acceleratorworkloads"]
+    scope: "Namespaced"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration

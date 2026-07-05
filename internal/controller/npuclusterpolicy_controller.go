@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -36,6 +37,8 @@ import (
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
+	"kcloud-operator/internal/partition/nvidia"
+	"kcloud-operator/internal/partition/rngd"
 	"kcloud-operator/internal/upgrade"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -52,6 +55,14 @@ const ownerAnnotation = "npu.ai/owner"
 
 // vendorNvidia is the NVIDIA vendor identifier used across the controller package.
 const vendorNvidia = "nvidia"
+
+// nvidiaDevicePluginVendorLabel 은 mixed/flat 두 device-plugin DaemonSet 이 공통으로 다는 라벨이다.
+// 두 DS 는 selector 충돌을 피하려 서로 다른 app.kubernetes.io/name 을 쓰므로(C-1),
+// restartNvidiaDevicePlugin 이 어느 쪽 pod 이든 찾으려면 이 공통 라벨로 List 해야 한다.
+const nvidiaDevicePluginVendorLabel = "kcloud.ai/dp-vendor"
+
+// vendorFuriosa is the Furiosa vendor identifier used across the controller package.
+const vendorFuriosa = "furiosa"
 
 // Tenstorrent Blackhole device plugin 기본 상수.
 // #21: TT plugin 은 공식 벤더 plugin 이 없어 kcloud 가 자체 구현했으므로(3rd party 아님),
@@ -188,6 +199,14 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "NvidiaDevicePluginFailed", err.Error())
 			return ctrl.Result{}, err
 		}
+	}
+
+	// -- NVIDIA GPU 텔레메트리(dcgm-exporter). 토글 off 면 기존 DS 를 제거하므로 항상 호출한다.
+	if err := r.ensureDcgmExporter(ctx, &policy); err != nil {
+		logger.Error(err, "failed to ensure dcgm-exporter")
+		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "DcgmExporter", err)
+		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "DcgmExporterFailed", err.Error())
+		return ctrl.Result{}, err
 	}
 
 	// -- Furiosa
@@ -370,7 +389,9 @@ func applyImagePullSecrets(spec *corev1.PodSpec, secrets []corev1.LocalObjectRef
 	}
 }
 
-// -- ensureNvidiaDevicePlugin creates a DaemonSet for NVIDIA
+// -- ensureNvidiaDevicePlugin creates the mixed(MIG 관리 노드) 와 flat(그 외) device-plugin
+// DaemonSet 두 개를 렌더한다 — MPS 근본해결(D-8) 4단계. mixed 는 --mig-strategy=mixed 로 MIG
+// 프로파일을, flat 은 그 플래그 없이 순정 GPU 를 광고하며 MigActiveNodeLabel 부재 노드만 맡는다.
 func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
@@ -380,52 +401,125 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin"}
+	mixed := r.buildNvidiaDevicePluginDS(policy, nvidia.DevicePluginNameMixed, sel, true)
+	flat := r.buildNvidiaDevicePluginDS(policy, nvidia.DevicePluginNameFlat, sel, false)
+
+	for _, ds := range []*appsv1.DaemonSet{mixed, flat} {
+		setOwnerAnnotation(&ds.ObjectMeta, policy)
+		applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+		applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+		applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
+
+		// 두 writer 조정: ACPP 가 sharing config 를 소유하면 live 배선을 보존한다(Task 3).
+		var live appsv1.DaemonSet
+		if err := r.Get(ctx, types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, &live); err == nil {
+			preserveNvidiaSharing(&live, ds)
+		}
+		if err := r.createOrUpdateDS(ctx, ds); err != nil {
+			log.Error(err, "failed to ensure nvidia device plugin daemonset", "name", ds.Name)
+			return err
+		}
+	}
+	log.Info("NVIDIA device plugin daemonsets ensured (mixed + flat)")
+	return nil
+}
+
+// buildNvidiaDevicePluginDS 는 mixed(MIG 관리 노드 전용) 또는 flat(그 외) device-plugin
+// DaemonSet 정의를 만든다. selector 는 immutable 이라 mixed(라이브 기존 리소스와 같은 이름)의
+// selector 는 과거 값 {app.kubernetes.io/name: nvidia-device-plugin} 그대로 둔다 — 바꾸면 기존
+// 클러스터에서 422 로 영구 실패한다. flat 은 자기 이름을 selector 값으로 써 자동으로 비겹침이다.
+// 두 DS 는 nvidiaDevicePluginVendorLabel 을 공통으로 달아 restartNvidiaDevicePlugin 의 노드별
+// pod 삭제가 어느 쪽이든 찾는다 — MPS 근본해결(D-8).
+func (r *NPUClusterPolicyReconciler) buildNvidiaDevicePluginDS(policy *npuv1alpha1.NPUClusterPolicy, name string, baseSel map[string]string, mixed bool) *appsv1.DaemonSet {
+	labels := map[string]string{"app.kubernetes.io/name": name, nvidiaDevicePluginVendorLabel: "nvidia"}
 	nvidiaRuntime := vendorNvidia
-	ds := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nvidia-device-plugin",
-			Namespace: "kube-system",
-			Labels:    labels,
-		},
+	args := []string{}
+	if mixed {
+		// worker1 은 A30(MIG 가능)+A2(비 MIG) 혼재 노드라 single 전략은 무효.
+		// mixed 는 A30 에 nvidia.com/mig-<profile> 을, A2 에는 기존 nvidia.com/gpu 를 광고한다.
+		args = []string{"--mig-strategy=mixed"}
+	}
+
+	spec := corev1.PodSpec{
+		RuntimeClassName: &nvidiaRuntime,
+		Tolerations:      []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+		Containers: []corev1.Container{{
+			Name:            "nvidia-device-plugin",
+			Image:           policy.Spec.Nvidia.DevicePluginImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Args:            args,
+			Env: []corev1.EnvVar{
+				{Name: "NVIDIA_VISIBLE_DEVICES", Value: "all"},
+				{Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "all"},
+				// MIG(mixed) 조각 메모리/용량 조회는 /dev/nvidia-caps 접근이 필요하다.
+				// MIG_MONITOR_DEVICES=all 로 nvidia 런타임이 caps 디바이스를 주입하게 한다.
+				{Name: "NVIDIA_MIG_MONITOR_DEVICES", Value: "all"},
+			},
+			// MIG 조각 조회는 특권이 필요하다("Insufficient Permissions" 회피). NVIDIA GPU
+			// Operator 의 device-plugin 도 MIG 에서 privileged 로 동작한다.
+			SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
+			VolumeMounts:    []corev1.VolumeMount{{Name: "device-plugin", MountPath: "/var/lib/kubelet/device-plugins"}},
+		}},
+		Volumes: []corev1.Volume{{
+			Name:         "device-plugin",
+			VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kubelet/device-plugins"}},
+		}},
+	}
+
+	if mixed {
+		merged := map[string]string{nvidia.MigActiveNodeLabel: "true"}
+		for k, v := range baseSel {
+			merged[k] = v
+		}
+		spec.NodeSelector = merged
+	} else {
+		keys := make([]string, 0, len(baseSel))
+		for k := range baseSel {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys) // map 순회는 무작위 — 정렬 없으면 매 reconcile 마다 렌더가 달라져 DS 가 롤링 재시작한다.
+		var terms []corev1.NodeSelectorRequirement
+		for _, k := range keys {
+			terms = append(terms, corev1.NodeSelectorRequirement{Key: k, Operator: corev1.NodeSelectorOpIn, Values: []string{baseSel[k]}})
+		}
+		terms = append(terms, corev1.NodeSelectorRequirement{Key: nvidia.MigActiveNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist})
+		spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: terms}},
+				},
+			},
+		}
+	}
+
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system", Labels: labels},
 		Spec: appsv1.DaemonSetSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": name}},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					NodeSelector:     sel,
-					RuntimeClassName: &nvidiaRuntime,
-					Tolerations:      []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
-					Containers: []corev1.Container{{
-						Name:            "nvidia-device-plugin",
-						Image:           policy.Spec.Nvidia.DevicePluginImage,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Env: []corev1.EnvVar{
-							{Name: "NVIDIA_VISIBLE_DEVICES", Value: "all"},
-							{Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "all"},
-						},
-						SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: boolPtr(false)},
-						VolumeMounts:    []corev1.VolumeMount{{Name: "device-plugin", MountPath: "/var/lib/kubelet/device-plugins"}},
-					}},
-					Volumes: []corev1.Volume{{
-						Name:         "device-plugin",
-						VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kubelet/device-plugins"}},
-					}},
-				},
+				Spec:       spec,
 			},
 		},
 	}
-	setOwnerAnnotation(&ds.ObjectMeta, policy)
-	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
-	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
-	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
+}
 
-	if err := r.createOrUpdateDS(ctx, ds); err != nil {
-		log.Error(err, "failed to ensure nvidia device plugin daemonset")
-		return err
+// preserveNvidiaSharing 는 live DS 가 ACPP 소유(sharing owner annotation)면 desired 에 배선을 복원한다.
+// RNGD 의 RNGD_PARTITION_POLICY 보존과 동일한 2-writer 조정 규칙이다.
+func preserveNvidiaSharing(live, desired *appsv1.DaemonSet) {
+	owner, owned := live.Annotations[nvidia.SharingOwnerAnnotation]
+	if !owned {
+		return
 	}
-	log.Info("NVIDIA device plugin daemonset ensured")
-	return nil
+	if desired.Annotations == nil {
+		desired.Annotations = map[string]string{}
+	}
+	desired.Annotations[nvidia.SharingOwnerAnnotation] = owner
+	mode := npuv1alpha1.SharingModeTimeSliced
+	if nvidia.HasMPSVolume(live) {
+		mode = npuv1alpha1.SharingModeMPS
+	}
+	nvidia.WireSharing(desired, mode, nvidia.SharingConfigMapNameOf(live))
 }
 
 // -- ensureFuriosaDevicePlugin creates a DaemonSet for Furiosa
@@ -576,18 +670,18 @@ func rngdDevicePluginArgs(partitionPolicy string) []string {
 func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, partitionPolicy string) error {
 	log := logf.FromContext(ctx)
 
-	rngd := policy.Spec.Furiosa.Rngd
+	rngdSpec := policy.Spec.Furiosa.Rngd
 
 	// Image (default to upstream release tag when unset; registry path 은 `furiosaai`, 하이픈 없음)
-	image := rngd.DevicePluginImage
+	image := rngdSpec.DevicePluginImage
 	if image == "" {
 		image = "docker.io/furiosaai/furiosa-device-plugin:2026.1.0"
 	}
 
 	// nodeSelector: 자립 라벨(node-manager 부여, NFD 비의존); override via Spec.Furiosa.Rngd.NodeSelector
 	sel := map[string]string{"kcloud.ai/rngd.present": "true"}
-	if len(rngd.NodeSelector) > 0 {
-		sel = rngd.NodeSelector
+	if len(rngdSpec.NodeSelector) > 0 {
+		sel = rngdSpec.NodeSelector
 	}
 
 	labels := map[string]string{"app.kubernetes.io/name": "furiosa-rngd-device-plugin"}
@@ -772,12 +866,60 @@ interval: 10`,
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
+	// 두 writer 조정: ACPP 가 partition env 를 소유하면(owner 어노테이션) live 값을 보존한다.
+	// (ACPP 가 RNGD_PARTITION_POLICY 의 권위 — Task 9. 어노테이션 없으면 기존 동작.)
+	var live appsv1.DaemonSet
+	if err := r.Get(ctx, types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, &live); err == nil {
+		if owner, owned := live.Annotations[rngd.PartitionOwnerAnnotation]; owned {
+			if v := unifiedEnvValue(&live, "RNGD_PARTITION_POLICY"); v != "" {
+				setUnifiedEnvValue(ds, "RNGD_PARTITION_POLICY", v)
+			}
+			if ds.Annotations == nil {
+				ds.Annotations = map[string]string{}
+			}
+			ds.Annotations[rngd.PartitionOwnerAnnotation] = owner
+		}
+	}
+
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
 		log.Error(err, "failed to ensure furiosa unified device plugin daemonset")
 		return err
 	}
 	log.Info("Furiosa unified device plugin daemonset ensured")
 	return nil
+}
+
+// unifiedEnvValue 는 furiosa-device-plugin 컨테이너에서 name env 값을 읽는다(없으면 "").
+func unifiedEnvValue(ds *appsv1.DaemonSet, name string) string {
+	for _, ctr := range ds.Spec.Template.Spec.Containers {
+		if ctr.Name != furiosaLegacyWarboyDSName {
+			continue
+		}
+		for _, e := range ctr.Env {
+			if e.Name == name {
+				return e.Value
+			}
+		}
+	}
+	return ""
+}
+
+// setUnifiedEnvValue 는 furiosa-device-plugin 컨테이너의 name env 를 value 로 설정한다(없으면 append).
+func setUnifiedEnvValue(ds *appsv1.DaemonSet, name, value string) {
+	for ci := range ds.Spec.Template.Spec.Containers {
+		ctr := &ds.Spec.Template.Spec.Containers[ci]
+		if ctr.Name != furiosaLegacyWarboyDSName {
+			continue
+		}
+		for ei := range ctr.Env {
+			if ctr.Env[ei].Name == name {
+				ctr.Env[ei].Value = value
+				return
+			}
+		}
+		ctr.Env = append(ctr.Env, corev1.EnvVar{Name: name, Value: value})
+		return
+	}
 }
 
 // ensureTenstorrentDevicePlugin creates a DaemonSet for the Tenstorrent Blackhole NPU device plugin.

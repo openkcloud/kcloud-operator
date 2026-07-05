@@ -70,6 +70,22 @@ type NvidiaSpec struct {
 	Enabled           bool              `json:"enabled"`
 	DevicePluginImage string            `json:"devicePluginImage"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// DcgmExporter 는 NVIDIA GPU 텔레메트리(온도/사용률/메모리/전력) exporter 설정이다.
+	// NPU 4벤더는 node-manager 가 hwmon 으로 수집하지만 NVIDIA 드라이버는 hwmon 을 등록하지
+	// 않아 NVML 경로가 필요하므로, upstream dcgm-exporter 를 operand 로 배포한다.
+	// 미지정(nil) 또는 Enabled=false 면 DS 를 만들지 않고 기존 것이 있으면 제거한다.
+	// +optional
+	DcgmExporter *DcgmExporterSpec `json:"dcgmExporter,omitempty"`
+}
+
+// DcgmExporterSpec 은 NVIDIA dcgm-exporter DaemonSet 배포 설정이다.
+type DcgmExporterSpec struct {
+	// Enabled=false(기본) 면 배포하지 않는다.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+	// Image 미지정 시 nvcr.io upstream 기본값을 사용한다(air-gap 환경은 미러 경로를 지정).
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // RebellionsSpec defines the Rebellions ATOM+ device plugin configuration.

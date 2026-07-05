@@ -1,7 +1,7 @@
 // ============================================================
-// webhook.go: Admission webhook 핸들러 (DIP/NCP validating + Pod mutating)
-// 상세: DIP/NCP spec 검증 거부 + opt-in 라벨 Pod 에 NVIDIA runtimeClass 주입 (S4-1)
-// 생성일: 2026-07-20 | 수정일: 2026-07-20
+// webhook.go: Admission webhook 핸들러 (DIP/NCP/AcceleratorClass/AcceleratorWorkload validating + Pod mutating)
+// 상세: spec 검증 거부 + 추상 워크로드 변환 검증 + opt-in 라벨 Pod 에 NVIDIA runtimeClass 주입
+// 생성일: 2026-07-20 | 수정일: 2026-07-30
 // ============================================================
 
 package webhook
@@ -23,15 +23,20 @@ import (
 // InjectLabel: 이 라벨이 "true" 인 Pod 만 mutating 대상(opt-in). 그 외 Pod 무개입.
 const InjectLabel = "kcloud.ai/inject"
 
-// nvidiaGPUResource: NVIDIA GPU 요청 리소스명.
-const nvidiaGPUResource = corev1.ResourceName("nvidia.com/gpu")
+// nvidiaResourcePrefix: NVIDIA device-plugin 이 광고하는 extended resource 접두.
+// 전체 장치(nvidia.com/gpu)와 mixed MIG 조각(nvidia.com/mig-<profile>)이 모두 여기 걸린다 —
+// 리터럴 nvidia.com/gpu 만 보면 MIG Pod 이 runtimeClass 없이 떠서 /dev/nvidia* 를 못 받는다.
+const nvidiaResourcePrefix = "nvidia.com/"
+
+// nvidiaRuntimeClass: 이 차트가 만드는 RuntimeClass 이름(deploy/helm/templates/runtimeclass.yaml).
+const nvidiaRuntimeClass = "nvidia"
 
 // knownVendors: DriverInstallPolicy 에서 허용하는 vendor 집합.
 var knownVendors = map[string]bool{
-	"nvidia":      true,
-	"furiosa":     true,
-	"tenstorrent": true,
-	"rebellions":  true,
+	nvidiaRuntimeClass: true,
+	"furiosa":          true,
+	"tenstorrent":      true,
+	"rebellions":       true,
 }
 
 // Setup 은 세 개의 admission webhook(DIP/NCP validating, Pod mutating)을 매니저에 등록한다.
@@ -49,6 +54,18 @@ func Setup(mgr ctrl.Manager) error {
 		WithValidator(&NCPValidator{}).
 		Complete(); err != nil {
 		return fmt.Errorf("register NPUClusterPolicy validator: %w", err)
+	}
+	if err := ctrl.NewWebhookManagedBy(mgr).
+		For(&npuv1alpha1.AcceleratorClass{}).
+		WithValidator(&ACValidator{}).
+		Complete(); err != nil {
+		return fmt.Errorf("register AcceleratorClass validator: %w", err)
+	}
+	if err := ctrl.NewWebhookManagedBy(mgr).
+		For(&npuv1alpha1.AcceleratorWorkload{}).
+		WithValidator(&AWValidator{Client: mgr.GetClient()}).
+		Complete(); err != nil {
+		return fmt.Errorf("register AcceleratorWorkload validator: %w", err)
 	}
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&corev1.Pod{}).
@@ -188,7 +205,7 @@ func (m *PodMutator) Default(_ context.Context, obj runtime.Object) error {
 		return nil
 	}
 	if podRequestsNvidiaGPU(pod) && (pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName == "") {
-		rc := "nvidia"
+		rc := nvidiaRuntimeClass
 		pod.Spec.RuntimeClassName = &rc
 	}
 	return nil
@@ -198,10 +215,16 @@ func podRequestsNvidiaGPU(pod *corev1.Pod) bool {
 	containers := append([]corev1.Container{}, pod.Spec.Containers...)
 	containers = append(containers, pod.Spec.InitContainers...)
 	for _, c := range containers {
-		if _, ok := c.Resources.Limits[nvidiaGPUResource]; ok {
+		if hasNvidiaResource(c.Resources.Limits) || hasNvidiaResource(c.Resources.Requests) {
 			return true
 		}
-		if _, ok := c.Resources.Requests[nvidiaGPUResource]; ok {
+	}
+	return false
+}
+
+func hasNvidiaResource(rl corev1.ResourceList) bool {
+	for name := range rl {
+		if strings.HasPrefix(string(name), nvidiaResourcePrefix) {
 			return true
 		}
 	}

@@ -18,9 +18,18 @@ import (
 	"kcloud-operator/internal/naming"
 )
 
-// RenderRebootJob 은 대상 노드를 재부팅하는 privileged one-shot Job 을 만든다.
-// image 는 nsenter 를 포함한 이미지(driver-installer 재사용). Namespace/OwnerRef 는 install Job 과 동일.
+// RenderRebootJob 은 DriverInstallPolicy 소유 재부팅 Job 이다(기존 호출자 호환).
 func RenderRebootJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image string) *batchv1.Job {
+	owner := metav1.OwnerReference{
+		APIVersion: "npu.ai/v1alpha1", Kind: "DriverInstallPolicy", Name: pol.Name, UID: pol.UID,
+	}
+	return RenderRebootJobFor(owner, pol.Spec.ImagePullSecrets, nodeName, image)
+}
+
+// RenderRebootJobFor 는 대상 노드를 재부팅하는 privileged one-shot Job 을 소유자 중립으로 만든다
+// (ACPP MIG mode enable 도 이 경로를 쓴다 — Ampere pending MIG 는 재부팅으로만 확정되므로).
+// image 는 nsenter 를 포함한 이미지(driver-installer / mig-tool). Namespace 는 install Job 과 동일.
+func RenderRebootJobFor(owner metav1.OwnerReference, pullSecrets []corev1.LocalObjectReference, nodeName, image string) *batchv1.Job {
 	labels := map[string]string{
 		"app.kubernetes.io/name":      "kcloud-node-reboot",
 		"app.kubernetes.io/component": "node-reboot",
@@ -48,20 +57,15 @@ func RenderRebootJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image strin
 			SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
 		}},
 	}
-	applyImagePullSecrets(&podSpec, pol.Spec.ImagePullSecrets)
+	applyImagePullSecrets(&podSpec, pullSecrets)
 
+	owner.Controller = boolPtr(true)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      naming.RebootJobName(nodeName),
-			Namespace: Namespace,
-			Labels:    labels,
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "npu.ai/v1alpha1",
-				Kind:       "DriverInstallPolicy",
-				Name:       pol.Name,
-				UID:        pol.UID,
-				Controller: boolPtr(true),
-			}},
+			Name:            naming.RebootJobName(nodeName),
+			Namespace:       Namespace,
+			Labels:          labels,
+			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,

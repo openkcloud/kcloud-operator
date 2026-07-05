@@ -345,7 +345,7 @@ func vendorNodeSelector(vendor, model string) map[string]string {
 	switch v {
 	case vendorNvidia:
 		return map[string]string{"kcloud.ai/nvidia.present": "true"}
-	case "furiosa":
+	case vendorFuriosa:
 		if m == "rngd" {
 			return map[string]string{"kcloud.ai/rngd.present": "true"}
 		}
@@ -367,7 +367,7 @@ func vendorRmmodCommand(vendor, model string) string {
 	switch v {
 	case vendorNvidia:
 		return "rmmod nvidia_uvm nvidia_drm nvidia || true"
-	case "furiosa":
+	case vendorFuriosa:
 		if m == "rngd" {
 			return "rmmod furiosa_rngd || true"
 		}
@@ -385,7 +385,7 @@ func vendorRmmodCommand(vendor, model string) string {
 // 불필요하여 false(마운트 미부착 → secret 부재 클러스터에서도 스케줄 가능). Furiosa 이외
 // 벤더는 애초에 이 경로에 도달하지 않지만 방어적으로 false.
 func furiosaAptAuthRequired(vendor, model string) bool {
-	return strings.EqualFold(vendor, "furiosa") && !strings.EqualFold(model, "rngd")
+	return strings.EqualFold(vendor, vendorFuriosa) && !strings.EqualFold(model, "rngd")
 }
 
 // versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작인 "Policy" 를 반환합니다.

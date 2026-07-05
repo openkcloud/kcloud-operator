@@ -1,8 +1,8 @@
 # Chart.yaml: NPU Operator Helm Chart 메타데이터
-# 생성일: 2026-03-25 | 수정일: 2026-07-21 (트랙G: control-plane GPU 워크로드 배제 → v0.5.52)
+# 생성일: 2026-03-25 | 수정일: 2026-07-30 (라이브 검증 트랙 Task 1: 배포 게이트 → v0.5.68)
 apiVersion: v2
 name: kcloud-operator
 description: Kubernetes Operator for unified NPU/GPU accelerator management
 type: application
-version: 0.5.56
-appVersion: "v0.5.52"
+version: 0.5.68
+appVersion: v0.5.79

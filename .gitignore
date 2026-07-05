@@ -37,3 +37,4 @@ internal/crdapply/crd/*.yaml
 .claude/
 CLAUDE.md
 AGENTS.md
+docs/superpowers/

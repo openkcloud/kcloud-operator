@@ -21,6 +21,13 @@ spec:
     nodeSelector:
       {{- toYaml .Values.nvidia.nodeSelector | nindent 6 }}
     {{- end }}
+    {{- if .Values.nvidia.dcgmExporter }}
+    dcgmExporter:
+      enabled: {{ .Values.nvidia.dcgmExporter.enabled }}
+      {{- if .Values.nvidia.dcgmExporter.image }}
+      image: "{{ .Values.nvidia.dcgmExporter.image }}"
+      {{- end }}
+    {{- end }}
   furiosa:
     enabled: {{ .Values.furiosa.enabled }}
     devicePluginImage: "{{ .Values.furiosa.devicePluginImage }}"

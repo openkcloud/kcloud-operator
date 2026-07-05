@@ -15,8 +15,52 @@ global:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.5.52
+  tag: v0.5.75
   pullPolicy: IfNotPresent
+
+# acpp: AcceleratorPartitionPolicy 관련 설정.
+#   probeImage: verify 단계 1-파티션 테스트 Pod 이미지. air-gap(Harbor mirror) 클러스터는
+#   미러 도달 가능 이미지로 지정. 빈 값이면 operator 코드 기본값(registry.k8s.io/pause:3.9) 사용.
+acpp:
+  probeImage: docker.io/library/nginx:1.25.2-alpine
+  # migJobImage: MIG apply/rollback Job 이 host nvidia-smi 를 nsenter 로 호출할 때 쓰는 이미지(util-linux 포함).
+  # air-gap 은 Harbor 미러 경로로 지정. 미설정시 코드 기본값(env 미주입)으로 동작하지 않으므로 라이브에선 필수.
+  migJobImage: registry.example.com:5000/kcloud/mig-tool:v0.1.0
+  # MPS 공유 모드에서 필요한 control daemon. ACPP 가 sharing.mode=mps 일 때만 배치한다
+  # (별도 토글 없음 — 정책이 켜면 뜨고 끄면 사라진다).
+  # migJobImage 와 같은 규약이다: 빈 값이면 env 가 주입되지 않아 코드 기본값(공개
+  # nvcr.io/nvidia/k8s-device-plugin)이 쓰이고, air-gap 클러스터에서는 당길 수 없어 daemon 이
+  # ImagePullBackOff 로 남는다. 그래서 기본값을 Harbor 미러 경로로 둔다 — 라이브에선 필수.
+  # 경로 규약은 미러된 upstream 이미지와 동일(kcloud/<upstream-org>/<image>). 이 태그가 Harbor 에
+  # 실제로 미러돼 있어야 한다 — 없으면 daemon 은 여전히 안 뜨지만, 이제 그 사실이 status 에
+  # SharingDaemonNotReady 로 드러난다(Ready 로 위장하지 않는다).
+  mpsControlDaemon:
+    image: registry.example.com:5000/kcloud/nvidia/k8s-device-plugin:v0.19.3
+  # measuredSharing: 이 클러스터에서 **실제로 시험한** 공유 기능을 기록한다. capability status 의
+  # verification 축이 required → verified 로 올라간다. 유효값은 "verified" 뿐이고 그 외/미설정은
+  # required 다. 코드는 이 값을 스스로 만들지 않는다 — 실측은 하드웨어·드라이버·device-plugin
+  # 조합에서 일어난 사건이라 코드가 모든 장치에 대해 주장할 수 없기 때문이다(정직성 §19.3).
+  # MPS 지원 여부 자체(supported)는 장치별 MIG 관측이 정하므로 이 값이 뒤집지 못한다 —
+  # 검증 축만 올린다. 하드웨어를 교체하면 다시 시험할 때까지 지워야 한다.
+  #
+  # ⚠ 이 값은 status 표기만 바꾸지 않는다 — **워크로드 승인 게이트**다. AcceleratorWorkload 의
+  # 공유 요청은 미검증 축을 거절하므로, 켜는 순간 이 클러스터의 모든 NVIDIA 장치에서 그 거절이
+  # 풀린다. implementation:auto 의 후보 선택도 이 축을 읽는다(timeSlicing → multiProcess 순).
+  #
+  # 두 값의 효과는 대칭이 아니다(실측 확인):
+  #  - timeSlicing: MIG-capable 장치의 time-slicing 워크로드 승인을 실제로 연다.
+  #    비-MIG 장치(A2 등)는 TimeSlicing 축이 미기입이라 영향 없음.
+  #  - multiProcess: auto 후보로는 올라가지만 워크로드는 아직 거절된다 — MPS capability 가
+  #    maxReplicas 를 채우지 않아 "maxReplicas is unset" 게이트에 걸린다. 이것만 켜면 auto 가
+  #    MPS 를 고른 뒤 거절하므로, 켤 때는 timeSlicing 도 함께 켜는 편이 안전하다.
+  #
+  # ⚠ 이종 클러스터: 이 값은 클러스터 단위다. A30/A2 를 시험하고 켠 뒤 H100 노드를 추가하면
+  # 그 노드는 한 번도 측정되지 않은 채 공유 워크로드를 받는다.
+  measuredSharing:
+    # multiProcess: "verified"  # MPS 한 GPU 위 CUDA 프로세스 2개 동시 실행 확인 시
+    # timeSlicing: "verified"   # time-slicing 배수 광고·할당 확인 시
+    multiProcess: ""
+    timeSlicing: ""
 
 # fullnameOverride: operator Deployment/SA/RBAC 리소스명(파드 prefix). 릴리스명과 분리.
 #   #28(2026-07-20): npu-operator-controller-manager → kcloud-operator-controller (가시성).
@@ -43,7 +87,7 @@ clusterPolicy:
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   repository: "kcloud-node-manager"
-  tag: "0.6.1"
+  tag: "0.6.4"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +101,12 @@ nvidia:
   # 자립 셀렉터(node-manager 가 감지 시 부여). NFD/gpu-operator 라벨 비의존.
   nodeSelector:
     kcloud.ai/nvidia.present: "true"
+  # GPU 텔레메트리(온도/사용률/메모리/전력) exporter. NPU 4벤더는 node-manager 가
+  # hwmon 으로 수집하지만 NVIDIA 드라이버는 hwmon 을 등록하지 않아 NVML 경로가 필요하다.
+  # enabled=true 로 켜면 NVIDIA 노드에 upstream dcgm-exporter DS(:9400)가 뜬다.
+  dcgmExporter:
+    enabled: false
+    image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
 
 furiosa:
   enabled: true
@@ -143,12 +193,14 @@ webhook:
   injectLabel: "kcloud.ai/inject"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 관리 REST API (S5-3-②): kubeconfig 없는 외부 관리툴/대시보드용 HTTP API.
+# 관리 REST API (S5-3-②) + 웹 콘솔(track ③, /ui/): kubeconfig 없는 외부 관리툴/대시보드용 HTTP API.
 # operator pod 내 별도 HTTPS listener(:9444). 인증=TokenReview, 인가=SubjectAccessReview.
 # 기본 opt-in(enabled=false) — 라이브 검증 시에만 true 로 전환. cert 는 lookup 멱등(upgrade 재수행에도 불변).
 # Service kcloud-operator-controller-api(ClusterIP, 443→9444). control 은 전부 CR patch 로 귀결.
 # ─────────────────────────────────────────────────────────────────────────────
 api:
+  # 관리 REST API + 웹 콘솔(/ui/). 활성 시 cert Secret 과 ClusterIP Service 가 생기고
+  # operator 가 :9444 HTTPS listener 를 연다. 콘솔은 별도 값 없이 이 하나로 함께 켜진다.
   enabled: false
   # 서버 포트(operator 컨테이너 내부). metrics(:8443)·webhook(:9443)와 겹치지 않게 :9444.
   port: 9444

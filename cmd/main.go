@@ -274,6 +274,23 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DriverUpgrade")
 		os.Exit(1)
 	}
+	if err := (&controller.AcceleratorPartitionPolicyReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("acceleratorpartitionpolicy-controller"),
+		Verifier: controller.NewLiveVerifier(mgr.GetClient()),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorPartitionPolicy")
+		os.Exit(1)
+	}
+	if err := (&controller.AcceleratorWorkloadReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("acceleratorworkload-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorWorkload")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Admission webhooks(DIP/NCP validating + Pod mutating). WebhookConfiguration(helm,
@@ -295,7 +312,10 @@ func main() {
 			Addr:  apiBindAddress,
 			Authn: authnClient,
 			Ctl:   npuctl.NewFromClient(mgr.GetClient()),
-			Log:   ctrl.Log.WithName("apiserver"),
+			// 조회 엔드포인트는 매니저 캐시가 아니라 API 서버를 직접 읽는다(캐시에 Event 를
+			// 태우지 않기 위해서다 — apiserver.Server.Reader 주석 참고).
+			Reader: mgr.GetAPIReader(),
+			Log:    ctrl.Log.WithName("apiserver"),
 		}
 		if len(apiCertPath) > 0 {
 			apiSrv.CertFile = filepath.Join(apiCertPath, "tls.crt")

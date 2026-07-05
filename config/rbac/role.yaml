@@ -23,7 +23,10 @@ rules:
   - events
   verbs:
   - create
+  - get
+  - list
   - patch
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -43,12 +46,14 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - ""
   resources:
   - pods
   verbs:
+  - create
   - delete
   - get
   - list
@@ -80,6 +85,17 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - batch
   resources:
   - jobs
@@ -94,6 +110,7 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
+  - acceleratorclasses
   - driverinstallpolicies
   - nodedevicereports
   verbs:
@@ -103,6 +120,7 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
+  - acceleratorpartitionpolicies
   - driverupgradestates
   - npuclusterpolicies
   verbs:
@@ -116,6 +134,15 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
+  - acceleratorpartitionpolicies/finalizers
+  - npuclusterpolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - npu.ai
+  resources:
+  - acceleratorpartitionpolicies/status
+  - acceleratorworkloads/status
   - driverupgradestates/status
   - npuclusterpolicies/status
   verbs:
@@ -125,9 +152,13 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
-  - npuclusterpolicies/finalizers
+  - acceleratorworkloads
   verbs:
+  - get
+  - list
+  - patch
   - update
+  - watch
 - apiGroups:
   - policy
   resources:

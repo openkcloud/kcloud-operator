@@ -113,6 +113,14 @@ func RebootJobName(nodeName string) string {
 	return "kcloud-node-reboot-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// AcppRebootJobName 은 ACPP(MIG mode enable)가 요청하는 재부팅 Job 이름이다.
+// RebootJobName 과 반드시 달라야 한다 — 이름이 같으면 드라이버 업그레이드 경로와 서로의 Job 을
+// 자기 것으로 오인해(한쪽은 재부팅을 쏜 적 없이 대기 상태를 영속, 다른 쪽은 AlreadyExists 로
+// 재시도 소모) 두 상태기계가 동시에 망가진다.
+func AcppRebootJobName(nodeName string) string {
+	return RebootJobName(nodeName) + "-acpp"
+}
+
 // ToolkitDSName returns the container-toolkit DaemonSet name for a given vendor/model.
 // DriverDSName 과 동일한 규칙에 "-toolkit" 접미사만 다르게 하여, driver / toolkit DS 를
 // 노드에서 짝으로 식별할 수 있게 한다.

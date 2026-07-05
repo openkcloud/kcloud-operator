@@ -19,6 +19,18 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["npuclusterpolicies", "npuclusterpolicies/status", "npuclusterpolicies/finalizers"]
     verbs: ["get", "list", "watch", "update", "patch"]
+  # ACPP: 사용자 생성 CR — reconciler get/list/watch + status/finalizer update (owner-lock 는 DS annotation).
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorpartitionpolicies", "acceleratorpartitionpolicies/status", "acceleratorpartitionpolicies/finalizers"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # 추상 사용자 API: AcceleratorClass 는 read-only(사용자/관리자가 만든다), AcceleratorWorkload 는
+  # 컨트롤러가 status 를 쓴다. Deployment 는 워크로드 렌더용으로 아래 apps 규칙에서 create 를 받는다.
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorworkloads", "acceleratorworkloads/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   # P6 최소화: NDR 은 operator 가 read-only(작성은 node-manager-role). create/update/patch 제거.
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports", "nodedevicereports/status"]
@@ -38,9 +50,10 @@ rules:
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # A6.1: quiesce-on-driver-upgrade — Cordoning 진입 시 라벨 가진 Deployment 의 replicas 를 0 으로 patch, Idle/Failed 진입 시 복구
+  # create: AcceleratorWorkload 컨트롤러가 사용자 워크로드 Deployment 를 만든다(삭제는 ownerReference GC 몫이라 delete 불필요).
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -52,7 +65,7 @@ rules:
     verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # P1: PDB-aware drain via Eviction API (pods/eviction create + PDB read)
   - apiGroups: [""]
     resources: ["pods/eviction"]
@@ -60,9 +73,12 @@ rules:
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
+  # events: 컨트롤러가 발행(create/patch)하고, 관리 API 의 /api/v1/events 가 읽는다(get/list/watch).
+  # 읽기 권한이 없으면 UI 의 History 탭이 조용히 500 을 낸다 — 마커만 고치고 여기를 빠뜨리면
+  # 코드는 맞고 배포는 틀린 상태가 된다(이 저장소에서 이미 두 번 발생).
   - apiGroups: [""]
     resources: ["events"]
-    verbs: ["create", "patch"]
+    verbs: ["get", "list", "watch", "create", "patch"]
   # Rebellions ATOM+ 지원: rbln-system 네임스페이스 + SA + RBAC 생성에 필요
   - apiGroups: [""]
     resources: ["namespaces"]

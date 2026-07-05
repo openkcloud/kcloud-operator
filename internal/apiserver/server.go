@@ -23,12 +23,19 @@ import (
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"kcloud-operator/pkg/npuctl"
 )
 
 // apiGroup: SubjectAccessReview 인가에 사용하는 리소스 그룹(CRD group).
 const apiGroup = "npu.ai"
+
+// events 는 core 그룹이라 operator 의 기존 npu.ai/apps 권한으로는 읽을 수 없다 — handleEvents
+// (events.go) 가 실제로 list 하므로 여기서 읽기 권한을 선언한다. 이 마커만으로는 배포되지
+// 않는다 — config/rbac/role.yaml 재생성 + deploy/helm/templates/rbac.yaml 수기 반영까지
+// 3계층을 모두 맞춰야 한다.
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
 
 // knownVendors: control 요청에서 허용하는 vendor 집합(npuctl 상수와 1:1).
 var knownVendors = map[string]bool{
@@ -47,7 +54,12 @@ type Server struct {
 	KeyFile  string // TLS 키(파일).
 	Authn    kubernetes.Interface
 	Ctl      *npuctl.Client
-	Log      logr.Logger
+	// Reader 는 신규 조회 엔드포인트(accelerators/capabilities/classes/policies/workloads/events)가
+	// 쓰는 직접 읽기 경로다. 매니저 캐시가 아니라 API 서버를 직접 읽는다 — 사람이 5초 주기로
+	// 새로고침하는 관리 화면이라 캐시 이득이 없고, Event 를 캐시에 태우면 클러스터 전체 이벤트를
+	// watch 하게 되어 operator 메모리만 늘어난다.
+	Reader client.Reader
+	Log    logr.Logger
 }
 
 // NeedLeaderElection 은 false 를 반환하여 API 서버가 리더 여부와 무관하게 서빙되게 합니다
@@ -89,22 +101,127 @@ func (s *Server) Start(ctx context.Context) error {
 // Go 1.22+ 메서드/와일드카드 패턴 라우팅 사용.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// read: npu.ai 리소스 list 권한 요구.
-	mux.HandleFunc("GET /api/v1/status", s.authz("list", "driverinstallpolicies", s.handleStatus))
-	mux.HandleFunc("GET /api/v1/nodes/{node}", s.authz("list", "driverinstallpolicies", s.handleNode))
+	nodeGate := authzPair{Group: "", Verb: "list", Resource: "nodes"}
+	acppGate := npuPair("list", "acceleratorpartitionpolicies")
+	ndrGate := npuPair("list", "nodedevicereports")
+	classGate := npuPair("list", "acceleratorclasses")
+	invGates := []authzPair{nodeGate, acppGate, ndrGate}
+	// read: npu.ai 리소스 list 권한 + core 그룹 nodes 권한. CollectStatus 가 corev1.NodeList 를
+	// 읽어 node.status.allocatable 전량을 응답에 싣기 때문이다(pkg/npuctl/types.go 의 Allocatable
+	// 주석 — 벤더 리소스명이 설정마다 달라 의도적으로 필터하지 않는다). 필터링이 아니라 인가로
+	// 닫는다: CLI(kubectl-npu)는 kubeconfig RBAC 로 이미 인가받고, --json 출력의 byte-identical
+	// 성질을 깨지 않아야 한다.
+	mux.HandleFunc("GET /api/v1/status", s.authzAll([]authzPair{nodeGate, npuPair("list", "driverinstallpolicies")}, s.handleStatus))
+	mux.HandleFunc("GET /api/v1/nodes/{node}", s.authzAll([]authzPair{nodeGate, npuPair("list", "driverinstallpolicies")}, s.handleNode))
 	// control: upgrade/rollback 은 DIP patch, toggle 은 NCP patch 권한 요구.
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/upgrade", s.authz("patch", "driverinstallpolicies", s.handleUpgrade))
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/rollback", s.authz("patch", "driverinstallpolicies", s.handleUpgrade))
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/toggle", s.authz("patch", "npuclusterpolicies", s.handleToggle))
+	// track ③ 인벤토리 조회: 미관리 노드는 NodeDeviceReport 만으로 채워지므로(review I-1)
+	// acceleratorpartitionpolicies 인가만으론 부족하다 — nodedevicereports 인가도 함께 요구한다
+	// (기존 authz 를 중첩 호출해 둘 다 통과해야 next 가 실행되게 한다). 응답은 node 이름·cordon
+	// 상태·advertised 수량도 함께 낸다(loadInventory/handleNodeAccelerators 가 corev1.Node 를
+	// 직접 읽는다) — core 그룹 nodes list 인가도 함께 요구한다(리뷰 Important #4, 5라우트 전부).
+	mux.HandleFunc("GET /api/v1/accelerators", s.authzAll(invGates, s.handleAccelerators))
+	mux.HandleFunc("GET /api/v1/accelerators/{uid...}", s.authzAll(invGates, s.handleAcceleratorByUID))
+	mux.HandleFunc("GET /api/v1/nodes/{node}/accelerators", s.authzAll(invGates, s.handleNodeAccelerators))
+	// track ③ capability 조회: memoryMiB/sharingReplicas 는 NDR 로 되짚은 값이라(§ intent.applyObservedSharing)
+	// accelerators 와 같은 이유로 nodedevicereports 인가도, node 파생 필드(schedulable/advertised) 때문에
+	// nodes 인가도 함께 요구한다.
+	mux.HandleFunc("GET /api/v1/capabilities", s.authzAll(invGates, s.handleCapabilities))
+	// track ③ CR 투영: 각 라우트는 자기 응답이 실제로 읽는 CR 종류의 list 권한만 요구한다
+	// (조인이 없으므로 accelerators/capabilities 처럼 이중 게이트가 필요 없다).
+	mux.HandleFunc("GET /api/v1/classes", s.authz("list", "acceleratorclasses", s.handleClasses))
+	mux.HandleFunc("GET /api/v1/policies", s.authz("list", "acceleratorpartitionpolicies", s.handlePolicies))
+	mux.HandleFunc("GET /api/v1/workloads", s.authz("list", "acceleratorworkloads", s.handleWorkloads))
+	// core 그룹 리소스이므로 그룹을 명시한다 — npu.ai 로 물으면 SAR 이 항상 거부한다.
+	mux.HandleFunc("GET /api/v1/events", s.authzGroup("", "list", "events", s.handleEvents))
+	// preview 는 POST 지만 아무것도 쓰지 않는다 — 그래서 읽기 등급(list) 권한을 요구한다.
+	// intent.Load(ACPP+NDR+Node)와 클래스 조회를 그대로 수행하므로, 응답이 실제로 읽는 네 리소스
+	// 전부를 인가한다(Task 3/4 의 "읽는 리소스는 전부 인가한다" 규칙 — acceleratorworkloads
+	// 자체는 읽지 않으므로 요구하지 않는다. nodes 는 core 그룹이라 별도 게이트가 필요하다).
+	mux.HandleFunc("POST /api/v1/preview", s.authzAll([]authzPair{nodeGate, acppGate, ndrGate, classGate}, s.handlePreview))
+	// 정적 대시보드. "{$}" 는 정확히 그 경로만 매칭하므로 /api/* 를 가리지 않는다.
+	mux.HandleFunc("GET /ui/{$}", s.handleUI)
+	mux.HandleFunc("GET /{$}", s.handleUI)
 	return mux
 }
 
 // ctxUserKey: 인증된 주체(username)를 request context 로 전달하는 키.
 type ctxUserKey struct{}
 
-// authz 는 Bearer 토큰을 TokenReview 로 인증하고 SubjectAccessReview 로 인가한 뒤 next 를 호출합니다.
-// 무토큰 401 / 인증 실패 401 / 무권한 403 / 리뷰 API 오류 500.
+// authz 는 npu.ai 그룹 리소스에 대한 인가다(기존 계약 그대로).
 func (s *Server) authz(verb, resource string, next http.HandlerFunc) http.HandlerFunc {
+	return s.authzGroup(apiGroup, verb, resource, next)
+}
+
+// authzPair 는 한 요청이 통과해야 하는 인가 한 건이다.
+type authzPair struct {
+	Group    string // CRD 그룹(npu.ai) 또는 core 그룹("")
+	Verb     string
+	Resource string
+}
+
+// npuPair 는 npu.ai 그룹 인가 한 건을 만드는 축약이다. verb 는 오늘 모든 호출에서 "list" 다 —
+// 정본 helper 라 향후 patch 게이트를 authzAll 로 옮길 때(Task 6/7 대상 밖) 그대로 재사용하도록
+// verb 를 고정하지 않는다.
+//
+//nolint:unparam
+func npuPair(verb, resource string) authzPair {
+	return authzPair{Group: apiGroup, Verb: verb, Resource: resource}
+}
+
+// authzAll 은 TokenReview 를 한 번만 돌고 pairs 를 순서대로 SAR 한다. 중첩 authzGroup 과
+// 동작이 같지만(첫 실패가 403 을 결정) 토큰 검증 왕복이 게이트 수에 비례하지 않는다.
+// pairs 순서는 403 메시지에 이름이 나오는 리소스를 결정하므로 기존 중첩 순서를 유지한다.
+func (s *Server) authzAll(pairs []authzPair, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := bearerToken(r)
+		if token == "" {
+			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		tr, err := s.Authn.AuthenticationV1().TokenReviews().Create(r.Context(),
+			&authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}, metav1.CreateOptions{})
+		if err != nil {
+			s.Log.Error(err, "TokenReview 실패")
+			writeError(w, http.StatusInternalServerError, "token review failed")
+			return
+		}
+		if !tr.Status.Authenticated {
+			writeError(w, http.StatusUnauthorized, "token not authenticated")
+			return
+		}
+		user := tr.Status.User
+		for _, p := range pairs {
+			sar, err := s.Authn.AuthorizationV1().SubjectAccessReviews().Create(r.Context(),
+				&authzv1.SubjectAccessReview{Spec: authzv1.SubjectAccessReviewSpec{
+					User:   user.Username,
+					UID:    user.UID,
+					Groups: user.Groups,
+					ResourceAttributes: &authzv1.ResourceAttributes{
+						Group: p.Group, Resource: p.Resource, Verb: p.Verb,
+					},
+				}}, metav1.CreateOptions{})
+			if err != nil {
+				s.Log.Error(err, "SubjectAccessReview 실패")
+				writeError(w, http.StatusInternalServerError, "authorization review failed")
+				return
+			}
+			if !sar.Status.Allowed {
+				writeError(w, http.StatusForbidden,
+					fmt.Sprintf("user %q not allowed to %s %s", user.Username, p.Verb, qualifiedResource(p.Group, p.Resource)))
+				return
+			}
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxUserKey{}, user.Username)))
+	}
+}
+
+// authzGroup 은 Bearer 토큰을 TokenReview 로 인증하고 SubjectAccessReview 로 인가한 뒤 next 를
+// 호출합니다. group 은 CRD 그룹(npu.ai) 또는 core 그룹("") 입니다.
+// 무토큰 401 / 인증 실패 401 / 무권한 403 / 리뷰 API 오류 500.
+func (s *Server) authzGroup(group, verb, resource string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
 		if token == "" {
@@ -131,7 +248,7 @@ func (s *Server) authz(verb, resource string, next http.HandlerFunc) http.Handle
 				UID:    user.UID,
 				Groups: user.Groups,
 				ResourceAttributes: &authzv1.ResourceAttributes{
-					Group: apiGroup, Resource: resource, Verb: verb,
+					Group: group, Resource: resource, Verb: verb,
 				},
 			}}, metav1.CreateOptions{})
 		if err != nil {
@@ -141,7 +258,7 @@ func (s *Server) authz(verb, resource string, next http.HandlerFunc) http.Handle
 		}
 		if !sar.Status.Allowed {
 			writeError(w, http.StatusForbidden,
-				fmt.Sprintf("user %q not allowed to %s %s.%s", user.Username, verb, resource, apiGroup))
+				fmt.Sprintf("user %q not allowed to %s %s", user.Username, verb, qualifiedResource(group, resource)))
 			return
 		}
 

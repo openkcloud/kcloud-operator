@@ -1,7 +1,7 @@
 // ============================================================
 // webhook_test.go: admission webhook 핸들러 단위 테스트
 // 상세: DIP/NCP 거부·통과, Pod 주입/무개입 케이스
-// 생성일: 2026-07-20 | 수정일: 2026-07-20
+// 생성일: 2026-07-20 | 수정일: 2026-07-30
 // ============================================================
 
 package webhook
@@ -92,9 +92,20 @@ func TestValidateNCP(t *testing.T) {
 }
 
 func gpuPod(labels map[string]string, gpu bool, rc string) *corev1.Pod {
+	return resourcePod(labels, map[string]bool{"nvidia.com/gpu": gpu}, rc)
+}
+
+// resourcePod 는 요청 리소스명을 골라 쓸 수 있는 Pod 이다(true 인 이름만 limits 에 담는다).
+func resourcePod(labels map[string]string, want map[string]bool, rc string) *corev1.Pod {
 	c := corev1.Container{Name: "c"}
-	if gpu {
-		c.Resources.Limits = corev1.ResourceList{nvidiaGPUResource: resource.MustParse("1")}
+	for name, on := range want {
+		if !on {
+			continue
+		}
+		if c.Resources.Limits == nil {
+			c.Resources.Limits = corev1.ResourceList{}
+		}
+		c.Resources.Limits[corev1.ResourceName(name)] = resource.MustParse("1")
 	}
 	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -115,7 +126,7 @@ func TestPodMutator(t *testing.T) {
 	if err := m.Default(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != "nvidia" {
+	if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != nvidiaRuntimeClass {
 		t.Fatalf("expected nvidia runtimeClass injected, got %v", p.Spec.RuntimeClassName)
 	}
 
@@ -144,5 +155,40 @@ func TestPodMutator(t *testing.T) {
 	}
 	if *p.Spec.RuntimeClassName != "custom" {
 		t.Fatalf("existing runtimeClass must be preserved, got %v", *p.Spec.RuntimeClassName)
+	}
+}
+
+// mixed MIG 조각(nvidia.com/mig-*)도 GPU 요청이다. 리터럴 nvidia.com/gpu 만 보면 MIG Pod 이
+// runtimeClass 없이 떠서 /dev/nvidia* 를 못 받는데도 Ready 가 된다.
+func TestPodMutatorInjectsForMIGAndInitContainerResources(t *testing.T) {
+	m := &PodMutator{}
+	optIn := map[string]string{InjectLabel: "true"}
+
+	p := resourcePod(optIn, map[string]bool{"nvidia.com/mig-1g.6gb": true}, "")
+	if err := m.Default(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != nvidiaRuntimeClass {
+		t.Fatalf("MIG resource must inject nvidia runtimeClass, got %v", p.Spec.RuntimeClassName)
+	}
+
+	// requests 만, 그리고 initContainer 에만 있는 경우도 같은 경로다.
+	p = resourcePod(optIn, nil, "")
+	p.Spec.InitContainers = []corev1.Container{{Name: "init", Resources: corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/mig-2g.12gb"): resource.MustParse("1")}}}}
+	if err := m.Default(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != nvidiaRuntimeClass {
+		t.Fatalf("initContainer request must inject nvidia runtimeClass, got %v", p.Spec.RuntimeClassName)
+	}
+
+	// 다른 벤더는 여전히 무개입.
+	p = resourcePod(optIn, map[string]bool{"furiosa.ai/rngd": true}, "")
+	if err := m.Default(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Spec.RuntimeClassName != nil {
+		t.Fatalf("non-nvidia resource must not be mutated, got %v", *p.Spec.RuntimeClassName)
 	}
 }

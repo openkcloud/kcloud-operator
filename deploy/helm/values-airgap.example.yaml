@@ -18,6 +18,10 @@ global:
 # ─────────────────────────────────────────────────────────────────────────────
 nvidia:
   devicePluginImage: "<your-registry>/nvidia/k8s-device-plugin:v0.17.1"
+  # GPU 텔레메트리 exporter(선택). 켤 경우 이미지도 미러 경로로 지정한다.
+  dcgmExporter:
+    enabled: false
+    image: "<your-registry>/nvidia/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
 
 furiosa:
   devicePluginImage: "<your-registry>/furiosa-ai/k8s-device-plugin:0.10.1"

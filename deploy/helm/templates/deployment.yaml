@@ -60,6 +60,37 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        {{- if .Values.acpp.probeImage }}
+        # ACPP_PROBE_IMAGE: AcceleratorPartitionPolicy verify 단계가 띄우는 1-파티션 테스트 Pod 이미지.
+        # air-gap(Harbor mirror) 클러스터는 미러 도달 가능 이미지로 지정(미설정 시 코드 기본값 registry.k8s.io/pause:3.9).
+        - name: ACPP_PROBE_IMAGE
+          value: {{ .Values.acpp.probeImage | quote }}
+        {{- end }}
+        {{- if .Values.acpp.migJobImage }}
+        - name: ACPP_MIG_JOB_IMAGE
+          value: {{ .Values.acpp.migJobImage | quote }}
+        {{- end }}
+        {{- if .Values.acpp.mpsControlDaemon }}
+        {{- if .Values.acpp.mpsControlDaemon.image }}
+        # ACPP_MPS_CONTROL_IMAGE: MPS 공유 모드에서 뜨는 control daemon 이미지. air-gap(Harbor
+        # mirror) 클러스터는 미러 도달 가능 이미지로 지정(미설정 시 코드 기본값 사용).
+        - name: ACPP_MPS_CONTROL_IMAGE
+          value: {{ .Values.acpp.mpsControlDaemon.image | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with .Values.acpp.measuredSharing }}
+        {{- if .multiProcess }}
+        # KCLOUD_NVIDIA_MULTIPROCESS / KCLOUD_NVIDIA_TIMESLICING: 라이브 실측 결과를 주입해
+        # capability status 의 검증 축을 올린다("verified" 만 유효, 그 외/미설정은 required).
+        # 코드가 스스로 주장하지 않는 값이므로 이 클러스터에서 실제로 시험한 뒤에만 켠다.
+        - name: KCLOUD_NVIDIA_MULTIPROCESS
+          value: {{ .multiProcess | quote }}
+        {{- end }}
+        {{- if .timeSlicing }}
+        - name: KCLOUD_NVIDIA_TIMESLICING
+          value: {{ .timeSlicing | quote }}
+        {{- end }}
+        {{- end }}
         # P6(S4-5) Pod Security: pod-level runAsNonRoot+seccompRuntimeDefault 와 결합해 restricted 준수.
         # cert(webhook/api)는 read-only secret 마운트, manager 는 rootfs 에 쓰지 않으므로 RO rootfs 안전.
         securityContext:
