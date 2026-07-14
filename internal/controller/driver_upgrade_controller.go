@@ -29,6 +29,7 @@ import (
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/upgrade"
 )
 
@@ -113,6 +114,14 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if policy == nil {
 		logger.Info("매칭 DriverInstallPolicy 없음, 스킵", "vendor", state.Spec.Vendor)
 		return ctrl.Result{}, nil
+	}
+
+	// 3.5. 위임 모드 — 상태머신을 여기서 직접 돌리는 대신 트랜잭션을 만든다(분기가 아니라
+	// 호출자의 이동이므로 조정자와 이 컨트롤러가 동시에 상태머신을 돌릴 수 없다).
+	if delegateModeEnabled() {
+		if handled, res, derr := r.delegateDriverUpgrade(ctx, &state); handled {
+			return res, derr
+		}
 	}
 
 	// 4. 상태 머신 실행
@@ -605,4 +614,95 @@ func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *
 		}
 	}
 	return fallback
+}
+
+// TransactionIDForDriver 는 드라이버 작업의 요청 정체성이다.
+// 목표 버전이 바뀌면 다른 트랜잭션이다 — 같은 노드의 다음 업그레이드가 이전 작업을 재사용하면
+// 저널이 두 사이클을 섞어 담는다.
+func TransactionIDForDriver(state *v1alpha1.DriverUpgradeState) string {
+	return fmt.Sprintf("%s-%s-%s", state.UID, state.Status.DesiredVersion, state.Spec.NodeName)
+}
+
+// OperationNameForDriver 는 드라이버 작업 객체 이름이다. 결정론적이라 같은 의도는 같은 객체를
+// 재사용한다 — 시각이나 난수를 넣으면 reconcile 마다 작업이 쌓인다.
+func OperationNameForDriver(state *v1alpha1.DriverUpgradeState) string {
+	name := fmt.Sprintf("drv-%s-%s", state.Name, state.Status.DesiredVersion)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
+// delegateDriverUpgrade 는 위임 모드에서 드라이버 상태머신을 직접 돌리는 대신 작업을 만든다.
+//
+// handled=true 면 호출자는 이 pass 를 여기서 끝낸다 — 상태머신을 부르지 않는다. 그래야 조정자와
+// 컨트롤러가 같은 상태머신을 동시에 돌리지 않는다(분기가 아니라 호출자의 이동이다).
+//
+// 유휴 상태에서는 위임하지 않는다(handled=false). 그 시점에는 상태머신이 아직 아무것도 건드리지
+// 않았고 목표 버전조차 계산 전일 수 있다 — "업그레이드가 필요한가" 의 판정은 상태머신 몫이고
+// 여기서 다시 구현하지 않는다.
+func (r *DriverUpgradeReconciler) delegateDriverUpgrade(ctx context.Context, state *v1alpha1.DriverUpgradeState) (bool, ctrl.Result, error) {
+	if state.Status.State != v1alpha1.UpgradeStateRequired {
+		// 유휴·진행 중·터미널 — 진행 중이면 이미 만들어 둔 작업이 상태머신을 돌리고 있으므로
+		// 여기서는 아무것도 하지 않고 넘긴다.
+		if isDriverOperationInFlight(state.Status.State) {
+			return true, ctrl.Result{RequeueAfter: opRequeue}, nil
+		}
+		return false, ctrl.Result{}, nil
+	}
+
+	pcis, err := r.devicePCIsForNode(ctx, state.Spec.NodeName, state.Spec.Vendor)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
+	op := &v1alpha1.AcceleratorOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: OperationNameForDriver(state)},
+		Spec: v1alpha1.AcceleratorOperationSpec{
+			Type: string(operation.DriverUpgrade), NodeName: state.Spec.NodeName,
+			Vendor:        state.Spec.Vendor,
+			TransactionID: TransactionIDForDriver(state),
+			Owner: v1alpha1.OperationOwner{
+				Kind: "DriverUpgradeState", Name: state.Name,
+				UID: string(state.UID), Generation: state.Generation,
+			},
+			ResourceKeys: ResourceKeysForDriver(state.Spec.NodeName, pcis),
+		},
+	}
+	if err := r.Create(ctx, op); err != nil && !apierrors.IsAlreadyExists(err) {
+		return true, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{RequeueAfter: opRequeue}, nil
+}
+
+// isDriverOperationInFlight 는 이미 만들어진 작업이 상태머신을 돌리고 있는 상태인지다.
+func isDriverOperationInFlight(state string) bool {
+	switch state {
+	case v1alpha1.UpgradeStatePreFlight, v1alpha1.UpgradeStateCordoning,
+		v1alpha1.UpgradeStateDraining, v1alpha1.UpgradeStateUpgrading,
+		v1alpha1.UpgradeStateValidating, v1alpha1.UpgradeStateRebootRequired,
+		v1alpha1.UpgradeStateRebooting, v1alpha1.UpgradeStateUncordoning,
+		v1alpha1.UpgradeStateRollback:
+		return true
+	}
+	return false
+}
+
+// devicePCIsForNode 는 그 노드의 해당 벤더 장치 PCI 목록이다(자원 키 재료).
+// 조회 실패는 오류로 올린다 — 장치를 모르는 채 만든 작업은 장치 단위 충돌을 못 잡는다.
+func (r *DriverUpgradeReconciler) devicePCIsForNode(ctx context.Context, node, vendor string) ([]string, error) {
+	var ndr v1alpha1.NodeDeviceReport
+	if err := r.Get(ctx, types.NamespacedName{Name: node}, &ndr); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil // 보고가 없으면 노드 키만으로 간다(ResourceKeysForDriver 가 처리한다).
+		}
+		return nil, err
+	}
+	pcis := make([]string, 0, len(ndr.Status.Devices))
+	for _, d := range ndr.Status.Devices {
+		if !strings.EqualFold(d.Vendor, vendor) || d.PCIeAddress == "" {
+			continue
+		}
+		pcis = append(pcis, d.PCIeAddress)
+	}
+	return pcis, nil
 }

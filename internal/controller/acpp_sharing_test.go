@@ -742,7 +742,7 @@ func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 	}
 
 	ts, err := r.runSharingOnly(acpp, nvidia.New(c), tgt,
-		npuv1alpha1.TargetStatus{NodeName: "worker1", Phase: npuv1alpha1.ACPPPhaseReady})
+		npuv1alpha1.TargetStatus{NodeName: "worker1", Phase: npuv1alpha1.ACPPPhaseReady}, &evidenceCtx{})
 	if err != nil {
 		t.Fatal(err)
 	}

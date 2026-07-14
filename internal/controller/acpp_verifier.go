@@ -25,6 +25,7 @@ import (
 
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/partition"
+	"kcloud-operator/internal/verification"
 )
 
 // verifyPollInterval/verifyTimeout 은 테스트 Pod Running 대기 폴링 파라미터(MVP-1 고정값).
@@ -149,4 +150,28 @@ func (v *liveVerifier) VerifyAllocation(t partition.Target, resourceName string)
 		case <-time.After(verifyPollInterval):
 		}
 	}
+}
+
+// allocationProber 는 기존 partition.Verifier 의 테스트 Pod 프로브를 verification 계약으로
+// 올린다. 코드를 옮기지 않는 이유는 이 프로브가 이미 라이브에서 검증된 경로이기 때문이다 —
+// 계약만 바꾸고 구현은 그대로 둔다.
+type allocationProber struct{ v partition.Verifier }
+
+// NewAllocationProber 는 partition.Verifier 를 verification.AllocationProber 로 감싼다.
+func NewAllocationProber(v partition.Verifier) verification.AllocationProber {
+	return &allocationProber{v: v}
+}
+
+func (a *allocationProber) Probe(ctx context.Context, nodeName, resourceName string) (bool, string, error) {
+	if a.v == nil {
+		return false, "no verifier configured", nil
+	}
+	res, err := a.v.VerifyAllocation(partition.Target{Ctx: ctx, NodeName: nodeName}, resourceName)
+	if err != nil {
+		return false, "", err
+	}
+	if res == nil {
+		return false, "verifier returned no result", nil
+	}
+	return res.TestPodAllocated, "", nil
 }

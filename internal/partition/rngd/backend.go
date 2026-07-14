@@ -134,7 +134,10 @@ func (b *Backend) Discover(t partition.Target) (*partition.DiscoverResult, error
 	var ndr v1alpha1.NodeDeviceReport
 	if err := b.c.Get(t.Ctx, types.NamespacedName{Name: t.NodeName}, &ndr); err == nil {
 		for _, d := range ndr.Status.Devices {
-			if d.Vendor != "furiosa" || d.Model != "RNGD" {
+			// 모델 표기는 detector 판에 따라 대소문자가 갈린다(라이브 0.6.4 는 "rngd"). 정확
+			// 일치로 거르면 장치가 하나도 안 잡혀 status.devices 가 비고, 그 위에 얹힌 검증
+			// (장치 관측 근거)이 "관측 전무" 로 영구 실패한다 — 라이브 실측, 2026-08-04.
+			if !strings.EqualFold(d.Vendor, "furiosa") || !strings.EqualFold(d.Model, "rngd") {
 				continue
 			}
 			res.DriverVersion = d.DriverVersion

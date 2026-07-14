@@ -243,6 +243,65 @@ func smallestDeviceMemoryMiB(ndrs []v1alpha1.NodeDeviceReport, nodeName string) 
 // webhook 과 컨트롤러가 같은 입력으로 같은 판정을 하도록 조회 지점을 하나로 묶는다.
 // 파라미터는 client.Reader 다 — 이 함수는 List 만 하므로 캐시 없는 직접 reader(관리 API)도
 // 그대로 쓸 수 있어야 한다.
+// ApplyHealth 는 배치 후보에서 "지금 쓰면 안 되는" 노드를 뺀다(F-18).
+//
+// health 축은 ACPP 판정 **뒤**에 얹는다. ACPP 가 준 사유가 더 구체적이므로 먼저 쓰고, 그것이
+// 없을 때만 health 사유를 쓴다 — 순서를 뒤집으면 "왜 배치가 안 되는가" 의 답이 항상 뭉뚱그린
+// health 사유로 덮인다. 상태가 비어 있는(아직 판정 전) 노드는 건드리지 않는다: 감시가 아직
+// 안 돈 것을 "쓰면 안 되는 노드" 로 읽으면 기능 도입이 곧 전면 차단이 된다.
+func ApplyHealth(snap []NodeCapability, healths []v1alpha1.AcceleratorHealth) []NodeCapability {
+	if len(healths) == 0 {
+		return snap
+	}
+	blocked := make(map[string]v1alpha1.AcceleratorHealthStatus, len(healths))
+	for _, h := range healths {
+		if h.Status.State != "" && !h.Status.AllocationAllowed {
+			blocked[h.Name] = h.Status
+		}
+	}
+	for i := range snap {
+		h, ok := blocked[snap[i].NodeName]
+		if !ok {
+			continue
+		}
+		snap[i].Stale = true
+		if snap[i].StaleReason == "" {
+			snap[i].StaleReason = fmt.Sprintf("health %s: %s", h.State, h.Reason)
+		}
+	}
+	// 장치 단위: 고장이 확인된(Unhealthy) 장치만 후보에서 뺀다. 관측 못 한 장치(Unknown)는
+	// 빼지 않는다 — 관측이 잠깐 끊긴 순간마다 용량이 출렁이고, 그 구간은 위 노드 축이 이미 막는다.
+	// PCI 주소가 없는 장치는 여기서도 걸러낼 수 없다: deviceInputsFromNDR(acceleratorhealth_controller.go)가
+	// PCI 없는 장치를 판정 입력에서부터 제외하므로 그런 장치의 고장은 애초에 관측되지 않는다.
+	// 회귀는 아니다(기존 노드 단위 driver 신호도 OR 라 이미 이런 장치를 못 봤다) — 다만 이 필터가
+	// 메꾸지 못하는 구멍이니, 장치 단위 제외가 전체 커버리지라고 오해하면 안 된다.
+	unhealthy := make(map[string]map[string]bool, len(healths))
+	for _, h := range healths {
+		for _, d := range h.Status.Devices {
+			if d.State == "Unhealthy" && d.PCIAddress != "" {
+				if unhealthy[h.Name] == nil {
+					unhealthy[h.Name] = map[string]bool{}
+				}
+				unhealthy[h.Name][d.PCIAddress] = true
+			}
+		}
+	}
+	for i := range snap {
+		bad := unhealthy[snap[i].NodeName]
+		if len(bad) == 0 {
+			continue
+		}
+		kept := make([]v1alpha1.DeviceStatus, 0, len(snap[i].Devices))
+		for _, d := range snap[i].Devices {
+			if !bad[d.PCIAddress] {
+				kept = append(kept, d)
+			}
+		}
+		snap[i].Devices = kept
+	}
+	return snap
+}
+
 func Load(ctx context.Context, c client.Reader) ([]NodeCapability, error) {
 	var nodes corev1.NodeList
 	if err := c.List(ctx, &nodes); err != nil {
@@ -256,5 +315,11 @@ func Load(ctx context.Context, c client.Reader) ([]NodeCapability, error) {
 	if err := c.List(ctx, &ndrs); err != nil {
 		return nil, fmt.Errorf("list nodedevicereports: %w", err)
 	}
-	return BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items), nil
+	// health 는 없을 수도 있다(구버전 배포·CRD 미적용). 그 경우 조용히 건너뛴다 —
+	// 감시가 없다는 이유로 배치를 막으면 기능 도입이 곧 장애가 된다.
+	var healths v1alpha1.AcceleratorHealthList
+	if err := c.List(ctx, &healths); err != nil {
+		return BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items), nil
+	}
+	return ApplyHealth(BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items), healths.Items), nil
 }

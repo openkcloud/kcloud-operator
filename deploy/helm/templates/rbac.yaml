@@ -31,10 +31,40 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["acceleratorworkloads", "acceleratorworkloads/status"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # P6 최소화: NDR 은 operator 가 read-only(작성은 node-manager-role). create/update/patch 제거.
+  # 검증 근거: operator 가 생성·갱신하는 CR — evidence 는 컨트롤러만 쓴다(사용자는 읽기만).
   - apiGroups: ["npu.ai"]
-    resources: ["nodedevicereports", "nodedevicereports/status"]
+    resources: ["acceleratorevidences", "acceleratorevidences/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # 검증 정책: 사용자/관리자가 만드는 CR — 컨트롤러는 읽기만 한다.
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorverificationpolicies"]
     verbs: ["get", "list", "watch"]
+  # 트랜잭션: operator 가 만들고 진행시키는 CR. 사용자는 읽기만 하지만 컨트롤러는 정리를 위해
+  # delete 까지 필요하다(종점 operation 회수).
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratoroperations", "acceleratoroperations/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # health 상태: operator 가 생성·갱신하는 CR(노드당 하나). 사용자는 읽기만.
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorhealths", "acceleratorhealths/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # health 정책: 사용자/관리자가 만드는 CR — 컨트롤러는 읽기만 한다.
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorhealthpolicies"]
+    verbs: ["get", "list", "watch"]
+  # P6 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러(migobservation_controller.go)
+  # 가 특권 Job 의 관측 결과를 이 보고서에 직접 기록한다(detector 는 비특권이라 MIG 를 못 봐서
+  # 대신 쓴다) — status 에 update/patch 가 없으면 그 기록이 조용히 거절되고, 보고서가 영영
+  # 안 바뀌어 재관측이 필요하다고 계속 판단해 특권 Job 이 반복 생성된다(2026-08-04 라이브 핫루프,
+  # config/rbac/role.yaml 은 이미 이 verb 를 갖고 있었지만 실제 배포는 이 파일이라 반영이 안 됐다).
+  # status 서브리소스는 list/watch 를 안 받는다(생성본 config/rbac/role.yaml 과 동일 — 서브리소스는
+  # 컬렉션이 아니라 list/watch 가 의미가 없다).
+  - apiGroups: ["npu.ai"]
+    resources: ["nodedevicereports"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["npu.ai"]
+    resources: ["nodedevicereports/status"]
+    verbs: ["get", "update", "patch"]
   # P6 최소화: DIP 는 사용자 생성 CR — reconciler get/list/watch + 관리 API(pkg/npuctl)가 spec patch(upgrade/rollback/toggle). create/update 미사용 제거.
   - apiGroups: ["npu.ai"]
     resources: ["driverinstallpolicies"]
@@ -79,6 +109,14 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch", "create", "patch"]
+  # 노드 Lease: 같은 노드를 두 프로세스가 동시에 만지지 않게 하는 트랜잭션 잠금(internal/operation
+  # 의 LeaseManager). 이 SA 는 이미 leader-election Role 로 이 namespace 의 모든 Lease 에
+  # get/list/watch/create/update/patch/delete 권한이 있어(resourceNames 제한 없음) 이 규칙은
+  # 지금 당장은 중복이다 — 그래도 명시하는 이유는, 그 Role 은 controller-runtime 리더 선출용이고
+  # 나중에 resourceNames 로 좁혀지면(최소권한 정리) 노드 Lease 가 조용히 깨지기 때문이다.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   # Rebellions ATOM+ 지원: rbln-system 네임스페이스 + SA + RBAC 생성에 필요
   - apiGroups: [""]
     resources: ["namespaces"]

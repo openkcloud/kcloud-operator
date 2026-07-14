@@ -414,7 +414,7 @@ func (b *Backend) Diff(_ partition.Target, resolved []partition.ResolvedEntry) (
 		return partition.DiffResult{Changed: true}, nil
 	}
 	r := resolved[0]
-	want := targetGeometrySummary(r.Profile, r.ExpectedCountPerDevice)
+	want := GeometrySummary(r.Profile, r.ExpectedCountPerDevice)
 	for _, d := range b.targets {
 		if d.Geometry != want {
 			return partition.DiffResult{Changed: true, ToPolicy: want}, nil
@@ -520,8 +520,10 @@ func toProfileSupport(ps []MigProfile) []v1alpha1.ProfileSupport {
 	return out
 }
 
-// targetGeometrySummary 는 Diff 가 관측 Geometry 와 비교하는 목표 문자열이다(format: "<profile> x<count>").
-func targetGeometrySummary(profile string, count int32) string {
+// GeometrySummary 는 Diff·검증이 관측 Geometry 와 비교하는 목표 문자열이다(format: "<profile> x<count>").
+// 패키지 밖(검증 계층·테스트 fixture)에서도 같은 문자열을 만들어야 하므로 공개한다 — 기대값을
+// 손으로 적으면 형식이 바뀌는 날 조용히 어긋난다.
+func GeometrySummary(profile string, count int32) string {
 	return fmt.Sprintf("%s x%d", profile, count)
 }
 

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,13 @@ import (
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/partition"
 	"kcloud-operator/internal/partition/nvidia"
+)
+
+// MIG 모드 관측값 문자열. 판정이 여러 곳에서 같은 값을 비교하므로 상수로 둔다.
+const (
+	migModeEnabled  = "Enabled"
+	migModeDisabled = "Disabled"
+	migModeNA       = "NA"
 )
 
 // migModeEnableAction 은 mode enable Job 의 결정론적 이름에 들어가는 action 토큰이다(GI apply 와 구분).
@@ -223,6 +231,23 @@ func (r *AcceleratorPartitionPolicyReconciler) syncMigActiveLabel(ctx context.Co
 	if cur == active {
 		return nil
 	}
+	if !active && !r.migModeFullyRestored(ctx, node) {
+		// 조각을 지웠다고 라벨을 떼면 안 되는 경우가 있다: MIG 모드가 켜진 채 조각이 0개인 GPU 다.
+		// 그 GPU 는 `nvidia-smi -L` 에는 보이지만 **CUDA 가 장치로 세지 않는다**. 라벨을 떼면
+		// flat device-plugin(`--mig-strategy` 없음 = none)이 담당하게 되고, none 전략은 MIG 상태를
+		// 보지 않으므로 그 GPU 를 통짜로 광고한다 — 스케줄러가 배정한 파드는 CUDA 초기화에서
+		// 죽는다(D-11, 2026-07-31 라이브에서 유령 GPU 1개가 실제로 광고됐다).
+		//
+		// 모르면 떼지 않는다. 라벨이 남아 생기는 손해는 "이 노드에서 공유 모드를 잠시 못 쓴다"
+		// 이고, 떼서 생기는 손해는 "쓸 수 없는 GPU 를 광고해 파드가 죽는다" 다. 후자가 훨씬 나쁘다.
+		if r.Recorder != nil {
+			r.Recorder.Eventf(&n, corev1.EventTypeWarning, "MigModeStillEnabled",
+				"keeping %s on node %s: a GPU still has MIG mode enabled (advertising it as a whole GPU would fail CUDA init)",
+				nvidia.MigActiveNodeLabel, node)
+		}
+		logf.FromContext(ctx).Info("keeping the mig-active label; mig mode is not fully restored", "node", node)
+		return nil
+	}
 	base := n.DeepCopy()
 	if n.Labels == nil {
 		n.Labels = map[string]string{}
@@ -233,6 +258,43 @@ func (r *AcceleratorPartitionPolicyReconciler) syncMigActiveLabel(ctx context.Co
 		delete(n.Labels, nvidia.MigActiveNodeLabel)
 	}
 	return r.Patch(ctx, &n, client.MergeFrom(base))
+}
+
+// migModeFullyRestored 는 이 노드의 NVIDIA GPU 중 MIG 모드가 아직 켜져 있는 것이 없는지다.
+// 판정 본체는 migModeFullyRestoredFor 하나뿐이다 — MigObservationReconciler 도 같은 질문을
+// 묻는데, 각자 구현하면 두 갈래가 갈라지고 갈라진 순간 한쪽만 고치고 고쳤다고 믿게 된다.
+func (r *AcceleratorPartitionPolicyReconciler) migModeFullyRestored(ctx context.Context, node string) bool {
+	return migModeFullyRestoredFor(ctx, r.Client, node)
+}
+
+// migModeFullyRestoredFor 는 node 의 NVIDIA GPU 중 MIG 모드가 아직 켜져 있는 것이 없는지다.
+//
+// 보고서가 **있을 때만** 판정한다. 보고서가 없으면 참을 돌려준다 — 유령 GPU 가 있다는 증거도
+// 없는데 라벨을 붙들면, 우리가 아무것도 모르는 노드가 영영 mixed device-plugin 에 묶여 공유
+// 모드를 못 쓴다. 반대로 보고서가 있는데 "모른다"(Unknown·관측 실패)고 말하면 그것은 증거가
+// 없는 것이 아니라 **관측이 실패한 것**이므로 붙들어 둔다.
+func migModeFullyRestoredFor(ctx context.Context, c client.Client, node string) bool {
+	var ndr npuv1alpha1.NodeDeviceReport
+	if err := c.Get(ctx, types.NamespacedName{Name: node}, &ndr); err != nil {
+		return true // 보고서 자체가 없다 — 판정 근거가 없으므로 기존 동작을 막지 않는다
+	}
+	for i := range ndr.Status.Devices {
+		d := &ndr.Status.Devices[i]
+		if !strings.EqualFold(d.Vendor, "nvidia") {
+			continue
+		}
+		if d.MigObservationError != "" {
+			return false // 관측 실패 — 모르는 것을 꺼졌다고 하지 않는다
+		}
+		switch d.MigModeCurrent {
+		case "", migModeDisabled, migModeNA, "N/A":
+			// 빈 값은 MIG 필드를 아예 안 쓰는 보고서(구버전·비MIG 장치)다. 관측기는 "N/A" 를
+			// "NA" 로 정규화하지만, 정규화 이전 값을 담은 옛 보고서가 남아 있을 수 있어 둘 다 받는다.
+		default:
+			return false // Enabled 이거나 Unknown — 둘 다 라벨을 뗄 근거가 아니다
+		}
+	}
+	return true
 }
 
 // cordonNode 는 cordon 취득의 유일한 지점이다(apply·삭제 공통). 호출 전에 소유 저널

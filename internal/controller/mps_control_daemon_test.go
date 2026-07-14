@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -183,6 +184,45 @@ func TestMpsRootWiringIsSymmetricBetweenDaemonAndDevicePlugin(t *testing.T) {
 	}
 	if daemonCtr != nvidia.MPSContainerRoot {
 		t.Errorf("컨테이너 경로 = %q, want %q", daemonCtr, nvidia.MPSContainerRoot)
+	}
+}
+
+// upstream(daemonset-mps-control-daemon.yml)은 mps-control-daemon-ctr 앞에 mount-shm
+// init container 를 둔다 — /mps 에 sized tmpfs 를 미리 깔아 host 재부팅 후 남은 shm 이나 크기
+// 상한 없는 디렉터리를 그대로 쓰지 않게 한다. 이 구현은 그 단계를 포팅하지 않았었다(hostPath
+// 로 대체) — 이 테스트가 그 포팅을 고정한다.
+func TestMPSDaemonHasMountShmInitContainer(t *testing.T) {
+	ds := renderMpsControlDaemonDS()
+	if len(ds.Spec.Template.Spec.InitContainers) == 0 {
+		t.Fatalf("mount-shm init container 가 없다")
+	}
+	ic := ds.Spec.Template.Spec.InitContainers[0]
+	if ic.Name != "mps-control-daemon-mounts" {
+		t.Fatalf("init container 이름 = %q", ic.Name)
+	}
+	if got := strings.Join(ic.Command, " "); got != "mps-control-daemon mount-shm" {
+		t.Fatalf("command = %q", got)
+	}
+	if ic.SecurityContext == nil || ic.SecurityContext.Privileged == nil || !*ic.SecurityContext.Privileged {
+		t.Fatalf("mount-shm 은 privileged 여야 한다")
+	}
+	var bidi bool
+	for _, m := range ic.VolumeMounts {
+		if m.MountPropagation != nil && *m.MountPropagation == corev1.MountPropagationBidirectional {
+			bidi = true
+			// mount-shm 이 tmpfs 를 까는 자리가 daemon 컨테이너가 실제로 읽는 mps-root 와
+			// 어긋나면 daemon 은 아무도 안 보는 곳에 shm 을 깔게 된다 — 렌더 필드만 보는
+			// 이웃 테스트들은 이 어긋남을 잡지 못한다.
+			if m.MountPath != nvidia.MPSContainerRoot {
+				t.Fatalf("mount-shm 마운트 경로 = %q, want %q", m.MountPath, nvidia.MPSContainerRoot)
+			}
+		}
+	}
+	if !bidi {
+		t.Fatalf("mps-root 마운트는 Bidirectional 이어야 host 로 전파된다: %+v", ic.VolumeMounts)
+	}
+	if ic.Image != ds.Spec.Template.Spec.Containers[0].Image {
+		t.Fatalf("init container 이미지는 daemon 과 같아야 한다: %q vs %q", ic.Image, ds.Spec.Template.Spec.Containers[0].Image)
 	}
 }
 

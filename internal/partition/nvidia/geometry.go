@@ -51,14 +51,20 @@ func BuildApplySteps(specs []GeometrySpec) []CommandStep {
 }
 
 // BuildDisableSteps 는 모델 B rollback 시퀀스를 만든다(§17.1): mode 는 끄지 않고 GI/CI 만 제거한 뒤
-// current==Enabled(여전히 enabled) 를 확인한다.
+// mode 가 정상 판독되는지 확인한다.
+//
+// 사후 확인이 Enabled 만 받으면 안 된다. RestoreMode 삭제는 mode 를 먼저 끄고(재부팅) 나서 이
+// 되돌리기를 부르므로, 그 경로에서는 mode 가 Disabled 인 것이 정상이다 — Enabled 만 받으면
+// "이미 다 되돌아간" 노드에서 job 이 실패하고 finalizer 가 영원히 안 빠진다(라이브 실측
+// 2026-08-04: 정책이 7분 넘게 Terminating, 노드는 cordon 된 채 방치). 이 확인의 목적은 "조각이
+// 사라졌다" 이지 "mode 가 켜져 있다" 가 아니므로 두 값을 모두 받는다(판독 불가는 여전히 실패).
 func BuildDisableSteps(selectors []string) []CommandStep {
 	steps := make([]CommandStep, 0, len(selectors)*3) // selector 당 3 스텝
 	for _, sel := range selectors {
 		steps = append(steps,
 			CommandStep{Argv: []string{"nvidia-smi", "mig", "-i", sel, "-dci"}, Optional: true},
 			CommandStep{Argv: []string{"nvidia-smi", "mig", "-i", sel, "-dgi"}, Optional: true},
-			CommandStep{Argv: q(sel, "mig.mode.current"), ExpectOneOf: []string{"Enabled"}},
+			CommandStep{Argv: q(sel, "mig.mode.current"), ExpectOneOf: []string{"Enabled", "Disabled"}},
 		)
 	}
 	return steps

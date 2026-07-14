@@ -212,6 +212,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharingOnly(
 	backend partition.Backend,
 	t partition.Target,
 	ts npuv1alpha1.TargetStatus,
+	ec *evidenceCtx,
 ) (npuv1alpha1.TargetStatus, error) {
 	if acpp.Spec.EffectiveSharingMode() == npuv1alpha1.SharingModeExclusive {
 		// 남은 공유가 있으면 먼저 내린다 — sharing-only 정책을 exclusive 로 patch 한 해제 경로.
@@ -230,15 +231,23 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharingOnly(
 	// 공유 요청 자체의 결함(미지원 backend / 형식 위반)은 어떤 mutation 보다 먼저 거른다.
 	// 여기를 통과한 backend 는 SharingBackend 구현체다(현재 nvidia 뿐 — runSharing 의 DP 재시작도
 	// nvidia 전용이라 대칭이 맞는다).
-	if _, rejected, ok, perr := r.precheckSharing(t.Ctx, acpp, backend, ts); perr != nil {
+	sb, rejected, ok, perr := r.precheckSharing(t.Ctx, acpp, backend, ts)
+	if perr != nil {
 		return ts, perr
-	} else if !ok {
+	}
+	if !ok {
 		return r.rejectSharing(acpp, backend, t, rejected)
 	}
 	base, err := r.sharingOnlyBase(t.Ctx, acpp, t.NodeName)
 	if err != nil {
 		return ts, err // transient(DP 기동 전 광고 0 등) — requeue 로 자가치유.
 	}
+	// 이 경로는 파티션 레이아웃이 없어 runTarget 의 partition-Ready 지점(근거 게이트가 Verified/
+	// Expectation 을 채우는 곳)을 거치지 않는다 — 채우지 않으면 근거 게이트가 이 pass 를 완전히
+	// 건너뛰어, 공유만 요청한 정책이 광고를 한 번도 비교하지 않고 Ready 로 올라간다. 여기서 쓰는
+	// 기대 광고량은 runSharing 이 실제로 sharingReady 에 찍는 값과 같은 계산이다.
+	ec.Expectation.Allocatable = sb.ExpectedSharedAllocatable(base, partition.SharingLayoutFrom(acpp.Spec))
+	ec.Verified = true
 	return r.runSharing(acpp, backend, t, ts, base)
 }
 

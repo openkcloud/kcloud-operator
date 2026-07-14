@@ -6,7 +6,9 @@
 package nvidia
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,9 +31,9 @@ const priorConfig = "version: v1\n"
 // dpDaemonSet 은 sharing 배선 대상 device-plugin DS 를 흉내낸다(테스트 픽스처).
 func dpDaemonSet() *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: dpName, Namespace: dpNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: DevicePluginNameMixed, Namespace: dpNamespace},
 		Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: dpName, Args: []string{"--mig-strategy=mixed"}}},
+			Containers: []corev1.Container{{Name: DevicePluginNameMixed, Args: []string{"--mig-strategy=mixed"}}},
 		}}},
 	}
 }
@@ -278,7 +280,7 @@ func TestApplySharingCreatesConfigMapAndPatchesDS(t *testing.T) {
 	}
 
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatalf("configmap not created: %v", err)
 	}
 	if !strings.Contains(cm.Data[SharingConfigKey], "replicas: 4") {
@@ -286,7 +288,7 @@ func TestApplySharingCreatesConfigMapAndPatchesDS(t *testing.T) {
 	}
 
 	var got appsv1.DaemonSet
-	if err := c.Get(ctx, types.NamespacedName{Name: dpName, Namespace: dpNamespace}, &got); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: DevicePluginNameMixed, Namespace: dpNamespace}, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Annotations[SharingOwnerAnnotation] != "acpp-1" {
@@ -311,7 +313,7 @@ func TestApplySharingRejectsInvalidLayout(t *testing.T) {
 		t.Fatal("replicas=1 must be rejected before any mutation")
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); !apierrors.IsNotFound(err) {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); !apierrors.IsNotFound(err) {
 		t.Fatalf("invalid layout must not create a configmap, err=%v", err)
 	}
 }
@@ -346,12 +348,12 @@ func TestRollbackSharingRemovesWiringWhenNoPriorConfig(t *testing.T) {
 	}
 
 	var cm corev1.ConfigMap
-	err = c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm)
+	err = c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("configmap must be deleted on rollback, err=%v", err)
 	}
 	var got appsv1.DaemonSet
-	if err := c.Get(ctx, types.NamespacedName{Name: dpName, Namespace: dpNamespace}, &got); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: DevicePluginNameMixed, Namespace: dpNamespace}, &got); err != nil {
 		t.Fatal(err)
 	}
 	if _, owned := got.Annotations[SharingOwnerAnnotation]; owned {
@@ -372,7 +374,7 @@ func TestRollbackSharingRemovesWiringWhenNoPriorConfig(t *testing.T) {
 func TestRollbackSharingRestoresPriorConfig(t *testing.T) {
 	ctx := context.Background()
 	prev := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: SharingConfigMapName, Namespace: dpNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: SharingConfigMapNameMixed, Namespace: dpNamespace},
 		Data:       map[string]string{SharingConfigKey: priorConfig},
 	}
 	ds := dpDaemonSet()
@@ -392,7 +394,7 @@ func TestRollbackSharingRestoresPriorConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatal(err)
 	}
 	if cm.Data[SharingConfigKey] != priorConfig {
@@ -406,7 +408,7 @@ func TestApplySharingRefusesForeignConfigMap(t *testing.T) {
 	ctx := context.Background()
 	foreign := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: SharingConfigMapName, Namespace: dpNamespace,
+			Name: SharingConfigMapNameMixed, Namespace: dpNamespace,
 			Annotations: map[string]string{SharingOwnerAnnotation: "acpp-other"},
 		},
 		Data: map[string]string{SharingConfigKey: priorConfig},
@@ -420,7 +422,7 @@ func TestApplySharingRefusesForeignConfigMap(t *testing.T) {
 		t.Fatal("apply must refuse a pre-existing sharing configmap it does not own")
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatal(err)
 	}
 	if cm.Data[SharingConfigKey] != priorConfig {
@@ -436,7 +438,7 @@ func TestRollbackSharingLeavesForeignConfigMapIntact(t *testing.T) {
 	ds.Annotations = map[string]string{SharingOwnerAnnotation: "acpp-other"}
 	WireSharing(ds, v1alpha1.SharingModeTimeSliced, SharingConfigMapNameMixed)
 	foreign := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: SharingConfigMapName, Namespace: dpNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: SharingConfigMapNameMixed, Namespace: dpNamespace},
 		Data:       map[string]string{SharingConfigKey: priorConfig},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme()).WithObjects(ds, foreign, worker1Node()).Build()
@@ -446,11 +448,11 @@ func TestRollbackSharingLeavesForeignConfigMapIntact(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatalf("foreign configmap must survive: %v", err)
 	}
 	var got appsv1.DaemonSet
-	if err := c.Get(ctx, types.NamespacedName{Name: dpName, Namespace: dpNamespace}, &got); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: DevicePluginNameMixed, Namespace: dpNamespace}, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Annotations[SharingOwnerAnnotation] != "acpp-other" || len(got.Spec.Template.Spec.Volumes) != 1 {
@@ -465,7 +467,7 @@ func TestApplySharingAdoptsOwnConfigMapAfterDaemonSetRecreation(t *testing.T) {
 	ctx := context.Background()
 	ours := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: SharingConfigMapName, Namespace: dpNamespace,
+			Name: SharingConfigMapNameMixed, Namespace: dpNamespace,
 			Annotations: map[string]string{SharingOwnerAnnotation: "acpp-1"},
 		},
 		Data: map[string]string{SharingConfigKey: priorConfig},
@@ -478,7 +480,7 @@ func TestApplySharingAdoptsOwnConfigMapAfterDaemonSetRecreation(t *testing.T) {
 		t.Fatalf("re-apply must survive a device-plugin DaemonSet recreation: %v", err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(cm.Data[SharingConfigKey], "replicas: 4") {
@@ -498,7 +500,7 @@ func TestApplySharingStampsOwnerOnConfigMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatal(err)
 	}
 	if cm.Annotations[SharingOwnerAnnotation] != "acpp-1" {
@@ -546,7 +548,7 @@ func TestRollbackSharingLeavesForeignMarkedConfigMap(t *testing.T) {
 	ctx := context.Background()
 	foreign := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: SharingConfigMapName, Namespace: dpNamespace,
+			Name: SharingConfigMapNameMixed, Namespace: dpNamespace,
 			Annotations: map[string]string{SharingOwnerAnnotation: "acpp-other"},
 		},
 		Data: map[string]string{SharingConfigKey: priorConfig},
@@ -558,7 +560,7 @@ func TestRollbackSharingLeavesForeignMarkedConfigMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapName, Namespace: dpNamespace}, &cm); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: SharingConfigMapNameMixed, Namespace: dpNamespace}, &cm); err != nil {
 		t.Fatalf("foreign-marked configmap must survive: %v", err)
 	}
 }
@@ -796,5 +798,19 @@ func TestRollbackSharingSkipsForeignOwnedDaemonSetInScanOrder(t *testing.T) {
 	}
 	if gotMixed.Annotations[SharingOwnerAnnotation] != "acpp-2" {
 		t.Fatalf("acpp-2's mixed ownership must be untouched: %v", gotMixed.Annotations)
+	}
+}
+
+func TestNoBackCompatAliasesRemain(t *testing.T) {
+	// 별칭이 남아 있으면 flat 노드에서 mixed 리소스를 가리키는 사고 경로가 살아 있다는 뜻이다.
+	// 컴파일 타임에 막을 방법이 없으므로 소스 스캔으로 회귀를 잠근다.
+	src, err := os.ReadFile("timeslicing.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"\n\tdpName ", "\n\tSharingConfigMapName "} {
+		if bytes.Contains(src, []byte(alias)) {
+			t.Fatalf("하위호환 별칭이 남아 있다: %q", alias)
+		}
 	}
 }

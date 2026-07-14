@@ -201,10 +201,10 @@ func (r *AcceleratorPartitionPolicyReconciler) anyPolicyStillUsesMPS(ctx context
 // 같은 이유로 노드 타깃도 flat device-plugin 과 같은 규칙(mig-active 부재)으로 좁힌다.
 //
 // upstream 은 이 마운트 전에 별도 init container(mps-control-daemon-mounts, command
-// mount-shm)로 /mps 에 sized tmpfs(/mps/shm)를 미리 깔아 둔다(mountPropagation: Bidirectional).
-// 이 구현은 그 init container 를 포팅하지 않았다 — hostPath 볼륨 자체는 뜨지만, tmpfs 준비 단계
-// 없이 데몬이 기동 시 필요한 디렉터리를 스스로 만드는지는 실기기 검증 전까지 미확인 리스크로
-// 남겨 둔다(review 재검토 요청사항, 추측으로 포팅하지 않음).
+// mount-shm)로 /mps 에 sized tmpfs(/mps/shm)를 미리 깔아 둔다(mountPropagation: Bidirectional) —
+// host 재부팅 후 남은 shm 이나 크기 상한 없는 디렉터리를 그대로 쓰지 않기 위해서다. 이 구현도
+// 그 init container 를 포팅한다(대칭). 볼륨 이름은 daemon 컨테이너와 같은 mps-pipe 를 그대로
+// 쓴다 — 이름을 바꾸면 라이브 롤링에서 마운트가 어긋난다(de22578 이 고친 그 결함).
 func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 	image := os.Getenv("ACPP_MPS_CONTROL_IMAGE")
 	if image == "" {
@@ -217,6 +217,7 @@ func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 	}
 	nvidiaRuntime := vendorNvidia
 	hostPathDir := corev1.HostPathDirectoryOrCreate
+	bidirectional := corev1.MountPropagationBidirectional
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -247,6 +248,21 @@ func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 					// upstream 기본값(enableHostPID=false 시 shareProcessNamespace: true) — daemon 이
 					// client 프로세스를 봐야 하는 것은 PID 네임스페이스지 IPC 네임스페이스가 아니다.
 					ShareProcessNamespace: boolPtr(true),
+					InitContainers: []corev1.Container{{
+						Name:            "mps-control-daemon-mounts",
+						Image:           image,
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						// upstream 과 동일: shm 을 준비하고 Bidirectional 전파로 host 에 올린다.
+						// 이 단계가 없으면 host 재부팅 후 남은 shm 이나 크기 상한 없는 디렉터리를
+						// 그대로 쓰게 된다.
+						Command:         []string{"mps-control-daemon", "mount-shm"},
+						SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:             "mps-pipe",
+							MountPath:        mpsContainerRoot,
+							MountPropagation: &bidirectional,
+						}},
+					}},
 					Containers: []corev1.Container{{
 						Name:            "mps-control-daemon",
 						Image:           image,

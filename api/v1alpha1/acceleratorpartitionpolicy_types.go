@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_types.go: AcceleratorPartitionPolicy CRD 타입
 // 상세: 이기종 가속기(RNGD/NVIDIA) 파티션 통합 인터페이스. spec + status 4축.
-// 생성일: 2026-07-23 | 수정일: 2026-07-30
+// 생성일: 2026-07-23 | 수정일: 2026-07-31
 // ============================================================
 package v1alpha1
 
@@ -36,13 +36,23 @@ type AcceleratorPartitionPolicySpec struct {
 	// +optional
 	Layout        []PartitionLayout `json:"layout,omitempty"`
 	QuiescePolicy QuiescePolicy     `json:"quiescePolicy,omitempty"`
-	// +kubebuilder:validation:Enum=Retain
+	// +kubebuilder:validation:Enum=Retain;RestoreMode
 	// +kubebuilder:default=Retain
 	DeletionPolicy string `json:"deletionPolicy,omitempty"`
 	// Sharing 은 공유 요청이다(nil = exclusive). layout 과 조합하면 partitioned-shared 가 된다.
 	// +optional
 	Sharing *SharingSpec `json:"sharing,omitempty"`
 }
+
+// deletionPolicy 값.
+const (
+	// DeletionPolicyRetain 은 파티션만 회수하고 MIG mode 는 그대로 둔다(기본값, 기존 동작).
+	DeletionPolicyRetain = "Retain"
+	// DeletionPolicyRestoreMode 는 파티션 회수에 더해 MIG mode 를 Disabled 로 되돌린다.
+	// 그 노드를 다시 공유 전용으로 쓰려면 필요하며, NVIDIA 드라이버가 mode 전환에 재부팅을
+	// 요구하므로 이 값을 쓰면 삭제 과정에 노드 재부팅이 포함된다.
+	DeletionPolicyRestoreMode = "RestoreMode"
+)
 
 // 공유 모드(R&D v1.0 §11 사용자 추상 모드 중 MVP 2종. partitioned/partitioned-shared 는
 // layout + sharing 조합으로 표현되므로 별도 값이 아니다).
@@ -147,6 +157,12 @@ type ApplyRecord struct {
 	// RebootAttempts 는 MIG mode 확정을 위해 이 정책이 요청한 재부팅 횟수다(Task 6). Job 생성
 	// 직전에 증가·영속하며, 상한을 넘으면 재부팅 대신 Failed 로 끝낸다(무한 재부팅 방지).
 	RebootAttempts int32 `json:"rebootAttempts,omitempty"`
+	// DisableRebootAttempts 는 deletionPolicy=RestoreMode 삭제 경로가 MIG mode 를 되돌리기 위해
+	// 요청한 재부팅 횟수다. RebootAttempts(mode enable)와 별도 예산이다 — enable 이 상한을
+	// 소진하고 Failed 로 끝난 뒤 그 정책을 RestoreMode 로 지우면, 공유 카운터로는 disable 이
+	// 재부팅을 한 번도 시도하지 못한 채 상한에 걸려 finalizer 가 영구 유지된다(두 작업은 방향이
+	// 반대인 별개 작업이다).
+	DisableRebootAttempts int32 `json:"disableRebootAttempts,omitempty"`
 	// SharingMode/SharingReplicas 는 공유 적용 저널이다 — mutation 이전에 영속하고, 삭제 시
 	// 이 값으로 device-plugin 설정 원복 대상을 판단한다(파티션 저널과 같은 규율).
 	SharingMode     string `json:"sharingMode,omitempty"`
@@ -272,6 +288,9 @@ const (
 	ACPPPhaseRollbackFailed          = "RollbackFailed"
 	ACPPPhaseFailed                  = "Failed"
 	ACPPPhaseUnsupported             = "Unsupported" // NVIDIA MVP apply 미지원
+	// ACPPPhaseDegraded 는 검증까지 통과했으나 그 뒤 광고가 무너진 상태다. 하드웨어는 그대로일
+	// 수 있으므로 실패가 아니고, 그렇다고 Ready 도 아니다 — 재적용은 하지 않는다(감지 전용).
+	ACPPPhaseDegraded = "Degraded"
 )
 
 // condition type
@@ -281,6 +300,7 @@ const (
 	ACPPCondApplied                = "Applied"
 	ACPPCondVerified               = "Verified"
 	ACPPCondRolledBack             = "RollbackSucceeded"
+	ACPPCondDegraded               = "Degraded"
 )
 
 // reason
@@ -308,6 +328,14 @@ const (
 	// ReasonSharingDaemonNotReady 는 mps control daemon 이 아직 안 뜬 상태다(transient — 이미지
 	// pull/스케줄링 대기). ApplyFailed 와 구분한다: 실패가 아니라 대기이고, 재시도로 풀린다.
 	ReasonSharingDaemonNotReady = "SharingDaemonNotReady"
+	// ReasonEvidenceDisagreement 는 spec·장치·노드 보고·광고가 서로 다른 말을 해 commit 을
+	// 거부했다는 뜻이다. 재시도로 풀릴 수 있으므로 terminal 이 아니다.
+	ReasonEvidenceDisagreement = "EvidenceDisagreement"
+	// 광고 붕괴 감시(monitorDrift) 사유 4종.
+	ReasonAdvertisementDrift           = "AdvertisementDrift"
+	ReasonAdvertisementDriftSuspected  = "AdvertisementDriftSuspected"
+	ReasonAdvertisementConsistent      = "AdvertisementConsistent"
+	ReasonAdvertisementCheckSuppressed = "AdvertisementCheckSuppressed"
 )
 
 // supportLevel (spec §4.3)

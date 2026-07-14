@@ -1277,7 +1277,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(got.Status.ApplyRecords[0].MigPhase).To(Equal(npuv1alpha1.MigPhaseRebootWaiting))
 	})
 
-	It("reaches Ready on a fresh cordoned apply (MIG pre-enabled) and persists ApplyRecord with ExpectedFullGPUCount = baseline", func() {
+	It("reaches Ready on a fresh cordoned apply (MIG pre-enabled) and excludes the partitioned GPU from ExpectedFullGPUCount", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-happy": "true"}
@@ -1301,7 +1301,10 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(rec.MigPhase).To(Equal(npuv1alpha1.MigPhaseReady))
 		Expect(rec.BaselineGPUCount).To(Equal(int32(1)))
 		Expect(rec.ExpectedMigCount).To(Equal(int32(4)))
-		Expect(rec.ExpectedFullGPUCount).To(Equal(rec.BaselineGPUCount), "model B: MIG GPU already excluded from nvidia.com/gpu → ExpectedFullGPUCount = baseline")
+		// 이 노드의 유일한 GPU 가 조각 대상이므로 apply 후 온전한 GPU 광고는 0 이다. baseline(=1)을
+		// 그대로 기대값으로 쓰면 mixed device-plugin 이 절대 낼 수 없는 수를 기다리게 된다 —
+		// 2026-08-04 라이브에서 그 전제 때문에 A30 파티션이 매번 rollback 됐다.
+		Expect(rec.ExpectedFullGPUCount).To(Equal(int32(0)), "조각낸 GPU 는 온전한 GPU 로 광고되지 않는다")
 		Expect(rec.OwnerUID).To(Equal(string(got.UID)))
 	})
 
@@ -1847,7 +1850,68 @@ var _ = Describe("review-d10 M-1: deletion rollback failure emits a Warning even
 		Expect(got.Status.ApplyRecords[0].MigPhase).To(Equal(npuv1alpha1.MigPhaseReady),
 			"이벤트만 남기고 삭제 저널(snapshot phase) 은 건드리지 않아야 한다")
 	})
+
+	// cordonForRollback 자체가 실패하면(예: nodeOwnerUID 조회와 cordon 조회 사이에 노드가 삭제되는
+	// 레이스) 다른 실패 경로와 달리 이벤트 없이 그냥 return err 했다 — 운영자에게는 이유 없는
+	// Terminating 만 보였다.
+	It("emits DeletionRollbackBlocked when cordonForRollback itself fails", func() {
+		wipeACPPs()
+		DeferCleanup(wipeACPPs)
+		sel := map[string]string{"kcloud.ai/m2-test": "true"}
+		seedNvidiaNode("m2-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
+		DeferCleanup(func() { cleanupNvidia("m2-node") })
+
+		Expect(k8sClient.Create(ctx, mkNvidiaACPP("m2-acpp", sel))).To(Succeed())
+		r := nvidiaReconciler()
+		Eventually(func() string {
+			_, _ = r.Reconcile(ctx, reconcileReq("m2-acpp"))
+			var g npuv1alpha1.AcceleratorPartitionPolicy
+			_ = k8sClient.Get(ctx, types.NamespacedName{Name: "m2-acpp"}, &g)
+			return g.Status.Phase
+		}, "10s", "200ms").Should(Equal(npuv1alpha1.ACPPPhaseReady))
+
+		var applied npuv1alpha1.AcceleratorPartitionPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "m2-acpp"}, &applied)).To(Succeed())
+
+		events := record.NewFakeRecorder(10)
+		r.Recorder = events
+		// nodeOwnerUID(소유권 확인)의 첫 조회는 통과시키고, cordonForRollback 의 두 번째 조회부터
+		// NotFound 를 주입한다 — 같은 노드를 순서대로 두 번 조회하는 실제 경로에서 cordon 실패만
+		// 격리해 재현한다.
+		r.Client = &cordonFailClient{Client: r.Client, node: "m2-node"}
+
+		Expect(k8sClient.Delete(ctx, &applied)).To(Succeed())
+		_, err := r.Reconcile(ctx, reconcileReq("m2-acpp"))
+		Expect(err).To(HaveOccurred(), "cordon 실패 시 삭제는 finalizer 를 유지해야 한다")
+
+		Eventually(events.Events).Should(Receive(ContainSubstring("DeletionRollbackBlocked")),
+			"cordon 실패 시 Warning 이벤트가 없다")
+
+		var got npuv1alpha1.AcceleratorPartitionPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "m2-acpp"}, &got)).To(Succeed())
+		Expect(got.Status.ApplyRecords[0].MigPhase).To(Equal(npuv1alpha1.MigPhaseReady),
+			"이벤트만 남기고 삭제 저널(snapshot phase) 은 건드리지 않아야 한다")
+	})
 })
+
+// cordonFailClient 는 지정된 노드에 대한 두 번째 이후 Get 호출부터 NotFound 를 주입한다 —
+// nodeOwnerUID(첫 Get)는 통과시키고 cordonForRollback(두 번째 Get)만 실패시켜, 두 함수가
+// 같은 노드를 순서대로 조회하는 실제 경로에서 cordon 실패만 재현한다(두 조회 사이 노드 삭제 레이스).
+type cordonFailClient struct {
+	client.Client
+	node  string
+	calls int
+}
+
+func (c *cordonFailClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Node); ok && key.Name == c.node {
+		c.calls++
+		if c.calls > 1 {
+			return apierrors.NewNotFound(corev1.Resource("nodes"), key.Name)
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
 
 // D-3(라이브 Task 5 §5.1): layout 없는 순수 시분할(sharing-only) 정책이 NVIDIA 에서 구조적으로
 // 불가능했다 — CRD 가 spec.layout 을 Required 로 강제했고, layout: [] 우회도 backend Validate() 가
@@ -1862,7 +1926,8 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 		seedNvidiaNode("nv-sharing-only-node", sel, false, npuv1alpha1.DeviceEntry{
 			Vendor: "nvidia", Model: "NVIDIA A2", Count: 1,
 			DriverLoaded: true, DriverVersion: "535.104.05", PCIeAddress: "0000:86:00.0",
-			MigModeCurrent: "N/A", MigModePending: "N/A",
+			// 관측기가 정규화한 뒤의 값이다("N/A" 원문이 아니라 "NA") — 프로덕션이 만들 수 있는 값으로 둔다.
+			MigModeCurrent: migModeNA, MigModePending: migModeNA,
 		})
 		DeferCleanup(func() { cleanupNvidia("nv-sharing-only-node") })
 		// sharing 배선 대상 device-plugin DS. 이 노드는 mig-active 라벨이 없다(MIG 없는 A2) —
@@ -1939,7 +2004,8 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 		seedNvidiaNode("nv-sharing-edit-node", sel, false, npuv1alpha1.DeviceEntry{
 			Vendor: "nvidia", Model: "NVIDIA A2", Count: 1,
 			DriverLoaded: true, DriverVersion: "535.104.05", PCIeAddress: "0000:86:00.0",
-			MigModeCurrent: "N/A", MigModePending: "N/A",
+			// 관측기가 정규화한 뒤의 값이다("N/A" 원문이 아니라 "NA") — 프로덕션이 만들 수 있는 값으로 둔다.
+			MigModeCurrent: migModeNA, MigModePending: migModeNA,
 		})
 		DeferCleanup(func() { cleanupNvidia("nv-sharing-edit-node") })
 		// 이 노드는 mig-active 라벨이 없다(MIG 없는 A2) — flat DS 를 대상화한다(Task 3).
@@ -2043,7 +2109,8 @@ func d5A2Device() npuv1alpha1.DeviceEntry {
 	return npuv1alpha1.DeviceEntry{
 		Vendor: "nvidia", Model: "NVIDIA A2", Count: 1,
 		DriverLoaded: true, DriverVersion: "535.104.05", PCIeAddress: d5A2PCI,
-		MigModeCurrent: "N/A", MigModePending: "N/A",
+		// 관측기가 정규화한 뒤의 값이다("N/A" 원문이 아니라 "NA") — 프로덕션이 만들 수 있는 값으로 둔다.
+		MigModeCurrent: migModeNA, MigModePending: migModeNA,
 	}
 }
 
@@ -2096,6 +2163,15 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 		Expect(getApplyRecord(&mig, "d5-node").GPUPCIs).To(Equal([]string{nvPCI}),
 			"MIG 정책은 A30 만 소유한다 — A2 는 MIG target 이 아니다(전제 확인)")
 
+		// D-5 의 MPS 게이트는 노드 라벨을 입력으로 쓴다 — 게이트 결과만 보면 라벨 동기화가
+		// 깨져도 spec 이 통과한다. 전제를 직접 고정한다.
+		By("MIG 적용 노드에 mig-active 라벨이 붙는다")
+		Eventually(func() string {
+			var n corev1.Node
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-node"}, &n)).To(Succeed())
+			return n.Labels[nvidia.MigActiveNodeLabel]
+		}, "10s", "200ms").Should(Equal("true"))
+
 		By("A2 를 겨냥한 MPS 정책을 적용한다 — 형제 owned-device 필터링은 여전히 통과해야 한다(D-5 본래 취지)")
 		Expect(k8sClient.Create(ctx, d5MpsACPP("d5-mps-acpp", sel))).To(Succeed())
 		_, err := r.Reconcile(ctx, reconcileReq("d5-mps-acpp"))
@@ -2126,6 +2202,41 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-mig-acpp"}, &mig)).To(Succeed())
 		Expect(mig.Status.Phase).To(Equal(npuv1alpha1.ACPPPhaseReady))
 		Expect(getApplyRecord(&mig, "d5-node").GPUPCIs).To(Equal([]string{nvPCI}))
+
+		By("MIG 정책을 삭제해 mig-active 라벨의 근거를 없앤다")
+		Expect(k8sClient.Delete(ctx, &mig)).To(Succeed())
+		_, err = r.Reconcile(ctx, reconcileReq("d5-mig-acpp"))
+		Expect(err).NotTo(HaveOccurred())
+
+		By("모드가 아직 켜져 있는 동안에는 라벨을 붙들어 둔다(D-11 유령 GPU 차단)")
+		Consistently(func() string {
+			_, _ = r.Reconcile(ctx, reconcileReq("d5-mig-acpp"))
+			var n corev1.Node
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-node"}, &n)).To(Succeed())
+			return n.Labels[nvidia.MigActiveNodeLabel]
+		}, "1s", "200ms").Should(Equal("true"),
+			"모드가 켜진 채 조각만 사라진 GPU 는 CUDA 가 못 쓴다 — flat plugin 이 통짜로 광고하면 파드가 죽는다")
+
+		// 모드가 복원된 뒤 라벨을 걷는 것은 **정책이 있는 경로**의 몫이다. 정책이 이미 사라진 뒤에는
+		// 이 라벨을 다시 볼 주체가 없다 — 라이브에서 그 순서(RestoreMode 로 모드까지 끄고 나서
+		// finalizer 완료)는 반대이므로 정상 경로에서는 이 창이 열리지 않지만, Retain 삭제나 수동
+		// 모드 복원 뒤에는 라벨이 남는다. 남아서 생기는 손해는 "이 노드에서 공유 모드를 못 쓴다"
+		// 이고, 그 사실은 위 MigModeStillEnabled 이벤트가 말해 준다. 걷어 내는 것은 운영자 몫이다.
+		By("정책이 다시 생겨 모드까지 복원되면 그때 라벨이 걷힌다")
+		var restored npuv1alpha1.NodeDeviceReport
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-node"}, &restored)).To(Succeed())
+		for i := range restored.Status.Devices {
+			if restored.Status.Devices[i].MigModeCurrent == migModeEnabled {
+				restored.Status.Devices[i].MigModeCurrent = migModeDisabled
+				restored.Status.Devices[i].MigModePending = migModeDisabled
+			}
+		}
+		Expect(k8sClient.Status().Update(ctx, &restored)).To(Succeed())
+		Expect(r.syncMigActiveLabel(ctx, "d5-node", false)).To(Succeed())
+		var afterRestore corev1.Node
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-node"}, &afterRestore)).To(Succeed())
+		Expect(afterRestore.Labels).NotTo(HaveKey(nvidia.MigActiveNodeLabel),
+			"모드까지 꺼졌는데 라벨이 남으면 이 노드는 영영 공유 모드를 못 쓴다")
 	})
 
 	// I-1(D-5 잔여 창): 소유 주장(OwnerUID)은 cordon 단계(4)의 journalQuiescing 이 쓰고, 장치 목록
@@ -2256,7 +2367,7 @@ func cleanupDevicePluginWiring() {
 	_ = k8sClient.Delete(ctx, &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameFlat, Namespace: "kube-system"}})
 	_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: nvidia.SharingConfigMapName, Namespace: "kube-system"}})
+		ObjectMeta: metav1.ObjectMeta{Name: nvidia.SharingConfigMapNameMixed, Namespace: "kube-system"}})
 	_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: nvidia.SharingConfigMapNameFlat, Namespace: "kube-system"}})
 }
@@ -2322,7 +2433,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 		Expect(nvidia.HasMPSVolume(&dp)).To(BeFalse())
 		var cm corev1.ConfigMap
 		Expect(apierrors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Name: nvidia.SharingConfigMapName, Namespace: "kube-system"}, &cm))).To(BeTrue(),
+			types.NamespacedName{Name: nvidia.SharingConfigMapNameMixed, Namespace: "kube-system"}, &cm))).To(BeTrue(),
 			"★ sharing.mps 블록이 전역 ConfigMap 에 쓰였다")
 		var mps appsv1.DaemonSet
 		Expect(apierrors.IsNotFound(k8sClient.Get(ctx,
@@ -2376,7 +2487,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d8-ts-acpp"}, &got)).To(Succeed())
 		Expect(getApplyRecord(&got, "d8-ts-node").SharingMode).To(Equal(npuv1alpha1.SharingModeTimeSliced))
 		var cm corev1.ConfigMap
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nvidia.SharingConfigMapName, Namespace: "kube-system"}, &cm)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nvidia.SharingConfigMapNameMixed, Namespace: "kube-system"}, &cm)).To(Succeed())
 		Expect(cm.Data[nvidia.SharingConfigKey]).To(ContainSubstring("replicas: 4"))
 
 		var mig npuv1alpha1.AcceleratorPartitionPolicy

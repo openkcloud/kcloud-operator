@@ -199,6 +199,28 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "NvidiaDevicePluginFailed", err.Error())
 			return ctrl.Result{}, err
 		}
+	} else {
+		// 토글 off 는 광고를 멈춰야 한다 — 두 DaemonSet(mixed/flat)을 모두 회수한다. 하나만 지우면
+		// 남은 쪽이 계속 nvidia.com/* 를 광고해 "꺼졌다"는 사용자 기대와 어긋난다. Furiosa 에는
+		// 대응하는 else-분기가 없다(전면 비활성화 시 지우는 경로가 없다) — 이 토글만의 정책이다.
+		//
+		// cleanupOwnedResources(CR 삭제, :353-355)는 device-plugin 을 소유 여부와 무관하게 항상
+		// 보존한다 — 지우면 전벤더 allocatable 순단이 나서다(#16 §5). 이 토글은 정반대 요청("이
+		// 벤더만 광고 중단")이라 지우는 게 맞지만, mixed 이름(nvidia.DevicePluginNameMixed =
+		// "nvidia-device-plugin")은 #19 무중단 이관을 위해 기존 3rd-party 리소스와 일부러 같은
+		// 이름을 쓴다(timeslicing.go:148). 그래서 이름만 보고 지우면 이 operator 가 한 번도
+		// reconcile 하지 않은(=owner annotation 이 없는) 3rd-party DS 까지 지울 수 있다.
+		// ensureNvidiaDevicePlugin 이 매 reconcile 마다 owner annotation 을 stamp 하므로
+		// (createOrUpdateDS 의 update 분기가 annotation 까지 덮어쓴다), enabled=true 로 한 번이라도
+		// reconcile 된 DS 는 owned 상태가 되고 이 토글로 정상 회수된다 — 실제로 지워지지 않는 것은
+		// 이 operator 가 그 벤더를 켠 적이 전혀 없는 DS 뿐이다.
+		for _, name := range []string{nvidia.DevicePluginNameMixed, nvidia.DevicePluginNameFlat} {
+			if err := r.deleteOwnedDaemonSetIfExists(ctx, name, &policy); err != nil {
+				logger.Error(err, "failed to remove NVIDIA Device Plugin", "daemonset", name)
+				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to remove %s: %v", name, err)
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	// -- NVIDIA GPU 텔레메트리(dcgm-exporter). 토글 off 면 기존 DS 를 제거하므로 항상 호출한다.
@@ -754,10 +776,32 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 }
 
 // deleteDaemonSetIfExists deletes a DaemonSet in kube-system by name, ignoring NotFound.
-// 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다.
+// 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다. 이 함수가 지우는 이름
+// (furiosaLegacyWarboyDSName/furiosaLegacyRngdDSName/furiosaUnifiedDSName)은 전부 이 operator 만
+// 만드는 이름이라 소유권 검사가 필요 없다. 이름을 흡수 대상(nvidia device-plugin)에 재사용하려면
+// deleteOwnedDaemonSetIfExists 를 쓸 것 — 그쪽은 이름만으로 지우면 흡수 대상 3rd-party 리소스까지
+// 지울 위험이 있다.
 func (r *NPUClusterPolicyReconciler) deleteDaemonSetIfExists(ctx context.Context, name string) error {
 	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"}}
 	if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// deleteOwnedDaemonSetIfExists 는 owner annotation 이 이 policy 와 일치할 때만 지운다.
+// nvidia device-plugin 처럼 흡수(#19)한 3rd-party 이름을 재사용하는 DS 전용 — 이름만 보고
+// 지우는 deleteDaemonSetIfExists 와 달리, 이 operator 가 한 번도 reconcile 하지 않아 owner
+// annotation 이 없는 DS 는 건드리지 않는다.
+func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetIfExists(ctx context.Context, name string, policy *npuv1alpha1.NPUClusterPolicy) error {
+	var ds appsv1.DaemonSet
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: "kube-system"}, &ds); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if ds.Annotations[ownerAnnotation] != fmt.Sprintf("%s/%s", policy.Namespace, policy.Name) {
+		return nil
+	}
+	if err := r.Delete(ctx, &ds); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil

@@ -91,6 +91,15 @@ spec:
           value: {{ .timeSlicing | quote }}
         {{- end }}
         {{- end }}
+        {{- if and .Values.operationCoordinator (eq .Values.operationCoordinator.mode "delegate") }}
+        # KCLOUD_OPERATION_COORDINATOR: 위임 모드 스위치. "delegate" 만 유효하고, 이 env 가 아예
+        # 주입되지 않으면 꺼진 것으로 읽힌다.
+        # .Values.operationCoordinator 존재를 먼저 확인하는 이유: --reuse-values 로 이 키가 없던
+        # 이전 릴리스를 업그레이드하면 이 맵 자체가 nil 이라 .mode 접근이 렌더링 실패로 죽는다
+        # (이 저장소에서 이미 겪은 함정과 같은 종류 — 방어 가드를 templates 에 남긴다).
+        - name: KCLOUD_OPERATION_COORDINATOR
+          value: "delegate"
+        {{- end }}
         # P6(S4-5) Pod Security: pod-level runAsNonRoot+seccompRuntimeDefault 와 결합해 restricted 준수.
         # cert(webhook/api)는 read-only secret 마운트, manager 는 rootfs 에 쓰지 않으므로 RO rootfs 안전.
         securityContext:

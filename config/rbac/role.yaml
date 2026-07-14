@@ -108,11 +108,22 @@ rules:
   - update
   - watch
 - apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - npu.ai
   resources:
   - acceleratorclasses
+  - acceleratorhealthpolicies
   - driverinstallpolicies
-  - nodedevicereports
   verbs:
   - get
   - list
@@ -120,6 +131,8 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
+  - acceleratorhealths
+  - acceleratoroperations
   - acceleratorpartitionpolicies
   - driverupgradestates
   - npuclusterpolicies
@@ -134,16 +147,12 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
-  - acceleratorpartitionpolicies/finalizers
-  - npuclusterpolicies/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - npu.ai
-  resources:
+  - acceleratorhealths/status
+  - acceleratoroperations/status
   - acceleratorpartitionpolicies/status
   - acceleratorworkloads/status
   - driverupgradestates/status
+  - nodedevicereports/status
   - npuclusterpolicies/status
   verbs:
   - get
@@ -152,7 +161,15 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
+  - acceleratorpartitionpolicies/finalizers
+  - npuclusterpolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - npu.ai
+  resources:
   - acceleratorworkloads
+  - nodedevicereports
   verbs:
   - get
   - list

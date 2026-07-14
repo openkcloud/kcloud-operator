@@ -32,11 +32,7 @@ import (
 	"kcloud-operator/internal/partition/nvidia"
 )
 
-const (
-	migModePCI      = "0000:18:00.0"
-	migModeEnabled  = "Enabled"
-	migModeDisabled = "Disabled"
-)
+const migModePCI = "0000:18:00.0"
 
 // failingExec 는 -mig 1 실행 실패를 흉내낸다(노드 복원 경로 검증용).
 type failingExec struct{}
@@ -385,7 +381,7 @@ func TestUnsupportedProfileFailsValidationAfterModeEnableNotAtApply(t *testing.T
 	r.NvidiaObserverFactory = func(client.Client) nvidia.Observer { return stubObserver{&obs} }
 
 	// 1) mode Disabled — profile 목록을 볼 수 없으니 형식 검증만 하고 mode enable 로 진행한다.
-	ts, err := r.runTarget(acpp, nvidia.New(c).WithExecutor(exec), migModeTarget(ctx))
+	ts, err := r.runTarget(acpp, nvidia.New(c).WithExecutor(exec), migModeTarget(ctx), &evidenceCtx{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +394,7 @@ func TestUnsupportedProfileFailsValidationAfterModeEnableNotAtApply(t *testing.T
 
 	// 2) 재부팅 후 mode Enabled — 이제 profile 이 보이므로 재검증에서 걸려야 한다.
 	obs = modeEnabledObs()
-	ts, err = r.runTarget(acpp, nvidia.New(c).WithExecutor(exec), migModeTarget(ctx))
+	ts, err = r.runTarget(acpp, nvidia.New(c).WithExecutor(exec), migModeTarget(ctx), &evidenceCtx{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +417,7 @@ func TestUnsupportedProfileFailsValidationAfterModeEnableNotAtApply(t *testing.T
 func runModePass(t *testing.T, r *AcceleratorPartitionPolicyReconciler, c client.Client,
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy, exec nvidia.Executor) npuv1alpha1.TargetStatus {
 	t.Helper()
-	ts, err := r.runTarget(acpp, nvidia.New(c).WithExecutor(exec).WithVerifier(r.Verifier), migModeTarget(context.Background()))
+	ts, err := r.runTarget(acpp, nvidia.New(c).WithExecutor(exec).WithVerifier(r.Verifier), migModeTarget(context.Background()), &evidenceCtx{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,6 +758,79 @@ var _ = Describe("syncMigActiveLabel", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &got)).To(Succeed())
 		_, present := got.Labels[nvidia.MigActiveNodeLabel]
 		Expect(present).To(BeFalse())
+	})
+
+	// 증명: 조각이 0개여도 **MIG 모드가 켜진 GPU 가 남아 있으면** 라벨을 떼지 않는다.
+	//
+	// D-11(2026-07-31 라이브): 그 상태의 GPU 는 `nvidia-smi -L` 에는 보이지만 CUDA 가 장치로
+	// 세지 않는다. 라벨을 떼면 flat device-plugin(전략 none)이 담당해 통짜 GPU 로 광고하고,
+	// 배정된 파드는 CUDA 초기화에서 죽는다. 실제로 유령 GPU 1개가 광고됐다.
+	//
+	// 깨는 뮤테이션: migModeFullyRestored 가 항상 true 를 돌려주면 라벨이 떨어져 실패한다.
+	It("keeps the label while a GPU still has MIG mode enabled", func() {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "ghost-gpu-node",
+			Labels: map[string]string{nvidia.MigActiveNodeLabel: "true"}}}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
+
+		ndr := &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: node.Name},
+			Spec: npuv1alpha1.NodeDeviceReportSpec{NodeName: node.Name}}
+		Expect(k8sClient.Create(ctx, ndr)).To(Succeed())
+		ndr.Status.Devices = []npuv1alpha1.DeviceEntry{
+			// A30: 모드는 켜졌는데 조각이 없다 — 바로 그 유령이다.
+			{Vendor: "nvidia", Count: 1, PCIeAddress: "0000:41:00.0",
+				MigModeCurrent: "Enabled", MigModePending: "Enabled", MigCurrentGeometry: "disabled"},
+			// A2: MIG 를 지원하지 않는다.
+			{Vendor: "nvidia", Count: 1, PCIeAddress: "0000:81:00.0", MigModeCurrent: "NA"},
+		}
+		Expect(k8sClient.Status().Update(ctx, ndr)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, ndr) })
+
+		r := &AcceleratorPartitionPolicyReconciler{Client: k8sClient}
+		Expect(r.syncMigActiveLabel(ctx, node.Name, false)).To(Succeed())
+
+		var got corev1.Node
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &got)).To(Succeed())
+		Expect(got.Labels).To(HaveKeyWithValue(nvidia.MigActiveNodeLabel, "true"),
+			"모드가 켜진 GPU 가 남았는데 라벨을 뗐다 — flat plugin 이 유령 GPU 를 광고한다")
+
+		// 모드까지 꺼지면 그때는 뗀다.
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &corev1.Node{})).To(Succeed())
+		var fresh npuv1alpha1.NodeDeviceReport
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &fresh)).To(Succeed())
+		fresh.Status.Devices[0].MigModeCurrent = "Disabled"
+		fresh.Status.Devices[0].MigModePending = "Disabled"
+		Expect(k8sClient.Status().Update(ctx, &fresh)).To(Succeed())
+
+		Expect(r.syncMigActiveLabel(ctx, node.Name, false)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &got)).To(Succeed())
+		Expect(got.Labels).NotTo(HaveKey(nvidia.MigActiveNodeLabel),
+			"모드까지 꺼졌는데 라벨이 남으면 이 노드는 영영 공유 모드를 못 쓴다")
+	})
+
+	// 증명: 관측이 실패한 보고서는 "꺼졌다" 로 읽지 않는다(fail-closed).
+	// 깨는 뮤테이션: migModeFullyRestored 의 MigObservationError 분기를 지우면 라벨이 떨어져 실패한다.
+	It("keeps the label when the report says the mig state could not be observed", func() {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "unobservable-mig-node",
+			Labels: map[string]string{nvidia.MigActiveNodeLabel: "true"}}}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
+
+		ndr := &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: node.Name},
+			Spec: npuv1alpha1.NodeDeviceReportSpec{NodeName: node.Name}}
+		Expect(k8sClient.Create(ctx, ndr)).To(Succeed())
+		ndr.Status.Devices = []npuv1alpha1.DeviceEntry{{
+			Vendor: "nvidia", Count: 1, PCIeAddress: "0000:41:00.0",
+			MigModeCurrent: "Unknown", MigObservationError: "mode query failed: exit status 9",
+		}}
+		Expect(k8sClient.Status().Update(ctx, ndr)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, ndr) })
+
+		r := &AcceleratorPartitionPolicyReconciler{Client: k8sClient}
+		Expect(r.syncMigActiveLabel(ctx, node.Name, false)).To(Succeed())
+		var got corev1.Node
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, &got)).To(Succeed())
+		Expect(got.Labels).To(HaveKeyWithValue(nvidia.MigActiveNodeLabel, "true"))
 	})
 })
 

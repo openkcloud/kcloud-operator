@@ -10,15 +10,18 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,9 +29,13 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driverjob"
+	"kcloud-operator/internal/naming"
+	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/partition"
 	"kcloud-operator/internal/partition/nvidia"
 	"kcloud-operator/internal/partition/rngd"
+	"kcloud-operator/internal/verification"
 )
 
 const acppFinalizer = "npu.ai/acpp-cleanup"
@@ -58,6 +65,30 @@ type AcceleratorPartitionPolicyReconciler struct {
 	// NvidiaObserverFactory 는 operator-driven MIG 관측 seam 이다(nil → 실 MigObserver Job, spec §16.3).
 	// envtest 는 fake observer 를 주입해 실제 Job 없이 관측 경로를 검증한다.
 	NvidiaObserverFactory func(client.Client) nvidia.Observer
+	// Verification 은 근거 기반 commit gate 다(nil 이면 게이트를 걸지 않는다).
+	// 게이트가 켜지면 Ready 승격 전에 spec·장치·NodeDeviceReport·광고가 서로 맞는지 확인하고,
+	// 어긋나면 Ready 로 올리지 않는다 — 기존 verifySucceeded 는 backend 왕복 성공만 보므로
+	// 관측원이 서로 다른 말을 하는 상태를 잡지 못한다.
+	Verification *verification.Verifier
+	// Leases 는 위임 모드에서 삭제 경로가 노드를 되돌리기 전에 잡는 노드 Lease seam 이다(nil 이면
+	// 잠그지 않는다 — 게이트가 꺼진 기존 배포는 이 필드를 아예 안 심으므로 동작이 그대로다).
+	// 삭제는 Reconcile 의 위임 분기보다 먼저 처리되므로(핸들러 진입 시점에 이미 결정) 조정자를
+	// 거치지 않는다 — 대신 하드웨어를 되돌리기 직전에 조정자와 같은 Lease 를 잡아 "삭제가 진행
+	// 중인 트랜잭션과 동시에 같은 노드를 만지는" 창을 없앤다.
+	Leases *operation.LeaseManager
+}
+
+// evidenceCtx 는 한 번의 reconcile pass 가 모은 검증 근거 입력이다. runTarget 이 채우고
+// Reconcile 의 게이트가 읽는다 — 관측 Job 을 두 번 띄우지 않기 위해 pass 안에서 실어 나른다.
+type evidenceCtx struct {
+	Vendor            string
+	Expectation       verification.Expectation
+	ObservedGeometry  map[string]string
+	ObservationErrors map[string]string
+	// TargetDevices 는 이 정책이 건드린 장치(PCI)다 — 보고서 대조를 비대상 장치까지 확대하지 않는다.
+	TargetDevices []string
+	// Ready 로 승격할 자격이 있는 pass 인지. 재검증을 건너뛴 pass(evidence 재사용)는 false 다.
+	Verified bool
 }
 
 // +kubebuilder:rbac:groups=npu.ai,resources=acceleratorpartitionpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -129,9 +160,20 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 		return ctrl.Result{}, r.writeTargetStatus(ctx, &acpp, ts)
 	}
 
-	ts, runErr := r.runTarget(&acpp, backend, target)
+	if delegateModeEnabled() {
+		// 위임 모드: 정책은 요청만 하고 실행은 Coordinator 가 한다.
+		return r.delegateToOperation(ctx, &acpp, target)
+	}
+
+	ec := &evidenceCtx{}
+	ts, runErr := r.runTarget(&acpp, backend, target, ec)
 	if runErr != nil {
 		logger.Error(runErr, "runTarget failed")
+	}
+	// 근거 게이트 — Ready 로 승격하려는 pass 에서만 돈다. 관측원이 서로 다른 말을 하면
+	// 여기서 Ready 를 취소한다(하드웨어는 건드리지 않는다 — 되돌리는 것은 Stage 2 의 몫).
+	if gerr := r.gateReady(ctx, &acpp, &ts, target, ec); gerr != nil {
+		logger.Error(gerr, "evidence gate failed", "node", target.NodeName)
 	}
 	// cordon 복원 단일 choke-point — mode enable(Task 6)이 잠근 노드는 종점에서 반드시 풀려야 한다.
 	// runTarget 의 종점은 갈래가 많아(터미널 5 + rollback 후 2) 개별 return 마다 흩뿌리면 새 갈래가
@@ -159,6 +201,11 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 	// 단, transient 블록 상태(WaitingForDrain: 외부 cordon/drain 대기, VerifyingAllocatable: 재시도 대기)는
 	// runErr 이 nil 이라 기본 resync(~10h)까지 잠들어버린다 → 짧은 RequeueAfter 로 능동 재확인한다(자가치유).
 	switch acpp.Status.Phase {
+	case npuv1alpha1.ACPPPhaseReady, npuv1alpha1.ACPPPhaseDegraded:
+		// 수렴한 정책도 광고를 계속 지켜봐야 한다. 지금은 Ready 에 requeue 가 없어 기본
+		// resync(~10시간)까지 잠들고, 그 사이 광고가 무너져도 아무도 모른다.
+		// 15초는 유예(기본 30초)와 합쳐 최악 45초 — 완료 기준의 60초 안에 든다.
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	case npuv1alpha1.ACPPPhaseWaitingForDrain:
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	case npuv1alpha1.ACPPPhaseVerifyingAllocatable:
@@ -183,8 +230,15 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 // shouldReverify 는 재검증 필요 여부를 판정한다(spec §3 evidence 재사용 게이트).
 // observedGeneration·resolved config 가 직전과 같고 직전 phase 가 Ready 면 false(재검증 skip).
 // 하나라도 다르면(또는 prev 가 없으면) true — 매 reconcile 마다 테스트 Pod 를 새로 만들지 않기 위함(MVP-1).
+//
+// Degraded 를 Ready 와 같이 정상상태로 본다. 광고 붕괴는 **감지 전용** 이라 재적용으로 이어지면
+// 안 되는데, Degraded 를 비정상으로 보면 여기서 true 가 나와 다음 pass 가 처음부터 다시 적용한다
+// (GI 재생성·device-plugin 재시작). 되돌리는 것은 Stage 4 remediation 의 몫이다.
 func (r *AcceleratorPartitionPolicyReconciler) shouldReverify(acpp *npuv1alpha1.AcceleratorPartitionPolicy, prev *npuv1alpha1.TargetStatus) bool {
-	if prev == nil || prev.Phase != npuv1alpha1.ACPPPhaseReady {
+	if prev == nil {
+		return true
+	}
+	if prev.Phase != npuv1alpha1.ACPPPhaseReady && prev.Phase != npuv1alpha1.ACPPPhaseDegraded {
 		return true
 	}
 	if acpp.Status.ObservedGeneration != acpp.Generation {
@@ -195,13 +249,16 @@ func (r *AcceleratorPartitionPolicyReconciler) shouldReverify(acpp *npuv1alpha1.
 }
 
 // runTarget 은 한 target 에 대해 discover→validate→diff→apply→verify→Ready 상태머신을 실행한다.
-func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.AcceleratorPartitionPolicy, backend partition.Backend, t partition.Target) (npuv1alpha1.TargetStatus, error) {
+// ec 는 이 pass 가 모은 검증 근거 입력을 실어 나른다(Reconcile 의 게이트가 소비한다).
+func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.AcceleratorPartitionPolicy, backend partition.Backend, t partition.Target, ec *evidenceCtx) (npuv1alpha1.TargetStatus, error) {
 	var prev *npuv1alpha1.TargetStatus
 	if len(acpp.Status.Targets) > 0 {
 		prev = &acpp.Status.Targets[0]
 	}
 	if !r.shouldReverify(acpp, prev) {
-		return *prev, nil // evidence 재사용 — Discover/Diff/Apply/Verify 전부 skip(idempotency).
+		// evidence 재사용 — 적용 경로는 전부 skip 한다. 다만 "아무것도 안 본다" 는 아니다:
+		// 검증 뒤에 광고가 무너졌는지만 확인한다(감지 전용, mutation 없음).
+		return r.monitorDrift(t, acpp, *prev)
 	}
 
 	ts := npuv1alpha1.TargetStatus{NodeName: t.NodeName, RequestedLayout: acpp.Spec.Layout}
@@ -225,6 +282,9 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 			if stop, oerr := r.observeNvidiaMIG(acpp, backend, nvb, t, &ts); stop {
 				return ts, oerr
 			}
+			ec.Vendor = vendorNvidia
+			ec.ObservedGeometry, ec.ObservationErrors = observedGeometryOf(nvb.Targets())
+			ec.TargetDevices = targetPCIs(nvb.Targets())
 		}
 	}
 
@@ -233,7 +293,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	// profile 요청은 여기서(GI 생성 전에) 거절된다 — -cgi 를 쏴보고 실패하는 경로로 새지 않는다.
 	layouts := toPartitionLayouts(acpp.Spec.Layout)
 	if len(layouts) == 0 {
-		return r.runSharingOnly(acpp, backend, t, ts)
+		return r.runSharingOnly(acpp, backend, t, ts, ec)
 	}
 	if err := backend.Validate(layouts); err != nil {
 		// mode enable 때문에 우리가 잠근 노드라면 되돌린다 — 만들다 만 GI 는 없고, 검증 거부는
@@ -274,7 +334,16 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 		}
 		// 파티션이 Ready 인 뒤에만 공유를 얹는다(Task 4). MIG Ready 로 가는 세 경로(첫 apply/
 		// managed no-diff/크래시 복구) 모두 여기를 통과하므로 spec.sharing 만 바뀌어도 반영된다.
-		return r.runSharing(acpp, backend, t, nts, expectedAllocatable(getApplyRecord(acpp, t.NodeName)))
+		rec := getApplyRecord(acpp, t.NodeName)
+		ec.Expectation = verification.Expectation{
+			Profile:        rec.Profile,
+			CountPerDevice: rec.Count,
+			Geometry:       nvidia.GeometrySummary(rec.Profile, rec.Count),
+			Allocatable:    expectedAllocatable(rec),
+			ProbeResource:  "nvidia.com/mig-" + rec.Profile,
+		}
+		ec.Verified = true
+		return r.runSharing(acpp, backend, t, nts, expectedAllocatable(rec))
 	}
 
 	// 3. Resolve + Diff
@@ -333,6 +402,14 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	if acpp.Spec.Vendor == vendorFuriosa {
 		r.ensureOwnerLock(t.Ctx, acpp)
 	}
+	// RNGD 는 per-PCI geometry 관측 축이 없다(설계 문서의 알려진 한계 항목) — Expectation.Geometry
+	// 는 비워 둔다. 그래도 장치 관측 체크 자체는 통과시켜야 한다: ObservedGeometry 를 비워 두면
+	// "관측이 아예 없다" 로 읽혀(evalDeviceObservation) 매 pass 마다 등급 없는 근거가 되고, 이 상태로
+	// cmd/main.go 가 게이트를 전역으로 켜면 RNGD 는 영원히 Ready 를 못 받는다 — 그래서 관측된 PCI 를
+	// 값 없이(geometry 비교 없음, 존재·무오류만) 채운다.
+	ec.Vendor = vendorFuriosa
+	ec.ObservedGeometry = rngdObservedPCIs(ts.Devices)
+	ec.Verified = true
 	// 공유 요청은 여기서도 통과시킨다 — 미지원 backend 는 조용히 무시하지 않고 Unsupported 로 보고한다.
 	return r.runSharing(acpp, backend, t, ts, ts.Advertisement.AdvertisedResources)
 }
@@ -398,7 +475,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	// 입력(spec)이 그대로면 결과도 그대로이므로 여기서 끝내고 spec 변경을 기다린다(노드는 종점
 	// choke-point 가 풀어 준다). 재시도 경로는 generation 증가뿐이다.
 	if rec.MigPhase == npuv1alpha1.MigPhaseRolledBack && rec.Generation == acpp.Generation {
-		ts.Phase = npuv1alpha1.ACPPPhaseFailed
+		ts.Phase = carryRollbackFailure(acpp, t.NodeName, &ts)
 		setCond(&ts, npuv1alpha1.ACPPCondApplied, metav1.ConditionFalse, "ApplyRolledBack",
 			"apply rolled back for this generation; update spec to retry", acpp.Generation)
 		return ts, nil
@@ -451,7 +528,16 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	if aerr != nil {
 		ts.Phase = npuv1alpha1.ACPPPhaseRollingBack
 		if rb != nil {
-			_ = backend.Rollback(t, *rb)
+			// 되돌리기 오류를 버리면 실패가 상태에 남지 않는다 — 그러면 되돌아가지 않은 장치를
+			// 되돌아간 것으로 처리하게 되고, 조정자의 보상 실패 종점도 영영 열리지 않는다.
+			if rbErr := backend.Rollback(t, *rb); rbErr != nil {
+				ts.Phase = npuv1alpha1.ACPPPhaseRollbackFailed
+				setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionFalse,
+					"RollbackFailed", rbErr.Error(), acpp.Generation)
+			} else {
+				setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionTrue,
+					"RollbackSucceeded", "partition restored after apply failure", acpp.Generation)
+			}
 		}
 		_ = r.setRecordPhase(t.Ctx, acpp, t.NodeName, npuv1alpha1.MigPhaseRolledBack)
 		_ = r.syncMigActiveLabel(t.Ctx, t.NodeName, false)
@@ -470,7 +556,14 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	if !verifySucceeded(vr, verr) {
 		ts.Phase = npuv1alpha1.ACPPPhaseRollingBack
 		if rb != nil {
-			_ = backend.Rollback(t, *rb)
+			if rbErr := backend.Rollback(t, *rb); rbErr != nil {
+				ts.Phase = npuv1alpha1.ACPPPhaseRollbackFailed
+				setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionFalse,
+					"RollbackFailed", rbErr.Error(), acpp.Generation)
+			} else {
+				setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionTrue,
+					"RollbackSucceeded", "partition restored after verify failure", acpp.Generation)
+			}
 		}
 		_ = r.setRecordPhase(t.Ctx, acpp, t.NodeName, npuv1alpha1.MigPhaseRolledBack)
 		_ = r.syncMigActiveLabel(t.Ctx, t.NodeName, false)
@@ -480,6 +573,27 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	_ = r.setRecordPhase(t.Ctx, acpp, t.NodeName, npuv1alpha1.MigPhaseReady)
 	setNvidiaReady(&ts, acpp)
 	return ts, nil
+}
+
+// carryRollbackFailure 는 "같은 generation 의 rollback 은 terminal 이다" 종점에서, 직전 pass 가
+// 남긴 되돌리기 결과(ACPPCondRolledBack)를 그대로 이어 붙인다. 이 종점은 매 pass 마다 새
+// TargetStatus 를 만들므로, 여기서 조건을 다시 세우지 않으면 되돌리기 실패로 남긴 신호가 다음
+// pass 부터 사라진다(첫 pass 에서만 보이는 되돌리기 실패는 표면화가 아니다). 되돌리기를 다시
+// 실행하지는 않는다 — 기본 phase(Failed)에 직전 결과만 반영해 돌려준다.
+func carryRollbackFailure(acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string, ts *npuv1alpha1.TargetStatus) string {
+	prev := findTargetStatus(acpp, node)
+	if prev == nil {
+		return npuv1alpha1.ACPPPhaseFailed
+	}
+	rb := apimeta.FindStatusCondition(prev.Conditions, npuv1alpha1.ACPPCondRolledBack)
+	if rb == nil {
+		return npuv1alpha1.ACPPPhaseFailed
+	}
+	setCond(ts, npuv1alpha1.ACPPCondRolledBack, rb.Status, rb.Reason, rb.Message, acpp.Generation)
+	if rb.Status == metav1.ConditionFalse {
+		return npuv1alpha1.ACPPPhaseRollbackFailed
+	}
+	return npuv1alpha1.ACPPPhaseFailed
 }
 
 // isApplyInFlightPhase 는 GI mutation 이 실제로 진행 중인 저널 phase 인지다(baseline 영속 이후).
@@ -518,6 +632,14 @@ func (r *AcceleratorPartitionPolicyReconciler) routeNvidiaNoDiff(acpp *npuv1alph
 		// 없어 recovery tail 을 탈 수 없다.
 		// 여기서 아래 ExistingMigConfiguration 으로 떨어뜨리면 자가치유 없는 terminal 실패가 되므로
 		// (Task 4 교훈), 정상 경로로 내려보내 변경시-전제부터 다시 밟게 한다(전부 transient·requeue).
+		return false, ts, nil
+	}
+	if rec.MigPhase == npuv1alpha1.MigPhaseRolledBack {
+		// 되돌리기가 실패해 GI 가 그대로 남으면 geometry 가 여전히 목표와 같아 여기로 들어온다.
+		// 아래 ExistingMigConfiguration 으로 떨어뜨리면 runNvidiaTarget 의 "같은 generation 의
+		// rollback 은 terminal 이다"(carryRollbackFailure)가 이 상태를 다시는 못 보고, 표면화한
+		// RollbackFailed/RolledBack 조건이 다음 pass 부터 사라진다 — 그 종점이 이 상태를 소유하게
+		// 내려보낸다(전이·mutation 없음, 표면화만 이어 붙인다).
 		return false, ts, nil
 	}
 	// 외부 수동 설정과 geometry 만 우연히 일치 — 이 ACPP 가 만든 것이 아니므로 채택 거부.
@@ -565,6 +687,203 @@ func (r *AcceleratorPartitionPolicyReconciler) observeNvidiaMIG(acpp *npuv1alpha
 	return false, nil
 }
 
+// observedGeometryOf 는 backend 가 들고 있는 관측 장치 목록을 PCI→geometry / PCI→오류 두 맵으로
+// 나눈다. 오류가 있는 장치는 geometry 를 신뢰할 수 없으므로 오류 쪽에만 넣는다.
+func observedGeometryOf(devs []nvidia.MigDevice) (map[string]string, map[string]string) {
+	geom := make(map[string]string, len(devs))
+	errs := make(map[string]string, len(devs))
+	for _, d := range devs {
+		if d.ObsError != "" {
+			errs[d.PCI] = d.ObsError
+			continue
+		}
+		geom[d.PCI] = d.Geometry
+	}
+	return geom, errs
+}
+
+// rngdObservedPCIs 는 RNGD 장치 관측의 "관측이 있었다" 만을 기록한다(PCI→빈 문자열). RNGD 는 nvidia
+// 처럼 PCI 별 geometry 축이 없어 값은 비교 대상이 아니다(Expectation.Geometry 도 비어 있어 무시된다) —
+// 그래도 관측 자체가 없으면 evalDeviceObservation 이 "관측 전무" 로 읽어 등급 없는 근거가 되므로,
+// Discover 가 이미 찾은 장치 PCI 존재만 여기서 알려준다.
+// 키는 PCI 가 있으면 PCI, 없으면 장치 ID 다 — Furiosa 는 detector 가 PCI 를 채우지 않아
+// PCI 만 받으면 관측이 통째로 사라진다(라이브 실측, 2026-08-04).
+func rngdObservedPCIs(devs []npuv1alpha1.DeviceStatus) map[string]string {
+	out := make(map[string]string, len(devs))
+	for _, d := range devs {
+		if key := deviceKey(d.PCIAddress, d.ID); key != "" {
+			out[key] = ""
+		}
+	}
+	return out
+}
+
+// deviceKey 는 장치 관측·보고를 맞대 놓을 식별자다(PCI 우선, 없으면 벤더가 준 ID).
+func deviceKey(pci, id string) string {
+	if pci != "" {
+		return pci
+	}
+	return id
+}
+
+// gateReady 는 Ready 로 승격하려는 status 를 근거로 재확인한다. 근거가 어긋나면 Ready 를 취소하고
+// 사유를 condition 으로 남긴다. 장치·DaemonSet 은 건드리지 않는다 — 감지와 기록만 한다.
+//
+// 게이트가 꺼져 있거나(Verification==nil), 이 pass 가 Ready 로 가지 않거나, 검증을 건너뛴
+// pass 면 아무것도 하지 않는다.
+func (r *AcceleratorPartitionPolicyReconciler) gateReady(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy,
+	ts *npuv1alpha1.TargetStatus, t partition.Target, ec *evidenceCtx) error {
+	if r.Verification == nil || !ec.Verified || ts.Phase != npuv1alpha1.ACPPPhaseReady {
+		return nil
+	}
+	ev, err := r.Verification.Verify(ctx, verification.Request{
+		NodeName:          t.NodeName,
+		Vendor:            acpp.Spec.Vendor,
+		SourcePolicy:      acpp.Name,
+		Generation:        acpp.Generation,
+		Expectation:       ec.Expectation,
+		ObservedGeometry:  ec.ObservedGeometry,
+		ObservationErrors: ec.ObservationErrors,
+		TargetDevices:     ec.TargetDevices,
+	})
+	if err != nil {
+		return err
+	}
+	if ev.Status.Level == "" {
+		ts.Phase = npuv1alpha1.ACPPPhaseVerifyingAllocatable
+		setCond(ts, npuv1alpha1.ACPPCondVerified, metav1.ConditionFalse,
+			npuv1alpha1.ReasonEvidenceDisagreement, ev.Status.Reason, acpp.Generation)
+	}
+	return nil
+}
+
+// monitorDrift 는 이미 수렴한 target 의 광고가 검증 시점 기준선을 유지하는지 확인하고 status 만
+// 갱신한다. 장치·DaemonSet·ConfigMap 을 건드리지 않는다.
+//
+// 판단 근거는 evidence 가 저장한 광고량이다 — 여기서 기대값을 다시 계산하면 "검증 뒤에 무너졌다"
+// 가 아니라 "지금 계산한 값과 다르다" 를 말하게 되고, 그 둘은 다른 주장이다.
+func (r *AcceleratorPartitionPolicyReconciler) monitorDrift(t partition.Target, acpp *npuv1alpha1.AcceleratorPartitionPolicy,
+	ts npuv1alpha1.TargetStatus) (npuv1alpha1.TargetStatus, error) {
+	if r.Verification == nil || t.NodeName == "" {
+		return ts, nil
+	}
+	ev, err := r.Verification.Load(t.Ctx, t.NodeName)
+	if err != nil {
+		return ts, err
+	}
+	var node corev1.Node
+	if err := r.Get(t.Ctx, types.NamespacedName{Name: t.NodeName}, &node); err != nil {
+		return ts, client.IgnoreNotFound(err)
+	}
+	var ndr npuv1alpha1.NodeDeviceReport
+	if err := r.Get(t.Ctx, types.NamespacedName{Name: t.NodeName}, &ndr); err != nil && !apierrors.IsNotFound(err) {
+		return ts, err
+	}
+
+	policy := verification.DefaultPolicy()
+	var policies npuv1alpha1.AcceleratorVerificationPolicyList
+	if err := r.List(t.Ctx, &policies); err == nil {
+		policy = verification.Resolve(policies.Items, node.Labels)
+	}
+	cur := verification.Compute(&node, &ndr, acpp.Spec.Vendor, acpp.Generation)
+	freshVerdict, _ := verification.CheckFreshness(ev, time.Now(), cur, policy.InvalidateOn)
+
+	rolling := false
+	if acpp.Spec.Vendor == vendorNvidia {
+		if v, rerr := nvidia.DevicePluginRolling(t.Ctx, r.Client, t.NodeName); rerr == nil {
+			rolling = v
+		} else {
+			// 롤아웃 여부를 모르면 억제한다 — 모르는 상태에서 장애를 선언하지 않는다.
+			rolling = true
+		}
+	}
+	rec := getApplyRecord(acpp, t.NodeName)
+	in := verification.DriftInput{
+		Actual:            allocatableSnapshot(&node),
+		RolloutInProgress: rolling,
+		NodeReady:         isNodeReadyForDrift(&node),
+		ApplyInFlight:     isApplyInFlightPhase(rec.MigPhase) || isMigModeEnablePhase(rec.MigPhase),
+		Terminating:       !acpp.DeletionTimestamp.IsZero() || !node.DeletionTimestamp.IsZero(),
+		EvidenceFresh:     verification.IsFresh(freshVerdict),
+		FirstSuspectedAt:  driftFirstSeen(&ts),
+		AlreadyConfirmed:  driftConfirmed(&ts),
+		Now:               metav1.Now(),
+		Grace:             policy.DriftGracePeriod,
+	}
+	if ev != nil {
+		in.Expected = ev.Status.AdvertisedResources
+	}
+
+	verdict, reason := verification.EvaluateDrift(in)
+	applyDriftVerdict(&ts, acpp, verdict, reason)
+	return ts, nil
+}
+
+// driftConfirmed 는 직전 pass 가 이미 광고 붕괴를 확정했는지다. 확정 조건은 status=True 이면서
+// 사유가 광고 붕괴인 것 — 다른 이유의 Degraded(예: 하드웨어 실패)를 광고 확정으로 읽지 않는다.
+func driftConfirmed(ts *npuv1alpha1.TargetStatus) bool {
+	c := apimeta.FindStatusCondition(ts.Conditions, npuv1alpha1.ACPPCondDegraded)
+	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == npuv1alpha1.ReasonAdvertisementDrift
+}
+
+// driftFirstSeen 은 의심을 처음 본 시각이다 — Degraded condition 이 Unknown 인 동안의
+// LastTransitionTime 이 그 값이다(별도 status 필드를 만들지 않는다).
+func driftFirstSeen(ts *npuv1alpha1.TargetStatus) *metav1.Time {
+	c := apimeta.FindStatusCondition(ts.Conditions, npuv1alpha1.ACPPCondDegraded)
+	if c == nil || c.Status != metav1.ConditionUnknown {
+		return nil
+	}
+	t := c.LastTransitionTime
+	return &t
+}
+
+// applyDriftVerdict 는 판정을 condition 과 phase 로 옮긴다. phase 는 Ready 와 Degraded 사이만
+// 오간다 — 다른 phase 로 내리면 재적용 경로가 열린다.
+func applyDriftVerdict(ts *npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorPartitionPolicy,
+	verdict verification.DriftVerdict, reason string) {
+	switch verdict {
+	case verification.DriftConfirmed:
+		ts.Phase = npuv1alpha1.ACPPPhaseDegraded
+		setCond(ts, npuv1alpha1.ACPPCondDegraded, metav1.ConditionTrue,
+			npuv1alpha1.ReasonAdvertisementDrift, reason, acpp.Generation)
+	case verification.DriftSuspected:
+		// 아직 확정이 아니다 — phase 는 Ready 로 둔다. 의심만으로 내리면 롤아웃마다 흔들린다.
+		ts.Phase = npuv1alpha1.ACPPPhaseReady
+		setCond(ts, npuv1alpha1.ACPPCondDegraded, metav1.ConditionUnknown,
+			npuv1alpha1.ReasonAdvertisementDriftSuspected, reason, acpp.Generation)
+	case verification.DriftSuppressed:
+		ts.Phase = npuv1alpha1.ACPPPhaseReady
+		setCond(ts, npuv1alpha1.ACPPCondDegraded, metav1.ConditionFalse,
+			npuv1alpha1.ReasonAdvertisementCheckSuppressed, reason, acpp.Generation)
+	default:
+		ts.Phase = npuv1alpha1.ACPPPhaseReady
+		setCond(ts, npuv1alpha1.ACPPCondDegraded, metav1.ConditionFalse,
+			npuv1alpha1.ReasonAdvertisementConsistent, "advertisement matches the verified baseline", acpp.Generation)
+	}
+}
+
+// allocatableSnapshot 은 노드 allocatable 을 판정 입력 형식으로 옮긴다.
+func allocatableSnapshot(node *corev1.Node) map[string]int32 {
+	out := make(map[string]int32, len(node.Status.Allocatable))
+	for k, q := range node.Status.Allocatable {
+		out[string(k)] = int32(q.Value())
+	}
+	return out
+}
+
+// isNodeReadyForDrift 는 노드가 Ready 인지다. Ready 가 아니면 광고가 비어도 그것은 노드 문제이지
+// 이 정책의 광고 붕괴가 아니다.
+func isNodeReadyForDrift(node *corev1.Node) bool {
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	// Ready condition 이 아직 없는 노드(envtest 시드 직후)는 판단 대상으로 본다 — 여기서 false 를
+	// 주면 모든 감시가 억제로 새 나가 기능이 죽는다.
+	return true
+}
+
 // verifyManagedNvidia 는 소유·Ready·geometry 일치(managed no-diff)의 재검증만 수행한다. 실 에러는 전파,
 // non-convergence(에러 아님)는 hard-fail 대신 transient(VerifyingAllocatable)로 두고 requeue 해 self-heal 한다.
 func (r *AcceleratorPartitionPolicyReconciler) verifyManagedNvidia(acpp *npuv1alpha1.AcceleratorPartitionPolicy, backend partition.Backend, nvb *nvidia.Backend, t partition.Target, ts npuv1alpha1.TargetStatus, rec npuv1alpha1.ApplyRecord) (npuv1alpha1.TargetStatus, error) {
@@ -601,7 +920,15 @@ func (r *AcceleratorPartitionPolicyReconciler) resumeNvidiaRecovery(acpp *npuv1a
 	vr, verr := backend.Verify(t)
 	if !verifySucceeded(vr, verr) {
 		ts.Phase = npuv1alpha1.ACPPPhaseRollingBack
-		_ = backend.Rollback(t, partition.RollbackState{}) // Rollback 은 target PCI 로 disable(state 무시).
+		// Rollback 은 target PCI 로 disable 한다(state 무시).
+		if rbErr := backend.Rollback(t, partition.RollbackState{}); rbErr != nil {
+			ts.Phase = npuv1alpha1.ACPPPhaseRollbackFailed
+			setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionFalse,
+				"RollbackFailed", rbErr.Error(), acpp.Generation)
+		} else {
+			setCond(&ts, npuv1alpha1.ACPPCondRolledBack, metav1.ConditionTrue,
+				"RollbackSucceeded", "partition restored after recovery verify failure", acpp.Generation)
+		}
 		_ = r.setRecordPhase(t.Ctx, acpp, t.NodeName, npuv1alpha1.MigPhaseRolledBack)
 		setCond(&ts, npuv1alpha1.ACPPCondVerified, metav1.ConditionFalse, "VerificationFailed", "recovery verify failed", acpp.Generation)
 		return ts, verr
@@ -703,8 +1030,13 @@ func (r *AcceleratorPartitionPolicyReconciler) restartNvidiaDevicePlugin(ctx con
 }
 
 // computeBaseline 은 apply 전 노드 상태에서 baseline·기대 allocatable 을 계산해 ApplyRecord 를 만든다(§15.2).
-// 모델 B(§17.1): MIG-enabled GPU 는 이미 nvidia.com/gpu 에서 빠져 있으므로 ExpectedFullGPUCount =
-// BaselineGPUCount(빼지 않음). physical-count 대조 검사는 제거(MIG 사전enable시 allocatable ≠ physical).
+//
+// ExpectedFullGPUCount 는 **apply 후** mixed device-plugin 이 광고할 온전한 GPU 수다 —
+// 물리 GPU 수에서 이 정책이 조각낼 대상 수를 뺀 값. apply 직전 allocatable(BaselineGPUCount)을
+// 그대로 기대값으로 쓰면 안 된다: mode 가 Enabled 여도 GI 가 없는 동안은 flat device-plugin 이
+// 그 GPU 를 온전한 GPU 로 계속 광고하므로(라이브 실측, 2026-08-04) baseline 이 물리 수와 같고,
+// 조각낸 뒤에는 mixed 가 그 GPU 를 빼고 광고해 기대값이 영원히 충족되지 않는다 — verify 가
+// 180초를 채우고 rollback 하면서 GI 생성·파괴만 반복한다.
 func (r *AcceleratorPartitionPolicyReconciler) computeBaseline(ctx context.Context, node string, acpp *npuv1alpha1.AcceleratorPartitionPolicy, resolved []partition.ResolvedEntry, targets []nvidia.MigDevice) (npuv1alpha1.ApplyRecord, error) {
 	var rec npuv1alpha1.ApplyRecord
 	if len(resolved) != 1 {
@@ -717,6 +1049,14 @@ func (r *AcceleratorPartitionPolicyReconciler) computeBaseline(ctx context.Conte
 	q := n.Status.Allocatable[corev1.ResourceName(nvidiaGPUResource)]
 	baseline := int32(q.Value())
 	nt := int32(len(targets))
+	var ndr npuv1alpha1.NodeDeviceReport
+	if err := r.Get(ctx, client.ObjectKey{Name: node}, &ndr); err != nil {
+		return rec, fmt.Errorf("baseline: get NodeDeviceReport %q: %w", node, err)
+	}
+	physical := nvidiaPhysicalGPUs(&ndr)
+	if physical < nt {
+		return rec, fmt.Errorf("baseline: node %s reports %d nvidia GPUs but %d are partition targets", node, physical, nt)
+	}
 	r0 := resolved[0]
 	// 기존 저널을 승계한 뒤 baseline 항목만 덮어쓴다 — 통째로 새 record 를 만들면 baseline 과
 	// 무관한 필드(cordonedByPolicy, sharingMode/Replicas)가 조용히 사라진다. cordon 소유권을
@@ -727,11 +1067,29 @@ func (r *AcceleratorPartitionPolicyReconciler) computeBaseline(ctx context.Conte
 	rec.OwnerUID = string(acpp.UID)
 	rec.BaselineGPUCount = baseline
 	rec.ExpectedMigCount = r0.ExpectedCountPerDevice * nt
-	rec.ExpectedFullGPUCount = baseline
+	rec.ExpectedFullGPUCount = physical - nt
 	rec.Profile = r0.Profile
 	rec.Count = r0.ExpectedCountPerDevice
 	rec.Generation = acpp.Generation
 	return rec, nil
+}
+
+// nvidiaPhysicalGPUs 는 NodeDeviceReport 가 보고한 그 노드의 nvidia 물리 GPU 수다. allocatable 이
+// 아니라 인벤토리를 쓰는 이유는, allocatable 이 "지금 어느 device-plugin 이 떠 있는가" 에 따라
+// 달라져 apply 후 기대값의 기준이 될 수 없기 때문이다.
+func nvidiaPhysicalGPUs(ndr *npuv1alpha1.NodeDeviceReport) int32 {
+	var n int32
+	for _, d := range ndr.Status.Devices {
+		if !strings.EqualFold(d.Vendor, vendorNvidia) {
+			continue
+		}
+		c := d.Count
+		if c <= 0 {
+			c = 1
+		}
+		n += c
+	}
+	return n
 }
 
 // targetPCIs 는 target 장치들의 PCI 목록이다 — 저널의 GPUPCIs 는 소유 주장 시점(journalQuiescing)과
@@ -1139,7 +1497,23 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 // (finalizer 유지, 운영자 개입). 소유 중이면 quiesce→snapshot PCI rollback→DP 재시작→fresh NDR 로
 // MIG Disabled + baseline gpu 복원 확인→lock 해제. 어느 단계든 err 면 finalizer 유지(requeue).
 func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy) error {
+	// 삭제가 끝까지 간 뒤에는 우리가 잡은 노드 Lease 를 돌려준다. 안 돌려주면 정책은 사라졌는데
+	// Lease 객체에는 죽은 소유자가 남아, 다음 작업이 만료(60초)를 기다려야 하고 운영자에게는
+	// 유령 소유자로 보인다(라이브 실측 2026-08-04: 공유 전용 정책 삭제 후 Lease 잔존).
+	// 중간에 실패하면 돌려주지 않는다 — 되돌리기가 아직 진행 중이므로 잠금을 유지하는 것이 맞다.
+	var held []string
 	for _, rec := range acpp.Status.ApplyRecords {
+		// 삭제는 Reconcile 의 위임 분기보다 먼저 처리돼(:123-125) 위임 모드에서도 여기까지 그대로
+		// 온다 — 조정자가 같은 노드에서 operation 을 Applying 중일 수 있다. 되돌리기 전에 같은
+		// Lease 를 잡아 두 주체가 동시에 하드웨어를 만지는 창을 없앤다. 위임이 꺼져 있거나
+		// Leases 가 안 심어진 배포(기존 동작)는 이 블록이 전부 no-op 이다.
+		took, lerr := r.takeDeletionLease(ctx, acpp, rec.NodeName)
+		if lerr != nil {
+			return lerr
+		}
+		if took {
+			held = append(held, rec.NodeName)
+		}
 		// 공유 원복은 소유권 판정보다 **위**다. 공유는 하드웨어를 바꾸지 않으므로 MIG 노드 lock 을
 		// 잡지 않는데(layout 없는 공유 정책이 그렇다), 아래 소유권 분기 뒤에 두면 그런 정책은 항상
 		// continue 로 건너뛰어 ConfigMap·배선·소유 표시가 영구히 남는다 — daemon 만 회수되므로
@@ -1180,7 +1554,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 			// lock 은 사라졌지만 하드웨어가 이미 baseline 일 수 있다 — 예: THIS record 를 이전 pass 에서
 			// 완전 정리(lock 해제)했고, 다른 record 의 requeue 로 재진입한 경우. 이미 복원된 하드웨어는
 			// 완료로 간주(멱등)하고, 진짜 미복원일 때만 차단한다.
-			if err := r.assertMigEmptyAndBaseline(ctx, rec); err == nil {
+			if err := r.assertMigEmptyAndBaseline(ctx, rec, acpp.Spec.DeletionPolicy == npuv1alpha1.DeletionPolicyRestoreMode); err == nil {
 				continue
 			}
 			// 하드웨어를 바꿨는데 lock 을 잃었고 복원도 증명 못 함 → 차단(운영자 개입).
@@ -1202,6 +1576,9 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 		// 외부 주체를 기다리며 영구히 막는다 — finalizer 가 빠지지 않아 ACPP 가 영원히 Terminating 이다.
 		// 배출은 하지 않으므로 GPU 를 쥔 pod 이 남아 있으면 아래 quiesce 전제가 그대로 걸러 낸다.
 		if err := r.cordonForRollback(ctx, acpp, rec); err != nil {
+			// 다른 차단 경로와 같은 신호를 준다 — 이벤트가 없으면 운영자에게는 이유 없는
+			// Terminating 으로만 보인다.
+			r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
 			return err
 		}
 		if err := r.assertNodeQuiesced(ctx, rec.NodeName); err != nil {
@@ -1217,9 +1594,8 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 		if err := r.restartNvidiaDevicePlugin(ctx, rec.NodeName); err != nil {
 			return err
 		}
-		if err := r.assertMigEmptyAndBaseline(ctx, rec); err != nil {
-			r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
-			return err // 복원 미확인 → finalizer 유지(never remove on unverified restore).
+		if err := r.finishNvidiaDeletionRollback(ctx, acpp, rec); err != nil {
+			return err
 		}
 		if err := r.syncMigActiveLabel(ctx, rec.NodeName, false); err != nil {
 			return err
@@ -1247,6 +1623,37 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 	// 영구 TargetConflict). record 없는 lock 은 hardware 미변경이므로 rollback 없이 lock 만 해제한다.
 	if err := r.releaseOrphanOwnerLocks(ctx, string(acpp.UID)); err != nil {
 		return err
+	}
+	return r.releaseDeletionLeases(ctx, acpp, held)
+}
+
+// takeDeletionLease 는 삭제 경로가 노드 Lease 를 잡는 지점이다. 위임이 꺼져 있거나 Lease 관리자가
+// 없으면(기존 배포) 아무것도 하지 않고 false 를 돌려준다 — 그 경우 돌려줄 것도 없다.
+func (r *AcceleratorPartitionPolicyReconciler) takeDeletionLease(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string) (bool, error) {
+	if !delegateModeEnabled() || r.Leases == nil {
+		return false, nil
+	}
+	ok, _, err := r.Leases.Acquire(ctx, node, deletionLeaseHolder(acpp))
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		// 조정자가 이 노드를 쥐고 있다 — 지금 되돌리면 동시 mutation 이 된다. finalizer 를
+		// 유지하고 다음 pass 에 다시 시도한다(Lease 는 만료가 있으므로 영구 대기가 아니다).
+		return false, fmt.Errorf("cleanup waiting for node lease on %s: coordinator busy", node)
+	}
+	return true, nil
+}
+
+// releaseDeletionLeases 는 삭제가 끝까지 간 뒤 잡았던 노드 Lease 를 돌려준다. 중간 실패 경로에서는
+// 부르지 않는다 — 되돌리기가 아직 진행 중이면 잠금을 유지하는 것이 맞다.
+func (r *AcceleratorPartitionPolicyReconciler) releaseDeletionLeases(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, nodes []string) error {
+	for _, node := range nodes {
+		if err := r.Leases.Release(ctx, node, deletionLeaseHolder(acpp)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1292,6 +1699,108 @@ func (r *AcceleratorPartitionPolicyReconciler) releaseNodeOwnerLockUID(ctx conte
 	return r.Patch(ctx, &n, client.MergeFrom(base))
 }
 
+// migModeDisableAction 은 mode disable Job 의 결정론적 이름에 들어가는 action 토큰이다(GI apply/enable 과 구분).
+const migModeDisableAction = "mig-mode-disable"
+
+// restoreMigModeDisabled 는 GI 회수 뒤 MIG mode 자체를 Disabled 로 되돌린다(deletionPolicy=RestoreMode).
+//
+// 완료 판정은 **재관측**이다 — 재부팅 성공보다 직접적인 신호이기 때문이다. 재부팅이 됐어도 mode 가
+// 안 내려갔으면 끝난 게 아니고, 그 판정은 BootID 로 할 수 없다. MIG mode enable 경로가 같은 이유로
+// 재관측을 쓴다.
+//
+// 재부팅 횟수는 저널의 DisableRebootAttempts 로 제한한다 — enable 경로의 RebootAttempts 와는
+// 별도 예산이다. enable 이 상한을 소진하고 Failed 로 끝난 정책을 RestoreMode 로 지우면, 공유
+// 카운터로는 disable 이 재부팅을 한 번도 시도하지 못한 채 상한에 걸려 finalizer 가 영구 유지된다
+// — 두 작업은 방향이 반대인 별개 작업이므로 예산도 분리한다. 상한을 넘으면 오류로 올려 finalizer
+// 를 유지한다 — 재부팅을 더 쏘는 대신 운영자를 부른다.
+//
+// 재부팅 Job 이 이미 있으면 이번 사이클은 이미 쏜 것이다 — enable 경로(ensureAcppRebootJob)와
+// 같은 규율로 존재 여부를 먼저 본다. 이 확인이 없으면 재부팅 하나가 끝나기도 전에(노드가 아직
+// 안 돌아왔거나 돌아왔지만 mode 재관측이 아직 Enabled 를 보고하는 매 pass 마다) 명령을 다시 쏘고
+// DisableRebootAttempts 를 다시 올려, 실제로는 한 번도 재시도하지 않았는데 상한을 금방 소진해버린다.
+// finishNvidiaDeletionRollback 은 GI rollback 뒤 baseline 확인과(deletionPolicy 에 따라) MIG
+// mode 복원까지를 한 단계로 묶는다. handleNvidiaDeletion 밖으로 뽑은 이유는 그 함수 하나가 이미
+// 복잡도 상한에 가까웠기 때문이다(gocyclo) — 로직은 그대로이고 나누기만 했다.
+func (r *AcceleratorPartitionPolicyReconciler) finishNvidiaDeletionRollback(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) error {
+	restoreMode := acpp.Spec.DeletionPolicy == npuv1alpha1.DeletionPolicyRestoreMode
+	if err := r.assertMigEmptyAndBaseline(ctx, rec, restoreMode); err != nil {
+		r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
+		return err // 복원 미확인 → finalizer 유지(never remove on unverified restore).
+	}
+	return r.enforceRestoreModeOnDeletion(ctx, acpp, rec)
+}
+
+// enforceRestoreModeOnDeletion 은 deletionPolicy=RestoreMode 일 때만 mode 복원을 밀어붙인다.
+func (r *AcceleratorPartitionPolicyReconciler) enforceRestoreModeOnDeletion(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) error {
+	if acpp.Spec.DeletionPolicy != npuv1alpha1.DeletionPolicyRestoreMode {
+		return nil
+	}
+	done, merr := r.restoreMigModeDisabled(ctx, acpp, rec)
+	if merr != nil {
+		r.emitDeletionBlockedEvent(acpp, rec.NodeName, merr)
+		return merr
+	}
+	if !done {
+		// 아직 mode 가 Disabled 로 관측되지 않았다 — finalizer 를 유지해 다음 pass 에 이어간다.
+		// 여기서 통과시키면 mode 가 켜진 채 정책만 사라져, 그 노드는 공유를 못 쓰는데 이유를
+		// 알려줄 객체도 없는 상태가 된다.
+		return fmt.Errorf("cleanup waiting for MIG mode restore on node %s", rec.NodeName)
+	}
+	return nil
+}
+
+func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) (bool, error) {
+	devs, oerr := r.observeDevicesForNode(ctx, rec.NodeName, rec.GPUPCIs)
+	if oerr != nil {
+		return false, oerr
+	}
+	// 관측을 신뢰할 수 없으면 아무것도 하지 않는다 — 상태를 모르는 채 재부팅을 예약하는 것이
+	// 이 경로에서 가장 위험한 행동이다(fail-closed, ModeObservable 과 같은 게이트).
+	if !nvidia.ModeObservable(devs) {
+		return false, fmt.Errorf("mig mode not observable on node %s; refusing to restore", rec.NodeName)
+	}
+	if !nvidia.NeedsModeDisable(devs) {
+		return true, nil // 이미 Disabled — 멱등하게 완료.
+	}
+
+	var existingJob batchv1.Job
+	jobErr := r.Get(ctx, types.NamespacedName{Name: naming.AcppRebootJobName(rec.NodeName), Namespace: driverjob.Namespace}, &existingJob)
+	if jobErr == nil {
+		return false, nil // 이미 예약했다 — 다음 재관측을 기다린다(명령·카운터 재실행 금지).
+	}
+	if !apierrors.IsNotFound(jobErr) {
+		return false, jobErr
+	}
+
+	if rec.DisableRebootAttempts >= maxMigRebootAttempts {
+		return false, fmt.Errorf("mig mode still enabled on node %s after %d reboots; manual intervention required",
+			rec.NodeName, rec.DisableRebootAttempts)
+	}
+
+	pcis := nvidia.ModeDisableTargets(devs)
+	steps := nvidia.ModeDisableSteps(pcis)
+	opID, cmdHash := nvidia.OperationID(string(acpp.UID), acpp.Generation, rec.NodeName, migModeDisableAction, steps)
+	if err := r.nvidiaExecutor().Run(ctx, opID, cmdHash, rec.NodeName, steps); err != nil {
+		return false, err
+	}
+	// 시도 횟수를 Job 생성 **이전에** 영속한다 — 재부팅이 프로세스를 죽이므로 카운터가 먼저
+	// durable 해야 상한이 의미를 갖는다(enable 경로와 같은 규율).
+	next := rec
+	next.NodeName = rec.NodeName
+	next.DisableRebootAttempts++
+	if err := r.patchApplyRecord(ctx, acpp, next); err != nil {
+		return false, err
+	}
+	rb := &nodeRebooter{Client: r.Client, Image: r.migToolImage()}
+	if err := rb.RequestReboot(ctx, rec.NodeName, ""); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // assertNodeQuiesced 는 rollback 안전(노드 cordon + GPU 점유 pod 없음)을 검증한다(§15.3).
 // 실제 판정은 partition.Quiescer 로 위임한다(Task 5 — 배출 로직과 판정 규칙을 한 곳에 둔다).
 func (r *AcceleratorPartitionPolicyReconciler) assertNodeQuiesced(ctx context.Context, node string) error {
@@ -1315,7 +1824,15 @@ func (r *AcceleratorPartitionPolicyReconciler) emitDeletionBlockedEvent(acpp *np
 // assertMigEmptyAndBaseline 은 rollback 후 fresh NDR 로 대상 PCI 전부 MIG Enabled + GI 없음
 // (geometry 빈 문자열) 이고 노드 nvidia.com/gpu allocatable 이 baseline 으로 복원됐는지 확인한다(모델 B §17.1).
 // mode 는 끄지 않는다(GI 만 제거). 하나라도 아니면 err.
-func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx context.Context, rec npuv1alpha1.ApplyRecord) error {
+// assertMigEmptyAndBaseline 은 GI 회수가 baseline 으로 정확히 돌아갔는지 확인한다.
+//
+// allowModeDisabled 는 deletionPolicy=RestoreMode 에서만 true 다 — 그 정책은 이 확인 뒤에
+// mode 자체를 Disabled 로 되돌리므로(restoreMigModeDisabled), 그 이후의 모든 재진입 pass 에서
+// 이 함수가 다시 불릴 때 mode 는 이미 Disabled 로 관측된다. "mode 는 반드시 Enabled" 를 그대로
+// 두면 mode 복원이 **성공한 바로 그 순간부터** 이 확인이 "MIG not enabled after rollback" 으로
+// 영구히 거절해, 정리가 다시는 끝나지 못한다(복원이 잘 됐는데 그 사실 때문에 막히는 역설).
+// Retain(allowModeDisabled=false)은 mode 를 절대 건드리지 않으므로 기존 그대로 Enabled 만 받는다.
+func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx context.Context, rec npuv1alpha1.ApplyRecord, allowModeDisabled bool) error {
 	// MIG 상태는 detector 가 못 채우므로(spec §16) apply 경로와 동일하게 observer(nsenter Job)로 관측한다.
 	obs, err := r.nvidiaObserver().Observe(ctx, rec.NodeName, rec.GPUPCIs)
 	if err != nil {
@@ -1327,10 +1844,11 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 		if o.Err != "" {
 			return fmt.Errorf("node %s pci %s observation failed after rollback: %s", rec.NodeName, o.PCI, o.Err)
 		}
-		if o.ModeCurrent != "Enabled" {
+		modeOK := o.ModeCurrent == migModeEnabled || (allowModeDisabled && o.ModeCurrent == migModeDisabled)
+		if !modeOK {
 			return fmt.Errorf("node %s pci %s MIG not enabled after rollback (current=%s)", rec.NodeName, o.PCI, o.ModeCurrent)
 		}
-		if o.Geometry != "" {
+		if !migGeometryEmpty(o.Geometry) {
 			return fmt.Errorf("node %s pci %s still has GPU instances after rollback (geometry=%s)", rec.NodeName, o.PCI, o.Geometry)
 		}
 	}
@@ -1344,10 +1862,22 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 		return err
 	}
 	q := n.Status.Allocatable[corev1.ResourceName(nvidiaGPUResource)]
-	if int32(q.Value()) != rec.BaselineGPUCount {
-		return fmt.Errorf("node %s allocatable %s=%d not restored to baseline %d", rec.NodeName, nvidiaGPUResource, q.Value(), rec.BaselineGPUCount)
+	got := int32(q.Value())
+	// mode 까지 되돌리는 경로(RestoreMode)는 baseline 보다 **많이** 돌아온다 — baseline 은 MIG mode
+	// 가 켜져 있던 시점의 광고량이라 조각 대상 GPU 가 빠져 있고, mode 를 끄면 그 GPU 가 온전한
+	// GPU 로 다시 광고되기 때문이다. 정확 일치를 요구하면 복원이 성공한 그 사실 때문에 정리가
+	// 막힌다(라이브 실측 2026-08-04). 부족한 것만 실패로 본다.
+	if got < rec.BaselineGPUCount || (!allowModeDisabled && got != rec.BaselineGPUCount) {
+		return fmt.Errorf("node %s allocatable %s=%d not restored to baseline %d", rec.NodeName, nvidiaGPUResource, got, rec.BaselineGPUCount)
 	}
 	return nil
+}
+
+// migGeometryEmpty 는 "조각이 없다" 의 두 표기를 함께 받는다. 관측기는 mode 가 꺼진 GPU 를
+// geometry "disabled" 로 보고하는데(NodeDeviceReport 계약과 같은 어휘), 빈 문자열만 받으면
+// mode 복원이 끝난 노드가 "아직 조각이 남았다" 로 읽힌다(라이브 실측 2026-08-04).
+func migGeometryEmpty(g string) bool {
+	return g == "" || strings.EqualFold(g, "disabled")
 }
 
 // setDeletionBlocked 는 cleanup 차단 상태를 영속한다: 대상 rec.MigPhase=CleanupBlocked + target
@@ -1376,4 +1906,96 @@ func (r *AcceleratorPartitionPolicyReconciler) setDeletionBlocked(ctx context.Co
 	if err := r.Status().Patch(ctx, acpp, client.MergeFrom(base)); err != nil {
 		logger.Error(err, "setDeletionBlocked: status patch failed")
 	}
+}
+
+// delegateModeEnabled 는 위임 모드가 켜졌는지다.
+//
+// 값을 캐시하지 않는다 — 캐시하면 "껐는데 안 꺼진다" 가 생긴다. Getenv 는 프로세스 메모리
+// 조회라 매 reconcile 마다 불러도 비용이 없다. 유효값은 "delegate" 하나이고 그 외/미설정은
+// 전부 꺼짐이다(값이 없으면 꺼진 것으로 읽히는 방향이 안전하다).
+func delegateModeEnabled() bool {
+	return os.Getenv("KCLOUD_OPERATION_COORDINATOR") == "delegate"
+}
+
+// deletionLeaseHolder 는 삭제 경로가 노드 Lease 를 잡을 때 쓰는 소유자 식별자다. 정책 이름
+// 기준으로 고정해 같은 삭제 pass 의 재시도가 자기 자신의 Lease 를 다시 잡을 수 있게 한다.
+func deletionLeaseHolder(acpp *npuv1alpha1.AcceleratorPartitionPolicy) string {
+	return "acpp-delete-" + acpp.Name
+}
+
+// TransactionIDFor 는 같은 의도의 재요청이 같은 값을 갖도록 만든 요청 정체성이다.
+// (uid, generation, node) — spec 이 바뀌면 generation 이 오르므로 새 트랜잭션이 된다.
+func TransactionIDFor(acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string) string {
+	return fmt.Sprintf("%s-%d-%s", acpp.UID, acpp.Generation, node)
+}
+
+// OperationNameFor 는 트랜잭션 객체 이름이다. 결정론적이라 같은 의도는 같은 객체를 재사용한다 —
+// 시각이나 난수를 넣으면 reconcile 마다 트랜잭션이 쌓인다.
+func OperationNameFor(acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string) string {
+	// UID 접미사가 없으면 삭제 후 같은 이름으로 재생성된 정책(generation 이 1로 되돌아간다)이
+	// 옛 정책의(고아로 남은, 대개 이미 종점인) operation 과 이름이 겹친다 — Create 가 돌려주는
+	// AlreadyExists 를 그대로 재사용으로 읽어, 이미 끝난 옛 객체를 새 정책이 영원히 기다리게
+	// 된다. UID 는 정책 인스턴스마다 달라 이 충돌 자체가 성립하지 않는다.
+	uid := string(acpp.UID)
+	if len(uid) > 8 {
+		uid = uid[:8]
+	}
+	suffix := "-" + uid
+	name := fmt.Sprintf("acpp-%s-%d-%s", acpp.Name, acpp.Generation, node)
+	if max := 63 - len(suffix); len(name) > max {
+		name = name[:max]
+	}
+	return name + suffix
+}
+
+// delegateToOperation 은 위임 모드에서 정책 대신 트랜잭션을 만든다.
+//
+// **여기서 runTarget 을 부르지 않는다.** 위임 모드의 유일한 mutation 호출자는 participant 이고,
+// 그래서 두 경로가 동시에 존재하지 않는다(분기가 아니라 호출자의 이동이다).
+//
+// 이미 수렴한 정책에는 트랜잭션을 만들지 않는다. 이 가드가 없으면 gate 를 켜는 순간 클러스터의
+// 모든 Ready 정책이 재적용된다 — 이 기능에서 폭발 반경이 가장 큰 지점이다.
+func (r *AcceleratorPartitionPolicyReconciler) delegateToOperation(ctx context.Context,
+	acpp *npuv1alpha1.AcceleratorPartitionPolicy, t partition.Target) (ctrl.Result, error) {
+	var prev *npuv1alpha1.TargetStatus
+	if len(acpp.Status.Targets) > 0 {
+		prev = &acpp.Status.Targets[0]
+	}
+	if !r.shouldReverify(acpp, prev) {
+		// 수렴 상태다 — 트랜잭션 없이 기존 광고 감시만 돈다.
+		ts, err := r.monitorDrift(t, acpp, *prev)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if werr := r.writeTargetStatus(ctx, acpp, ts); werr != nil {
+			return ctrl.Result{}, werr
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	if t.NodeName == "" {
+		return ctrl.Result{}, nil // 대상 노드가 없다 — 만들 트랜잭션이 없다.
+	}
+
+	opType := OperationTypeForACPP(acpp)
+	op := &npuv1alpha1.AcceleratorOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: OperationNameFor(acpp, t.NodeName)},
+		Spec: npuv1alpha1.AcceleratorOperationSpec{
+			Type: string(opType), NodeName: t.NodeName, Vendor: acpp.Spec.Vendor,
+			TransactionID: TransactionIDFor(acpp, t.NodeName),
+			Owner: npuv1alpha1.OperationOwner{
+				Kind: "AcceleratorPartitionPolicy", Name: acpp.Name,
+				UID: string(acpp.UID), Generation: acpp.Generation,
+			},
+			ResourceKeys: ResourceKeysForACPP(acpp, t.NodeName, opType),
+		},
+	}
+	// ownerRef 를 심어 정책이 지워지면 K8s GC 가 이 트랜잭션도 회수하게 한다(둘 다 cluster-scoped
+	// 라 유효하다) — 그러지 않으면 종점(Succeeded 등)에 도달한 operation 객체가 영구히 쌓인다.
+	if err := ctrl.SetControllerReference(acpp, op, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Create(ctx, op); err != nil && !apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 }

@@ -186,6 +186,103 @@ var _ = Describe("ensureNvidiaDevicePlugin renders mixed and flat DaemonSets", f
 	})
 })
 
+// Nvidia.Enabled=false 시 mixed/flat DaemonSet 을 모두 회수한다 — 단, 이 policy 가 owner
+// annotation 으로 소유를 인정한 것만. 실제로는 enabled=true 로 한 번이라도 reconcile 되면
+// ensureNvidiaDevicePlugin(:418)이 매번 annotation 을 stamp 하므로, 토글 off 시점엔 거의 항상
+// owned 상태다 — 그래서 두 DS 모두 owner annotation 을 미리 달아 그 상태를 재현한다.
+var _ = Describe("NPUClusterPolicy reconcile with Nvidia.Enabled=false", func() {
+	It("removes both the mixed and flat NVIDIA device plugin DaemonSets when owned", func() {
+		policy := &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "np-nvidia-disable-test", Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/npu-op-detector:test"},
+				Nvidia:   npuv1alpha1.NvidiaSpec{Enabled: false, DevicePluginImage: "img:v1"},
+			},
+		}
+		owner := map[string]string{ownerAnnotation: policy.Namespace + "/" + policy.Name}
+
+		selMixed := map[string]string{"app.kubernetes.io/name": nvidia.DevicePluginNameMixed}
+		selFlat := map[string]string{"app.kubernetes.io/name": nvidia.DevicePluginNameFlat}
+		mixed := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system", Annotations: owner},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: selMixed},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selMixed},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "d", Image: "old:v0"}}},
+				},
+			},
+		}
+		flat := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameFlat, Namespace: "kube-system", Annotations: owner},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: selFlat},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selFlat},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "d", Image: "old:v0"}}},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, mixed)).To(Succeed())
+		Expect(k8sClient.Create(ctx, flat)).To(Succeed())
+		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, policy)
+			_ = k8sClient.Delete(ctx, mixed)
+			_ = k8sClient.Delete(ctx, flat)
+		})
+
+		r := &NPUClusterPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(50)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, name := range []string{nvidia.DevicePluginNameMixed, nvidia.DevicePluginNameFlat} {
+			var ds appsv1.DaemonSet
+			getErr := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: "kube-system"}, &ds)
+			Expect(errors.IsNotFound(getErr)).To(BeTrue(), name+" 가 남아 있다 — 토글 off 는 소유한 DS 를 모두 지워야 한다")
+		}
+	})
+
+	// 이 operator 가 한 번도 reconcile 하지 않은(=owner annotation 없는) DS 는 이름이 같아도
+	// 지우면 안 된다 — #19 흡수 대상 3rd-party DS 보호. 소유권 검사를 걷어내면 이 스펙이 실패로
+	// 뒤집힌다(뮤테이션으로 확인).
+	It("does not remove a same-named DaemonSet it has never owned", func() {
+		selMixed := map[string]string{"app.kubernetes.io/name": nvidia.DevicePluginNameMixed}
+		unowned := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system"},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: selMixed},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: selMixed},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "d", Image: "3rd-party:v0"}}},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, unowned)).To(Succeed())
+
+		policy := &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "np-nvidia-disable-unowned-test", Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/npu-op-detector:test"},
+				Nvidia:   npuv1alpha1.NvidiaSpec{Enabled: false, DevicePluginImage: "img:v1"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, policy)
+			_ = k8sClient.Delete(ctx, unowned)
+		})
+
+		r := &NPUClusterPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(50)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		var ds appsv1.DaemonSet
+		getErr := k8sClient.Get(ctx, types.NamespacedName{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system"}, &ds)
+		Expect(getErr).NotTo(HaveOccurred(), "owner annotation 이 없는 3rd-party DS 를 지웠다 — 흡수 전 리소스가 보호돼야 한다")
+	})
+})
+
 // TestOwnedScanNamespaces: #16 detector 이동 dual-ns 스캔 고정.
 // env 미설정 → kube-system 1개(회귀 0). 설정 → kube-system + kcloud 2개(과도기 orphan 방지).
 func TestOwnedScanNamespaces(t *testing.T) {

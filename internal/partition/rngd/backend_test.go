@@ -246,3 +246,28 @@ func TestRngdDiscover(t *testing.T) {
 		}
 	}
 }
+
+// TestDiscoverAcceptsLowercaseModel 은 detector 가 보내는 실제 표기("rngd")로도 장치가 잡히는지
+// 고정한다. 정확 일치("RNGD")로 거르면 status.devices 가 비고, 그 위에 얹힌 검증이 "관측 전무"
+// 로 영구 실패한다 — 2026-08-04 라이브에서 실제로 그렇게 막혔다.
+func TestDiscoverAcceptsLowercaseModel(t *testing.T) {
+	ndr := &v1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "rngd-1"},
+		Status: v1alpha1.NodeDeviceReportStatus{Devices: []v1alpha1.DeviceEntry{{
+			Vendor: "furiosa", Model: "rngd", Count: 1, DriverVersion: "2026.1.0",
+		}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(dsWithPolicy(testDualCorePolicy), ndr).Build()
+	res, err := New(c).Discover(partition.Target{Ctx: context.Background(), NodeName: "rngd-1",
+		DaemonSetName: "furiosa-unified-device-plugin", DaemonSetNamespace: "kube-system"})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(res.Devices) != 1 {
+		t.Fatalf("devices = %d, want 1 (lowercase model must be accepted)", len(res.Devices))
+	}
+	if res.DriverVersion != "2026.1.0" {
+		t.Errorf("driverVersion = %q, want 2026.1.0", res.DriverVersion)
+	}
+}

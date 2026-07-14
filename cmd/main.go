@@ -48,7 +48,10 @@ import (
 	"kcloud-operator/internal/controller"
 	"kcloud-operator/internal/crdapply"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/naming"
+	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/upgrade"
+	"kcloud-operator/internal/verification"
 	npuwebhook "kcloud-operator/internal/webhook"
 	"kcloud-operator/pkg/npuctl"
 	// +kubebuilder:scaffold:imports
@@ -265,22 +268,76 @@ func main() {
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorderFor("driver-upgrade-statemachine"),
 	}
-	if err := (&controller.DriverUpgradeReconciler{
+	driverReconciler := &controller.DriverUpgradeReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorderFor("driverupgrade-controller"),
 		StateMachine: sm,
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := driverReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DriverUpgrade")
 		os.Exit(1)
 	}
-	if err := (&controller.AcceleratorPartitionPolicyReconciler{
+	// acppLiveVerifier 는 apply 검증과 근거 게이트의 allocation probe 가 공유하는 단일 인스턴스다 —
+	// 따로 만들면 ACPP_PROBE_IMAGE 설정이 두 곳으로 갈라진다.
+	acppLiveVerifier := controller.NewLiveVerifier(mgr.GetClient())
+	acppReconciler := &controller.AcceleratorPartitionPolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("acceleratorpartitionpolicy-controller"),
-		Verifier: controller.NewLiveVerifier(mgr.GetClient()),
-	}).SetupWithManager(mgr); err != nil {
+		Verifier: acppLiveVerifier,
+		Verification: &verification.Verifier{
+			Client: mgr.GetClient(),
+			Prober: controller.NewAllocationProber(acppLiveVerifier),
+		},
+		// 삭제 경로가 위임 모드에서 노드를 되돌리기 전에 조정자와 같은 Lease 를 잡는다(같은
+		// Namespace/Duration — 서로 다른 Lease 로 나뉘면 이 목적 자체가 성립하지 않는다).
+		Leases: &operation.LeaseManager{
+			Client: mgr.GetClient(), Namespace: naming.OperatorNamespace(),
+			Holder: "kcloud-operator", Duration: 60 * time.Second,
+		},
+	}
+	if err := acppReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorPartitionPolicy")
+		os.Exit(1)
+	}
+	// AcceleratorOperation 컨트롤러 — ACPP reconciler 인스턴스를 재사용한다. participant 가 그
+	// seam(Verifier·Executor·Observer)을 그대로 써야 적용 로직이 갈라지지 않는다.
+	if err := (&controller.AcceleratorOperationReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("accelerator-operation"),
+		Participants: operation.Registry{
+			operation.PartitionReconfigure: controller.NewACPPParticipant(acppReconciler),
+			operation.SharingModeChange:    controller.NewACPPParticipant(acppReconciler),
+			operation.Revalidate:           controller.NewRevalidateParticipant(acppReconciler),
+			operation.DriverInstall:        controller.NewDriverParticipant(driverReconciler),
+			operation.DriverUpgrade:        controller.NewDriverParticipant(driverReconciler),
+			operation.DriverRollback:       controller.NewDriverParticipant(driverReconciler),
+			operation.DevicePluginRestart:  controller.NewDevicePluginParticipant(acppReconciler),
+			operation.RecoverDevice:        controller.NewRecoverDeviceParticipant(acppReconciler),
+			operation.NodeReboot: controller.NewNodeRebootParticipant(
+				mgr.GetClient(), os.Getenv("ACPP_MIG_JOB_IMAGE")),
+		},
+		Leases: &operation.LeaseManager{
+			Client: mgr.GetClient(), Namespace: naming.OperatorNamespace(),
+			Holder: "kcloud-operator", Duration: 60 * time.Second,
+		},
+		Verification: &verification.Verifier{
+			Client: mgr.GetClient(),
+			Prober: controller.NewAllocationProber(controller.NewLiveVerifier(mgr.GetClient())),
+		},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorOperation")
+		os.Exit(1)
+	}
+
+	// Health 감시 컨트롤러 — 장치를 직접 바꾸지 않고 상태 기록·격리 라벨·복구 작업 생성만 한다.
+	if err := (&controller.AcceleratorHealthReconciler{
+		Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("accelerator-health"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorHealth")
 		os.Exit(1)
 	}
 	if err := (&controller.AcceleratorWorkloadReconciler{
@@ -289,6 +346,14 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("acceleratorworkload-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorWorkload")
+		os.Exit(1)
+	}
+	// 정책과 무관한 저빈도 MIG 관측 — 정책이 없어도 보고서의 MIG 필드가 신선해야 한다.
+	if err := (&controller.MigObservationReconciler{
+		Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("migobservation"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MigObservation")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

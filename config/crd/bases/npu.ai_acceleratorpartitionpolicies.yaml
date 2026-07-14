@@ -56,6 +56,7 @@ spec:
                 default: Retain
                 enum:
                 - Retain
+                - RestoreMode
                 type: string
               layout:
                 description: |-
@@ -162,6 +163,15 @@ spec:
                         cordon 해 둔 노드를 정책이 멋대로 uncordon 하지 않도록, 우리가 잠근 노드만 되돌린다.
                       type: boolean
                     count:
+                      format: int32
+                      type: integer
+                    disableRebootAttempts:
+                      description: |-
+                        DisableRebootAttempts 는 deletionPolicy=RestoreMode 삭제 경로가 MIG mode 를 되돌리기 위해
+                        요청한 재부팅 횟수다. RebootAttempts(mode enable)와 별도 예산이다 — enable 이 상한을
+                        소진하고 Failed 로 끝난 뒤 그 정책을 RestoreMode 로 지우면, 공유 카운터로는 disable 이
+                        재부팅을 한 번도 시도하지 못한 채 상한에 걸려 finalizer 가 영구 유지된다(두 작업은 방향이
+                        반대인 별개 작업이다).
                       format: int32
                       type: integer
                     expectedFullGPUCount:

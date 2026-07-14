@@ -116,6 +116,13 @@ spec:
                       type: string
                   type: object
                 type: array
+              observedAt:
+                description: |-
+                  ObservedAt 은 node-agent 가 이 보고서를 마지막으로 갱신한 시각입니다. 비어 있으면 "관측 시각
+                  미상" 이고, health 판정은 그 상태를 Healthy 로 승격하지 않습니다(모르는 것을 아는 것처럼
+                  다루지 않는다 — R&D base v0.1 §10.3).
+                format: date-time
+                type: string
               passthroughReserved:
                 description: |-
                   PassthroughReserved 는 노드에 GPU 가 존재하며 전량 vfio-pci(passthrough)에 바인딩된 경우 true 입니다.

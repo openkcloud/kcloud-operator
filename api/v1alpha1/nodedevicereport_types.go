@@ -78,6 +78,11 @@ type NodeDeviceReportStatus struct {
 	PassthroughReserved bool `json:"passthroughReserved,omitempty"`
 	// Validation 은 node-agent 가 상시/정기 실행하는 벤더별 검증 결과입니다(S2-3).
 	Validation *ValidationStatus `json:"validation,omitempty"`
+	// ObservedAt 은 node-agent 가 이 보고서를 마지막으로 갱신한 시각입니다. 비어 있으면 "관측 시각
+	// 미상" 이고, health 판정은 그 상태를 Healthy 로 승격하지 않습니다(모르는 것을 아는 것처럼
+	// 다루지 않는다 — R&D base v0.1 §10.3).
+	// +optional
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
 }
 
 // ValidationStatus 는 node-agent Validation 능력의 노드 검증 결과입니다(S2-3).

@@ -1,14 +1,18 @@
 // ============================================================
-// acpp_verifier_test.go: allocatableMet 순수 함수 unit 테스트
-// 생성일: 2026-07-23
+// acpp_verifier_test.go: allocatableMet 순수 함수 + allocationProber 어댑터 unit 테스트
+// 생성일: 2026-07-23 | 수정일: 2026-07-31
 // ============================================================
 package controller
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"kcloud-operator/internal/partition"
 )
 
 // TestNewLiveVerifier_ProbeImage 는 ACPP_PROBE_IMAGE 미설정 시 fallback(registry.k8s.io/pause:3.9),
@@ -52,4 +56,59 @@ func TestAllocatableMet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// stubVerifier 는 partition.Verifier 를 고정 응답으로 구현한다(allocationProber 어댑터 전용 테스트 seam).
+type stubVerifier struct {
+	res *partition.VerifyResult
+	err error
+}
+
+func (s stubVerifier) VerifyAllocatable(partition.Target, map[string]int32) (*partition.VerifyResult, error) {
+	return nil, nil
+}
+func (s stubVerifier) VerifyAllocation(partition.Target, string) (*partition.VerifyResult, error) {
+	return s.res, s.err
+}
+
+// TestAllocationProber_Probe 는 NewAllocationProber 가 기존 partition.Verifier.VerifyAllocation 을
+// verification.AllocationProber 계약(allocated, message, err)으로 정확히 옮기는지 확인한다 —
+// nil verifier(미설정), 프로브 자체 에러, nil 결과, 정상 결과 네 갈래.
+func TestAllocationProber_Probe(t *testing.T) {
+	t.Run("nil verifier reports not-allocated without error", func(t *testing.T) {
+		p := NewAllocationProber(nil)
+		ok, msg, err := p.Probe(context.Background(), "node-1", "nvidia.com/mig-1g.6gb")
+		if ok || msg == "" || err != nil {
+			t.Fatalf("Probe() = (%v, %q, %v), want (false, non-empty, nil)", ok, msg, err)
+		}
+	})
+	t.Run("verifier error propagates", func(t *testing.T) {
+		wantErr := errors.New("probe pod scheduling failed")
+		p := NewAllocationProber(stubVerifier{err: wantErr})
+		ok, _, err := p.Probe(context.Background(), "node-1", "nvidia.com/mig-1g.6gb")
+		if ok || !errors.Is(err, wantErr) {
+			t.Fatalf("Probe() = (%v, _, %v), want (false, %v)", ok, err, wantErr)
+		}
+	})
+	t.Run("nil result is not-allocated without error", func(t *testing.T) {
+		p := NewAllocationProber(stubVerifier{res: nil})
+		ok, msg, err := p.Probe(context.Background(), "node-1", "nvidia.com/mig-1g.6gb")
+		if ok || msg == "" || err != nil {
+			t.Fatalf("Probe() = (%v, %q, %v), want (false, non-empty, nil)", ok, msg, err)
+		}
+	})
+	t.Run("successful allocation reports true", func(t *testing.T) {
+		p := NewAllocationProber(stubVerifier{res: &partition.VerifyResult{TestPodAllocated: true}})
+		ok, _, err := p.Probe(context.Background(), "node-1", "nvidia.com/mig-1g.6gb")
+		if !ok || err != nil {
+			t.Fatalf("Probe() = (%v, _, %v), want (true, nil)", ok, err)
+		}
+	})
+	t.Run("unallocated result reports false", func(t *testing.T) {
+		p := NewAllocationProber(stubVerifier{res: &partition.VerifyResult{TestPodAllocated: false}})
+		ok, _, err := p.Probe(context.Background(), "node-1", "nvidia.com/mig-1g.6gb")
+		if ok || err != nil {
+			t.Fatalf("Probe() = (%v, _, %v), want (false, nil)", ok, err)
+		}
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/health"
 )
 
 func node(name string, alloc map[string]string) corev1.Node {
@@ -105,6 +107,28 @@ func TestBuildSnapshotDetectsOutOfBandSharing(t *testing.T) {
 	}
 	if strings.Contains(rj.Message, "replica") {
 		t.Fatalf("rejection must not assert replication as the mechanism: %q", rj.Message)
+	}
+}
+
+// 광고가 무너진 노드에는 새 워크로드를 배치하지 않는다 — Degraded 는 Ready 가 아니므로
+// 기존 fail-closed 규칙이 그대로 적용된다. 이 동작은 의도된 것이며 여기서 고정한다.
+func TestDegradedTargetMarksNodeStale(t *testing.T) {
+	acpp := v1alpha1.AcceleratorPartitionPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Generation: 2},
+		Status: v1alpha1.AcceleratorPartitionPolicyStatus{
+			ObservedGeneration: 2,
+			Targets: []v1alpha1.TargetStatus{{
+				NodeName: "worker1", Phase: v1alpha1.ACPPPhaseDegraded,
+			}},
+		},
+	}
+	nc := &NodeCapability{NodeName: "worker1"}
+	applyACPPStatus(nc, []v1alpha1.AcceleratorPartitionPolicy{acpp})
+	if !nc.Stale {
+		t.Fatalf("Degraded 노드가 stale 로 표시되지 않았다")
+	}
+	if !strings.Contains(nc.StaleReason, v1alpha1.ACPPPhaseDegraded) {
+		t.Fatalf("stale 사유에 phase 가 없다: %q", nc.StaleReason)
 	}
 }
 
@@ -325,5 +349,147 @@ func TestLoadReadsClusterObjects(t *testing.T) {
 	}
 	if len(snap) != 1 || snap[0].NodeName != "worker1" {
 		t.Fatalf("snapshot %+v", snap)
+	}
+}
+
+// TestApplyHealthDropsBlockedNode 는 할당이 막힌 노드가 배치 후보에서 빠지는지 본다.
+// 이 축이 없으면 health 는 상태만 예쁘게 적고 워크로드는 그대로 그 노드로 간다(F-18).
+func TestApplyHealthDropsBlockedNode(t *testing.T) {
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	if len(snap) != 1 || snap[0].Stale {
+		t.Fatalf("전제가 틀렸다 — 정상 노드가 이미 배제돼 있다: %+v", snap)
+	}
+	got := ApplyHealth(snap, []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
+		Status: v1alpha1.AcceleratorHealthStatus{
+			State: "Quarantined", AllocationAllowed: false, Reason: "RepeatedRecoveryFailure",
+		},
+	}})
+	if !got[0].Stale {
+		t.Fatal("격리 노드가 후보로 남았다")
+	}
+	if got[0].StaleReason == "" {
+		t.Fatal("배제 사유가 비었다 — 운영자가 왜 배치가 안 되는지 알 수 없다")
+	}
+}
+
+// TestApplyHealthKeepsHealthyNode 는 정상 노드가 영향을 안 받는지 본다(회귀 방지).
+func TestApplyHealthKeepsHealthyNode(t *testing.T) {
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	got := ApplyHealth(snap, []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
+		Status:     v1alpha1.AcceleratorHealthStatus{State: "Healthy", AllocationAllowed: true},
+	}})
+	if got[0].Stale {
+		t.Fatalf("정상 노드가 배제됐다: %s", got[0].StaleReason)
+	}
+}
+
+// TestApplyHealthIgnoresUnjudgedNode 는 아직 판정 전인 노드를 막지 않는지 본다.
+func TestApplyHealthIgnoresUnjudgedNode(t *testing.T) {
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	got := ApplyHealth(snap, []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
+	}})
+	if got[0].Stale {
+		t.Fatal("판정 전 노드를 막았다 — 감시 도입이 곧 전면 차단이 된다")
+	}
+}
+
+// TestApplyHealthRemovesOnlyTheUnhealthyDevice 는 고장난 장치만 후보에서 빠지고
+// 노드 자체는 남는지 본다 — 장치 하나 때문에 노드 전체를 버리면 용량이 낭비된다.
+// 깨는 뮤테이션: 장치 필터를 지우면 두 장치가 다 남아 실패한다.
+func TestApplyHealthRemovesOnlyTheUnhealthyDevice(t *testing.T) {
+	snap := []NodeCapability{{
+		NodeName: "n1",
+		Devices: []v1alpha1.DeviceStatus{
+			{PCIAddress: "0000:18:00.0"},
+			{PCIAddress: "0000:86:00.0"},
+		},
+	}}
+	// State/AllocationAllowed 는 손으로 지어낸 조합이 아니라 실제 health.Evaluate() 가 장치
+	// 하나만 고장났을 때 실제로 내는 값이다(장치 하나가 살아 있으면 Degraded+allow=true —
+	// 노드를 통째로 버리지 않는다. internal/health/evaluate.go 의 장치축 fold 참고).
+	healths := []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{
+			State: "Degraded", Reason: "DriverNotLoaded", AllocationAllowed: true,
+			Devices: []v1alpha1.DeviceHealth{
+				{PCIAddress: "0000:18:00.0", State: "Healthy"},
+				{PCIAddress: "0000:86:00.0", State: "Unhealthy", Reason: "DriverNotLoaded"},
+			},
+		},
+	}}
+	got := ApplyHealth(snap, healths)
+	if got[0].Stale {
+		t.Fatalf("장치 하나 때문에 노드 전체를 버렸다: %+v", got[0])
+	}
+	if len(got[0].Devices) != 1 || got[0].Devices[0].PCIAddress != "0000:18:00.0" {
+		t.Fatalf("고장난 장치가 후보에 남았다: %+v", got[0].Devices)
+	}
+}
+
+// TestApplyHealthKeepsUnknownDevices 는 관측 못 한 장치를 성급히 빼지 않는지 본다.
+// 빼 버리면 관측이 잠깐 끊긴 순간마다 용량이 출렁인다 — 노드 축(AllocationAllowed)이
+// 이미 그 구간을 막고 있다.
+func TestApplyHealthKeepsUnknownDevices(t *testing.T) {
+	snap := []NodeCapability{{NodeName: "n1",
+		Devices: []v1alpha1.DeviceStatus{{PCIAddress: "0000:18:00.0"}}}}
+	healths := []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{
+			State: "Healthy", AllocationAllowed: true,
+			Devices: []v1alpha1.DeviceHealth{{PCIAddress: "0000:18:00.0", State: "Unknown"}},
+		},
+	}}
+	got := ApplyHealth(snap, healths)
+	if len(got[0].Devices) != 1 {
+		t.Fatalf("관측 못 한 장치를 뺐다: %+v", got[0].Devices)
+	}
+}
+
+// TestApplyHealthAcceptsRealEvaluateOutput 는 internal/health 와 internal/intent 를 실제로
+// 이어 본다 — 단위 시험은 각자 통과해도 조합에서 어긋날 수 있다(fold 가 노드를 통째로 막으면
+// 이 아래 장치 필터는 존재해도 절대 실행되지 않는다, 2026-08-04 재현). health.Evaluate() 가
+// 낸 진짜 Result 를 그대로 옮겨 ApplyHealth 에 먹인다.
+// 깨는 뮤테이션: evaluate.go 의 fold 를 "장치 하나만 고장나도 allow=false" 로 되돌리면
+// 노드가 Stale 로 막혀 장치 필터에 닿지도 못하고 실패한다.
+func TestApplyHealthAcceptsRealEvaluateOutput(t *testing.T) {
+	now := time.Now()
+	seen := now.Add(-10 * time.Second)
+	res := health.Evaluate(health.Inputs{
+		NodeReady: true, NDRObservedAt: &seen, DriverLoaded: true,
+		DevicePluginReady: true,
+		Devices: []health.DeviceInput{
+			{PCI: "0000:18:00.0", DriverLoaded: true},
+			{PCI: "0000:86:00.0", DriverLoaded: false},
+		},
+		Now: now,
+	}, health.DefaultPolicy())
+
+	devs := make([]v1alpha1.DeviceHealth, len(res.Devices))
+	for i, d := range res.Devices {
+		devs[i] = v1alpha1.DeviceHealth{PCIAddress: d.PCI, State: d.State, Reason: d.Reason}
+	}
+	healths := []v1alpha1.AcceleratorHealth{{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{
+			State: res.State, Reason: res.Reason, AllocationAllowed: res.AllocationAllowed, Devices: devs,
+		},
+	}}
+	snap := []NodeCapability{{
+		NodeName: "n1",
+		Devices: []v1alpha1.DeviceStatus{
+			{PCIAddress: "0000:18:00.0"},
+			{PCIAddress: "0000:86:00.0"},
+		},
+	}}
+
+	got := ApplyHealth(snap, healths)
+	if got[0].Stale {
+		t.Fatalf("장치 하나만 고장났는데 노드 전체가 막혔다: state=%s allow=%v", res.State, res.AllocationAllowed)
+	}
+	if len(got[0].Devices) != 1 || got[0].Devices[0].PCIAddress != "0000:18:00.0" {
+		t.Fatalf("고장난 장치가 후보에 남았다: %+v", got[0].Devices)
 	}
 }

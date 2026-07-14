@@ -44,5 +44,8 @@ func init() {
 		&AcceleratorPartitionPolicy{}, &AcceleratorPartitionPolicyList{},
 		&AcceleratorClass{}, &AcceleratorClassList{},
 		&AcceleratorWorkload{}, &AcceleratorWorkloadList{},
+		&AcceleratorEvidence{}, &AcceleratorEvidenceList{},
+		&AcceleratorVerificationPolicy{}, &AcceleratorVerificationPolicyList{},
+		&AcceleratorOperation{}, &AcceleratorOperationList{},
 	)
 }

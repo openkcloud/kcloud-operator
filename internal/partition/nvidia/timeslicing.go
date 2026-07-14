@@ -134,7 +134,7 @@ func ExpectedShared(base map[string]int32, l partition.SharingLayout) map[string
 	return out
 }
 
-// dpNamespace/dpName 은 sharing 배선 대상 device-plugin DaemonSet·ConfigMap 좌표다.
+// dpNamespace 는 sharing 배선 대상 device-plugin DaemonSet·ConfigMap 이 사는 네임스페이스다.
 const (
 	dpNamespace = "kube-system"
 
@@ -149,15 +149,8 @@ const (
 	DevicePluginNameMixed = "nvidia-device-plugin"
 	DevicePluginNameFlat  = "nvidia-device-plugin-flat"
 
-	// SharingConfigMapNameMixed 는 기존 SharingConfigMapName 값과 동일.
 	SharingConfigMapNameMixed = "nvidia-device-plugin-sharing"
 	SharingConfigMapNameFlat  = "nvidia-device-plugin-flat-sharing"
-
-	// dpName 는 하위호환 별칭이다 — Task 3 에서 호출부를 DevicePluginTargetForNode 로 옮긴 뒤 제거한다.
-	dpName = DevicePluginNameMixed
-
-	// SharingConfigMapName 은 하위호환 별칭이다 — Task 3 에서 제거한다.
-	SharingConfigMapName = SharingConfigMapNameMixed
 )
 
 // DevicePluginTargetForNode 는 노드의 MigActiveNodeLabel 값에 따라 이 노드를 맡는
@@ -172,6 +165,35 @@ func DevicePluginTargetForNode(ctx context.Context, c client.Client, node string
 		return DevicePluginNameMixed, SharingConfigMapNameMixed, nil
 	}
 	return DevicePluginNameFlat, SharingConfigMapNameFlat, nil
+}
+
+// DevicePluginRolling 은 이 노드를 맡는 device-plugin DaemonSet 이 지금 롤아웃 중인지다.
+// 롤링 중에는 allocatable 이 잠깐 비는 것이 정상이므로, 광고 감시는 이 창을 장애로 세지 않는다.
+// DaemonSet 이 없으면 false 다 — 없는 상태의 광고 부재는 억제할 것이 아니라 드러낼 것이다.
+func DevicePluginRolling(ctx context.Context, c client.Client, node string) (bool, error) {
+	dsName, _, err := DevicePluginTargetForNode(ctx, c, node)
+	if err != nil {
+		return false, err
+	}
+	var ds appsv1.DaemonSet
+	if err := c.Get(ctx, types.NamespacedName{Name: dsName, Namespace: dpNamespace}, &ds); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	st := ds.Status
+	switch {
+	case st.ObservedGeneration < ds.Generation:
+		return true, nil // 컨트롤러가 아직 최신 spec 을 못 봤다
+	case st.NumberUnavailable > 0:
+		return true, nil
+	case st.UpdatedNumberScheduled < st.DesiredNumberScheduled:
+		return true, nil
+	case st.NumberReady < st.DesiredNumberScheduled:
+		return true, nil
+	}
+	return false, nil
 }
 
 // SharingConfigMapNameOf 는 live DS 에 이미 배선된 sharing ConfigMap 이름을 읽는다
