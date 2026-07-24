@@ -92,7 +92,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "create", "delete"]
@@ -121,14 +121,13 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # P6 최소화: Rebellions RBAC 셋업은 SA 를 get(CreateOrUpdate)·create·update 만 — delete 미사용 제거.
+  # DRA 드라이버를 끄면 그 드라이버의 SA·역할을 회수하므로 delete 가 필요하다.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # P6 최소화: Rebellions ClusterRole/Binding 도 create·update 만 — delete 미사용 제거.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles", "clusterrolebindings"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # P4 관리 REST API(S5-3-②): 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
   # api.enabled=false 여도 무해하며, 누락 시 모든 API 요청이 500(리뷰 생성 실패)이 되므로 항상 부여.
   - apiGroups: ["authentication.k8s.io"]
@@ -137,6 +136,23 @@ rules:
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]
+  # DRA 드라이버에 줄 권한은 operator 자신이 먼저 갖고 있어야 한다 — 쿠버네티스가
+  # 자기가 없는 권한을 담은 ClusterRole 생성을 막는다(권한 상승 방지). 그래서
+  # 가용성 실측용 읽기에 더해 드라이버가 요구하는 쓰기까지 여기 있다.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceslices", "resourceclaims", "resourceclaimtemplates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceslices/status", "resourceclaims/status", "resourceclaimtemplates/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/driver"]
+    verbs: ["associated-node:update", "associated-node:patch"]
+  # DeviceClass 는 읽기에 더해 쓰기가 필요하다 — DRA 드라이버를 배포할 때 그 벤더의
+  # DeviceClass 를 operator 가 만들고, 끄면 회수한다.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["deviceclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -165,7 +181,7 @@ rules:
   # node-agent NFD/GFD 라벨링(§5.3, Q1=A): 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   # node-agent Validation ③ device-plugin/allocatable 관찰용.
   - apiGroups: [""]
     resources: ["pods"]

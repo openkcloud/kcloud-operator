@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-07-20
+# 생성일: 2026-03-25 | 수정일: 2026-08-07 (operator 기본 이미지 태그를 v0.7.1 로 정합)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # global.registry: 사설 이미지(operator/detector/device-plugin/driver)의 레지스트리.
@@ -15,7 +15,7 @@ global:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.5.75
+  tag: v0.7.9
   pullPolicy: IfNotPresent
 
 # acpp: AcceleratorPartitionPolicy 관련 설정.
@@ -101,7 +101,7 @@ clusterPolicy:
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   repository: "kcloud-node-manager"
-  tag: "0.6.4"
+  tag: "0.6.11"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +111,13 @@ detector:
 # ─────────────────────────────────────────────────────────────────────────────
 nvidia:
   enabled: true
+  # advertiseBy: 이 벤더 장치를 누가 광고하는가. 빈 값/미지정이면 device-plugin 이다.
+  #   "dra" 로 바꾸면 operator 가 대상 노드에 dra-owned 라벨을 붙이고 그 노드에서
+  #   device-plugin DaemonSet 을 걷는다. 광고는 벤더 DRA 드라이버가 발행하는
+  #   ResourceSlice 가 맡는다 — 그 드라이버가 없으면 그 노드는 아무것도 광고하지 않는다.
+  #   ⚠ 벤더 DRA 드라이버를 먼저 설치하고 ResourceSlice 발행을 확인한 뒤에 켤 것.
+  #   되돌리려면 이 값을 지우면 된다(라벨 회수 + device-plugin 복귀).
+  advertiseBy: ""
   devicePluginImage: "nvcr.io/nvidia/k8s-device-plugin:v0.17.1"
   # 자립 셀렉터(node-manager 가 감지 시 부여). NFD/gpu-operator 라벨 비의존.
   nodeSelector:
@@ -121,27 +128,58 @@ nvidia:
   dcgmExporter:
     enabled: false
     image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
+  # dra: NVIDIA DRA 드라이버 배포. Furiosa 와 달리 광고 주체와 묶여 있다 —
+  # advertiseBy 가 dra 가 아니면 operator 가 거절한다(벤더 chart 가 device-plugin 과의
+  # 공존을 막고, 광고를 끈 채로 깔면 발행물 없는 껍데기만 남는다).
+  # 노드 일부만 넘기는 구성도 거절한다. 벤더 발행 스위치가 DaemonSet 단위다.
+  dra:
+    enabled: false
+    repository: "dra-driver-nvidia/dra-driver-nvidia-gpu"
+    tag: "v0.4.0"
 
 furiosa:
   enabled: true
+  # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
+  advertiseBy: ""
   devicePluginImage: "ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1"
   configMapName: "npu-device-plugin"
   # 자립 셀렉터(node-manager 가 Warboy 감지 시 부여). NFD/수동 라벨 비의존.
   nodeSelector:
     kcloud.ai/furiosa.present: "true"
+  # exporter: RNGD 텔레메트리 exporter(:9410). 코어 사용률·DRAM·전력·온도.
+  # dcgm-exporter 의 Furiosa 대응물이며 벤더 SMI 를 cgo 로 호출한다.
+  exporter:
+    enabled: false
+    repository: "furiosa-exporter"
+    tag: "0.1.0"
+    interval: "10s"
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin (Phase 1, 2026-04-21)
   # spec.furiosa.rngd 필드 — omitempty 이므로 enabled=false 시 CR에서 생략됨.
   # ─────────────────────────────────────────────────────────────────────
   rngd:
     enabled: true
+    # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
+    advertiseBy: ""
     # ⚠️ partitionPolicy != "none" 은 operator 가 device-plugin 에 `--policy <값>` 을
     #    전달하므로, 그 flag 를 지원하는 파티션 가능 이미지(`furiosa-device-plugin-mi`)가
     #    반드시 필요하다. 일반 `furiosaai/furiosa-device-plugin` 이미지는 `--policy` 미지원
     #    → CrashLoopBackOff(unknown flag). 아래 기본값은 production(4 instance/card) 재현용.
     # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+    # ⚠️ 아래 kcloud/ 접두는 오타가 아니다. global.registry 가 이미 Harbor 프로젝트
+    #    경로(.../kcloud)까지 가리키므로 최종 경로는 .../kcloud/kcloud/... 로 두 겹이
+    #    되는데, Harbor 에 실재하는 것이 그 두 겹 경로다. 접두를 지우면 없는 경로를
+    #    당겨 ImagePullBackOff. 한 겹으로 옮기려면 이미지를 먼저 올려야 한다.
+    #    (chart_image_path_test.go 가 이 접두를 고정)
     devicePluginRepository: "kcloud/furiosa-device-plugin-mi"
     devicePluginTag: "v0.1.0"
+    # dra: 이 벤더의 DRA 드라이버를 operator 가 배포할 것인가. 광고 주체(advertiseBy)와
+    # 독립이다 — 켜도 광고는 device-plugin 이 계속 맡는다.
+    # 이미지는 미러된 upstream 규약(kcloud/<upstream-org>/<image>)을 따른다.
+    dra:
+      enabled: false
+      repository: "furiosaai/furiosa-dra-driver"
+      tag: "2026.1.1"
     resourceName: "furiosa.ai/rngd"
     # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
     # "none" 으로 바꾸면 위 -mi 이미지든 일반 이미지든 동작(--policy 미전달).
@@ -158,6 +196,7 @@ furiosa:
   # ─────────────────────────────────────────────────────────────────────
   unified:
     enabled: false
+    # ⚠️ kcloud/ 접두는 오타가 아니다 — 위 rngd.devicePluginRepository 주석 참조.
     devicePluginRepository: "kcloud/furiosa-unified-device-plugin"
     devicePluginTag: "0.1.0"
 
@@ -179,6 +218,8 @@ rebellions:
 
 tenstorrent:
   enabled: true
+  # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
+  advertiseBy: ""
   # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   # Harbor 에 kcloud/tenstorrent/k8s-device-plugin:v0.1.0 로 push 예정.
   devicePluginRepository: "tenstorrent/k8s-device-plugin"
@@ -218,6 +259,19 @@ api:
   enabled: false
   # 서버 포트(operator 컨테이너 내부). metrics(:8443)·webhook(:9443)와 겹치지 않게 :9444.
   port: 9444
+  service:
+    # ClusterIP(기본) 이면 클러스터 안에서만 닿는다. 콘솔을 클러스터 밖 브라우저로 열려면
+    # NodePort 로 바꾼다 — 아무 노드 IP 의 nodePort 로 https 접속이 열린다.
+    type: ClusterIP
+    # NodePort 일 때 쓸 고정 포트(30000-32767). 비우면 k8s 가 임의 할당한다.
+    # 고정하지 않으면 재설치마다 포트가 바뀌어 북마크가 깨진다.
+    nodePort: ""
+    # cert SAN 에 더할 DNS 이름. 노드 호스트명으로 접속할 때 쓴다.
+    # cert 는 최초 1회만 발급되므로 나중에 늘리려면 -api-cert Secret 삭제 후 pod 재시작.
+    extraAltNames: []
+    # cert SAN 에 더할 IP. **IP 로 접속하려면 반드시 여기에 넣는다** — IP 를 DNS SAN 에
+    # 넣으면 브라우저가 매칭하지 않아 경고가 그대로 뜬다.
+    extraAltIPs: []
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DriverInstallPolicy CR 자동 생성 설정 (driverInstallPolicies와 nvidia/furiosa 구분)
@@ -290,7 +344,9 @@ driverInstallPolicies:
       - "580.126.09"
       - "580.142"
       - "580.159.03"
+      - "580.173.02"
       - "595.58.03"
+      - "595.84"
     # 자립 셀렉터(node-manager 부여). 드라이버 install DS/Job + toolkit DS 공용.
     nodeSelector:
       kcloud.ai/nvidia.present: "true"
@@ -340,6 +396,8 @@ driverInstallPolicies:
       maxUnavailable: 1
       maxParallelUpgrades: 1
       drainTimeout: "5m"
+      # validationTimeout 은 install Job 이 끝난 뒤의 검증(NDR 반영·device-plugin 재광고)에만
+      # 쓰인다. Job 실행 자체는 activeDeadlineSeconds(30m)가 시한을 갖는다.
       validationTimeout: "10m"
       rollbackOnFailure: true
       # S2-5 cross-major reboot: rmmod 불가로 재부팅이 필요한 NVIDIA 메이저 교체(예 535→580) 대응.

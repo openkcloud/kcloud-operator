@@ -362,6 +362,46 @@ func (e migZeroCountingExec) Run(_ context.Context, _, _, _ string, steps []nvid
 	return nil
 }
 
+var _ = Describe("deletion restores MIG mode before checking the advertisement baseline", func() {
+	// 증명: 조각이 회수됐지만 MIG mode 가 아직 켜져 있어 광고가 baseline 에 못 미치는 상태에서도
+	// 모드 해제 명령이 나간다. mixed 전략에서 mode 가 켜진 채 조각이 없는 GPU 는 아무것도 광고하지
+	// 않으므로 이 상태는 RestoreMode 삭제가 **반드시** 지나는 구간이다.
+	// 깨는 뮤테이션: baseline 확인을 모드 복원보다 앞에 두면(2026-08-05 이전 순서) baseline 미달로
+	// 먼저 반환해 해제 명령이 영영 안 나가고 finalizer 가 영구히 남는다.
+	It("issues the mode disable while the advertisement is still below baseline", func() {
+		wipeACPPs()
+		DeferCleanup(wipeACPPs)
+		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		node := "restore-below-baseline-node"
+		labels := map[string]string{"kcloud.ai/restore-below-baseline": "true"}
+		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
+		DeferCleanup(func() { cleanupNvidia(node); cleanupRebootFixture(node) })
+
+		acpp := mkNvidiaACPP("restore-below-baseline-acpp", labels)
+		acpp.Spec.DeletionPolicy = npuv1alpha1.DeletionPolicyRestoreMode
+		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
+		seedDeletableRecord(acpp, node)
+
+		// 노드가 광고하는 GPU(1) 보다 baseline(2)을 크게 잡는다 — mode 를 끄기 전의 실제 상태다.
+		var fresh npuv1alpha1.AcceleratorPartitionPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: acpp.Name}, &fresh)).To(Succeed())
+		fresh.Status.ApplyRecords[0].BaselineGPUCount = 2
+		Expect(k8sClient.Status().Update(ctx, &fresh)).To(Succeed())
+
+		disables := 0
+		r := nvidiaReconciler()
+		r.NvidiaExecFactory = func(client.Client) nvidia.Executor { return migZeroCountingExec{n: &disables} }
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: acpp.Name}, &fresh)).To(Succeed())
+		err := r.handleNvidiaDeletion(ctx, &fresh)
+
+		Expect(err).To(HaveOccurred(), "모드가 아직 켜져 있는데 정리를 완료로 처리했다")
+		Expect(disables).To(BeNumerically(">", 0),
+			"광고가 baseline 에 못 미친다는 이유로 모드 해제가 막혔다 — 그 광고를 되돌리는 것이 모드 해제다")
+		_, jerr := rebootJobFor(node)
+		Expect(jerr).NotTo(HaveOccurred(), "재부팅이 실제로 예약되지 않았다")
+	})
+})
+
 var _ = Describe("deletion releases the node lease it took", func() {
 	// 증명: 위임 모드에서 삭제가 잡은 노드 Lease 를 끝에 돌려준다.
 	// 깨는 뮤테이션: releaseHeld 호출을 지우면 Lease 소유자가 남아 실패한다.

@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-04-29
+// 생성일: 2026-04-13 | 수정일: 2026-08-07
 // ============================================================
 
 package upgrade
@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/driverjob"
+	"kcloud-operator/internal/intent"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/validator"
@@ -69,6 +70,18 @@ const QuiesceOnDriverUpgradeLabelKey = quiesceOnDriverUpgradeLabelKey
 // 저장되어 operator restart 후 status 손실 시 fallback 복구 경로로 활용된다.
 // 값은 base-10 정수 문자열 (예: "3").
 const QuiesceReplicasBackupAnnotation = "npu.ai/replicas-backup"
+
+// cordonOwnerAnnotationKey 는 이 상태머신이 직접 노드를 unschedulable 로 뒤집었을 때만 노드에
+// 남기는 소유권 표식이며 값은 그 cordon 을 건 DUS 이름이다.
+// 왜 라벨이 아니라 별도 annotation 인가: driver-upgrading 라벨은 Failed 전이 시점에
+// clearUpgradingLabel 이 지운다(device-plugin 재스케줄 목적). 그래서 Failed 에 도달한 뒤에는
+// 라벨로 "이 cordon 이 우리 것인가" 를 물을 수 없다. 표식의 수명이 cordon 의 수명과 같아야 한다.
+const cordonOwnerAnnotationKey = "npu.ai/cordoned-by-driver-upgrade"
+
+// failedCordonRecheckInterval 은 Failed 에서 cordon 해제를 보류했을 때(벤더 광고가 아직 0 이
+// 아님) 광고를 다시 볼 주기다. 보류에는 재진입이 없으면 의미가 없다 — 광고는 device-plugin 이
+// 뒤늦게 재시작하며 떨어질 수 있다.
+const failedCordonRecheckInterval = 60 * time.Second
 
 // hostnameLabelKey 는 deploymentTargetsNode 가 nodeSelector / nodeAffinity 매칭에 사용하는
 // Kubernetes 표준 노드 hostname 라벨 키다.
@@ -133,15 +146,13 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateValidating:
 		// S2-5: install 성공 후 cross-major 로 커널 모듈 교체에 재부팅이 필요하면(NDR.needsReboot),
 		// validator 체인 앞에서 RebootRequired 로 분기(재부팅 전엔 validator 가 구 버전을 보고 실패).
-		// 단 재부팅은 사이클당 1회(RebootAttempts==0)에서만 트리거한다: 재부팅 후 install Job 이
-		// host 마커를 소거해도 NDR 반영은 detector 스캔주기(30s)만큼 지연되어, 여기서 stale-true 를
-		// 읽으면 "재부팅이 안 먹혔다"로 오판→MaxReboots 초과→Failed 가 된다(실측 25~30s > requeue 20s).
-		// 재부팅 후 수렴 판정은 validator 체인이 권위 신호(실제 드라이버 버전/헬스): pass→Idle,
-		// 지속 실패→ValidationTimeout→Failed 로 안전 착지. needsReboot=false(기존 클러스터)는 이
-		// 분기를 절대 타지 않음(회귀 0).
-		// ponytail: maxReboots>1(현재 미사용) 지원하려면 reboot 완료시각 추적 + settle 창 필요 — 수요 시 확장.
+		// 마커가 없으면 이 분기를 절대 타지 않는다 — 근거 없는 재부팅은 고착보다 나쁘다.
+		// 마커가 있을 때 남는 문제는 그 관측을 믿어도 되는가다: 재부팅 후 install Job 이 host
+		// 마커를 소거해도 NDR 반영은 detector 스캔주기(30s)만큼 지연되어, stale-true 를 읽으면
+		// "재부팅이 안 먹혔다"로 오판→MaxReboots 초과→Failed 가 된다(실측 25~30s > requeue 20s).
+		// 그래서 rebootMarkerIsFresh 가 "이번 install Job 완료보다 나중 관측인가"로 가른다.
 		if need, nerr := m.nodeNeedsReboot(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model); nerr == nil &&
-			need && state.Status.RebootAttempts == 0 {
+			need && m.rebootMarkerIsFresh(ctx, state) {
 			return m.transitionTo(state, v1alpha1.UpgradeStateRebootRequired,
 				"cross-major: 커널 모듈 교체 위해 노드 재부팅 필요", 0)
 		}
@@ -155,11 +166,7 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateRollback:
 		return m.handleRollback(ctx, state, policy)
 	case v1alpha1.UpgradeStateFailed:
-		// 터미널 상태 — 자동 복구 중단. 추가 transition / DS image patch / requeue 없음.
-		// 사용자가 수동으로 DUS 를 정리하거나 신규 업그레이드 cycle 을 트리거할 때까지
-		// 어떠한 자동 동작도 수행하지 않는다 (rollback infinite-loop 방지, plan §R1).
-		logger.Info("Failed 터미널 상태 — 추가 transition 없이 즉시 반환 (수동 조치 필요)")
-		return false, 0, nil
+		return m.handleFailed(ctx, state)
 	case v1alpha1.UpgradeStateUnverifiedVersion:
 		// terminal: verifiedVersions 화이트리스트에 없는 버전 — DS image patch 없이 대기.
 		// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구한다.
@@ -227,7 +234,7 @@ func (m *UpgradeStateMachine) handleIdle(
 			state.Status.PreviousVersion = ""
 			state.Status.PreviousImage = ""
 			state.Status.RollbackAttempts = 0
-			state.Status.RebootAttempts = 0 // S2-5: 새 사이클 진입 시 재부팅 카운터 초기화
+			resetRebootTracking(&state.Status) // 새 사이클: 재부팅 카운터·마커 초기화
 			m.Recorder.Eventf(state, corev1.EventTypeNormal, "InstallRequired",
 				"Job 모드 설치/복구 필요(driverLoaded=false): 목표 버전 %s (autoUpgrade 무관)", desiredVersion)
 			return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
@@ -314,7 +321,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	state.Status.PreviousVersion = currentVersion
 	state.Status.PreviousImage = ""
 	state.Status.RollbackAttempts = 0
-	state.Status.RebootAttempts = 0 // S2-5: 새 사이클 진입 시 재부팅 카운터 초기화
+	resetRebootTracking(&state.Status) // 새 사이클: 재부팅 카운터·마커 초기화
 	return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
 		fmt.Sprintf("버전 불일치 감지: %s → %s", currentVersion, desiredVersion), 0)
 }
@@ -689,6 +696,167 @@ func (m *UpgradeStateMachine) handleUncordoning(
 	return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
 }
 
+// handleFailed 는 터미널 Failed 상태를 처리한다. 자동 복구(상태 전이 / DS image patch /
+// install Job 재생성)는 여전히 하지 않는다 — rollback infinite-loop 방지(plan §R1)는 그대로다.
+// 여기서 하는 일은 단 하나, **이 사이클이 걸어 둔 cordon 을 조건이 맞으면 푸는 것**이다.
+// 상태는 Failed 로 남고 사람의 수동 조치는 여전히 필요하다.
+//
+// 왜 푸는가 — 라이브 실측(2026-08-05, docs/impl/k8s134-verification-20260805.md 부록 H.3):
+// worker1 의 Furiosa 드라이버가 사라지자 DUS 가 Draining("노드 cordon 완료") → Failed("롤백할
+// 이전 버전 없음(job)") 로 착지했고, cordon 이 남은 채 방치됐다. cordon 된 노드는 BuildSnapshot
+// 이 후보에서 통째로 뺀다. 그래서 같은 노드에서 멀쩡히 돌던 NVIDIA GPU 2장까지 배치 불가가
+// 되고 NVIDIA 워크로드가 NoCandidateNodes 로 거절됐다 — 한 벤더의 드라이버 소실이 그 노드의
+// 모든 벤더를 인질로 잡는다. cordon 은 노드 단위 도구라 "이 벤더만 못 쓴다" 를 표현하지 못한다.
+// 실패한 벤더의 배제는 광고(extended resource)가 이미 담당한다.
+//
+// 왜 무조건 풀지 않는가: 같은 실측에서 device-plugin 이 드라이버 소실과 함께 광고를 0 으로
+// 내렸지만 그것은 **관측 하나이지 보장이 아니다**. 드라이버 없이도 광고를 유지하는 플러그인이
+// 있다면 cordon 을 푸는 순간 드라이버 없는 장치 위로 워크로드가 떨어진다. 그래서 해제 직전에
+// 그 벤더의 광고가 실제 0 인지 확인하고, 확인하지 못하면 cordon 을 유지한다. 가드가 해제
+// 자체보다 중요하다.
+func (m *UpgradeStateMachine) handleFailed(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+) (bool, time.Duration, error) {
+	logger := logf.FromContext(ctx).WithValues("node", state.Spec.NodeName, "vendor", state.Spec.Vendor)
+
+	// 탈출 (2026-08-07 라이브): 노드가 이미 목표를 만족하고 있으면 Failed 로 붙잡아 둘 이유가
+	// 없다. `.91` k8s-worker3-tenstorrent 가 current=desired=2.8.0 에 드라이버도 로드된 채로
+	// 사흘을 Failed 로 남아 있었다 — 실패를 만든 조건이 이미 사라졌는데 상태에 나가는 길이
+	// 없었기 때문이다. 사람이 손댈 것이 없는 상태에서 "수동 조치 필요" 를 말하는 것은 상태를
+	// 잘못 표현하는 것이고, 그 노드는 운영자의 확인 목록에 영원히 남는다.
+	//
+	// 왜 이 조건에서만 여는가: 여기서 Idle 로 보내면 handleIdle 이 다시 판정한다. 버전이 같고
+	// 드라이버가 로드돼 있으면 handleIdle 은 아무것도 하지 않는다(Job 모드 self-heal 은
+	// driverLoaded=false 로만 발동하고, 버전 일치 분기는 Idle 을 유지한다). 그래서 왕복이
+	// 생기지 않는다. 조건을 넓히면 — 예컨대 버전만 보고 열면 — Idle 이 설치를 다시 걸고 같은
+	// 이유로 실패해 Failed 로 돌아오는 왕복이 생기고, 그 왕복은 고착보다 나쁘다(노드를 계속
+	// 건드린다).
+	if recovered, err := m.failedStateRecovered(ctx, state); err != nil {
+		return false, 0, err
+	} else if recovered {
+		m.Recorder.Eventf(state, corev1.EventTypeNormal, "FailedStateRecovered",
+			"노드가 목표 버전 %s 를 이미 만족하고 드라이버도 로드됨 — Failed 해제 후 Idle 복귀",
+			state.Status.DesiredVersion)
+		// 지난 사이클의 재시도 카운터를 물려주지 않는다. 남겨 두면 다음 실패가 첫 시도부터
+		// 한도에 걸린다.
+		state.Status.RollbackAttempts = 0
+		resetRebootTracking(&state.Status)
+		return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
+			fmt.Sprintf("복구 확인(%s): 목표 버전 도달·드라이버 로드", state.Status.DesiredVersion),
+			60*time.Second)
+	}
+
+	var node corev1.Node
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			// 노드가 없으면 풀 cordon 도 없다(노드 삭제 등) — 터미널 그대로 정지.
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+
+	// 해제 조건 (a) cordon 이 실제로 남아 있고 (b) 그 cordon 의 주인이 이 DUS 여야 한다.
+	// 주인 판정은 cordonNode 가 노드를 직접 false→true 로 뒤집었을 때만 남긴 annotation 으로
+	// 한다. ACPP quiesce(internal/partition/quiesce.go Cordon)도 운영자의 수동 cordon 도
+	// 아무 표식을 남기지 않으므로, 표식이 없거나 남의 이름이면 그 cordon 은 우리 것이 아니다.
+	// 남의 cordon 을 우리가 풀면 그 주체의 의도(파티션 적용 중 / 정비 중)를 지우게 된다.
+	if !node.Spec.Unschedulable || node.Annotations[cordonOwnerAnnotationKey] != state.Name {
+		logger.Info("Failed 터미널 상태 — 해제할 cordon 없음(미소유 또는 이미 해제), 추가 transition 없이 즉시 반환")
+		return false, 0, nil
+	}
+
+	// 해제 조건 (c) 그 벤더의 광고가 실제 0.
+	stillAdvertised, decidable := vendorStillAdvertised(&node, state.Spec.Vendor)
+	if !decidable || stillAdvertised != "" {
+		// 유지. 보류이지 포기가 아니므로 다시 볼 기회를 남긴다 — 광고는 device-plugin 이
+		// 뒤늦게 재시작하며 떨어질 수 있다. 여기서 반환하는 requeue 는 상태 전이도 DS 패치도
+		// Job 생성도 하지 않으므로 §R1 의 무한 롤백 방지와 충돌하지 않는다(같은 switch 의
+		// UnverifiedVersion 이 이미 같은 방식으로 터미널 상태를 재확인한다).
+		logger.Info("Failed 터미널 상태 — cordon 유지(벤더 광고 0 미확인)",
+			"advertisedResource", stillAdvertised, "vendorKnown", decidable)
+		return true, failedCordonRecheckInterval, nil
+	}
+
+	// 해제. 소유권 표식도 같은 patch 로 지운다 — 표식이 남으면 사람이 다시 cordon 했을 때
+	// 우리가 또 푼다.
+	base := node.DeepCopy()
+	node.Spec.Unschedulable = false
+	delete(node.Annotations, cordonOwnerAnnotationKey)
+	if err := m.Patch(ctx, &node, client.MergeFrom(base)); err != nil {
+		return false, 0, fmt.Errorf("터미널 Failed 상태의 cordon 해제 실패: %w", err)
+	}
+
+	// 관측 가능성: 왜 풀렸는지를 event 와 status message 양쪽에 남긴다. 원래 실패 사유를
+	// 덮지 않고 덧붙인다 — 사람이 봐야 하는 것은 "왜 실패했고 왜 cordon 은 풀렸나" 둘 다다.
+	// 이 경로는 소유권 표식을 지우며 딱 한 번만 지나므로 message 가 중복 누적되지 않는다.
+	m.Recorder.Eventf(state, corev1.EventTypeWarning, "FailedCordonReleased",
+		"드라이버 복구 실패(수동 조치 필요)가 지속되나 벤더 %s 의 장치 광고가 0 이므로 노드 %s cordon 해제 — "+
+			"같은 노드의 다른 벤더 장치 배치를 복구한다", state.Spec.Vendor, state.Spec.NodeName)
+	state.Status.Message = fmt.Sprintf("%s / cordon 해제됨(%s 광고 0, 다른 벤더 배치 복구)",
+		state.Status.Message, state.Spec.Vendor)
+	logger.Info("Failed 터미널 상태 — cordon 해제 완료(벤더 광고 0)")
+	return false, 0, nil
+}
+
+// failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다.
+// 만족의 정의는 둘 다여야 한다: (a) 목표 버전이 지정돼 있고 현재 버전과 같다,
+// (b) 그 벤더 장치의 드라이버가 실제로 로드돼 있다.
+//
+// (b) 를 함께 보는 이유: 버전 문자열은 마지막 관측의 잔상일 수 있다. 모듈이 빠진 노드를
+// 버전만 보고 "만족" 으로 읽으면 Idle 로 보냈다가 self-heal 이 설치를 걸고, 그 설치가 원래
+// 실패하던 이유로 다시 실패해 Failed 로 돌아온다. 근거를 하나 더 요구해 그 왕복을 막는다.
+//
+// NDR 이 없으면 (b) 를 확인할 수 없으므로 false 다 — 확인하지 못한 것을 만족으로 읽지 않는다.
+func (m *UpgradeStateMachine) failedStateRecovered(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+) (bool, error) {
+	desired := state.Status.DesiredVersion
+	if desired == "" || desired != state.Status.CurrentVersion {
+		return false, nil
+	}
+	var ndr v1alpha1.NodeDeviceReport
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &ndr); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	notLoaded, err := m.driverNotLoaded(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model)
+	if err != nil {
+		return false, err
+	}
+	return !notLoaded, nil
+}
+
+// vendorStillAdvertised 는 노드가 그 벤더의 extended resource 를 아직 광고 중인지 본다.
+// 반환값은 (0 이 아닌 리소스명, 판정 가능 여부)이며 ("", true) 만이 "광고가 0 임을 확인했다"
+// 는 뜻이다.
+//
+// 카탈로그(internal/intent)가 모르는 벤더는 어떤 리소스명을 봐야 하는지 알 수 없으므로
+// decidable=false 를 돌린다 — 찾은 게 없는 것을 0 으로 읽으면 안 된다.
+//
+// 카탈로그의 고정 이름과 대조하지 않고 allocatable 을 훑어 VendorForResource 로 되짚는 이유:
+// NVIDIA mixed MIG 는 프로파일마다 nvidia.com/mig-<profile> 이라는 동적 리소스명으로 광고해서
+// nvidia.com/gpu 하나만 보면 MIG 장치가 살아 있는데도 0 으로 읽힌다. furiosa 처럼 한 벤더
+// 아래 제품이 둘(rngd/warboy)인 경우도 이 방식이면 product 를 몰라도 둘 다 걸린다 — cordon 은
+// 벤더 단위 DUS 가 걸었으므로 해제도 그 벤더 전체가 0 일 때만 해야 한다.
+func vendorStillAdvertised(node *corev1.Node, vendor string) (string, bool) {
+	if !intent.KnownVendor(vendor) {
+		return "", false
+	}
+	for name, q := range node.Status.Allocatable {
+		if !strings.EqualFold(intent.VendorForResource(string(name)), vendor) {
+			continue
+		}
+		if !q.IsZero() {
+			return string(name), true
+		}
+	}
+	return "", true
+}
+
 // handleRollback: 이전 버전으로 DaemonSet 복구 후 Upgrading으로 전이
 func (m *UpgradeStateMachine) handleRollback(
 	ctx context.Context,
@@ -897,6 +1065,37 @@ func (m *UpgradeStateMachine) nodeNeedsReboot(ctx context.Context, nodeName, ven
 	return false, nil
 }
 
+// rebootMarkerIsFresh 는 needsReboot 관측을 이번 사이클의 재부팅 근거로 써도 되는지 판정한다.
+//
+// 기준은 "관측이 이번 install Job 완료보다 나중인가" 다. install Job 이 끝난 뒤에 남은 마커는
+// 그 Job 이 방금 쓴 것이므로 진짜이고, 완료 이전 관측은 소거 전 상태를 보고 있는 stale 이다.
+//
+// 왜 시도 횟수로 가르지 않는가 — 원래 규율은 RebootAttempts==0 이었다. 그러면 "재부팅 후에
+// 다시 돈 install Job 이 새로 남긴 마커" 를 표현할 방법이 없다. 라이브 실측(2026-08-07 `.91`
+// k8s-worker1): 05:43 에 시작한 580.173.02 install Job 이 05:49 에 마커를 남기고 정상 종료했는데
+// 앞선 재부팅이 예산을 이미 써버려 상태기계가 Validating 에서 나가지 못했고, 사람이 노드를
+// 재부팅할 때까지 9분을 멈춰 있었다. 나가는 길이 없는 상태였다.
+//
+// 근거를 확보하지 못하면(NDR 에 observedAt 없음 / Job 없음 / 완료시각 없음 — daemonset 모드가
+// 여기 해당) 기존 규율로 후퇴한다. 재부팅 예산 자체는 여기서 정하지 않는다 —
+// handleRebootRequired 의 MaxReboots 한 곳이 갖는다.
+func (m *UpgradeStateMachine) rebootMarkerIsFresh(ctx context.Context, state *v1alpha1.DriverUpgradeState) bool {
+	firstReboot := state.Status.RebootAttempts == 0
+
+	var ndr v1alpha1.NodeDeviceReport
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &ndr); err != nil || ndr.Status.ObservedAt == nil {
+		return firstReboot
+	}
+	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
+	var job batchv1.Job
+	if err := m.Get(ctx, types.NamespacedName{Name: jobName, Namespace: driverjob.Namespace}, &job); err != nil ||
+		job.Status.CompletionTime == nil {
+		return firstReboot
+	}
+	// 첫 재부팅은 기존 동작을 그대로 둔다(회귀 0). 관측이 설치 완료보다 나중이면 그 뒤로도 연다.
+	return firstReboot || ndr.Status.ObservedAt.After(job.Status.CompletionTime.Time)
+}
+
 // maxReboots 는 정책의 MaxReboots(기본 1)를 반환한다.
 func maxReboots(policy *v1alpha1.DriverInstallPolicy) int32 {
 	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.MaxReboots > 0 {
@@ -1074,6 +1273,13 @@ func (m *UpgradeStateMachine) cordonNode(ctx context.Context, nodeName string, s
 	if !node.Spec.Unschedulable {
 		node.Spec.Unschedulable = true
 		changed = true
+		// 소유권 표식은 우리가 직접 false→true 로 뒤집었을 때만 남긴다. 이미 unschedulable 인
+		// 노드는 주인이 따로 있고(ACPP quiesce / 운영자 수동), 거기에 우리 이름을 달면
+		// handleFailed 가 나중에 남의 cordon 을 우리 것으로 알고 풀어 버린다.
+		if node.Annotations == nil {
+			node.Annotations = map[string]string{}
+		}
+		node.Annotations[cordonOwnerAnnotationKey] = state.Name
 	}
 	if node.Labels == nil {
 		node.Labels = map[string]string{}
@@ -1117,6 +1323,12 @@ func (m *UpgradeStateMachine) uncordonNode(ctx context.Context, nodeName string,
 	}
 	if _, ok := node.Labels[driverUpgradingBlockingLabelKey]; ok {
 		delete(node.Labels, driverUpgradingBlockingLabelKey)
+		changed = true
+	}
+	// 우리 소유권 표식도 함께 회수한다. 정상 종료로 cordon 이 풀렸는데 표식이 남으면
+	// handleFailed 가 나중에 남의(또는 다음 사이클의) cordon 을 우리 것으로 오인한다.
+	if node.Annotations[cordonOwnerAnnotationKey] == state.Name {
+		delete(node.Annotations, cordonOwnerAnnotationKey)
 		changed = true
 	}
 	if !changed {
@@ -1753,6 +1965,15 @@ func deploymentTargetsNode(d *appsv1.Deployment, nodeName string) bool {
 }
 
 // containsString 는 slice 에 s 가 포함되어 있으면 true 를 반환한다.
+// resetRebootTracking 은 새 업그레이드 사이클에 들어갈 때 이전 사이클의 재부팅 흔적을 지운다.
+// 카운터만 지우고 마커(RebootRequestedTime/RebootBootID)를 남기면, cross-major 재부팅 게이트가
+// 낡은 bootID 를 현재 부팅으로 착각한다.
+func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
+	s.RebootAttempts = 0
+	s.RebootRequestedTime = metav1.Time{}
+	s.RebootBootID = ""
+}
+
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {

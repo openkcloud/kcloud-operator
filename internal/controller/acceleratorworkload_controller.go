@@ -5,7 +5,7 @@
 // 돌려 결과를 status 에 남긴다. 성공하면 Deployment 하나를 소유하고, 거절되면 Deployment 를
 // 만들지 않고 Condition=False 로 사유를 남긴다(실행 중인 것을 강제로 죽이지는 않는다 —
 // 광고가 사라지면 Pod 은 자연히 Pending 이 되고, 그 판단은 운영자 몫이다).
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-08-05
 // ============================================================
 package controller
 
@@ -17,6 +17,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -46,6 +47,23 @@ const awRequeueInterval = 2 * time.Minute
 // errDeploymentNotOwned 는 같은 이름의 Deployment 가 남의 것일 때다. 뺏지 않는다.
 var errDeploymentNotOwned = errors.New("deployment is not owned by this AcceleratorWorkload")
 
+// errResourceClaimTemplateNotOwned 는 같은 이름의 ResourceClaimTemplate 이 남의 것일 때다.
+var errResourceClaimTemplateNotOwned = errors.New("resourceclaimtemplate is not owned by this AcceleratorWorkload")
+
+// errResourceClaimTemplateDrift 는 살아있는 템플릿이 요청하는 DeviceClass 가 지금 번역이
+// 확정한 것과 다를 때다. spec 이 불변이라 Update 로는 못 고치고, 지웠다 다시 만들면 그 템플릿으로
+// 이미 뜬 Pod 의 claim 이 끊긴다 — operator 가 혼자 결정할 일이 아니므로 사유만 드러낸다.
+var errResourceClaimTemplateDrift = errors.New("resourceclaimtemplate deviceClassName no longer matches the resolved allocation")
+
+// draClaimName 은 pod.spec.resourceClaims 안에서 이 claim 을 가리키는 이름이다(컨테이너의
+// resources.claims 도 같은 이름으로 참조한다).
+const draClaimName = "accel"
+
+// draClaimTemplateName 은 이 워크로드가 소유하는 ResourceClaimTemplate 의 이름이다.
+func draClaimTemplateName(awName string) string {
+	return awName + "-accel"
+}
+
 // AcceleratorWorkloadReconciler 는 추상 워크로드를 Deployment 로 실현한다.
 type AcceleratorWorkloadReconciler struct {
 	client.Client
@@ -57,6 +75,8 @@ type AcceleratorWorkloadReconciler struct {
 // +kubebuilder:rbac:groups=npu.ai,resources=acceleratorworkloads,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=npu.ai,resources=acceleratorworkloads/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses;resourceslices;resourceclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaimtemplates,verbs=get;list;watch;create;update;patch;delete
 
 func (r *AcceleratorWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var aw npuv1alpha1.AcceleratorWorkload
@@ -73,7 +93,7 @@ func (r *AcceleratorWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
-	snap, err := intent.Load(ctx, r.Client)
+	snap, dra, err := intent.Load(ctx, r.Client)
 	if err != nil {
 		// 재시도해도 같은 결과인 실패(주로 RBAC)를 백오프에 묻어 두면 CR 은 영영 빈 status 로 남는다.
 		if nonRetryableAPIError(err) {
@@ -82,13 +102,45 @@ func (r *AcceleratorWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.
 		}
 		return ctrl.Result{}, err
 	}
-	res, err := intent.Translate(intent.BuildRequest(&aw, &class), snap)
+	res, err := intent.TranslateWithDRA(intent.BuildRequest(&aw, &class), snap, dra)
 	if err != nil {
 		var rj *intent.Reject
 		if errors.As(err, &rj) {
 			return r.rejected(ctx, &aw, rj.Reason, rj.Axis, rj.Error())
 		}
 		return ctrl.Result{}, err
+	}
+
+	rct := renderResourceClaimTemplate(&aw, res)
+	if rct == nil {
+		// DRA 를 벗어난(devicePlugin 으로 되돌린) 워크로드가 남긴 템플릿은 지운다 — 그냥 두면
+		// ownerRef GC 가 CR 삭제 때까지 미루므로 devicePlugin 으로 도는 워크로드가 쓰지도 않는
+		// claim 템플릿을 계속 갖고 있게 된다.
+		if err := r.deleteOwnedResourceClaimTemplate(ctx, &aw); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		if err := ctrl.SetControllerReference(&aw, rct, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.applyResourceClaimTemplate(ctx, rct); err != nil {
+			if errors.Is(err, errResourceClaimTemplateNotOwned) {
+				return ctrl.Result{RequeueAfter: awRequeueInterval},
+					r.translated(ctx, &aw, res, nil, npuv1alpha1.AWReasonDeploymentConflict, err.Error())
+			}
+			// 번역은 성공했고 status.resolved 에는 새 DeviceClass 가 실린다 — Pod 이 아직 옛
+			// 클래스를 청구한다는 사실을 WorkloadReady=False + Warning 이벤트로 남겨야 사용자가
+			// 자기 수정이 반영되지 않았음을 알 수 있다.
+			if errors.Is(err, errResourceClaimTemplateDrift) {
+				return ctrl.Result{RequeueAfter: awRequeueInterval},
+					r.translated(ctx, &aw, res, nil, npuv1alpha1.AWReasonResourceClaimTemplateDrift, err.Error())
+			}
+			if nonRetryableAPIError(err) {
+				return ctrl.Result{RequeueAfter: awRequeueInterval},
+					r.translated(ctx, &aw, res, nil, npuv1alpha1.AWReasonDeploymentInvalid, err.Error())
+			}
+			return ctrl.Result{}, err
+		}
 	}
 
 	dep := renderDeployment(&aw, res)
@@ -149,6 +201,65 @@ func (r *AcceleratorWorkloadReconciler) applyDeployment(ctx context.Context, wan
 	return merged, nil
 }
 
+// applyResourceClaimTemplate 은 DRA 경로에서 쓸 ResourceClaimTemplate 을 소유·생성한다. applyDeployment
+// 와 같은 소유권 규율(남의 것은 안 뺏는다)을 따르지만, spec 이 불변(K8s 제약)이라 Deployment 처럼
+// 필드별 병합을 할 게 없다 — 없으면 만들고, 있으면 요청하는 DeviceClass 가 지금 번역 결과와
+// 같은지만 본다. 여기서 비교하지 않으면 AcceleratorClass 의 deviceClassName 을 바꾼 뒤
+// status.resolved 는 새 값을, Pod 은 계속 옛 값을 가리키는데 아무 데도 그 사실이 남지 않는다.
+func (r *AcceleratorWorkloadReconciler) applyResourceClaimTemplate(ctx context.Context, want *resourcev1.ResourceClaimTemplate) error {
+	var live resourcev1.ResourceClaimTemplate
+	err := r.Get(ctx, types.NamespacedName{Name: want.Name, Namespace: want.Namespace}, &live)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, want); err != nil {
+			return fmt.Errorf("create resourceclaimtemplate %s/%s: %w", want.Namespace, want.Name, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	owner := metav1.GetControllerOf(&live)
+	if owner == nil || owner.UID != want.OwnerReferences[0].UID {
+		return fmt.Errorf("resourceclaimtemplate %s/%s already exists and is not controlled by this workload: %w",
+			want.Namespace, want.Name, errResourceClaimTemplateNotOwned)
+	}
+	if got, expected := claimDeviceClassName(&live), claimDeviceClassName(want); got != expected {
+		return fmt.Errorf("resourceclaimtemplate %s/%s still requests deviceClass %q but the resolved allocation is %q; "+
+			"spec is immutable, so delete the template (and the pods holding claims from it) to adopt the new class: %w",
+			want.Namespace, want.Name, got, expected, errResourceClaimTemplateDrift)
+	}
+	return nil
+}
+
+// claimDeviceClassName 은 이 템플릿이 요청하는 DeviceClass 다(없으면 빈 문자열). 우리가 만든
+// 템플릿은 요청이 하나뿐이지만, 예전 버전이 만든 모양도 그대로 읽을 수 있게 첫 유효값을 쓴다.
+func claimDeviceClassName(t *resourcev1.ResourceClaimTemplate) string {
+	for _, req := range t.Spec.Spec.Devices.Requests {
+		if req.Exactly != nil && req.Exactly.DeviceClassName != "" {
+			return req.Exactly.DeviceClassName
+		}
+	}
+	return ""
+}
+
+// deleteOwnedResourceClaimTemplate 은 DRA 경로를 벗어났을 때 우리가 만든 템플릿을 회수한다.
+// resource.k8s.io 를 서빙하지 않는 클러스터에서는 조회 자체가 NoMatch 다 — 거기서는 만든 적도
+// 없으므로 지울 것도 없다(이걸 오류로 올리면 DRA 없는 클러스터의 모든 워크로드가 재조정 실패한다).
+func (r *AcceleratorWorkloadReconciler) deleteOwnedResourceClaimTemplate(ctx context.Context, aw *npuv1alpha1.AcceleratorWorkload) error {
+	var live resourcev1.ResourceClaimTemplate
+	err := r.Get(ctx, types.NamespacedName{Name: draClaimTemplateName(aw.Name), Namespace: aw.Namespace}, &live)
+	if err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return client.IgnoreNotFound(err)
+	}
+	if owner := metav1.GetControllerOf(&live); owner == nil || owner.UID != aw.UID {
+		return nil // 남의 것은 안 건드린다(applyResourceClaimTemplate 과 같은 규율).
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, &live))
+}
+
 // mergeDeployment 는 우리가 소유하는 필드만 live 위에 얹는다. live.Spec 을 통째로 갈아끼우면
 // API server 가 채워 넣은 기본값(dnsPolicy·strategy·imagePullPolicy…)이 매번 지워졌다 다시
 // 채워져 "항상 다름" 이 되고, 그 결과 재조정마다 rolling restart 가 난다.
@@ -173,6 +284,9 @@ func mergeDeployment(live, want *appsv1.Deployment) *appsv1.Deployment {
 	out.Spec.Template.Spec.Affinity = want.Spec.Template.Spec.Affinity
 	// 이 필드도 우리 소유다 — 안 맞추면 이 수정 이전에 만들어진 Deployment 는 영영 runtimeClass 없이 남는다.
 	out.Spec.Template.Spec.RuntimeClassName = want.Spec.Template.Spec.RuntimeClassName
+	// DRA 경로의 claim 참조도 우리 소유다 — 빠뜨리면 기존 Deployment 는 재조정을 거쳐도 영영
+	// pod.spec.resourceClaims 없이 남아 컨테이너의 claims 참조가 허공을 가리킨다.
+	out.Spec.Template.Spec.ResourceClaims = want.Spec.Template.Spec.ResourceClaims
 	wc := want.Spec.Template.Spec.Containers[0]
 	if len(out.Spec.Template.Spec.Containers) != 1 {
 		out.Spec.Template.Spec.Containers = want.Spec.Template.Spec.Containers
@@ -268,8 +382,20 @@ func renderDeployment(aw *npuv1alpha1.AcceleratorWorkload, res *intent.Result) *
 		"app.kubernetes.io/managed-by": "kcloud-operator",
 		podInjectLabel:                 labelValueTrue,
 	}
-	limits := corev1.ResourceList{
-		corev1.ResourceName(res.ResourceName): *resource.NewQuantity(int64(res.Quantity), resource.DecimalSI),
+	// DRA 경로는 extended resource 를 쓰지 않는다 — limits 까지 채우면 스케줄러가 같은 장치를
+	// device-plugin 자원과 DRA claim 양쪽으로 이중 요청한다. 대신 pod.spec.resourceClaims 를
+	// 가리키는 claim 참조를 컨테이너에 단다.
+	var limits corev1.ResourceList
+	var claims []corev1.ResourceClaim
+	var podClaims []corev1.PodResourceClaim
+	if res.AllocationAPI == npuv1alpha1.AllocationAPIDRA {
+		tmplName := draClaimTemplateName(aw.Name)
+		podClaims = []corev1.PodResourceClaim{{Name: draClaimName, ResourceClaimTemplateName: &tmplName}}
+		claims = []corev1.ResourceClaim{{Name: draClaimName}}
+	} else {
+		limits = corev1.ResourceList{
+			corev1.ResourceName(res.ResourceName): *resource.NewQuantity(int64(res.Quantity), resource.DecimalSI),
+		}
 	}
 	// NVIDIA 는 runtimeClass 를 여기서 직접 박는다. 노드의 containerd 기본 런타임은 runc 이고
 	// nvidia hook 은 이 핸들러에서만 돌므로, 없으면 컨테이너는 /dev/nvidia* 없이 뜬다 —
@@ -303,13 +429,38 @@ func renderDeployment(aw *npuv1alpha1.AcceleratorWorkload, res *intent.Result) *
 				Spec: corev1.PodSpec{
 					Affinity:         affinity,
 					RuntimeClassName: runtimeClass,
+					ResourceClaims:   podClaims,
 					Containers: []corev1.Container{{
 						Name:      "workload",
 						Image:     aw.Spec.Workload.Image,
 						Command:   aw.Spec.Workload.Command,
 						Args:      aw.Spec.Workload.Args,
 						Env:       aw.Spec.Workload.Env,
-						Resources: corev1.ResourceRequirements{Limits: limits},
+						Resources: corev1.ResourceRequirements{Limits: limits, Claims: claims},
+					}},
+				},
+			},
+		},
+	}
+}
+
+// renderResourceClaimTemplate 은 DRA 경로에서만 쓴다. Pod 이 참조할 accel claim 을 만든다.
+// device-plugin 경로에서는 nil 이다 — Reconcile 은 nil 이면 이 리소스를 아예 건드리지 않는다.
+func renderResourceClaimTemplate(aw *npuv1alpha1.AcceleratorWorkload, res *intent.Result) *resourcev1.ResourceClaimTemplate {
+	if res.AllocationAPI != npuv1alpha1.AllocationAPIDRA {
+		return nil
+	}
+	return &resourcev1.ResourceClaimTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: draClaimTemplateName(aw.Name), Namespace: aw.Namespace},
+		Spec: resourcev1.ResourceClaimTemplateSpec{
+			Spec: resourcev1.ResourceClaimSpec{
+				Devices: resourcev1.DeviceClaim{
+					Requests: []resourcev1.DeviceRequest{{
+						Name: draClaimName,
+						Exactly: &resourcev1.ExactDeviceRequest{
+							DeviceClassName: res.DeviceClassName,
+							Count:           int64(res.Quantity),
+						},
 					}},
 				},
 			},
@@ -321,5 +472,6 @@ func (r *AcceleratorWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&npuv1alpha1.AcceleratorWorkload{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&resourcev1.ResourceClaimTemplate{}).
 		Complete(r)
 }

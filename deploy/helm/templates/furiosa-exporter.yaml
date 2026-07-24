@@ -1,0 +1,71 @@
+{{- if .Values.furiosa.exporter.enabled }}
+# ============================================================
+# furiosa-exporter.yaml: Furiosa RNGD 텔레메트리 exporter DaemonSet
+# 상세: :9410 에서 코어 사용률·DRAM·전력·온도를 Prometheus 포맷으로 낸다.
+#       비특권 — /sys·/dev 읽기만으로 furiosa-smi 가 동작한다(기존 통합
+#       device-plugin 과 동일 조건). 대상은 RNGD 노드뿐이다.
+# 생성일: 2026-08-07
+# ============================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kcloud-furiosa-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: kcloud-furiosa-exporter
+    app.kubernetes.io/component: telemetry
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kcloud-furiosa-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kcloud-furiosa-exporter
+        app.kubernetes.io/component: telemetry
+    spec:
+      # RNGD 전용이다. Warboy 노드에 올리면 벤더 SMI 가 furiosa_smi_init 에서
+      # "unsupported device id 0" 으로 abort 하고 컨테이너가 죽는다(2026-08-07 실측,
+      # k8s-worker1). 오류 반환이 아니라 프로세스 abort 라 코드로 감쌀 수 없다.
+      nodeSelector:
+        kcloud.ai/rngd.present: "true"
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: furiosa-exporter
+          image: "{{ .Values.global.registry }}/{{ .Values.furiosa.exporter.repository }}:{{ .Values.furiosa.exporter.tag }}"
+          args: ["--interval={{ .Values.furiosa.exporter.interval }}"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: 9410
+              protocol: TCP
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: dev
+              mountPath: /dev
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9410
+            initialDelaySeconds: 5
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: dev
+          hostPath:
+            path: /dev
+{{- end }}

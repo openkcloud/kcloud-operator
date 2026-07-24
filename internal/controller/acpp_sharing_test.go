@@ -19,6 +19,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +54,7 @@ func sharingScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = npuv1alpha1.AddToScheme(s)
 	_ = clientgoscheme.AddToScheme(s)
+	_ = resourcev1.AddToScheme(s) // clientgoscheme 에는 resource.k8s.io 가 없다(ResourceClaim 픽스처 테스트용).
 	return s
 }
 

@@ -16,6 +16,9 @@ spec:
     image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.detector.repository "tag" .Values.detector.tag) }}"
   nvidia:
     enabled: {{ .Values.nvidia.enabled }}
+    {{- with .Values.nvidia.advertiseBy }}
+    advertiseBy: {{ . | quote }}
+    {{- end }}
     devicePluginImage: "{{ .Values.nvidia.devicePluginImage }}"
     {{- if .Values.nvidia.nodeSelector }}
     nodeSelector:
@@ -28,8 +31,16 @@ spec:
       image: "{{ .Values.nvidia.dcgmExporter.image }}"
       {{- end }}
     {{- end }}
+    {{- if .Values.nvidia.dra }}
+    dra:
+      enabled: {{ .Values.nvidia.dra.enabled }}
+      image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.nvidia.dra.repository "tag" .Values.nvidia.dra.tag) }}"
+    {{- end }}
   furiosa:
     enabled: {{ .Values.furiosa.enabled }}
+    {{- with .Values.furiosa.advertiseBy }}
+    advertiseBy: {{ . | quote }}
+    {{- end }}
     devicePluginImage: "{{ .Values.furiosa.devicePluginImage }}"
     configMapName: "{{ .Values.furiosa.configMapName }}"
     {{- if .Values.furiosa.nodeSelector }}
@@ -43,9 +54,17 @@ spec:
     {{- if .Values.furiosa.rngd }}
     rngd:
       enabled: {{ .Values.furiosa.rngd.enabled }}
+      {{- with .Values.furiosa.rngd.advertiseBy }}
+      advertiseBy: {{ . | quote }}
+      {{- end }}
       devicePluginImage: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.rngd.devicePluginRepository "tag" .Values.furiosa.rngd.devicePluginTag) }}"
       resourceName: "{{ .Values.furiosa.rngd.resourceName }}"
       partitionPolicy: {{ .Values.furiosa.rngd.partitionPolicy | default "none" | quote }}
+      {{- if .Values.furiosa.rngd.dra }}
+      dra:
+        enabled: {{ .Values.furiosa.rngd.dra.enabled }}
+        image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.rngd.dra.repository "tag" .Values.furiosa.rngd.dra.tag) }}"
+      {{- end }}
       {{- if .Values.furiosa.rngd.nodeSelector }}
       nodeSelector:
         {{- toYaml .Values.furiosa.rngd.nodeSelector | nindent 8 }}
@@ -67,6 +86,9 @@ spec:
   {{- if .Values.tenstorrent }}
   tenstorrent:
     enabled: {{ .Values.tenstorrent.enabled }}
+    {{- with .Values.tenstorrent.advertiseBy }}
+    advertiseBy: {{ . | quote }}
+    {{- end }}
     devicePluginImage: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.tenstorrent.devicePluginRepository "tag" .Values.tenstorrent.devicePluginTag) | quote }}
     resourceName: {{ .Values.tenstorrent.resourceName | quote }}
     {{- with .Values.tenstorrent.nodeSelector }}

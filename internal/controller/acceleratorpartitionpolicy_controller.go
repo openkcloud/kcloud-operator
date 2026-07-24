@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-07-31
+// 생성일: 2026-07-23 | 수정일: 2026-08-05
 // ============================================================
 package controller
 
@@ -123,7 +123,7 @@ func (r *AcceleratorPartitionPolicyReconciler) nvidiaObserver() nvidia.Observer 
 	if r.NvidiaObserverFactory != nil {
 		return r.NvidiaObserverFactory(r.Client)
 	}
-	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, os.Getenv("ACPP_MIG_JOB_IMAGE"))
+	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, os.Getenv("ACPP_MIG_JOB_IMAGE"), nvidia.StreamApply)
 }
 
 // Reconcile 은 discover→validate→diff→(apply)→verify→Ready 상태머신을 target 별로 실행하고 phase 를 집계한다.
@@ -262,6 +262,25 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	}
 
 	ts := npuv1alpha1.TargetStatus{NodeName: t.NodeName, RequestedLayout: acpp.Spec.Layout}
+
+	// 0. 소유권 — 이 노드의 이 벤더 장치를 DRA 가 광고하기로 선언됐다면 우리가 파티션을
+	// 건드리면 안 된다. DRA 드라이버는 claim 시점에 MIG 를 구성한다(NVIDIA k8s-dra-driver-gpu
+	// 의 createMigDevice). 같은 GPU 를 둘이 재구성하면 재구성 중인 장치 위에 워크로드가 올라간다.
+	// 적용 경로 넷이 모두 runTarget 을 지나므로 판정은 여기 한 곳에 둔다.
+	if owned, oerr := r.draOwnedNode(t.Ctx, t.NodeName, acpp.Spec.Vendor); oerr != nil {
+		ts.Phase = npuv1alpha1.ACPPPhaseFailed
+		setCond(&ts, npuv1alpha1.ACPPCondCapabilitiesDiscovered, metav1.ConditionFalse,
+			"OwnershipCheckFailed", oerr.Error(), acpp.Generation)
+		return ts, oerr
+	} else if owned {
+		msg := fmt.Sprintf("노드 %s 의 %s 장치는 DRA 가 광고한다(NPUClusterPolicy 의 advertiseBy: dra) — "+
+			"파티션 구성 주체가 둘이 되지 않도록 이 노드에는 적용하지 않는다. 되돌리려면 advertiseBy 를 devicePlugin 으로 두라",
+			t.NodeName, acpp.Spec.Vendor)
+		ts.Phase = npuv1alpha1.ACPPPhaseFailed
+		setCond(&ts, npuv1alpha1.ACPPCondCapabilitiesDiscovered, metav1.ConditionFalse,
+			"NodeOwnedByDRA", msg, acpp.Generation)
+		return ts, nil
+	}
 
 	// 1. Discover
 	dres, err := backend.Discover(t)
@@ -1724,11 +1743,23 @@ const migModeDisableAction = "mig-mode-disable"
 func (r *AcceleratorPartitionPolicyReconciler) finishNvidiaDeletionRollback(ctx context.Context,
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) error {
 	restoreMode := acpp.Spec.DeletionPolicy == npuv1alpha1.DeletionPolicyRestoreMode
+	// RestoreMode 는 mode 복원을 baseline 확인보다 **먼저** 한다. mixed 전략에서 MIG mode 가 켜진
+	// 채 조각이 없는 GPU 는 아무것도 광고하지 않으므로, mode 를 끄기 전의 allocatable 은 baseline
+	// 보다 반드시 적다 — 순서가 반대면 baseline 확인이 mode 복원을 막고 mode 복원만이 baseline 을
+	// 만들 수 있어 서로를 기다린다(2026-08-05 라이브: finalizer 영구 잔존, 노드 cordon 고착).
+	// mode 복원이 끝난 뒤의 pass 에서 아래 baseline 확인이 그대로 판정한다 — 확인을 건너뛰지 않는다.
+	if restoreMode {
+		if err := r.enforceRestoreModeOnDeletion(ctx, acpp, rec); err != nil {
+			// 차단 이벤트는 enforceRestoreModeOnDeletion 이 실패 시에만 남긴다 — 재부팅 대기는
+			// 정상 진행 상태라 매 pass 이벤트를 남기면 소음이 된다.
+			return err
+		}
+	}
 	if err := r.assertMigEmptyAndBaseline(ctx, rec, restoreMode); err != nil {
 		r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
 		return err // 복원 미확인 → finalizer 유지(never remove on unverified restore).
 	}
-	return r.enforceRestoreModeOnDeletion(ctx, acpp, rec)
+	return nil
 }
 
 // enforceRestoreModeOnDeletion 은 deletionPolicy=RestoreMode 일 때만 mode 복원을 밀어붙인다.
@@ -1801,8 +1832,9 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx contex
 	return false, nil
 }
 
-// assertNodeQuiesced 는 rollback 안전(노드 cordon + GPU 점유 pod 없음)을 검증한다(§15.3).
-// 실제 판정은 partition.Quiescer 로 위임한다(Task 5 — 배출 로직과 판정 규칙을 한 곳에 둔다).
+// assertNodeQuiesced 는 rollback 안전(노드 cordon + 장치 점유 워크로드 없음)을 검증한다(§15.3).
+// 판정은 전적으로 partition.Quiescer 에 있다 — 배출 대상 규칙과 완료 판정 규칙이 갈라지면
+// "배출은 안 하면서 정지했다고 보는" 구멍이 생기므로(DRA pod 이 실제로 그랬다) 한 곳에 둔다.
 func (r *AcceleratorPartitionPolicyReconciler) assertNodeQuiesced(ctx context.Context, node string) error {
 	if err := partition.NvidiaQuiescer(r.Client).AssertQuiesced(ctx, node); err != nil {
 		return fmt.Errorf("%w; unsafe to rollback MIG", err)
@@ -1863,12 +1895,26 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 	}
 	q := n.Status.Allocatable[corev1.ResourceName(nvidiaGPUResource)]
 	got := int32(q.Value())
-	// mode 까지 되돌리는 경로(RestoreMode)는 baseline 보다 **많이** 돌아온다 — baseline 은 MIG mode
-	// 가 켜져 있던 시점의 광고량이라 조각 대상 GPU 가 빠져 있고, mode 를 끄면 그 GPU 가 온전한
-	// GPU 로 다시 광고되기 때문이다. 정확 일치를 요구하면 복원이 성공한 그 사실 때문에 정리가
-	// 막힌다(라이브 실측 2026-08-04). 부족한 것만 실패로 본다.
-	if got < rec.BaselineGPUCount || (!allowModeDisabled && got != rec.BaselineGPUCount) {
-		return fmt.Errorf("node %s allocatable %s=%d not restored to baseline %d", rec.NodeName, nvidiaGPUResource, got, rec.BaselineGPUCount)
+	// mode 까지 되돌리는 경로(RestoreMode)는 baseline 보다 **많이** 돌아온다 — mode 를 끄면 조각
+	// 대상이던 GPU 가 온전한 GPU 로 다시 광고되기 때문이다. 정확 일치를 요구하면 복원이 성공한
+	// 그 사실 때문에 정리가 막힌다(라이브 실측 2026-08-04). 부족한 것만 실패로 본다.
+	if allowModeDisabled {
+		if got < rec.BaselineGPUCount {
+			return fmt.Errorf("node %s allocatable %s=%d not restored to baseline %d",
+				rec.NodeName, nvidiaGPUResource, got, rec.BaselineGPUCount)
+		}
+		return nil
+	}
+	// Retain 은 MIG mode 를 켠 채 둔다. mode 가 Enabled 인 GPU 는 조각을 모두 회수해도 full GPU 로
+	// 광고되지 않으므로, 돌아올 수 있는 값은 **MIG 대상이 아닌 GPU 수**(ExpectedFullGPUCount)다.
+	//
+	// 여기서 BaselineGPUCount 를 요구하면 안 된다 — 그 값은 baseline 을 잡던 시점의 광고량이고,
+	// mode 가 Disabled 인 노드에서 시작하면 조각 대상 GPU 까지 포함한 수다(A30 2장 노드에서 2).
+	// mode 를 켠 뒤에는 그 수가 원리상 다시 나올 수 없어 finalizer 가 영구 보유되고 노드가 cordon
+	// 된 채 남는다. deletionPolicy 기본값이 Retain 이라 노출이 넓다(2026-08-06 실측).
+	if got != rec.ExpectedFullGPUCount {
+		return fmt.Errorf("node %s allocatable %s=%d not restored to expected full-gpu count %d",
+			rec.NodeName, nvidiaGPUResource, got, rec.ExpectedFullGPUCount)
 	}
 	return nil
 }
@@ -1998,4 +2044,18 @@ func (r *AcceleratorPartitionPolicyReconciler) delegateToOperation(ctx context.C
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+}
+
+// draOwnedNode 는 이 노드의 이 벤더 광고가 DRA 로 넘어갔는지다. 라벨은 NPUClusterPolicy 의
+// advertiseBy 에서 파생된다(operator 가 붙인다). 노드를 못 읽으면 "모른다" 이므로 오류다 —
+// 안전 게이트에서 조회 실패를 "아니다" 로 흘리면 두 소유자가 붙는다.
+func (r *AcceleratorPartitionPolicyReconciler) draOwnedNode(ctx context.Context, node, vendor string) (bool, error) {
+	if node == "" || vendor == "" {
+		return false, nil
+	}
+	var n corev1.Node
+	if err := r.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		return false, fmt.Errorf("노드 %s 조회 실패(DRA 소유 확인): %w", node, err)
+	}
+	return n.Labels[npuv1alpha1.DRAOwnedNodeLabel(vendor)] == labelValueTrue, nil
 }

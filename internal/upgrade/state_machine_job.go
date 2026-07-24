@@ -6,7 +6,8 @@
 //       재사용하되, "DS 이미지 patch + pod 삭제" 를 "install Job 생성/재생성" 으로,
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
-// 생성일: 2026-07-16
+//       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
+// 생성일: 2026-07-16 | 수정일: 2026-08-07
 // ============================================================
 
 package upgrade
@@ -89,7 +90,7 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 	// Q2: 업그레이드 착수 시점에 rollback 대상(이전 버전 이미지)을 캡처한다. Job 모드는 상주
 	// DS 가 없어 이전 이미지를 읽을 소스가 없으므로, DIP image 의 variant 접미사 + PreviousVersion
 	// 으로 검증된 build tag 를 재구성해 저장한다. 재구성 불가 시 빈 값 유지 → rollback 은 Failed(안전).
-	captureJobPreviousImage(state, desiredImage)
+	captureJobPreviousImage(state, desiredImage, policy.Spec.Driver.Installer)
 
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	var job batchv1.Job
@@ -108,10 +109,12 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 		return false, 0, fmt.Errorf("install Job 조회 실패: %w", err)
 	}
 
-	// 잔여 Job 존재(이전 사이클 산물). 이미지 불일치면 삭제 후 재생성(requeue → NotFound 경로).
-	if jobContainerImage(&job) != desiredImage {
-		logger.Info("이전 사이클 install Job 이미지 불일치 — 삭제 후 재생성",
-			"job", jobName, "current", jobContainerImage(&job), "desired", desiredImage)
+	// 잔여 Job 존재(이전 사이클 산물). 목표와 불일치면 삭제 후 재생성(requeue → NotFound 경로).
+	if !jobTargetsInstall(&job, desiredImage, desiredVersion) {
+		logger.Info("이전 사이클 install Job 목표 불일치 — 삭제 후 재생성",
+			"job", jobName,
+			"currentImage", jobContainerImage(&job), "desiredImage", desiredImage,
+			"currentVersion", jobDriverVersion(&job), "desiredVersion", desiredVersion)
 		if err := m.deleteInstallJob(ctx, &job); client.IgnoreNotFound(err) != nil {
 			return false, 0, fmt.Errorf("잔여 install Job 삭제 실패: %w", err)
 		}
@@ -140,43 +143,52 @@ func (m *UpgradeStateMachine) handleValidatingJob(
 		logger.Error(err, "Validating(job) 진입 시 blocking 라벨 제거 실패", "node", state.Spec.NodeName)
 	}
 
-	// ─── 1. 전체 validation timeout 가드(daemonset 과 동일 예산) ───
-	validationTimeout := parseDuration("", 15*time.Minute)
-	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.ValidationTimeout != "" {
-		validationTimeout = parseDuration(policy.Spec.UpgradePolicy.ValidationTimeout, 15*time.Minute)
-	}
-	if !state.Status.LastTransitionTime.IsZero() &&
-		time.Since(state.Status.LastTransitionTime.Time) > validationTimeout {
-		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
-			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "검증 타임아웃(job): 롤백 시작", 0)
-		}
-		return m.jobTransitionToFailed(ctx, state, "검증 타임아웃(job): 수동 조치 필요")
-	}
-
-	// ─── 2. Job 상태 판정 ───
+	// ─── 1. Job 상태 판정 ───
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	var job batchv1.Job
 	err := m.Get(ctx, types.NamespacedName{Name: jobName, Namespace: driverjob.Namespace}, &job)
-	if apierrors.IsNotFound(err) {
-		// Job 미발견(아직 미생성 / 완료 후 TTL GC). 상위 timeout 가드 안에서 재확인 대기.
-		logger.Info("install Job 미발견 — 재확인 대기", "job", jobName)
-		return true, 10 * time.Second, nil
-	}
-	if err != nil {
+	jobFound := err == nil
+	if err != nil && !apierrors.IsNotFound(err) {
 		return false, 0, fmt.Errorf("install Job 조회 실패: %w", err)
 	}
 
 	// hard failure: backoffLimit 소진(Failed condition) → CrashLoop 과 동일 취급.
-	if jobFailed(&job) {
+	// activeDeadlineSeconds 초과도 여기로 들어온다(DeadlineExceeded).
+	if jobFound && jobFailed(&job) {
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "install Job 실패: 롤백 시작", 0)
 		}
 		return m.jobTransitionToFailed(ctx, state, "install Job 실패(backoffLimit 소진): 수동 조치 필요")
 	}
 
-	// 아직 완료 전 → 재시도(상위 timeout 가드가 무한 hang 차단).
-	if !jobComplete(&job) {
+	// install Job 이 아직 돌고 있으면 검증 예산을 쓰지 않는다. Job 에는 자기 시한
+	// (activeDeadlineSeconds, 기본 30m)이 있고 초과하면 위 실패 분기가 받는다. 여기서 별도
+	// 시계를 돌리면 정상 진행 중인 설치를 실패로 단정한다 — 라이브 실측: apt 로 313MB 를 받는
+	// 도중 검증 예산 10분이 끝나 롤백으로 밀려났고, 그 롤백이 없는 이미지를 집어 노드가 굳었다.
+	if jobFound && !jobComplete(&job) {
 		logger.Info("install Job 진행 중 — 완료 대기", "job", jobName)
+		return true, 10 * time.Second, nil
+	}
+
+	// ─── 2. 검증 예산 가드 — Job 이 끝난 뒤(또는 사라진 뒤)부터 잰다 ───
+	validationTimeout := parseDuration("", 15*time.Minute)
+	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.ValidationTimeout != "" {
+		validationTimeout = parseDuration(policy.Spec.UpgradePolicy.ValidationTimeout, 15*time.Minute)
+	}
+	since := state.Status.LastTransitionTime.Time
+	if jobFound && job.Status.CompletionTime != nil && job.Status.CompletionTime.After(since) {
+		since = job.Status.CompletionTime.Time
+	}
+	if !since.IsZero() && time.Since(since) > validationTimeout {
+		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
+			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "검증 타임아웃(job): 롤백 시작", 0)
+		}
+		return m.jobTransitionToFailed(ctx, state, "검증 타임아웃(job): 수동 조치 필요")
+	}
+
+	if !jobFound {
+		// Job 미발견(아직 미생성 / 완료 후 TTL GC). 검증 예산 안에서 재확인 대기.
+		logger.Info("install Job 미발견 — 재확인 대기", "job", jobName)
 		return true, 10 * time.Second, nil
 	}
 
@@ -299,7 +311,7 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 	// rollback 대상 이미지: 캡처된 PreviousImage 우선, 없으면 DIP variant 재구성.
 	prevImage := state.Status.PreviousImage
 	if prevImage == "" {
-		prevImage = reconstructPrevImage(policy.Spec.Driver.Image, prevVersion)
+		prevImage = reconstructPrevImage(policy.Spec.Driver.Image, policy.Spec.Driver.Installer, prevVersion)
 	}
 	if prevImage == "" {
 		metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
@@ -316,7 +328,7 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 		return false, 0, fmt.Errorf("rollback: install Job 조회 실패: %w", getErr)
 	}
 
-	if jobExists && jobContainerImage(&job) == prevImage {
+	if jobExists && jobTargetsInstall(&job, prevImage, prevVersion) {
 		// 이미 rollback 대상 Job 이 존재.
 		if jobFailed(&job) {
 			// rollback Job 도 실패 → 삭제해 다음 사이클에서 재시도(재생성 시 카운트).
@@ -395,11 +407,11 @@ func (m *UpgradeStateMachine) deleteInstallJob(ctx context.Context, job *batchv1
 
 // captureJobPreviousImage 는 Q2 에 따라 rollback 대상 이미지를 DUS status 에 캡처한다.
 // 이미 캡처됐거나 PreviousVersion 이 없으면 no-op. 재구성 결과가 검증된 build tag 일 때만 저장한다.
-func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage string) {
+func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage, installer string) {
 	if state.Status.PreviousImage != "" || state.Status.PreviousVersion == "" {
 		return
 	}
-	candidate := reconstructPrevImage(desiredImage, state.Status.PreviousVersion)
+	candidate := reconstructPrevImage(desiredImage, installer, state.Status.PreviousVersion)
 	if candidate != "" {
 		state.Status.PreviousImage = candidate
 	}
@@ -407,9 +419,16 @@ func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage st
 
 // reconstructPrevImage 는 desired 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해
 // 이전 버전 이미지를 재구성한다. variant 미검출/검증 실패 시 빈 문자열.
-func reconstructPrevImage(dipImage, prevVersion string) string {
+func reconstructPrevImage(dipImage, installer, prevVersion string) string {
 	if dipImage == "" || prevVersion == "" {
 		return ""
+	}
+	// apt/script 인스톨러는 이미지가 버전을 담지 않는다 — 드라이버 버전은 DRIVER_VERSION 환경
+	// 변수로 들어간다. 그런데도 태그를 버전으로 갈아 끼우면 레지스트리에 없는 이미지가 만들어지고,
+	// rollback Job 이 ImagePullBackOff 로 앉아 노드가 cordon 상태로 고착된다(라이브 실측).
+	// 되돌릴 대상은 같은 이미지 + 이전 버전이다.
+	if installer != v1alpha1.DriverInstallerNGC {
+		return dipImage
 	}
 	variant := extractImageVariantSuffix(dipImage)
 	if variant == "" {
@@ -431,6 +450,34 @@ func jobContainerImage(job *batchv1.Job) string {
 	cs := job.Spec.Template.Spec.Containers
 	if len(cs) > 0 {
 		return cs[0].Image
+	}
+	return ""
+}
+
+// jobTargetsInstall 은 잔여 Job 이 지금 하려는 설치(이미지 + 목표 버전)와 같은 것인지 반환한다.
+//
+// 이미지만으로는 판정할 수 없다. apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을
+// 설치하고 목표 버전은 DRIVER_VERSION env 로만 들어간다 — 그래서 지난 사이클이 남긴 완료된
+// Job 과 이번 사이클의 Job 이 이미지 상으로는 구별되지 않는다. 라이브 실측(2026-08-07
+// `.91` k8s-worker1): 595.84 사이클 종료 12초 뒤 시작한 580.173.02 사이클이 앞 사이클의
+// 완료된 Job 을 재사용해, 580 설치를 한 번도 만들지 않은 채 validator 가 앞 Job 의 결과를
+// 10분간 채점했다.
+//
+// DRIVER_VERSION 이 없는 Job(구 operator 산물)은 불일치로 본다 — 삭제 후 재생성이 안전한 쪽이다.
+func jobTargetsInstall(job *batchv1.Job, image, version string) bool {
+	return jobContainerImage(job) == image && jobDriverVersion(job) == version
+}
+
+// jobDriverVersion 은 Job pod template 첫 컨테이너의 DRIVER_VERSION env 값이다(없으면 "").
+func jobDriverVersion(job *batchv1.Job) string {
+	cs := job.Spec.Template.Spec.Containers
+	if len(cs) == 0 {
+		return ""
+	}
+	for _, e := range cs[0].Env {
+		if e.Name == "DRIVER_VERSION" {
+			return e.Value
+		}
 	}
 	return ""
 }

@@ -60,13 +60,30 @@ const (
 	AWReasonNodeCordoned = "NodeCordoned"
 	// AWReasonReplicasTooFew: 공유 계열 모드인데 access.replicas 가 2 미만이다.
 	// 백엔드 한계가 아니라 사용자 입력 문제이므로 BackendUnsupported 와 구분한다.
-	AWReasonReplicasTooFew    = "ReplicasTooFew"
-	AWReasonDRANotEnabled     = "DRANotEnabled"
-	AWReasonSharingNotApplied = "SharingNotApplied"
-	AWReasonDeviceShared      = "DeviceShared"
-	AWReasonTranslated        = "Translated"
-	AWReasonWorkloadReady     = "WorkloadReady"
-	AWReasonWorkloadNotReady  = "WorkloadNotReady"
+	AWReasonReplicasTooFew = "ReplicasTooFew"
+	AWReasonDRANotEnabled  = "DRANotEnabled"
+	// AWReasonDRAMappingMissing: 클러스터는 DRA 를 서빙하지만 이 AcceleratorClass 가
+	// 그 벤더의 DeviceClass 를 선언하지 않았다. 고칠 곳은 클러스터가 아니라 클래스다.
+	AWReasonDRAMappingMissing = "DRAMappingMissing"
+	// AWReasonDRADriverMissing: 클래스가 가리키는 DeviceClass 가 실재하지 않는다.
+	// 벤더 DRA 드라이버가 설치되지 않았다는 뜻이다.
+	AWReasonDRADriverMissing = "DRADriverMissing"
+	// AWReasonDRAUnsupportedRequest: 클러스터도 드라이버도 멀쩡하지만 DRA 경로가 그 요청의
+	// 축(공유·분할·requirements)을 아직 구현하지 않았다. 클러스터 탓이 아니므로
+	// BackendUnsupported/CapabilityUnverified 와 구분한다 — 고치는 방법은 allocationAPI 를
+	// devicePlugin 으로 돌리는 것이지 장치나 드라이버를 손보는 것이 아니다.
+	AWReasonDRAUnsupportedRequest = "DRAUnsupportedRequest"
+	// AWReasonDRADoubleAdvertised: DRA 장치를 내놓는 노드가 같은 벤더를 device-plugin 으로도
+	// 광고하고 있어 후보에서 뺐다(스케줄러가 카드 1장을 독립 자원 2개로 본다). NoCandidateNodes
+	// 와 구분하는 이유는 그 메시지가 사실과 반대로 읽히기 때문이다 — 장치도 드라이버도 멀쩡한데
+	// "아무 노드도 장치를 안 낸다" 를 받은 사용자는 멀쩡한 DRA 드라이버를 다시 깐다.
+	// 고칠 곳은 그 노드의 device-plugin 광고다.
+	AWReasonDRADoubleAdvertised = "DRADoubleAdvertised"
+	AWReasonSharingNotApplied   = "SharingNotApplied"
+	AWReasonDeviceShared        = "DeviceShared"
+	AWReasonTranslated          = "Translated"
+	AWReasonWorkloadReady       = "WorkloadReady"
+	AWReasonWorkloadNotReady    = "WorkloadNotReady"
 	// AWReasonDeploymentConflict: 같은 이름의 Deployment 가 이미 있는데 이 CR 소유가 아니다.
 	// 번역은 성공했지만 워크로드를 실현할 수 없다 — 남의 것을 뺏지 않고 사유만 남긴다.
 	AWReasonDeploymentConflict = "DeploymentConflict"
@@ -74,6 +91,10 @@ const (
 	// 거절했다(Invalid/Forbidden/BadRequest — 잘못된 리소스명, 권한, quota, terminating namespace).
 	// 백오프로 영영 재시도하며 status 를 비워 두지 않고 사유를 CR 에 남긴다.
 	AWReasonDeploymentInvalid = "DeploymentInvalid"
+	// AWReasonResourceClaimTemplateDrift: 이미 있는 ResourceClaimTemplate 이 청구하는 DeviceClass 가
+	// 지금 번역이 확정한 것과 다르다. spec 이 불변이라 operator 가 고칠 수 없고, 지웠다 다시 만들면
+	// 그 템플릿으로 뜬 Pod 의 claim 이 끊긴다 — 조용히 옛 클래스로 계속 도는 대신 사유를 남긴다.
+	AWReasonResourceClaimTemplateDrift = "ResourceClaimTemplateDrift"
 )
 
 // AccessSpec 는 장치를 어떻게 쓸 것인가다.
@@ -99,7 +120,8 @@ type AcceleratorPreferences struct {
 	// Vendors 는 선호 벤더 순서다. 클래스 mappings 에 없는 벤더는 무시된다.
 	// +optional
 	Vendors []string `json:"vendors,omitempty"`
-	// AllocationAPI 는 노출 계층이다. 현재 클러스터는 K8s 1.28 이라 dra 를 요청하면 거절된다.
+	// AllocationAPI 는 노출 계층이다. dra 가용 여부는 하드코딩이 아니라
+	// DeviceClass·ResourceSlice 실측으로 판정한다(internal/intent/dra.go).
 	// +kubebuilder:validation:Enum=auto;devicePlugin;dra
 	// +kubebuilder:default=auto
 	// +optional
@@ -149,6 +171,10 @@ type ResolvedAllocation struct {
 	// ResourceName 은 Pod 이 실제로 요청하는 extended resource 다.
 	// +optional
 	ResourceName string `json:"resourceName,omitempty"`
+	// DeviceClassName 은 DRA 경로에서 ResourceClaimTemplate 이 참조할 DeviceClass 다.
+	// allocationAPI=devicePlugin 이면 비어 있고, dra 면 ResourceName 이 비고 이쪽이 찬다.
+	// +optional
+	DeviceClassName string `json:"deviceClassName,omitempty"`
 	// +optional
 	Quantity int32 `json:"quantity,omitempty"`
 	// +optional

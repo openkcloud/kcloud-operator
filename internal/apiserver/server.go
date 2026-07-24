@@ -134,6 +134,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/classes", s.authz("list", "acceleratorclasses", s.handleClasses))
 	mux.HandleFunc("GET /api/v1/policies", s.authz("list", "acceleratorpartitionpolicies", s.handlePolicies))
 	mux.HandleFunc("GET /api/v1/workloads", s.authz("list", "acceleratorworkloads", s.handleWorkloads))
+	// 소비자 목록은 Pod 와 ResourceClaim 두 core/DRA 리소스를 읽으므로 두 게이트를 모두 요구한다.
+	// resourceclaims 는 클러스터에 없을 수도 있지만(1.28 라인) SAR 은 RBAC 만 보므로 게이트는 선다.
+	mux.HandleFunc("GET /api/v1/consumers", s.authzAll([]authzPair{
+		{Group: "", Verb: "list", Resource: "pods"},
+		{Group: "resource.k8s.io", Verb: "list", Resource: "resourceclaims"},
+	}, s.handleConsumers))
 	// core 그룹 리소스이므로 그룹을 명시한다 — npu.ai 로 물으면 SAR 이 항상 거부한다.
 	mux.HandleFunc("GET /api/v1/events", s.authzGroup("", "list", "events", s.handleEvents))
 	// preview 는 POST 지만 아무것도 쓰지 않는다 — 그래서 읽기 등급(list) 권한을 요구한다.

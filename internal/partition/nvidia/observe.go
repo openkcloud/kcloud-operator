@@ -138,20 +138,82 @@ type MigObserver struct {
 	c         client.Client
 	namespace string
 	image     string // mig-tool 이미지(ACPP_MIG_JOB_IMAGE) — nsenter 포함
+	stream    string // 관측 스트림 식별자 — Job 이름을 호출자별로 가른다(observeJobName 참조)
 }
 
-func NewMigObserver(c client.Client, namespace, image string) *MigObserver {
-	return &MigObserver{c: c, namespace: namespace, image: image}
+// NewMigObserver 는 stream 으로 이름공간이 갈린 관측기를 만든다. stream 은 이 관측기를 돌리는
+// 제어 루프를 가리킨다(정책 적용 경로 / 상시 관측 경로). 노드 이름만으로 Job 을 식별하면 같은
+// 노드를 보는 두 루프가 **서로의 Job 을 지운다** — Observe 는 stale 재사용을 막으려 시작할 때
+// 기존 Job 을 지우기 때문이다. 진 쪽은 fail-closed 관측(Err 채움)을 받고, 그 관측은 보고서에
+// 기록되지 않아 NodeDeviceReport 의 geometry 가 영영 갱신되지 않는다(2026-08-05 라이브).
+func NewMigObserver(c client.Client, namespace, image, stream string) *MigObserver {
+	return &MigObserver{c: c, namespace: namespace, image: image, stream: stream}
 }
+
+// 관측 스트림 식별자. 값은 Job 이름에 들어가므로 DNS-1123 label 로 안전한 짧은 토큰이어야 한다.
+const (
+	// StreamApply 는 ACPP 적용 상태머신이 돌리는 관측이다.
+	StreamApply = "apply"
+	// StreamStanding 은 정책과 무관하게 주기적으로 도는 관측이다.
+	StreamStanding = "standing"
+)
+
+// observeJobName 은 (스트림, 노드) 당 하나인 결정론적 Job 이름이다. 스트림이 비면 기존 이름을
+// 유지한다 — 이름이 바뀌면 이전 버전이 남긴 Job 을 못 지운다.
+func observeJobName(stream, nodeName string) string {
+	if stream == "" {
+		return "acpp-mig-observe-" + shortHash(nodeName)
+	}
+	return "acpp-mig-observe-" + stream + "-" + shortHash(nodeName)
+}
+
+// observePCIsPerJob 은 관측 Job 하나가 담는 PCI 수다.
+//
+// 1 인 이유는 전송 채널 때문이다 — 관측 출력은 `/dev/termination-log` 로 나가고 kubelet 이
+// 이를 **4096 바이트에서 자른다**. MIG 를 켜면 `mig -lgi`/`-lgip` 표가 커져 A30 한 장이 약
+// 2.5KB 를 쓰므로, 두 장만 담아도 한 장의 섹션이 통째로 잘린다(2026-08-06 A30 2장 실측 합계
+// 5018 바이트).
+//
+// 잘린 장치는 "missing PCI section" 으로 fail-closed 되고, MIG-capability 판정에서 빠져
+// target 집합이 줄어든다. 그러면 ApplyRecord 의 GPUPCIs 와 개수가 어긋나 ACPP 가 **자기가 방금
+// 적용한 배치를 남이 만든 것으로 판정**하고 terminal Failed 로 굳는다(하드웨어와 광고는 정상인데
+// 정책만 실패로 남는다). 장치 수가 늘수록 확실히 재발하므로 장치당 한 Job 으로 고정한다.
+const observePCIsPerJob = 1
 
 // Observe 는 nodeName 의 각 pci 에 대해 mode/-lgi/-lgip 를 privileged Job 으로 조회하고
 // fail-closed 로 parse 한 Observation 을 pci 당 하나씩 반환한다(§16.2). Job 실패·pod 소실·빈
 // 메시지·section 누락은 조용히 드롭하지 않고 Err 를 채운 Observation 으로 표면화한다(apply 차단용).
+//
+// PCI 는 observePCIsPerJob 단위로 나눠 Job 을 돌린다. 반환 순서는 입력 pcis 순서와 같다.
 func (o *MigObserver) Observe(ctx context.Context, nodeName string, pcis []string) ([]Observation, error) {
 	if len(pcis) == 0 {
 		return nil, nil
 	}
-	name := "acpp-mig-observe-" + shortHash(nodeName)
+	out := make([]Observation, 0, len(pcis))
+	var firstErr error
+	for chunkIdx, chunk := range chunkPCIs(pcis) {
+		obs, err := o.observeChunk(ctx, nodeName, chunk, chunkIdx)
+		out = append(out, obs...)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return out, firstErr
+}
+
+// chunkPCIs 는 pcis 를 Job 하나가 담을 수 있는 크기로 나눈다. 순서와 내용은 보존된다.
+func chunkPCIs(pcis []string) [][]string {
+	out := make([][]string, 0, (len(pcis)+observePCIsPerJob-1)/observePCIsPerJob)
+	for i := 0; i < len(pcis); i += observePCIsPerJob {
+		out = append(out, pcis[i:min(i+observePCIsPerJob, len(pcis))])
+	}
+	return out
+}
+
+// observeChunk 는 PCI 한 묶음을 Job 하나로 관측한다. chunkIdx 는 Job 이름을 가르는 접미다 —
+// 같은 (스트림, 노드)의 묶음들이 서로의 Job 을 지우지 않게 한다.
+func (o *MigObserver) observeChunk(ctx context.Context, nodeName string, pcis []string, chunkIdx int) ([]Observation, error) {
+	name := fmt.Sprintf("%s-%d", observeJobName(o.stream, nodeName), chunkIdx)
 	// 이전 Job(TTL 잔존/실패)을 먼저 정리해 stale 성공을 재사용하지 않는다.
 	o.deleteJob(ctx, name)
 	if err := o.createTolerant(ctx, renderObserveJob(name, nodeName, pcis, o.image, o.namespace)); err != nil {

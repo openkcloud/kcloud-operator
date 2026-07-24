@@ -5,7 +5,7 @@
 //       것" — 지우면 사용자는 노드가 왜 안 보이는지 알 수 없다. Candidate=false + 사유를 단다.
 //       사유는 intent 패키지의 Axis/Reason 어휘를 그대로 재사용한다(intent.CheckMode 의 stale
 //       거절과 같은 모양) — 여기서 별도의 사유 문자열 체계를 새로 만들지 않는다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-08-05
 // ============================================================
 
 package apiserver
@@ -44,6 +44,10 @@ type NodeCapabilityView struct {
 	PartitionProfiles []string               `json:"partitionProfiles,omitempty"`
 	Policy            string                 `json:"policy,omitempty"`
 	Devices           []DeviceCapabilityView `json:"devices,omitempty"`
+	// DRADevices 는 이 노드가 DRA 로 내놓는 드라이버별 장치 수다. DRA 로만 광고하는 노드는
+	// Advertised 도 Devices 도 비어 있어 candidate:true 의 근거가 화면에서 사라진다 — 후보인
+	// 이유를 볼 수 있게 이 값을 낸다.
+	DRADevices map[string]int32 `json:"draDevices,omitempty"`
 }
 
 // BuildNodeCapabilities 는 모든 노드를 capability 뷰로 접는다(순수 함수).
@@ -51,10 +55,10 @@ type NodeCapabilityView struct {
 // 스냅샷에 나타나지 않은 노드의 사유만 이 함수가 붙인다. 장치 목록은 스냅샷의 nc.Devices 를
 // 쓴다 — intent.applyACPPStatus 가 이미 수렴 게이트(generation/phase)를 통과시킨 값만 담기
 // 때문이다(TargetStatus.Devices 원시값을 다시 읽으면 미수렴 노드의 낡은 장치가 새 나갈 수 있다).
-func BuildNodeCapabilities(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport) []NodeCapabilityView {
+func BuildNodeCapabilities(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport, dra intent.DRACapability) []NodeCapabilityView {
 	// cordon 을 지운 사본으로 스냅샷을 떠서 cordon 노드도 capability 를 갖게 한다.
 	// cordon 자체는 아래에서 후보 탈락 사유로 따로 붙인다.
-	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs)
+	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs, dra)
 	byNode := make(map[string]intent.NodeCapability, len(snap))
 	for i := range snap {
 		byNode[snap[i].NodeName] = snap[i]
@@ -94,6 +98,7 @@ func BuildNodeCapabilities(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPart
 		if ok {
 			v.Vendor = nc.Vendor
 			v.Advertised = nc.Advertised
+			v.DRADevices = nc.DRADevices
 			v.MemoryMiB = nc.MemoryMiB
 			v.PartitionProfiles = nc.PartitionProfiles
 			v.SharingReplicas = nc.SharingReplicas
@@ -128,6 +133,15 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list nodedevicereports: %v", err))
 		return
 	}
+	// DRA 가용성은 intent.Load 가 판정한 것을 그대로 받는다(preview 와 같은 경로). 여기서
+	// DeviceClass/ResourceSlice 를 따로 읽어 다시 판정하면 /capabilities 와 /preview 가 같은
+	// 노드를 두고 서로 다른 답을 하게 된다 — 스냅샷이 DRA 전용 노드를 통째로 버리던 결함이
+	// 정확히 그 모양이었다.
+	_, dra, err := intent.Load(r.Context(), s.Reader)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	limit, offset := pageParams(r)
-	writePage(w, BuildNodeCapabilities(nodes.Items, acpps.Items, ndrs.Items), limit, offset)
+	writePage(w, BuildNodeCapabilities(nodes.Items, acpps.Items, ndrs.Items, dra), limit, offset)
 }

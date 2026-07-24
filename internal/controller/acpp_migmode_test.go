@@ -11,6 +11,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -878,3 +879,38 @@ var _ = Describe("review-i1 M-1/M-3: reboot branch cordons before requesting a r
 		Expect(rec.CordonedByPolicy).To(BeTrue())
 	})
 })
+
+// TestRunTarget_RefusesOnDRAOwnedNode 는 광고 주체가 DRA 로 넘어간 노드에서 ACPP 가 파티션을
+// 건드리지 않는 것을 단정한다. NVIDIA DRA 드라이버는 claim 시점에 MIG 를 구성하므로
+// (createMigDevice), 같은 GPU 를 둘이 재구성하면 재구성 중인 장치 위에 워크로드가 올라간다.
+func TestRunTarget_RefusesOnDRAOwnedNode(t *testing.T) {
+	ctx := context.Background()
+	acpp := migModeACPP()
+	r, c := migModeFixture(t, acpp, false)
+
+	var node corev1.Node
+	if err := c.Get(ctx, types.NamespacedName{Name: "worker1"}, &node); err != nil {
+		t.Fatalf("노드 조회 실패: %v", err)
+	}
+	node.Labels[npuv1alpha1.DRAOwnedNodeLabel("nvidia")] = labelValueTrue
+	if err := c.Update(ctx, &node); err != nil {
+		t.Fatalf("라벨 부여 실패: %v", err)
+	}
+
+	ts, err := r.runTarget(acpp, nvidia.New(c).WithExecutor(fakeNvidiaExec{}), migModeTarget(ctx), &evidenceCtx{})
+	if err != nil {
+		t.Fatalf("거절은 오류가 아니라 상태여야 함: %v", err)
+	}
+	if ts.Phase != npuv1alpha1.ACPPPhaseFailed {
+		t.Errorf("phase = %q, want %q", ts.Phase, npuv1alpha1.ACPPPhaseFailed)
+	}
+	var found bool
+	for _, cond := range ts.Conditions {
+		if cond.Reason == "NodeOwnedByDRA" && strings.Contains(cond.Message, "advertiseBy") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("거절 사유가 광고 주체 스위치를 지목하지 않음: %+v", ts.Conditions)
+	}
+}

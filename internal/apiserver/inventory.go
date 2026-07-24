@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-08-05
 // ============================================================
 
 package apiserver
@@ -203,8 +203,8 @@ func uncordonedCopy(nodes []corev1.Node) []corev1.Node {
 // BuildInventory 는 노드·ACPP·NDR 을 물리 장치 목록으로 접는다(순수 함수).
 // 노드 단위 값(광고량·공유 상태·파티션 프로파일)은 intent.BuildSnapshot 을 그대로 재사용한다 —
 // 특히 "광고 수 > 물리 장치 수이면 timeSliced" 정직성 override 를 여기서 다시 구현하지 않는다.
-func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport) []AcceleratorView {
-	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs)
+func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport, dra intent.DRACapability) []AcceleratorView {
+	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs, dra)
 	byNode := make(map[string]intent.NodeCapability, len(snap))
 	for i := range snap {
 		byNode[snap[i].NodeName] = snap[i]
@@ -274,10 +274,16 @@ func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPo
 		}
 		// 어떤 ACPP 도 이 노드를 타깃하지 않는다 — 진짜 미관리 노드다. NDR 집계 행을 개수만큼
 		// 펼치고 합성 ID 를 준다.
+		// 색인은 (벤더, 모델) 별로 노드 전체에서 이어 붙인다. 집계 행마다 0 으로 되돌리면
+		// 같은 모델 카드가 여러 행으로 보고될 때(카드마다 PCI 주소가 달라 detector 가 행을
+		// 나눈다) 합성 ID 가 충돌한다 — 실측: A30 2장이 모두 ".../nvidia/generic#0".
+		next := map[string]int32{}
 		for _, e := range ndrEntriesFor(ndrs, name) {
-			for k := int32(0); k < e.Count; k++ {
+			for range int(e.Count) {
 				v := base
-				v.UID = fmt.Sprintf("%s/%s/%s#%d", name, e.Vendor, e.Model, k)
+				seq := next[e.Vendor+"/"+e.Model]
+				next[e.Vendor+"/"+e.Model] = seq + 1
+				v.UID = fmt.Sprintf("%s/%s/%s#%d", name, e.Vendor, e.Model, seq)
 				v.Source = SourceNDR
 				v.Vendor, v.Model, v.PCIAddress = e.Vendor, e.Model, e.PCIeAddress
 				if e.MemoryMiB > 0 {
@@ -303,11 +309,17 @@ func ndrEntriesFor(ndrs []v1alpha1.NodeDeviceReport, nodeName string) []v1alpha1
 			}
 		}
 	}
+	// PCI 주소까지 기준에 넣는다. 벤더·모델만 보면 같은 모델 카드 여러 장이 동률이 되고,
+	// 동률 순서는 보고 순서에 좌우된다 — 그러면 합성 ID 가 장치 사이를 오가 UID 로 장치를
+	// 가리킬 수 없다.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Vendor != out[j].Vendor {
 			return out[i].Vendor < out[j].Vendor
 		}
-		return out[i].Model < out[j].Model
+		if out[i].Model != out[j].Model {
+			return out[i].Model < out[j].Model
+		}
+		return out[i].PCIeAddress < out[j].PCIeAddress
 	})
 	return out
 }

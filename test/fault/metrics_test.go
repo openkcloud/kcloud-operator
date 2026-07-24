@@ -80,13 +80,22 @@ func (r *suiteReport) write(path string) error {
 	sort.Slice(r.cases, func(i, j int) bool { return r.cases[i].ID < r.cases[j].ID })
 
 	var b strings.Builder
+	// 문서 게이트(validate_docs.py)가 docs/ 아래 마크다운에 frontmatter 4키를 요구한다.
+	// 자동 생성물이라고 예외가 아니다 — 생성기가 직접 채운다. updated 는 실행일이다.
+	b.WriteString("---\n")
+	b.WriteString("title: \"Stage 5 장애 주입 결과\"\n")
+	b.WriteString("description: \"test/fault 스위트가 실행될 때마다 덮어쓰는 장애 주입 하네스 판정표와 정확성 지표.\"\n")
+	b.WriteString("created: 2026-07-31\n")
+	fmt.Fprintf(&b, "updated: %s\n", time.Now().Format("2006-01-02"))
+	b.WriteString("---\n\n")
 	b.WriteString("<!--\n")
 	b.WriteString("============================================================\n")
 	b.WriteString("stage5-metrics.md: 장애 주입 하네스 실행 결과 (자동 생성)\n")
 	b.WriteString("상세: test/fault 스위트가 실행될 때마다 덮어쓴다. 손으로 고치지 않는다.\n")
 	b.WriteString("============================================================\n-->\n\n")
 	b.WriteString("# Stage 5 장애 주입 결과\n\n")
-	fmt.Fprintf(&b, "실행 시각 기준 소요: %s\n\n", time.Since(r.start).Round(time.Millisecond))
+	// 소요 시간은 적지 않는다 — 실행마다 달라져 재생성 결과가 매번 diff 로 잡히고,
+	// 그 잡음 때문에 릴리스 게이트의 "트리 깨끗함" 이 절대 성립하지 않는다.
 	b.WriteString("## 시나리오별 판정\n\n")
 	b.WriteString("| ID | 시나리오 | 판정 | 기대 | 관측 | 비고 |\n|---|---|:--:|---|---|---|\n")
 	for _, c := range r.cases {

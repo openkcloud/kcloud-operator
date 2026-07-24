@@ -25,6 +25,9 @@ import (
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/upgrade"
+
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 func newTestScheme() *runtime.Scheme {
@@ -74,6 +77,9 @@ func makeDIP(name, model, version string) *v1alpha1.DriverInstallPolicy {
 	}
 }
 
+// vendor 는 지금 모든 호출이 furiosa 지만, 벤더별 시험을 추가할 때 그대로 쓰도록 남긴다.
+//
+//nolint:unparam
 func makeDUS(name, nodeName, vendor, model, state, currentVersion, desiredVersion string) *v1alpha1.DriverUpgradeState {
 	return &v1alpha1.DriverUpgradeState{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -231,11 +237,46 @@ func TestEnsureUpgradeStates_UpgradeRequiredOnVersionMismatch(t *testing.T) {
 		t.Fatalf("DUS 조회 실패: %v", err)
 	}
 
-	if got.Status.State != v1alpha1.UpgradeStateRequired {
-		t.Errorf("state: got %q, want %q", got.Status.State, v1alpha1.UpgradeStateRequired)
+	// 이 경로는 관측만 한다. 업그레이드 진입은 게이트를 가진 상태기계가 정한다.
+	if got.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state: got %q, want %q", got.Status.State, v1alpha1.UpgradeStateIdle)
 	}
 	if got.Status.CurrentVersion != installedVer {
 		t.Errorf("currentVersion: got %q, want %q", got.Status.CurrentVersion, installedVer)
+	}
+	if got.Status.DesiredVersion != desiredVer {
+		t.Errorf("desiredVersion: got %q, want %q", got.Status.DesiredVersion, desiredVer)
+	}
+}
+
+// TestReconcile_GatesOpenEntersUpgrade 는 게이트가 열려 있으면 업그레이드가 실제로 시작되는 것을
+// 고정한다. 위 시험이 "여기서는 전이하지 않는다" 만 단정하므로, 전이 자체가 사라지는 회귀를
+// 이 시험이 잡는다.
+func TestReconcile_GatesOpenEntersUpgrade(t *testing.T) {
+	const (
+		nodeName     = "worker-13"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-13-furiosa"
+	)
+	dip := dipWithGates(true, installedVer, desiredVer)
+	dip.Spec.UpgradePolicy.IdleCooldownSeconds = ptr.To(int32(0))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, installedVer, desiredVer)
+	r := newReconciler(workerNode(nodeName), makeNDR(nodeName, "warboy", installedVer), dip, dus)
+	r.Recorder = record.NewFakeRecorder(64)
+	r.StateMachine.Recorder = r.Recorder
+
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: dusName}}); err != nil {
+		t.Fatalf("Reconcile 오류: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateRequired {
+		t.Errorf("state: got %q, want %q — 게이트가 열렸는데 업그레이드로 진입하지 않았다",
+			got.Status.State, v1alpha1.UpgradeStateRequired)
 	}
 }
 
@@ -259,10 +300,14 @@ func TestEnsureUpgradeStates_ResetsStaleRebootAttempts(t *testing.T) {
 	dus.Status.RebootAttempts = 1 // 이전 사이클 잔존(stale)
 	dus.Status.RebootBootID = "stale-boot-id"
 
+	dip.Spec.UpgradePolicy = &v1alpha1.UpgradePolicy{AutoUpgrade: true, IdleCooldownSeconds: ptr.To(int32(0))}
+
 	r := newReconciler(node, ndr, dip, dus)
+	r.Recorder = record.NewFakeRecorder(64)
+	r.StateMachine.Recorder = r.Recorder
 	ctx := context.Background()
-	if err := r.ensureUpgradeStates(ctx); err != nil {
-		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: dusName}}); err != nil {
+		t.Fatalf("Reconcile 오류: %v", err)
 	}
 
 	var got v1alpha1.DriverUpgradeState
@@ -1336,5 +1381,176 @@ func TestRestore_FromAnnotation_Fallback(t *testing.T) {
 	rec := sm.Recorder.(*record.FakeRecorder)
 	if !hasRecorderEventReason(rec, "DeploymentRestoredFromAnnotation") {
 		t.Errorf("DeploymentRestoredFromAnnotation 이벤트가 발행되지 않음")
+	}
+}
+
+// dipWithGates 는 업그레이드 게이트(autoUpgrade / verifiedVersions)를 지정한 정책이다.
+// dipWithGates 는 게이트 시험 전용 고정 정책이다(furiosa/warboy, 목표 1.9.8-3).
+func dipWithGates(autoUpgrade bool, verified ...string) *v1alpha1.DriverInstallPolicy {
+	dip := makeDIP("furiosa-warboy", "warboy", "1.9.8-3")
+	dip.Spec.UpgradePolicy = &v1alpha1.UpgradePolicy{AutoUpgrade: autoUpgrade}
+	dip.Spec.VerifiedVersions = verified
+	return dip
+}
+
+// TestEnsureUpgradeStates_AutoUpgradeDisabledStaysIdle 는 autoUpgrade=false 인데도 업그레이드가
+// 시작되던 결함을 고정한다. 라이브 실측: autoUpgrade=false 인 정책에서 install Job 이 생성됐다.
+// 판정은 상태기계(handleIdle)가 게이트와 함께 내린다 — 이 sync 경로는 버전만 맞춘다.
+func TestEnsureUpgradeStates_AutoUpgradeDisabledStaysIdle(t *testing.T) {
+	const (
+		nodeName     = "worker-9"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-9-furiosa"
+	)
+	r := newReconciler(
+		workerNode(nodeName),
+		makeNDR(nodeName, "warboy", installedVer),
+		dipWithGates(false),
+		makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, installedVer, desiredVer),
+	)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state: got %q, want %q — 이 경로가 게이트를 건너뛰고 업그레이드를 시작했다",
+			got.Status.State, v1alpha1.UpgradeStateIdle)
+	}
+}
+
+// TestEnsureUpgradeStates_UnverifiedVersionStaysIdle 는 verifiedVersions 화이트리스트 밖 버전으로
+// 업그레이드가 시작되던 결함을 고정한다. 라이브 실측: 목록에 없는 595.84 로 install Job 이 생성됐다.
+func TestEnsureUpgradeStates_UnverifiedVersionStaysIdle(t *testing.T) {
+	const (
+		nodeName     = "worker-10"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-10-furiosa"
+	)
+	r := newReconciler(
+		workerNode(nodeName),
+		makeNDR(nodeName, "warboy", installedVer),
+		dipWithGates(true, "1.8.0", "1.9.0"),
+		makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, installedVer, desiredVer),
+	)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state: got %q, want %q — 검증되지 않은 버전으로 업그레이드가 시작됐다",
+			got.Status.State, v1alpha1.UpgradeStateIdle)
+	}
+}
+
+// TestEnsureUpgradeStates_PolicyVersionChangeStaysIdle 는 정책 버전이 바뀌었을 때도 게이트가
+// 걸린 상태에서는 업그레이드로 진입하지 않는 것을 고정한다. desiredVersion 동기화는 그대로 한다.
+func TestEnsureUpgradeStates_PolicyVersionChangeStaysIdle(t *testing.T) {
+	const (
+		nodeName     = "worker-11"
+		installedVer = "1.8.0"
+		oldDesired   = "1.8.0"
+		newDesired   = "1.9.8-3"
+		dusName      = "worker-11-furiosa"
+	)
+	r := newReconciler(
+		workerNode(nodeName),
+		makeNDR(nodeName, "warboy", installedVer),
+		dipWithGates(false),
+		makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, installedVer, oldDesired),
+	)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DesiredVersion != newDesired {
+		t.Errorf("desiredVersion 동기화 실패: got %q, want %q", got.Status.DesiredVersion, newDesired)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state: got %q, want %q — 정책 버전 변경만으로 게이트를 건너뛰었다",
+			got.Status.State, v1alpha1.UpgradeStateIdle)
+	}
+}
+
+// TestEnsureUpgradeStates_NewDUSStartsIdleWhenGated 는 DUS 신규 생성 경로도 같은 규칙을 따르는
+// 것을 고정한다. 생성 시점에 State=UpgradeRequired 로 박으면 게이트를 지나칠 길이 없다.
+func TestEnsureUpgradeStates_NewDUSStartsIdleWhenGated(t *testing.T) {
+	const (
+		nodeName     = "worker-12"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-12-furiosa"
+	)
+	r := newReconciler(
+		workerNode(nodeName),
+		makeNDR(nodeName, "warboy", installedVer),
+		dipWithGates(false),
+	)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates 오류: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("신규 DUS state: got %q, want %q", got.Status.State, v1alpha1.UpgradeStateIdle)
+	}
+	if got.Status.CurrentVersion != installedVer || got.Status.DesiredVersion != desiredVer {
+		t.Errorf("버전 동기화 실패: current=%q desired=%q", got.Status.CurrentVersion, got.Status.DesiredVersion)
+	}
+}
+
+// TestEnsureUpgradeStates_MismatchSyncIsIdempotent 는 버전이 어긋난 채로 reconcile 이 반복돼도
+// 동기화가 상태를 계속 건드리지 않는 것을 고정한다. 매번 LastTransitionTime 을 갱신하면
+// IdleCooldown 이 영원히 차지 않아 업그레이드가 시작되지 못한다(실측: Idle 에 갇힘).
+func TestEnsureUpgradeStates_MismatchSyncIsIdempotent(t *testing.T) {
+	const (
+		nodeName     = "worker-14"
+		installedVer = "1.8.0"
+		desiredVer   = "1.9.8-3"
+		dusName      = "worker-14-furiosa"
+	)
+	r := newReconciler(
+		workerNode(nodeName),
+		makeNDR(nodeName, "warboy", installedVer),
+		dipWithGates(true, installedVer, desiredVer),
+		makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, "", desiredVer),
+	)
+	ctx := context.Background()
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("1회차 오류: %v", err)
+	}
+	var first v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &first); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("2회차 오류: %v", err)
+	}
+	var second v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &second); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if !first.Status.LastTransitionTime.Equal(&second.Status.LastTransitionTime) {
+		t.Errorf("버전이 어긋난 채 반복 동기화가 LastTransitionTime 을 갱신함: %v → %v",
+			first.Status.LastTransitionTime, second.Status.LastTransitionTime)
+	}
+	if second.Status.CurrentVersion != installedVer {
+		t.Errorf("currentVersion 동기화 실패: %q", second.Status.CurrentVersion)
 	}
 }

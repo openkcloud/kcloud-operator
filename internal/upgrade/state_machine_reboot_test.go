@@ -1,4 +1,11 @@
-// state_machine_reboot_test.go: S2-5 cross-major reboot 전이 단위 테스트
+// ============================================================
+// state_machine_reboot_test.go: cross-major reboot 전이 단위 테스트
+// 상세: 재부팅 트리거/완료 판정(bootID 가드), 재부팅 예산, needs-reboot 마커의
+//
+//	신선도 판정(install Job 완료 이후 관측인가) 검증.
+//
+// 생성일: 2026-07-20 | 수정일: 2026-08-07
+// ============================================================
 package upgrade
 
 import (
@@ -253,6 +260,119 @@ func TestTransitionState_FirstValidation_TriggersReboot(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
 		t.Errorf("state=%q, want RebootRequired (첫 검증 needsReboot 트리거)", dus.Status.State)
+	}
+}
+
+// ── needs-reboot 마커의 신선도 ────────────────────
+//
+// 재부팅 후에는 "사이클당 1회" 규율이 needsReboot=true 를 전부 stale 로 간주해 왔다. 그런데
+// 재부팅 뒤에 다시 돈 install Job 이 새로 남긴 마커는 stale 이 아니라 진짜다.
+// 라이브 실측(2026-08-07 `.91` k8s-worker1): 05:43 에 시작한 580.173.02 install Job 이
+// 05:49 에 마커를 남기고 정상 종료했는데, 앞선 불필요한 재부팅이 예산을 이미 써버린 탓에
+// 상태기계가 Validating 에서 나가지 못했고 사람이 노드를 재부팅할 때까지 9분을 멈춰 있었다.
+// 판별 기준은 시도 횟수가 아니라 "관측이 이번 install Job 완료보다 나중인가" 다.
+
+// rebootNDRAt 는 관측 시각(ObservedAt)이 붙은 NDR 이다.
+func rebootNDRAt(needsReboot bool, observedAt time.Time) *v1alpha1.NodeDeviceReport {
+	ndr := rebootNDR(needsReboot)
+	ts := metav1.NewTime(observedAt)
+	ndr.Status.ObservedAt = &ts
+	return ndr
+}
+
+// completedInstallJobAt 는 완료 시각이 지정된 install Job 이다.
+func completedInstallJobAt(completed time.Time) *batchv1.Job {
+	j := makeInstallJob(true, false)
+	ts := metav1.NewTime(completed)
+	j.Status.CompletionTime = &ts
+	return j
+}
+
+// 재부팅 후라도 install Job 완료 뒤에 관측된 마커면 재부팅으로 넘어간다.
+func TestTransitionState_PostReboot_MarkerAfterInstall_TriggersReboot(t *testing.T) {
+	done := time.Now().Add(-2 * time.Minute)
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verNew, verNew)
+	dus.Status.RebootAttempts = 1 // 앞 사이클/앞 단계에서 이미 1회 재부팅함
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip,
+		rebootNDRAt(true, done.Add(time.Minute)), readyNode(true), completedInstallJobAt(done))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
+		t.Errorf("state=%q, want RebootRequired (install 완료 후 새로 남은 마커)", dus.Status.State)
+	}
+}
+
+// install Job 완료 이전 관측이면 stale 이다 — 재부팅으로 넘어가지 않는다.
+func TestTransitionState_PostReboot_MarkerBeforeInstall_NoReboot(t *testing.T) {
+	done := time.Now().Add(-2 * time.Minute)
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verNew, verNew)
+	dus.Status.RebootAttempts = 1
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip,
+		rebootNDRAt(true, done.Add(-time.Minute)), readyNode(true), completedInstallJobAt(done))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State == v1alpha1.UpgradeStateRebootRequired {
+		t.Error("install 완료 이전 관측(stale)으로 재부팅 전이됨")
+	}
+}
+
+// 첫 재부팅(attempts==0)은 관측이 install 완료보다 이르더라도 기존대로 트리거한다.
+// 신선도 판정은 재부팅 후 재진입을 열기 위한 것이지 첫 재부팅을 늦추려는 것이 아니다(회귀 0).
+func TestTransitionState_FirstReboot_StaleMarkerStillTriggers(t *testing.T) {
+	done := time.Now()
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip,
+		rebootNDRAt(true, done.Add(-time.Minute)), readyNode(true), completedInstallJobAt(done))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
+		t.Errorf("state=%q, want RebootRequired (첫 재부팅은 기존 동작 유지)", dus.Status.State)
+	}
+}
+
+// 마커가 없으면 어떤 경우에도 재부팅으로 넘어가지 않는다 — 불필요한 재부팅이 고착보다 나쁘다.
+func TestTransitionState_NoMarker_NeverReboots(t *testing.T) {
+	done := time.Now().Add(-2 * time.Minute)
+	for _, attempts := range []int32{0, 1} {
+		dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
+		dus.Status.RebootAttempts = attempts
+		dip := makeJobDIP(verNew, imgNew, true, true)
+		sm := newUpgradeSMWithRecorder(dus, dip,
+			rebootNDRAt(false, done.Add(time.Minute)), readyNode(true), completedInstallJobAt(done))
+
+		if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+			t.Fatalf("TransitionState 실패(attempts=%d): %v", attempts, err)
+		}
+		if dus.Status.State == v1alpha1.UpgradeStateRebootRequired {
+			t.Errorf("attempts=%d: 마커가 없는데 재부팅 전이됨", attempts)
+		}
+	}
+}
+
+// 하향(desired < current)에서도 마커가 있으면 재부팅으로 넘어간다.
+// cross-major 하향은 구 모듈이 물려 있어 삽입만 못 하는 상태이고 rmmod 로는 풀리지 않는다.
+func TestTransitionState_Downgrade_Marker_TriggersReboot(t *testing.T) {
+	done := time.Now().Add(-2 * time.Minute)
+	// host 는 아직 verNew, 목표는 verOld — 하향.
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verNew, verOld)
+	dip := makeJobDIP(verOld, imgOld, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip,
+		rebootNDRAt(true, done.Add(time.Minute)), readyNode(true), completedInstallJobAt(done))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
+		t.Errorf("state=%q, want RebootRequired (하향 + 마커)", dus.Status.State)
 	}
 }
 

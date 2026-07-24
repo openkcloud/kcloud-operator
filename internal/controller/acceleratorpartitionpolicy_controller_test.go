@@ -929,6 +929,21 @@ func seedNvidiaNode(name string, labels map[string]string, cordoned bool, devs .
 	Expect(k8sClient.Status().Update(ctx, ndr)).To(Succeed())
 }
 
+// setNodeGPUAllocatable 은 노드의 nvidia.com/gpu 광고량을 덮어쓴다.
+//
+// MIG mode 가 Enabled 인 GPU 는 조각이 없어도 full GPU 로 광고되지 않는다(A30 2장 실측:
+// mode Enabled + GI 0 → nvidia.com/gpu=0). seedNvidiaNode 의 기본값 1 은 mode Disabled 를
+// 전제한 값이라, MIG Enabled 로 시드하는 삭제 시험은 이 헬퍼로 0 을 명시해야 프로덕션이
+// 실제로 만들 수 있는 상태가 된다.
+func setNodeGPUAllocatable(name string, n int64) {
+	var node corev1.Node
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Name: name}, &node)).To(Succeed())
+	node.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(n, resource.DecimalSI),
+	}
+	Expect(k8sClient.Status().Update(ctx, &node)).To(Succeed())
+}
+
 // nvidiaReconciler 는 fake executor(실 Job 우회) + 항상-성공 verifier 로 구성한 reconciler 다.
 func nvidiaReconciler() *AcceleratorPartitionPolicyReconciler {
 	return &AcceleratorPartitionPolicyReconciler{
@@ -1489,6 +1504,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		// uncordoned 로 시드한다 — 성공한 apply 는 종점에서 노드를 되돌려 놓으므로 실제 운영의 삭제는
 		// 항상 이 상태에서 시작한다(D-10). 한 Reconcile 안에서 cordon 취득→rollback→uncordon 이 돈다.
 		seedNvidiaNode("nv-del-ok-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-ok-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-ok-node") })
 
 		uid := mkFinalizedNvidiaACPP("nv-del-ok-acpp", sel)
@@ -1523,13 +1539,10 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		seedNvidiaNode("nv-del-fail-node", sel, true, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("nv-del-fail-node") })
 
-		By("dropping nvidia.com/gpu allocatable to 0 — restore assertion (baseline=1) must fail")
-		var node corev1.Node
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "nv-del-fail-node"}, &node)).To(Succeed())
-		node.Status.Allocatable = corev1.ResourceList{
-			corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(0, resource.DecimalSI),
-		}
-		Expect(k8sClient.Status().Update(ctx, &node)).To(Succeed())
+		By("nvidia.com/gpu 를 1 로 남겨 둠 — MIG Enabled 노드가 낼 수 없는 값이라 복원 확인이 실패해야 한다")
+		// 기대값은 ExpectedFullGPUCount(=0, MIG 대상이 아닌 GPU 수)다. mode 가 Enabled 인데
+		// full GPU 가 광고되고 있다는 것은 회수가 끝나지 않았다는 뜻이므로 finalizer 를 쥔다.
+		setNodeGPUAllocatable("nv-del-fail-node", 1)
 
 		uid := mkFinalizedNvidiaACPP("nv-del-fail-acpp", sel)
 		setNodeOwner("nv-del-fail-node", uid)
@@ -1614,9 +1627,11 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		sel := map[string]string{"kcloud.ai/nv-del-multi": "true"}
 		// nodeA: 처음부터 복원됨(Enabled+GI 없음) + allocatable=1(baseline) → assert 항상 통과(정리 완료 record).
 		seedNvidiaNode("nv-del-multi-a", sel, true, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-multi-a", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-multi-a") })
 		// nodeB: pass 1 에는 GI 존재(미복원) → assert 실패로 err/requeue. pass 2 에 복원(GI 없음)으로 갱신.
 		seedNvidiaNode("nv-del-multi-b", sel, true, a30Device("1g.6gb", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-multi-b", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-multi-b") })
 
 		uid := mkFinalizedNvidiaACPP("nv-del-multi-acpp", sel)
@@ -1675,9 +1690,11 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-del-orphan": "true"}
 		seedNvidiaNode("nv-del-orphan-node", sel, true, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-orphan-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-orphan-node") })
 		// 타 소유자 노드 — full-node 스캔이 UID 불일치로 건드리지 않아야 한다.
 		seedNvidiaNode("nv-del-orphan-other", sel, true, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-orphan-other", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-orphan-other") })
 
 		uid := mkFinalizedNvidiaACPP("nv-del-orphan-acpp", sel)
@@ -1718,6 +1735,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		sel := map[string]string{"kcloud.ai/nv-del-cordon": "true"}
 		// uncordoned + mode 이미 Enabled → apply 가 스스로 cordon(D-5)하고 Ready 종점에서 되돌린다.
 		seedNvidiaNode("nv-del-cordon-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-cordon-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-cordon-node") })
 
 		Expect(k8sClient.Create(ctx, mkNvidiaACPP("nv-del-cordon-acpp", sel))).To(Succeed())
@@ -1783,6 +1801,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-del-precordon": "true"}
 		seedNvidiaNode("nv-del-precordon-node", sel, true, a30Device("", "Enabled", "Enabled", ""))
+		setNodeGPUAllocatable("nv-del-precordon-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-precordon-node") })
 
 		uid := mkFinalizedNvidiaACPP("nv-del-precordon-acpp", sel)

@@ -59,6 +59,16 @@ spec:
                 items:
                   description: AcceleratorMapping 은 한 벤더에서 이 클래스가 무엇으로 실현되는지다.
                   properties:
+                    deviceClassName:
+                      description: |-
+                        DeviceClassName 은 이 벤더를 DRA 로 요청할 때 쓸 DeviceClass 이름이다.
+                        DRADriver 와 함께 있어야 하며, 없으면 이 벤더는 DRA 경로를 지원하지 않는다.
+                      type: string
+                    draDriver:
+                      description: |-
+                        DRADriver 는 그 DeviceClass 가 고르는 ResourceSlice.spec.driver 다.
+                        노드 후보 판정에 쓴다 — DeviceClass 의 CEL 을 해석하지 않기 위해 명시받는다.
+                      type: string
                     nativeProfile:
                       description: |-
                         NativeProfile 은 partitioned 계열 모드에서 요구하는 벤더 공식 profile

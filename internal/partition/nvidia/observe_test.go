@@ -94,6 +94,24 @@ func TestParseDelimitedMessage(t *testing.T) {
 	}
 }
 
+// TestObserveJobNameSeparatesStreams 는 같은 노드를 보는 두 관측 루프가 서로 다른 Job 이름을
+// 쓰는지 고정한다. 이름이 같으면 Observe 의 "시작할 때 기존 Job 삭제" 규율이 상대의 Job 을
+// 지워, 진 쪽은 fail-closed 관측만 받고 NodeDeviceReport 의 geometry 가 영영 갱신되지 않는다
+// (2026-08-05 라이브: ACPP 가 VerifyingAllocatableResources 에서 무한 정체).
+func TestObserveJobNameSeparatesStreams(t *testing.T) {
+	apply := observeJobName(StreamApply, "worker1")
+	standing := observeJobName(StreamStanding, "worker1")
+	if apply == standing {
+		t.Fatalf("streams share job name %q; concurrent observers will delete each other", apply)
+	}
+	if same := observeJobName(StreamApply, "worker1"); same != apply {
+		t.Errorf("job name must stay deterministic per stream: %q != %q", same, apply)
+	}
+	if other := observeJobName(StreamApply, "worker3"); other == apply {
+		t.Errorf("job name must stay distinct per node, got %q for both", apply)
+	}
+}
+
 func TestObserveJobRender(t *testing.T) {
 	job := renderObserveJob("acpp-mig-observe-abc", "worker1", []string{obsTestPCI}, "harbor/mig-tool:latest", "kcloud-operator")
 
@@ -128,5 +146,30 @@ func TestObserveJobRender(t *testing.T) {
 	}
 	if strings.Contains(script, "set -e") {
 		t.Errorf("observe script must NOT use set -e (must capture failed nvidia-smi as text)")
+	}
+}
+
+// TestChunkPCIsKeepsOneDevicePerJob 은 관측 Job 하나가 장치 하나만 담는지 고정한다.
+// 관측 출력은 /dev/termination-log 로 나가고 kubelet 이 4096 바이트에서 자른다. MIG 를 켠
+// A30 한 장의 출력이 약 2.5KB 라 두 장을 한 Job 에 담으면 뒤쪽 장치 섹션이 통째로 사라지고,
+// 그 장치가 target 에서 빠지면서 ACPP 가 자기가 적용한 배치를 남의 것으로 판정해 굳는다.
+func TestChunkPCIsKeepsOneDevicePerJob(t *testing.T) {
+	in := []string{"0000:18:00.0", "0000:af:00.0", "0000:3b:00.0"}
+	got := chunkPCIs(in)
+
+	if len(got) != len(in) {
+		t.Fatalf("묶음 수 = %d, want %d (장치당 Job 하나)", len(got), len(in))
+	}
+	var flat []string
+	for _, c := range got {
+		if len(c) != 1 {
+			t.Errorf("묶음 크기 = %d, want 1 — 여러 장치를 한 Job 에 담으면 출력이 잘린다", len(c))
+		}
+		flat = append(flat, c...)
+	}
+	for i := range in {
+		if i < len(flat) && flat[i] != in[i] {
+			t.Errorf("순서 어긋남 [%d]: %q, want %q", i, flat[i], in[i])
+		}
 	}
 }

@@ -5,6 +5,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// 드라이버 설치 방식. ngc 만 이미지 자체가 드라이버 버전을 담는다 — 나머지는 이미지가
+// 버전과 무관하고 DRIVER_VERSION 환경 변수로 설치 버전이 정해진다.
+const (
+	DriverInstallerAPT    = "apt"
+	DriverInstallerNGC    = "ngc"
+	DriverInstallerScript = "script"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=dip
 // DriverInstallPolicy는 노드의 장치 드라이버/툴킷 설치 정책을 정의합니다.

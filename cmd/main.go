@@ -358,11 +358,22 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Admission webhooks(DIP/NCP validating + Pod mutating). WebhookConfiguration(helm,
-	// webhook.enabled)이 없으면 호출이 도달하지 않아 무해하게 미사용으로 남는다.
-	if err := npuwebhook.Setup(mgr); err != nil {
-		setupLog.Error(err, "unable to set up admission webhooks")
-		os.Exit(1)
+	// Admission webhooks(DIP/NCP validating + Pod mutating).
+	//
+	// webhook-cert-path 가 비면 등록 자체를 건너뛴다. 이전 주석은 "WebhookConfiguration 이
+	// 없으면 무해하게 미사용으로 남는다" 고 적었으나 **틀렸다** — 핸들러를 등록하는 순간
+	// controller-runtime 이 웹훅 서버를 띄우고, 인증서 경로가 비면 기본 경로
+	// (/tmp/k8s-webhook-server/serving-certs)에서 찾다가 매니저가 통째로 죽는다.
+	// helm 차트는 webhook.enabled=false 면 --webhook-cert-path 를 주지 않으므로
+	// **차트 기본값 그대로 설치하면 operator 가 뜨지 못했다**(kind 1.28 실측 2026-08-06).
+	// 라이브는 줄곧 webhook 을 켜서 운영해 와 드러나지 않았다.
+	if webhookCertPath != "" {
+		if err := npuwebhook.Setup(mgr); err != nil {
+			setupLog.Error(err, "unable to set up admission webhooks")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("webhook-cert-path 가 비어 admission webhook 미등록 — 웹훅 서버도 띄우지 않는다")
 	}
 
 	// Management REST API(S5-3-②, opt-in). api-bind-address 가 비면 미기동(무영향).

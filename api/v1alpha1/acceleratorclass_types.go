@@ -42,6 +42,14 @@ type AcceleratorMapping struct {
 	// exclusive/shared 전용 매핑은 비워 둔다.
 	// +optional
 	NativeProfile string `json:"nativeProfile,omitempty"`
+	// DeviceClassName 은 이 벤더를 DRA 로 요청할 때 쓸 DeviceClass 이름이다.
+	// DRADriver 와 함께 있어야 하며, 없으면 이 벤더는 DRA 경로를 지원하지 않는다.
+	// +optional
+	DeviceClassName string `json:"deviceClassName,omitempty"`
+	// DRADriver 는 그 DeviceClass 가 고르는 ResourceSlice.spec.driver 다.
+	// 노드 후보 판정에 쓴다 — DeviceClass 의 CEL 을 해석하지 않기 위해 명시받는다.
+	// +optional
+	DRADriver string `json:"draDriver,omitempty"`
 }
 
 // AcceleratorClassSpec 는 등급 선언이다.

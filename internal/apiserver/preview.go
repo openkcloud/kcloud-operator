@@ -84,12 +84,12 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		},
 	}}
 
-	snap, err := intent.Load(r.Context(), s.Reader)
+	snap, dra, err := intent.Load(r.Context(), s.Reader)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	res, err := intent.Translate(intent.BuildRequest(aw, &class), snap)
+	res, err := intent.TranslateWithDRA(intent.BuildRequest(aw, &class), snap, dra)
 	if err != nil {
 		var rj *intent.Reject
 		if errors.As(err, &rj) {

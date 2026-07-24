@@ -2,7 +2,7 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27 | 수정일: 2026-04-28
+// 생성일: 2026-04-27 | 수정일: 2026-08-07
 // ============================================================
 
 package validator
@@ -259,6 +259,43 @@ func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 		t.Fatalf("FAIL 기대, 실제 PASS: %s", res.Message)
 	}
 	for _, want := range []string{hostVer, desired, "rmmod", "ssh", nodeName} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("Message 에 %q 포함 기대, 실제: %s", want, res.Message)
+		}
+	}
+}
+
+// TestDriverModule_NeedsReboot_NoRmmodGuidance 는 NDR 이 needsReboot 을 보고할 때
+// rmmod 안내를 내지 않는 것을 고정한다. cross-major 교체는 목표 버전 모듈이 이미 디스크에
+// 준비됐고 구 모듈이 사용 중이라 삽입만 못 하는 상태이며, rmmod 로는 풀리지 않는다 —
+// 그 지시를 따르는 사람은 시간만 버린다(2026-08-07 라이브).
+func TestDriverModule_NeedsReboot_NoRmmodGuidance(t *testing.T) {
+	const (
+		nodeName = "k8s-worker1"
+		vendor   = "nvidia"
+		hostVer  = "595.84"
+		desired  = "580.173.02"
+	)
+	ndr := makeNDR(nodeName, hostVer)
+	ndr.Status.Devices[0].NeedsReboot = true
+	c := newFakeClient(t, ndr)
+
+	v := &DriverModuleValidator{}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil {
+		t.Fatalf("예상치 못한 에러: %v", err)
+	}
+	if res.Passed {
+		t.Fatalf("FAIL 기대, 실제 PASS: %s", res.Message)
+	}
+	// "rmmod 로는 풀리지 않는다" 는 남아도 된다 — 손대려는 사람을 막는 정보다.
+	// 없어야 하는 것은 그것을 실행하라는 지시다.
+	for _, forbidden := range []string{"sudo rmmod", "ssh"} {
+		if strings.Contains(res.Message, forbidden) {
+			t.Errorf("재부팅 대기 상태에 %q 조치 지시가 남아 있음: %s", forbidden, res.Message)
+		}
+	}
+	for _, want := range []string{hostVer, desired, "재부팅"} {
 		if !strings.Contains(res.Message, want) {
 			t.Errorf("Message 에 %q 포함 기대, 실제: %s", want, res.Message)
 		}

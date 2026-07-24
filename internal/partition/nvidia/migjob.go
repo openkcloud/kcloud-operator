@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,19 @@ import (
 // 동일 이름 Job 재조우 시 이 값으로 "같은 의도 재실행(재사용)" vs "충돌(하드 에러)" 을 가른다.
 const CmdHashAnnotation = "acpp.npu.ai/cmd-hash"
 
+// NodeBootIDAnnotation 은 Job 을 만든 순간 대상 노드가 돌고 있던 부팅 세대(BootID)다.
+// RebootRestartsAnnotation 은 재부팅에 치여 다시 만든 횟수이며, 재생성 때 이어서 센다.
+//
+// 2026-08-05 라이브(결함 3): mode 복원 재부팅이 GI rollback Job 의 파드를 실행 전에 덮쳤다.
+// 파드는 NodeName 고정 + RestartPolicy=Never 라 재부팅 후에도 Pending 에서 회복하지 못했고,
+// Job 은 Succeeded 도 Failed 도 아닌 채 남았다. 이름이 결정론적이라 이후 모든 pass 가 같은 죽은
+// Job 을 다시 찾아 10분씩 기다렸다 — 자력 탈출 경로가 없어 ACPP 삭제가 finalizer 에 영구히
+// 걸렸고 운영자가 Job 을 수동으로 지워야 풀렸다.
+const (
+	NodeBootIDAnnotation     = "acpp.npu.ai/node-boot-id"
+	RebootRestartsAnnotation = "acpp.npu.ai/reboot-restarts"
+)
+
 // Namespace 는 MIG apply Job 이 생성되는 네임스페이스(operator 관리, driverjob 과 동일 규칙).
 var Namespace = naming.OperatorNamespace()
 
@@ -40,6 +54,13 @@ const (
 	defaultPollInterval time.Duration = 2 * time.Second
 	defaultWaitTimeout  time.Duration = 10 * time.Minute
 )
+
+// maxJobRebootRestarts 는 "재부팅에 치인 Job 을 다시 만든다" 의 상한이다. 상한이 없으면 노드가
+// 반복 재부팅하는 동안(외부 재부팅 루프·하드웨어 이상) 같은 Job 을 영원히 다시 만들며, 그 사이
+// 삭제/적용은 끝나지도 실패하지도 않는다 — 결함 3 이 만든 것과 같은 종류의 무한 대기다.
+// 값은 mode 전환 재부팅 예산(maxMigRebootAttempts=2)과 같다: 한 방향 전환이 정당하게 쓸 수 있는
+// 재부팅 수만큼만 봐준다. 넘으면 하드 에러로 올려 운영자를 부른다(terminal).
+const maxJobRebootRestarts = 2
 
 // Executor 는 CommandStep 시퀀스 실행 seam 이다(하드웨어 의존 격리).
 // *JobExecutor 가 실 구현이며, 단위 테스트는 fake 를 주입한다(Backend.WithExecutor).
@@ -73,21 +94,31 @@ func (e *JobExecutor) Run(ctx context.Context, opID, cmdHash, nodeName string, s
 		if existing.Annotations[CmdHashAnnotation] != cmdHash {
 			return fmt.Errorf("nvidia: job %q exists with different cmd-hash (name collision, different intent)", opID)
 		}
+		restarts := rebootRestartsOf(&existing)
 		// 아직 실행 중이면 그대로 완료 대기(중복 실행 방지). 이미 완료(Succeeded/Failed)된 Job 은
 		// 재실행을 위해 삭제 후 재생성한다 — rollback 으로 하드웨어가 되돌려진 뒤 과거 성공을 재사용하면
 		// GI 를 다시 만들지 않아 무한 apply→verify실패→rollback 루프가 된다.
 		if existing.Status.Succeeded == 0 && existing.Status.Failed == 0 {
-			return e.wait(ctx, opID)
+			// "실행 중" 과 "재부팅에 치여 영영 안 끝남" 을 여기서 가른다(결함 3, 2026-08-05).
+			// 노드가 그대로면 아무리 느린 Job 도 건드리지 않는다 — 판정 근거는 파드 phase 가 아니라
+			// 부팅 세대이고, 부팅 세대는 실제로 부팅해야만 바뀐다.
+			if !e.strandedByReboot(ctx, &existing) {
+				return e.wait(ctx, opID)
+			}
+			restarts++
+			if restarts > maxJobRebootRestarts {
+				return fmt.Errorf("nvidia: job %q stranded by node reboot %d times; manual intervention required", opID, restarts-1)
+			}
 		}
 		bg := metav1.DeletePropagationBackground
 		if delErr := e.Client.Delete(ctx, &existing, &client.DeleteOptions{PropagationPolicy: &bg}); delErr != nil && !apierrors.IsNotFound(delErr) {
 			return delErr
 		}
-		if err := e.createWhenGone(ctx, opID, cmdHash, nodeName, steps); err != nil {
+		if err := e.createWhenGone(ctx, opID, cmdHash, nodeName, steps, restarts); err != nil {
 			return err
 		}
 	case apierrors.IsNotFound(err):
-		job := renderMigJob(opID, cmdHash, nodeName, steps, e.Image)
+		job := e.renderJob(ctx, opID, cmdHash, nodeName, steps, 0)
 		if createErr := e.Client.Create(ctx, job); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 			return createErr
 		}
@@ -97,13 +128,66 @@ func (e *JobExecutor) Run(ctx context.Context, opID, cmdHash, nodeName string, s
 	return e.wait(ctx, opID)
 }
 
+// strandedByReboot 는 이 Job 이 얹혀 있던 노드가 Job 이 끝나기 전에 재부팅됐는지다.
+//
+// 판정을 BootID 로 하는 이유: operator 는 자기가 재부팅을 **요청했다** 는 것만 알지, 그 재부팅이
+// 실제로 언제 일어났는지도, 이 Job 의 파드보다 앞인지 뒤인지도 모른다. 게다가 재부팅 주체는
+// 우리만이 아니다(드라이버 업그레이드 경로·운영자·정전). BootID 는 그 모든 원인을 하나로 덮는
+// 관측된 사실이다 — "이 Job 이 놓인 기계" 와 "지금 그 자리에 있는 기계" 가 다른가.
+//
+// 건강한 느린 Job 에 오발하지 않는다: 재부팅이 없으면 BootID 는 영원히 그대로다(커널이 부팅마다
+// 새로 만드는 값). 반대로 재부팅이 있었으면 그 Job 은 절대 성공할 수 없다 — 파드는 NodeName 고정
+// + RestartPolicy=Never + backoffLimit=0 이라 재스케줄되지 않고, 재부팅에 잘린 컨테이너는 steps 를
+// 끝까지 실행한 적이 없기 때문이다. 스스로 Failed 로 떨어지는 운 좋은 경우는 기존 재생성 경로가
+// 이미 처리하므로, 이 판정은 "떨어지지도 않는" 나머지만 담당한다.
+//
+// 모르면 건드리지 않는다(fail-safe): 스탬프가 없는 옛 Job, 노드 조회 실패, 빈 BootID 는 전부 false —
+// 기존 동작(대기)으로 남는다. 잘못 지우는 쪽이 잘못 기다리는 쪽보다 나쁘다(특권 Job 중복 실행).
+func (e *JobExecutor) strandedByReboot(ctx context.Context, job *batchv1.Job) bool {
+	placedOn := job.Annotations[NodeBootIDAnnotation]
+	node := job.Spec.Template.Spec.NodeName
+	if placedOn == "" || node == "" {
+		return false
+	}
+	var n corev1.Node
+	if err := e.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		return false
+	}
+	cur := n.Status.NodeInfo.BootID
+	return cur != "" && cur != placedOn
+}
+
+// renderJob 은 renderMigJob 에 재부팅 판정용 스탬프(부팅 세대 + 재생성 횟수)를 새겨 돌려준다.
+// BootID 조회 실패는 무시한다 — 스탬프가 없으면 strandedByReboot 가 판정을 포기할 뿐이고,
+// 그 상태는 이 수정 이전과 정확히 같다. 관측 실패로 Job 생성 자체를 막을 이유는 없다.
+func (e *JobExecutor) renderJob(ctx context.Context, opID, cmdHash, nodeName string, steps []CommandStep, restarts int) *batchv1.Job {
+	job := renderMigJob(opID, cmdHash, nodeName, steps, e.Image)
+	var n corev1.Node
+	if err := e.Client.Get(ctx, types.NamespacedName{Name: nodeName}, &n); err == nil {
+		job.Annotations[NodeBootIDAnnotation] = n.Status.NodeInfo.BootID
+	}
+	if restarts > 0 {
+		job.Annotations[RebootRestartsAnnotation] = strconv.Itoa(restarts)
+	}
+	return job
+}
+
+// rebootRestartsOf 는 Job 에 누적된 재생성 횟수를 읽는다(없거나 깨졌으면 0).
+func rebootRestartsOf(job *batchv1.Job) int {
+	n, err := strconv.Atoi(job.Annotations[RebootRestartsAnnotation])
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
 // wait 는 Job 완료(Succeeded>0/Failed>0)를 ctx-aware 폴링으로 대기한다(time.Sleep 미사용).
 // createWhenGone 은 삭제 진행 중인 동명 Job 이 사라질 때까지 폴링한 뒤 새 Job 을 만든다.
-func (e *JobExecutor) createWhenGone(ctx context.Context, opID, cmdHash, nodeName string, steps []CommandStep) error {
+func (e *JobExecutor) createWhenGone(ctx context.Context, opID, cmdHash, nodeName string, steps []CommandStep, restarts int) error {
 	deadline := time.NewTimer(60 * time.Second)
 	defer deadline.Stop()
 	for {
-		job := renderMigJob(opID, cmdHash, nodeName, steps, e.Image)
+		job := e.renderJob(ctx, opID, cmdHash, nodeName, steps, restarts)
 		err := e.Client.Create(ctx, job)
 		if err == nil {
 			return nil
@@ -151,6 +235,12 @@ func (e *JobExecutor) wait(ctx context.Context, name string) error {
 			}
 			if job.Status.Failed > 0 {
 				return fmt.Errorf("nvidia: job %q failed", name)
+			}
+			// 대기 도중 노드가 재부팅되면 이 Job 은 끝나지 않는다 — 남은 timeout 을 다 태울 이유가
+			// 없다. 여기서 바로 빠져나오면 다음 pass 의 Run 이 재생성으로 복구한다. 이 조기 탈출이
+			// 없으면 최초 재부팅 pass 가 10분을 통째로 낭비한다(라이브에서 실제로 관측된 지연).
+			if e.strandedByReboot(ctx, &job) {
+				return fmt.Errorf("nvidia: job %q stranded by node reboot; recreating on the next pass", name)
 			}
 		}
 	}

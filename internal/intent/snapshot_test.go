@@ -33,7 +33,7 @@ func TestBuildSnapshotSkipsNodesWithoutAccelerators(t *testing.T) {
 	snap := BuildSnapshot([]corev1.Node{
 		node("cpu-only", map[string]string{"cpu": "8", "memory": "16Gi"}),
 		node("worker1", map[string]string{"cpu": "8", "nvidia.com/gpu": "2"}),
-	}, nil, nil)
+	}, nil, nil, DRACapability{})
 	if len(snap) != 1 || snap[0].NodeName != "worker1" {
 		t.Fatalf("unexpected snapshot %+v", snap)
 	}
@@ -84,7 +84,7 @@ func ndr(nodeName, vendor string, count int32) v1alpha1.NodeDeviceReport {
 func TestBuildSnapshotSkipsCordonedNodes(t *testing.T) {
 	cordoned := node("worker1", map[string]string{"nvidia.com/gpu": "2"})
 	cordoned.Spec.Unschedulable = true
-	snap := BuildSnapshot([]corev1.Node{cordoned, node("worker2", map[string]string{"nvidia.com/gpu": "1"})}, nil, nil)
+	snap := BuildSnapshot([]corev1.Node{cordoned, node("worker2", map[string]string{"nvidia.com/gpu": "1"})}, nil, nil, DRACapability{})
 	if len(snap) != 1 || snap[0].NodeName != "worker2" {
 		t.Fatalf("cordoned node still a candidate: %+v", snap)
 	}
@@ -96,7 +96,7 @@ func TestBuildSnapshotSkipsCordonedNodes(t *testing.T) {
 func TestBuildSnapshotDetectsOutOfBandSharing(t *testing.T) {
 	acpp := readyACPP("worker1", 1, []v1alpha1.DeviceStatus{{ID: "gpu0"}}, nil, v1alpha1.SharingModeExclusive, 0)
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "8"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 2)})
+		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 2)}, DRACapability{})
 	if snap[0].SharingMode != v1alpha1.SharingModeOversubscribed || snap[0].SharingReplicas != 4 {
 		t.Fatalf("out-of-band oversubscription not detected: %+v", snap[0])
 	}
@@ -138,7 +138,7 @@ func TestDegradedTargetMarksNodeStale(t *testing.T) {
 // (필드를 손으로 꽂지 않는다).
 func TestBuildSnapshotRNGDPEsAreOversubscribedNotTimeSliced(t *testing.T) {
 	n := node("rngd-1", map[string]string{"furiosa.ai/rngd": "4"})
-	snap := BuildSnapshot([]corev1.Node{n}, nil, []v1alpha1.NodeDeviceReport{ndr("rngd-1", "furiosa", 1)})
+	snap := BuildSnapshot([]corev1.Node{n}, nil, []v1alpha1.NodeDeviceReport{ndr("rngd-1", "furiosa", 1)}, DRACapability{})
 	if len(snap) != 1 {
 		t.Fatalf("snapshot %+v", snap)
 	}
@@ -156,7 +156,7 @@ func TestBuildSnapshotRNGDPEsAreOversubscribedNotTimeSliced(t *testing.T) {
 // shared 요청이 통과한다. 미상(0)으로 두어 exclusive 도 shared 도 모두 거절되게 한다.
 func TestBuildSnapshotSharingRatioNotAMultiple(t *testing.T) {
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "3"})},
-		nil, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 2)})
+		nil, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 2)}, DRACapability{})
 	nc := snap[0]
 	if nc.SharingMode != v1alpha1.SharingModeOversubscribed || nc.SharingReplicas != 0 {
 		t.Fatalf("floored replica factor published: %+v", nc)
@@ -178,7 +178,7 @@ func TestBuildSnapshotObservedSharingStaysQuietWithoutEvidence(t *testing.T) {
 		"equal count": {ndr("worker1", "nvidia", 2)},
 		"no NDR":      nil,
 	} {
-		snap := BuildSnapshot(nodes, nil, reports)
+		snap := BuildSnapshot(nodes, nil, reports, DRACapability{})
 		if snap[0].SharingMode != v1alpha1.SharingModeExclusive || snap[0].SharingReplicas != 0 {
 			t.Fatalf("%s: sharing invented: %+v", name, snap[0])
 		}
@@ -186,7 +186,7 @@ func TestBuildSnapshotObservedSharingStaysQuietWithoutEvidence(t *testing.T) {
 	// 파티션 노드는 리소스명이 조각을 가리키므로 물리 장치 수와 비교하지 않는다.
 	acpp := readyACPP("worker1", 1, nil, []string{"1g.6gb"}, v1alpha1.SharingModeExclusive, 0)
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/mig-1g.6gb": "7"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 1)})
+		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, []v1alpha1.NodeDeviceReport{ndr("worker1", "nvidia", 1)}, DRACapability{})
 	if snap[0].SharingMode != v1alpha1.SharingModeExclusive {
 		t.Fatalf("partitioned node misread as shared: %+v", snap[0])
 	}
@@ -196,7 +196,7 @@ func TestBuildSnapshotReadsAppliedJournal(t *testing.T) {
 	devs := []v1alpha1.DeviceStatus{{ID: "PCI-0000:3b:00.0"}}
 	acpp := readyACPP("worker1", 3, devs, []string{"1g.6gb"}, v1alpha1.SharingModeTimeSliced, 4)
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/mig-1g.6gb": "4"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{acpp}, nil, DRACapability{})
 	if len(snap) != 1 {
 		t.Fatalf("snapshot %+v", snap)
 	}
@@ -216,7 +216,7 @@ func TestBuildSnapshotFailsClosedOnStaleACPP(t *testing.T) {
 	stale := readyACPP("worker1", 5, nil, nil, "", 0)
 	stale.Status.ObservedGeneration = 4 // 아직 수렴하지 않음
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{stale}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{stale}, nil, DRACapability{})
 	if !snap[0].Stale || snap[0].StaleReason == "" {
 		t.Fatalf("stale generation not detected: %+v", snap[0])
 	}
@@ -224,7 +224,7 @@ func TestBuildSnapshotFailsClosedOnStaleACPP(t *testing.T) {
 	notReady := readyACPP("worker1", 5, nil, nil, "", 0)
 	notReady.Status.Targets[0].Phase = v1alpha1.ACPPPhaseApplying
 	snap = BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{notReady}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{notReady}, nil, DRACapability{})
 	if !snap[0].Stale {
 		t.Fatalf("non-Ready phase not detected: %+v", snap[0])
 	}
@@ -241,7 +241,7 @@ func TestBuildSnapshotTakesSmallestDeviceMemory(t *testing.T) {
 		}},
 	}
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil,
-		[]v1alpha1.NodeDeviceReport{ndr})
+		[]v1alpha1.NodeDeviceReport{ndr}, DRACapability{})
 	if snap[0].MemoryMiB != 15360 {
 		t.Fatalf("MemoryMiB=%d want 15360", snap[0].MemoryMiB)
 	}
@@ -254,7 +254,7 @@ func TestBuildSnapshotVendorIsDeterministicOnMultiVendorNode(t *testing.T) {
 	n := node("worker1", map[string]string{"nvidia.com/gpu": "2", "furiosa.ai/rngd": "1"})
 	var want string
 	for i := 0; i < 20; i++ {
-		snap := BuildSnapshot([]corev1.Node{n}, nil, nil)
+		snap := BuildSnapshot([]corev1.Node{n}, nil, nil, DRACapability{})
 		if len(snap) != 1 {
 			t.Fatalf("snapshot %+v", snap)
 		}
@@ -280,9 +280,9 @@ func TestBuildSnapshotACPPSelectionIsDeterministic(t *testing.T) {
 	acppB.Name = "acpp-b"
 
 	forward := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{acppA, acppB}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{acppA, acppB}, nil, DRACapability{})
 	backward := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{acppB, acppA}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{acppB, acppA}, nil, DRACapability{})
 
 	if forward[0].SharingReplicas != 2 || backward[0].SharingReplicas != 2 {
 		t.Fatalf("expected acpp-a (replicas=2) to win regardless of input order: forward=%+v backward=%+v",
@@ -302,7 +302,7 @@ func TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy(t *testing.T) {
 	ready.Name = "worker1-a30-4x1g"
 
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1", "nvidia.com/mig-1g.6gb": "4"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{failed, ready}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{failed, ready}, nil, DRACapability{})
 	if len(snap) != 1 {
 		t.Fatalf("snapshot %+v", snap)
 	}
@@ -327,9 +327,24 @@ func TestBuildSnapshotAllNonReadySiblingsStillStale(t *testing.T) {
 	b.Status.Targets[0].Phase = v1alpha1.ACPPPhaseApplying
 
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "1"})},
-		[]v1alpha1.AcceleratorPartitionPolicy{b, a}, nil)
+		[]v1alpha1.AcceleratorPartitionPolicy{b, a}, nil, DRACapability{})
 	if !snap[0].Stale || !strings.Contains(snap[0].StaleReason, "acpp-a") {
 		t.Fatalf("Ready 부재 시 stale + 사전순 첫 정책 사유여야 한다: %+v", snap[0])
+	}
+}
+
+// DRA 만 광고하는 노드가 스냅샷에서 사라지면 안 된다.
+func TestBuildSnapshotKeepsDRAOnlyNode(t *testing.T) {
+	nodes := []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "dra-only"}}}
+	dra := DRACapability{APIServed: true, SlicesByNodeDriver: map[string]map[string]int32{
+		"dra-only": {"gpu.nvidia.com": 4},
+	}}
+	snap := BuildSnapshot(nodes, nil, nil, dra)
+	if len(snap) != 1 {
+		t.Fatalf("DRA-only node dropped from snapshot: %+v", snap)
+	}
+	if snap[0].DRADevices["gpu.nvidia.com"] != 4 {
+		t.Fatalf("DRADevices = %+v", snap[0].DRADevices)
 	}
 }
 
@@ -343,7 +358,7 @@ func TestLoadReadsClusterObjects(t *testing.T) {
 	}
 	n := node("worker1", map[string]string{"nvidia.com/gpu": "1"})
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(&n).Build()
-	snap, err := Load(context.Background(), c)
+	snap, _, err := Load(context.Background(), c)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -355,7 +370,7 @@ func TestLoadReadsClusterObjects(t *testing.T) {
 // TestApplyHealthDropsBlockedNode 는 할당이 막힌 노드가 배치 후보에서 빠지는지 본다.
 // 이 축이 없으면 health 는 상태만 예쁘게 적고 워크로드는 그대로 그 노드로 간다(F-18).
 func TestApplyHealthDropsBlockedNode(t *testing.T) {
-	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil, DRACapability{})
 	if len(snap) != 1 || snap[0].Stale {
 		t.Fatalf("전제가 틀렸다 — 정상 노드가 이미 배제돼 있다: %+v", snap)
 	}
@@ -375,7 +390,7 @@ func TestApplyHealthDropsBlockedNode(t *testing.T) {
 
 // TestApplyHealthKeepsHealthyNode 는 정상 노드가 영향을 안 받는지 본다(회귀 방지).
 func TestApplyHealthKeepsHealthyNode(t *testing.T) {
-	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil, DRACapability{})
 	got := ApplyHealth(snap, []v1alpha1.AcceleratorHealth{{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
 		Status:     v1alpha1.AcceleratorHealthStatus{State: "Healthy", AllocationAllowed: true},
@@ -387,7 +402,7 @@ func TestApplyHealthKeepsHealthyNode(t *testing.T) {
 
 // TestApplyHealthIgnoresUnjudgedNode 는 아직 판정 전인 노드를 막지 않는지 본다.
 func TestApplyHealthIgnoresUnjudgedNode(t *testing.T) {
-	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil)
+	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil, DRACapability{})
 	got := ApplyHealth(snap, []v1alpha1.AcceleratorHealth{{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
 	}})

@@ -5,7 +5,7 @@
 //       각 Validator 는 controller-runtime client 와 기본 식별자만 받아
 //       단일 검증 시도(Run)를 수행한다. caller 는 timeout 내에서 재시도하고
 //       Event/Metric 을 발행한다.
-// 생성일: 2026-04-27 | 수정일: 2026-04-28
+// 생성일: 2026-04-27 | 수정일: 2026-08-07
 // ============================================================
 
 package validator
@@ -97,6 +97,7 @@ func (v *DriverModuleValidator) Run(
 	// 동일 vendor 의 device 가 여러 개여도 driverVersion 은 동일하다고 가정 — 첫 발견값을 사용.
 	hostVer := ""
 	hostDetail := ""
+	hostNeedsReboot := false
 	for _, d := range ndr.Status.Devices {
 		if !strings.EqualFold(d.Vendor, vendor) {
 			continue
@@ -107,6 +108,7 @@ func (v *DriverModuleValidator) Run(
 		if hostVer == "" {
 			hostVer = d.DriverVersion
 			hostDetail = d.DriverVersionDetail
+			hostNeedsReboot = d.NeedsReboot
 		}
 		if d.DriverVersion == desiredVersion {
 			return Result{Passed: true, Message: "NDR.driverVersion 이 desiredVersion 과 일치"}, nil
@@ -121,6 +123,18 @@ func (v *DriverModuleValidator) Run(
 				"sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia; 그 후 driver-ds Pod 재시작",
 			hostVer, desiredVersion, nodeName,
 		)
+		// needsReboot 이면 위 안내는 틀렸다. 목표 버전 모듈은 이미 디스크에 준비돼 있고 구 모듈이
+		// 사용 중이라 삽입만 못 한 상태(cross-major)라서 rmmod 로는 풀리지 않는다 — 그 지시를
+		// 따르는 사람은 시간만 버린다(2026-08-07 라이브). 교체 주체는 노드 재부팅뿐이고,
+		// 그 재부팅은 상태기계가 RebootRequired 로 진행한다.
+		if hostNeedsReboot {
+			msg = fmt.Sprintf(
+				"host kernel module=%s ≠ desired=%s — 목표 버전 모듈은 디스크에 준비됐고 구 모듈이 "+
+					"사용 중이라 삽입만 못 한 상태(cross-major). 노드 재부팅으로만 교체되며 rmmod 로는 "+
+					"풀리지 않는다 — operator 가 재부팅을 진행하므로 수동 조치 불필요 (node=%s)",
+				hostVer, desiredVersion, nodeName,
+			)
+		}
 		if hostDetail != "" {
 			msg = fmt.Sprintf("%s (detail=%s)", msg, hostDetail)
 		}

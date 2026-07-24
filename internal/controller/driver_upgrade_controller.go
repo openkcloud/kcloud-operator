@@ -229,11 +229,10 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	var existing v1alpha1.DriverUpgradeState
 	err := r.Get(ctx, types.NamespacedName{Name: dusName}, &existing)
 	if apierrors.IsNotFound(err) {
-		// 신규 생성: 버전 비교로 초기 State 결정
+		// 신규 DUS 는 항상 Idle 로 만든다. 버전이 어긋났는지는 여기서 판단하지 않는다 —
+		// 업그레이드로 넘어갈지는 상태기계 handleIdle 이 autoUpgrade·verifiedVersions·cooldown
+		// 게이트를 걸어 정한다. 생성 시점에 UpgradeRequired 로 박으면 그 게이트를 지날 길이 없다.
 		initialState := v1alpha1.UpgradeStateIdle
-		if policy.Spec.Driver.Version != "" && device.DriverVersion != policy.Spec.Driver.Version {
-			initialState = v1alpha1.UpgradeStateRequired
-		}
 		dus := v1alpha1.DriverUpgradeState{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: dusName,
@@ -268,14 +267,12 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		existing.Status.DesiredVersion = desiredVersion
 		existing.Status.CurrentVersion = device.DriverVersion
 		if existing.Status.State == v1alpha1.UpgradeStateIdle {
-			existing.Status.State = v1alpha1.UpgradeStateRequired
-			// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
+			// 새 사이클의 입력만 정리한다. Idle→UpgradeRequired 전이는 상태기계 handleIdle 이
+			// 게이트(autoUpgrade·verifiedVersions·cooldown)를 걸어 결정한다.
 			existing.Status.PreviousImage = ""
 		}
 		// 새 사이클 진입: 이전 사이클의 재부팅 카운터/마커를 리셋(durable persist).
-		// handleIdle 의 리셋(state_machine.go)은 이 sync 경로가 이미 Idle→Required 로 전이시키면
-		// 실행되지 않으므로, cross-major 재부팅 게이트(need && RebootAttempts==0)가 stale 값에 막히지 않도록
-		// 여기서도 리셋한다(P2-2 stale RebootAttempts 하드닝).
+		// cross-major 재부팅 게이트(need && RebootAttempts==0)가 stale 값에 막히지 않게 한다.
 		resetRebootTracking(&existing.Status)
 		existing.Status.LastTransitionTime = metav1.Now()
 		existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", oldDesired, desiredVersion)
@@ -285,28 +282,12 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		return
 	}
 
-	// 버전 불일치 감지: Idle 상태에서만 UpgradeRequired 전이
-	if existing.Status.State == v1alpha1.UpgradeStateIdle &&
-		desiredVersion != "" &&
-		device.DriverVersion != desiredVersion &&
-		existing.Status.CurrentVersion != desiredVersion {
-
-		patch := client.MergeFrom(existing.DeepCopy())
-		existing.Status.State = v1alpha1.UpgradeStateRequired
-		existing.Status.CurrentVersion = device.DriverVersion
-		existing.Status.DesiredVersion = desiredVersion
-		existing.Status.PreviousVersion = device.DriverVersion
-		// 새 업그레이드 사이클이므로 이전 사이클에서 남은 PreviousImage 비움
-		existing.Status.PreviousImage = ""
-		// 새 사이클 진입: 재부팅 카운터/마커 리셋(P2-2 stale RebootAttempts 하드닝) — 위 정책변경 경로와 동일.
-		resetRebootTracking(&existing.Status)
-		existing.Status.LastTransitionTime = metav1.Now()
-		existing.Status.Message = fmt.Sprintf("버전 불일치: %s → %s", device.DriverVersion, desiredVersion)
-		if err := r.Status().Patch(ctx, &existing, patch); err != nil {
-			logger.Error(err, "DriverUpgradeState 상태 패치 실패", "name", dusName)
-		}
-		return
-	}
+	// 버전 불일치를 여기서 UpgradeRequired 로 전이시키지 않는다. 그러면 handleIdle 의 게이트
+	// (autoUpgrade / verifiedVersions / IdleCooldown)를 통째로 지나쳐 버린다 — 라이브에서
+	// autoUpgrade=false·화이트리스트 밖 버전인데도 install Job 이 생성됐다. 전이 결정은
+	// handleIdle 한 곳이 갖는다. 불일치 상황의 관측값 갱신은 아래 currentVersion 동기화가
+	// 이미 담당하므로 여기에 별도 분기를 두지 않는다 — 두면 매 reconcile 마다
+	// LastTransitionTime 이 갱신돼 IdleCooldown 이 영원히 차지 않는다(실측).
 
 	// currentVersion 동기화: Idle 상태에서 NDR이 갱신되었지만 버전이 일치하는 경우
 	// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)

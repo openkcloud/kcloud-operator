@@ -8,7 +8,14 @@
 {{- $fullname := include "npu-operator.fullname" . -}}
 {{- $svcName := printf "%s-api" $fullname -}}
 {{- $secretName := printf "%s-api-cert" $fullname -}}
-{{- $altNames := list (printf "%s.%s.svc" $svcName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svcName .Release.Namespace) -}}
+{{/*
+cert SAN: 서비스 DNS 두 개가 기본이다. NodePort 로 열어 노드 IP 로 접속하면 그 IP 가 SAN 에
+없어 브라우저가 이름 불일치 경고를 낸다 — api.service.extraAltNames 로 노드 IP/호스트명을
+더한다. **IP 로 접속할 것이면 extraAltIPs 를 써야 한다** — IP 를 DNS SAN 에 넣으면 브라우저가
+매칭하지 않는다. cert 는 아래 lookup 으로 최초 1회만 발급되므로, 이미 발급된 뒤 SAN 을
+늘리려면 기존 Secret 을 지우고 operator pod 를 재시작해야 한다.
+*/}}
+{{- $altNames := concat (list (printf "%s.%s.svc" $svcName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svcName .Release.Namespace)) (.Values.api.service.extraAltNames | default list) -}}
 {{/*
 cert 멱등성(P3 webhook 과 동일): 기존 Secret 이 있으면 그 값을 재사용, 없을 때만 최초 1회 발급.
 helm upgrade 반복에도 Secret 불변(검증 f). lookup 은 base64 data, gen* 은 PEM → b64enc 로 통일.
@@ -21,7 +28,7 @@ helm upgrade 반복에도 Secret 불변(검증 f). lookup 은 base64 data, gen* 
 {{- $tlsKey = index $existing.data "tls.key" -}}
 {{- else -}}
 {{- $ca := genCA "kcloud-operator-api-ca" 3650 -}}
-{{- $cert := genSignedCert $svcName nil $altNames 3650 $ca -}}
+{{- $cert := genSignedCert $svcName (.Values.api.service.extraAltIPs | default list) $altNames 3650 $ca -}}
 {{- $tlsCert = b64enc $cert.Cert -}}
 {{- $tlsKey = b64enc $cert.Key -}}
 {{- end }}
@@ -48,7 +55,8 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: management-api
 spec:
-  type: ClusterIP
+  # 기본은 ClusterIP — 콘솔을 클러스터 밖 브라우저로 열려면 NodePort 로 바꾼다.
+  type: {{ .Values.api.service.type | default "ClusterIP" }}
   selector:
     {{- include "npu-operator.selectorLabels" . | nindent 4 }}
   ports:
@@ -56,4 +64,7 @@ spec:
     port: 443
     targetPort: {{ .Values.api.port }}
     protocol: TCP
+    {{- if and (eq (.Values.api.service.type | default "ClusterIP") "NodePort") .Values.api.service.nodePort }}
+    nodePort: {{ .Values.api.service.nodePort }}
+    {{- end }}
 {{- end }}

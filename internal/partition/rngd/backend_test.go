@@ -3,6 +3,7 @@ package rngd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/intent"
 	"kcloud-operator/internal/partition"
 )
 
@@ -71,11 +73,34 @@ func TestDiscoverFillsCapabilityAxesRngd(t *testing.T) {
 	if d.SharingCapability.MultiProcess.Verification != v1alpha1.VerificationRequired {
 		t.Fatalf("multiProcess verification = %q, want required", d.SharingCapability.MultiProcess.Verification)
 	}
-	if d.IsolationCapability.Compute != v1alpha1.IsolationSubdevice {
-		t.Fatalf("PE partition compute isolation = %q, want subdevice", d.IsolationCapability.Compute)
+	if (d.IsolationCapability != v1alpha1.IsolationCapability{}) {
+		// 세 축 전부 미실측이어야 한다. compute 를 subdevice 로 적었던 과거 회귀를 막는 핀이다 —
+		// 파티션이 카드의 mgmt·bar·DMA 채널을 공유하고 health 도 카드 단위라 subdevice 근거가 없다
+		// (deviceStatusFor 주석의 벤더 코드 인용 참조). 등급을 새로 적으려면 실측이 먼저다.
+		t.Fatalf("RNGD isolation must stay unmeasured on every axis, got %+v", d.IsolationCapability)
 	}
-	if d.IsolationCapability.Memory != "" {
-		t.Fatalf("RNGD memory isolation must stay unknown(empty), got %q", d.IsolationCapability.Memory)
+}
+
+// TestRngdIsolationRejectsMinimumIsolation 는 미실측 격리가 배치 게이트에서 실제로
+// fail-closed 로 작동하는지를 소비자(intent.CheckRequirements) 쪽에서 확인한다.
+// 주의: 이 변경은 승인/거절 결과를 뒤집지 않는다 — memory 축이 원래 미실측이라
+// minimumIsolation 이 걸린 요청은 예전에도 전부 거절됐다. 달라진 것은 거절이 지목하는
+// 축(memory → compute)뿐이며, 그 지목이 사실과 맞는지가 여기서 고정하는 값이다.
+func TestRngdIsolationRejectsMinimumIsolation(t *testing.T) {
+	nc := intent.NodeCapability{NodeName: "rngd-1", Vendor: "furiosa",
+		Devices: []v1alpha1.DeviceStatus{deviceStatusFor("furiosa", "rngd")}}
+	req := v1alpha1.AcceleratorRequirements{MinimumIsolation: v1alpha1.IsolationSubdevice}
+	access := v1alpha1.AccessSpec{Mode: v1alpha1.AccessModePartitioned}
+
+	rj := intent.CheckRequirements(nc, req, access, v1alpha1.AcceleratorMapping{NativeProfile: "2core.12gb"})
+	if rj == nil {
+		t.Fatalf("unmeasured isolation must not satisfy minimumIsolation=%q", req.MinimumIsolation)
+	}
+	if rj.Reason != v1alpha1.AWReasonCapabilityUnverified {
+		t.Fatalf("reject reason = %q, want %q (unmeasured, not too-weak)", rj.Reason, v1alpha1.AWReasonCapabilityUnverified)
+	}
+	if !strings.Contains(rj.Message, "isolation.compute") {
+		t.Fatalf("reject must name the compute axis as unmeasured, got %q", rj.Message)
 	}
 }
 

@@ -416,6 +416,7 @@ var _ = Describe("delegate mode deletion lease guard", func() {
 			DeferCleanup(wipeACPPs)
 			sel := map[string]string{"kcloud.ai/aop-del-lease": "true"}
 			seedNvidiaNode("aop-del-lease-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
+			setNodeGPUAllocatable("aop-del-lease-node", 0)
 			DeferCleanup(func() { cleanupNvidia("aop-del-lease-node") })
 
 			uid := mkFinalizedNvidiaACPP("aop-del-lease-acpp", sel)

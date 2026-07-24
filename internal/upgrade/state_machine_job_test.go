@@ -4,7 +4,7 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-08-07
 // ============================================================
 
 package upgrade
@@ -44,7 +44,10 @@ func makeJobDIP(version, image string, autoUpgrade, rollbackOnFailure bool) *v1a
 		Spec: v1alpha1.DriverInstallPolicySpec{
 			Vendor: jVendor,
 			Model:  jModel,
-			Driver: v1alpha1.DriverSpec{Version: version, Image: image, Mode: "job"},
+			// ngc: 이미지가 드라이버 버전을 담는 방식. 이 파일의 기존 시험들은 버전별 태그
+			// 재구성을 전제로 쓰였으므로 그 방식을 명시한다.
+			Driver: v1alpha1.DriverSpec{Version: version, Image: image, Mode: "job",
+				Installer: v1alpha1.DriverInstallerNGC},
 			UpgradePolicy: &v1alpha1.UpgradePolicy{
 				AutoUpgrade:       autoUpgrade,
 				RollbackOnFailure: rollbackOnFailure,
@@ -421,6 +424,94 @@ func TestHandleRollbackJob_CreatesRollbackJob(t *testing.T) {
 	}
 }
 
+// ── install Job 신원(이미지+목표 버전) ────────────
+//
+// apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을 설치한다 — 목표 버전은 이미지
+// 태그가 아니라 DRIVER_VERSION env 로 들어간다. 그래서 이미지만으로 Job 을 식별하면 지난
+// 사이클이 남긴 완료된 Job 을 이번 사이클의 Job 으로 착각한다.
+// 라이브 실측(2026-08-07 `.91` k8s-worker1): 595.84 사이클이 끝난 12초 뒤 580.173.02
+// 사이클이 시작했고, 앞 사이클의 완료된 Job 이 TTL 안에 살아 있어 재사용됐다. 580 설치는
+// 한 번도 생성되지 않은 채 validator 가 앞 Job 의 결과(595.84)를 10분간 채점했고 검증
+// 예산 만료 → 불필요한 rollback → 불필요한 재부팅으로 이어졌다.
+
+// makeAptJobDIP 는 apt 인스톨러 정책이다 — 모든 버전이 같은 이미지를 쓴다(라이브 구성).
+func makeAptJobDIP(version, image string) *v1alpha1.DriverInstallPolicy {
+	dip := makeJobDIP(version, image, true, true)
+	dip.Spec.Driver.Installer = v1alpha1.DriverInstallerAPT
+	return dip
+}
+
+// makeVersionedInstallJob 는 DRIVER_VERSION env 를 담은 install Job 이다(RenderInstallJob 과 동일 형태).
+func makeVersionedInstallJob(image, version string, complete bool) *batchv1.Job {
+	j := makeInstallJob(complete, false)
+	j.Spec.Template.Spec.Containers[0].Image = image
+	j.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{
+		{Name: "RUN_MODE", Value: "job"},
+		{Name: "DRIVER_VERSION", Value: version},
+	}
+	return j
+}
+
+// 같은 이미지 + 다른 목표 버전인 잔여 Job 은 이번 사이클의 Job 이 아니다 — 삭제 후 재생성.
+func TestHandleUpgradingJob_StaleJobSameImageOtherVersion_Recreated(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verNew, verOld)
+	dip := makeAptJobDIP(verOld, imgNew)
+	stale := makeVersionedInstallJob(imgNew, verNew, true) // 지난 사이클(verNew) 산물, 완료됨
+	sm := newUpgradeSMWithRecorder(dus, dip, stale)
+
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	if dus.Status.State == v1alpha1.UpgradeStateValidating {
+		t.Error("지난 사이클의 완료된 Job 을 이번 사이클 Job 으로 재사용했다 — 목표 버전이 설치되지 않는다")
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err == nil {
+		t.Errorf("잔여 Job 이 삭제되지 않음 (DRIVER_VERSION=%q, 목표=%q)", jobDriverVersion(&job), verOld)
+	}
+}
+
+// 같은 이미지 + 같은 목표 버전이면 이번 사이클의 Job 이다 — 재사용(재생성 금지).
+func TestHandleUpgradingJob_SameImageSameVersion_Reused(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verNew)
+	dip := makeAptJobDIP(verNew, imgNew)
+	mine := makeVersionedInstallJob(imgNew, verNew, false) // 이번 사이클, 진행 중
+	sm := newUpgradeSMWithRecorder(dus, dip, mine)
+
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Errorf("state=%q, want Validating (같은 버전 Job 재사용)", dus.Status.State)
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err != nil {
+		t.Error("진행 중인 이번 사이클 Job 이 삭제됨 — 설치가 중단된다")
+	}
+}
+
+// rollback 도 같은 신원 규칙을 쓴다 — 실패한 desired 버전 Job 을 rollback Job 으로 오인하면
+// 되돌리기가 한 번도 실행되지 않는다.
+func TestHandleRollbackJob_StaleJobSameImageOtherVersion_Recreated(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verOld, verNew)
+	dus.Status.PreviousVersion = verOld
+	dip := makeAptJobDIP(verNew, imgNew)
+	failedDesired := makeVersionedInstallJob(imgNew, verNew, true) // 되돌릴 대상이 아닌 Job
+	sm := newUpgradeSMWithRecorder(dus, dip, failedDesired)
+
+	if _, _, err := sm.handleRollbackJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollbackJob 실패: %v", err)
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job)
+	if err == nil && jobDriverVersion(&job) == verNew {
+		t.Error("desired 버전 Job 을 rollback Job 으로 오인 — 되돌리기가 실행되지 않는다")
+	}
+}
+
 // ── job status 헬퍼 ──────────────────────────────
 
 func TestJobStatusHelpers(t *testing.T) {
@@ -437,17 +528,25 @@ func TestJobStatusHelpers(t *testing.T) {
 
 func TestReconstructPrevImage(t *testing.T) {
 	cases := []struct {
-		dipImage, prevVersion, want string
+		dipImage, installer, prevVersion, want string
 	}{
-		{imgNew, verOld, imgOld},
-		{"reg/nv:1.7.8-v3", "1.7.7", "reg/nv:1.7.7-v3"},
-		{"reg/nv:590.48.01", verOld, ""}, // variant 없음 → 재구성 불가
-		{"", verOld, ""},                 // 이미지 없음
-		{imgNew, "", ""},                 // prevVersion 없음
+		// ngc: 이미지가 드라이버를 담으므로 버전별 태그를 재구성한다.
+		{imgNew, v1alpha1.DriverInstallerNGC, verOld, imgOld},
+		{"reg/nv:1.7.8-v3", v1alpha1.DriverInstallerNGC, "1.7.7", "reg/nv:1.7.7-v3"},
+		{"reg/nv:590.48.01", v1alpha1.DriverInstallerNGC, verOld, ""}, // variant 없음 → 재구성 불가
+		{"", v1alpha1.DriverInstallerNGC, verOld, ""},                 // 이미지 없음
+		{imgNew, v1alpha1.DriverInstallerNGC, "", ""},                 // prevVersion 없음
+		// apt/script: 이미지는 버전과 무관하다. 태그를 갈아 끼우면 없는 이미지가 만들어져
+		// rollback Job 이 ImagePullBackOff 로 앉는다 — 같은 이미지를 그대로 쓴다.
+		{imgNew, v1alpha1.DriverInstallerAPT, verOld, imgNew},
+		{"reg/nv:580.159.03-v179", v1alpha1.DriverInstallerAPT, "580.173.02", "reg/nv:580.159.03-v179"},
+		{imgNew, v1alpha1.DriverInstallerScript, verOld, imgNew},
+		{imgNew, v1alpha1.DriverInstallerAPT, "", ""}, // prevVersion 없음은 여전히 재구성 불가
 	}
 	for _, c := range cases {
-		if got := reconstructPrevImage(c.dipImage, c.prevVersion); got != c.want {
-			t.Errorf("reconstructPrevImage(%q,%q)=%q, want %q", c.dipImage, c.prevVersion, got, c.want)
+		if got := reconstructPrevImage(c.dipImage, c.installer, c.prevVersion); got != c.want {
+			t.Errorf("reconstructPrevImage(%q,%q,%q)=%q, want %q",
+				c.dipImage, c.installer, c.prevVersion, got, c.want)
 		}
 	}
 }
@@ -487,5 +586,75 @@ func TestRestartStaleDevicePluginPods(t *testing.T) {
 	}
 	if err := sm.Get(context.Background(), types.NamespacedName{Name: "tt-dp-fresh", Namespace: "kcloud"}, &got); err != nil {
 		t.Error("fresh device-plugin Pod 가 삭제됨(보존돼야)")
+	}
+}
+
+// TestHandleRollbackJob_AptInstallerKeepsImage 는 apt 인스톨러에서 rollback Job 이 정책 이미지를
+// 그대로 쓰는 것을 고정한다. 버전으로 태그를 갈아 끼우면 레지스트리에 없는 이미지가 되고
+// (실측: nvidia-driver-ds:580.173.02-v179 not found) Job 이 ImagePullBackOff 로 앉아
+// 노드가 cordon 상태로 고착된다.
+func TestHandleRollbackJob_AptInstallerKeepsImage(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verOld, verNew)
+	dus.Status.PreviousVersion = verOld
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Spec.Driver.Installer = v1alpha1.DriverInstallerAPT
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleRollbackJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollingBackJob 실패: %v", err)
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err != nil {
+		t.Fatalf("rollback Job 미생성: %v", err)
+	}
+	if got := jobContainerImage(&job); got != imgNew {
+		t.Errorf("rollback job image=%q, want %q (정책 이미지 그대로)", got, imgNew)
+	}
+	if dus.Status.DesiredVersion != verOld {
+		t.Errorf("desiredVersion=%q, want %q (이전 버전으로 되돌림)", dus.Status.DesiredVersion, verOld)
+	}
+}
+
+// TestHandleValidatingJob_RunningJobDoesNotConsumeBudget 는 install Job 이 아직 돌고 있는 동안
+// 검증 예산이 만료되어 롤백으로 밀려나지 않는 것을 고정한다. 라이브 실측: apt 로 313MB 를
+// 받는 도중 10분 예산이 끝나 설치가 중단되고, 이어진 롤백이 없는 이미지를 집어 노드가 굳었다.
+func TestHandleValidatingJob_RunningJobDoesNotConsumeBudget(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
+	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "10m"
+	running := makeInstallJob(false, false)
+	sm := newUpgradeSMWithRecorder(dus, dip, running)
+
+	requeue, _, err := sm.handleValidatingJob(context.Background(), dus, dip)
+	if err != nil {
+		t.Fatalf("handleValidatingJob 실패: %v", err)
+	}
+	if !requeue {
+		t.Error("진행 중인 Job 은 재확인 대기여야 한다")
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Errorf("state=%q, want Validating — 진행 중인 설치가 예산 만료로 중단됐다", dus.Status.State)
+	}
+}
+
+// TestHandleValidatingJob_BudgetStartsAfterJobCompletion 는 Job 이 끝난 뒤부터 검증 예산이
+// 흐르는 것을 고정한다. 완료 직후라면 Validating 진입이 아무리 오래됐어도 타임아웃이 아니다.
+func TestHandleValidatingJob_BudgetStartsAfterJobCompletion(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
+	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "10m"
+	done := makeInstallJob(true, false)
+	now := metav1.NewTime(time.Now())
+	done.Status.CompletionTime = &now
+	sm := newUpgradeSMWithRecorder(dus, dip, done)
+
+	if _, _, err := sm.handleValidatingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleValidatingJob 실패: %v", err)
+	}
+	if dus.Status.State == v1alpha1.UpgradeStateRollback {
+		t.Error("완료 직후인데 검증 타임아웃으로 롤백됐다")
 	}
 }

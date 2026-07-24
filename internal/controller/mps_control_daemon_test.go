@@ -354,15 +354,16 @@ func TestMpsControlDaemon_SurvivesCleanupBlockedSiblingsMPSRecord(t *testing.T) 
 			ApplyRecords: []npuv1alpha1.ApplyRecord{{
 				NodeName: "node1", MigPhase: npuv1alpha1.MigPhaseReady, // phase≥Applying → 하드웨어 변경됨.
 				SharingMode: npuv1alpha1.SharingModeMPS, SharingReplicas: 4,
-				GPUPCIs: []string{sharingPCI}, BaselineGPUCount: 1,
+				GPUPCIs: []string{sharingPCI}, BaselineGPUCount: 1, ExpectedFullGPUCount: 1,
 			}},
 		},
 	}
 	other := &npuv1alpha1.AcceleratorPartitionPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "acpp-other", UID: "uid-other"},
 	}
-	// node1 의 owner lock 이 남의 것 → 삭제가 소유권 충돌로 들어간다. allocatable 도 baseline(1)로
-	// 복원돼 있지 않아 assertMigEmptyAndBaseline 이 실패하고 CleanupBlocked 로 차단된다.
+	// node1 의 owner lock 이 남의 것 → 삭제가 소유권 충돌로 들어간다. allocatable 도 회수 후
+	// 기대값(ExpectedFullGPUCount=1, MIG 대상이 아닌 GPU 한 장)으로 복원돼 있지 않아
+	// assertMigEmptyAndBaseline 이 실패하고 CleanupBlocked 로 차단된다.
 	node1 := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "node1", Annotations: map[string]string{migOwnerAnnotation: "uid-someone-else"}},
 	}

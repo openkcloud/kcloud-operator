@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -141,6 +142,13 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desir
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses,verbs=get;list;watch;create;update;patch;delete
+// DRA 드라이버에 줄 권한은 operator 자신이 먼저 갖고 있어야 한다 — 쿠버네티스가
+// 자기가 없는 권한을 담은 ClusterRole 생성을 막는다(권한 상승 방지).
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims;resourceslices;resourceclaimtemplates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/status;resourceslices/status;resourceclaimtemplates/status,verbs=update;patch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/driver,verbs={"associated-node:update","associated-node:patch"}
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -190,6 +198,15 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// -- 광고 주체 스위치: DaemonSet 을 만들기 전에 노드 라벨을 spec 과 맞춘다.
+	// 순서가 뒤바뀌면 라벨이 붙기 전 렌더가 한 박자 먼저 나가 두 광고가 겹칠 수 있다.
+	if err := r.reconcileDRAOwnedLabels(ctx, &policy); err != nil {
+		logger.Error(err, "DRA 소유 라벨 동기화 실패")
+		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "AdvertiseSwitchFailed", "%v", err)
+		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "AdvertiseSwitchFailed", err.Error())
+		return ctrl.Result{}, err
+	}
+
 	// -- NVIDIA
 	if policy.Spec.Nvidia.Enabled {
 		logger.Info("Ensuring NVIDIA Device Plugin DaemonSet")
@@ -223,11 +240,12 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	// -- NVIDIA GPU 텔레메트리(dcgm-exporter). 토글 off 면 기존 DS 를 제거하므로 항상 호출한다.
-	if err := r.ensureDcgmExporter(ctx, &policy); err != nil {
-		logger.Error(err, "failed to ensure dcgm-exporter")
-		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "DcgmExporter", err)
-		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "DcgmExporterFailed", err.Error())
+	// -- 부가 operand(텔레메트리 exporter, DRA 드라이버). 둘 다 토글 off 면 회수하므로
+	//    항상 호출한다. 광고 주체와 독립이라 실패해도 device-plugin 광고는 산다.
+	if name, err := r.ensureSideOperands(ctx, &policy); err != nil {
+		logger.Error(err, "failed to ensure side operand", "operand", name)
+		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", name, err)
+		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, name+"Failed", err.Error())
 		return ctrl.Result{}, err
 	}
 
@@ -313,7 +331,22 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.setReadyCondition(ctx, &policy, metav1.ConditionTrue, "AllResourcesReady", "All resources reconciled successfully")
 	r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "Reconciled", "Successfully reconciled all resources")
 
-	return ctrl.Result{}, nil
+	// DRA 드라이버가 아직 발행 전이면 다시 본다. 발행물은 드라이버가 뜬 뒤 몇 초 지나
+	// 생기는데 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가 없으면 상태가
+	// Installing 에 굳는다(2026-08-07 실측).
+	return ctrl.Result{RequeueAfter: draRequeue(&policy)}, nil
+}
+
+// draRequeue 는 발행 관측을 기다리는 DRA 드라이버가 있으면 재확인 간격을 준다.
+// 0 이면 재큐하지 않는다. 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가
+// 없으면 발행이 생겨도 상태가 Installing 에 굳는다(2026-08-07 실측).
+func draRequeue(policy *npuv1alpha1.NPUClusterPolicy) time.Duration {
+	for _, d := range policy.Status.DRADrivers {
+		if d.Phase == npuv1alpha1.DRAPhaseInstalling {
+			return 30 * time.Second
+		}
+	}
+	return 0
 }
 
 // setReadyCondition updates the Ready condition on the policy status.
@@ -388,6 +421,25 @@ func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, 
 	}
 
 	return nil
+}
+
+// ensureSideOperands 는 광고 경로 밖의 operand 를 순서대로 맞춘다. 실패한 operand
+// 이름을 함께 돌려주어 호출부가 사유를 그대로 기록하게 한다.
+func (r *NPUClusterPolicyReconciler) ensureSideOperands(
+	ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy,
+) (string, error) {
+	for _, op := range []struct {
+		name   string
+		ensure func(context.Context, *npuv1alpha1.NPUClusterPolicy) error
+	}{
+		{"DcgmExporter", r.ensureDcgmExporter},
+		{"DRADriver", r.ensureDRADriver},
+	} {
+		if err := op.ensure(ctx, policy); err != nil {
+			return op.name, err
+		}
+	}
+	return "", nil
 }
 
 // setOwnerAnnotation sets the npu.ai/owner annotation on the given ObjectMeta.
@@ -513,6 +565,10 @@ func (r *NPUClusterPolicyReconciler) buildNvidiaDevicePluginDS(policy *npuv1alph
 			},
 		}
 	}
+
+	// mixed 는 nodeSelector 로, flat 은 affinity 로 노드를 고른다. dra-owned 제외는 둘 다
+	// affinity 로 건다 — 한쪽만 빼면 그 DaemonSet 이 DRA 소유 노드에서 계속 광고한다.
+	excludeDRAOwnedNodes(&spec, vendorNvidia)
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system", Labels: labels},
@@ -642,6 +698,7 @@ interval: 10`,
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorFuriosa)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
@@ -764,6 +821,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorRngd)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
@@ -907,6 +965,9 @@ interval: 10`,
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	// 통합 DS 는 두 제품을 함께 광고하므로 둘 중 하나라도 DRA 소유면 물러난다.
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorFuriosa)
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorRngd)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
@@ -1042,6 +1103,7 @@ func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.C
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorTenstorrent)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 

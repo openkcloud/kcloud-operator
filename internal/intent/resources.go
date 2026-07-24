@@ -58,6 +58,14 @@ func WholeDeviceResource(vendor, product string) (string, error) {
 	return "", fmt.Errorf("intent: %s: cannot determine resource name — product must be one of %v, got %q", vendor, names, product)
 }
 
+// KnownVendor 는 이 카탈로그가 그 벤더의 리소스명을 아는지다. 모르는 벤더는 어떤 리소스를
+// 봐야 하는지 알 수 없으므로 "그 벤더의 광고가 0 이다" 를 증명할 방법이 없다 — 호출자는
+// 찾은 게 없는 것과 0 임을 확인한 것을 구분해야 한다.
+func KnownVendor(vendor string) bool {
+	_, ok := productResource[strings.ToLower(vendor)]
+	return ok
+}
+
 // PartitionResource 는 nativeProfile 파티션이 광고되는 리소스명이다.
 func PartitionResource(vendor, product, nativeProfile string) (string, error) {
 	if strings.EqualFold(vendor, "nvidia") && nativeProfile != "" {
@@ -74,6 +82,16 @@ func ResourceFor(m v1alpha1.AcceleratorMapping, mode string) (string, error) {
 	default:
 		return WholeDeviceResource(m.Vendor, m.Product)
 	}
+}
+
+// ValidateDRAMapping 은 DRA 축 두 필드가 함께 채워졌는지 본다.
+// 한쪽만 있으면 관리자가 절반만 설정한 것이고, 그 상태로 통과시키면 노드 후보가
+// 조용히 0이 되어 "왜 후보가 없나" 를 되짚을 수 없게 된다.
+func ValidateDRAMapping(m v1alpha1.AcceleratorMapping) error {
+	if (m.DeviceClassName == "") != (m.DRADriver == "") {
+		return fmt.Errorf("AcceleratorClass mapping for vendor %q sets only one of deviceClassName/draDriver; set both or neither", m.Vendor)
+	}
+	return nil
 }
 
 // VendorForResource 는 리소스명에서 벤더를 되짚는다. 가속기 리소스가 아니면 "".
