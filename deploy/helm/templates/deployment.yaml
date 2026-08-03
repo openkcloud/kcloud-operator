@@ -52,6 +52,10 @@ spec:
         - "--api-bind-address=:{{ .Values.api.port }}"
         - --api-cert-path=/tmp/k8s-api-server/serving-certs
         {{- end }}
+        {{- if .Values.metrics.enabled }}
+        - "--metrics-bind-address=:{{ .Values.metrics.port }}"
+        - "--metrics-secure={{ .Values.metrics.secure }}"
+        {{- end }}
         env:
         # OPERATOR_NAMESPACE: operator 관리 워크로드(driver DS / install Job / toolkit DS)를
         # 배치할 네임스페이스. release namespace 를 Downward API 로 주입한다(#16). device-plugin 은

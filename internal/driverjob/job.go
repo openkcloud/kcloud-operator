@@ -49,6 +49,27 @@ const (
 // 대해 중복 생성이 불가능하다(de-facto lease). owner 는 DIP(cluster-scoped)로 설정해
 // DIP 삭제 시 K8s GC 가 Job 을 cascade 정리한다(TTL GC 와 함께 orphan 방지).
 func RenderInstallJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string) *batchv1.Job {
+	return renderJob(pol, nodeName, image, version, false)
+}
+
+// RenderRollbackJob 은 실패한 업그레이드를 되돌리는 Job 을 빌드한다. RenderInstallJob 과 같되
+// **다운그레이드를 허용한다.**
+//
+// 정책의 `driver.allowDowngrade` 는 *정책 변경으로 버전을 낮추는 것*을 막는 장치다. 롤백은
+// 그것과 다른 일이다 — 방금 실패한 업그레이드를 원래 자리로 되돌리는 것이고, 정의상 내려간다.
+// 둘을 한 값으로 묶으면 installer 자신의 다운그레이드 가드가 롤백을 거부해 되돌릴 수 없는
+// 업그레이드가 만들어지고, 노드는 실패한 버전에 갇힌다(2026-08-10 라이브,
+// docs/impl/furiosa-version-swap-20260812.md §3.4).
+//
+// VERSION_SOURCE 도 Policy 로 고정한다. Host 로 두면 installer 가 호스트에 남은 *실패한* 버전을
+// desired 로 채택해 롤백이 그대로 무동작이 된다.
+func RenderRollbackJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string) *batchv1.Job {
+	return renderJob(pol, nodeName, image, version, true)
+}
+
+func renderJob(
+	pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string, rollback bool,
+) *batchv1.Job {
 	name := naming.InstallJobName(pol.Spec.Vendor, pol.Spec.Model, nodeName)
 	labels := map[string]string{
 		"app.kubernetes.io/name":      "kcloud-driver-install",
@@ -81,13 +102,21 @@ func RenderInstallJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, ver
 
 	// env: DS driver 컨테이너 env(안전장치 a/b/c) + RUN_MODE=job.
 	// RUN_MODE=job 이 entrypoint 의 상주 while-loop 를 exit 0 으로 분기시킨다.
+	// 롤백은 정의상 내려가는 일이라 정책 가드를 넘어선다(RenderRollbackJob 주석 참조).
+	allowDowngrade := pol.Spec.Driver.AllowDowngrade
+	versionSource := versionSourceOrDefault(pol.Spec.Driver.VersionSource)
+	if rollback {
+		allowDowngrade = true
+		versionSource = versionSourcePolicy
+	}
+
 	env := []corev1.EnvVar{
 		{Name: "RUN_MODE", Value: "job"},
 		{Name: "DRIVER_VERSION", Value: version},
 		{Name: "REBOOT_STRATEGY", Value: pol.Spec.RebootStrategy},
 		{Name: "VENDOR", Value: pol.Spec.Vendor},
-		{Name: "ALLOW_DOWNGRADE", Value: strconv.FormatBool(pol.Spec.Driver.AllowDowngrade)},
-		{Name: "VERSION_SOURCE", Value: versionSourceOrDefault(pol.Spec.Driver.VersionSource)},
+		{Name: "ALLOW_DOWNGRADE", Value: strconv.FormatBool(allowDowngrade)},
+		{Name: "VERSION_SOURCE", Value: versionSource},
 		{Name: "SKIP_ON_PASSTHROUGH", Value: strconv.FormatBool(pol.Spec.Driver.SkipOnPassthrough)},
 	}
 
@@ -210,10 +239,13 @@ func furiosaAptAuthRequired(vendor, model string) bool {
 	return strings.EqualFold(vendor, "furiosa") && !strings.EqualFold(model, "rngd")
 }
 
+// versionSourcePolicy 는 정책이 선언한 버전을 그대로 쓰라는 값이다(entrypoint 의 VERSION_SOURCE).
+const versionSourcePolicy = "Policy"
+
 // versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작 "Policy" 를 반환한다.
 func versionSourceOrDefault(vs string) string {
 	if vs == "" {
-		return "Policy"
+		return versionSourcePolicy
 	}
 	return vs
 }

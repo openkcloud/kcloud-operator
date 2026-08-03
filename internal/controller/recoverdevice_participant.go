@@ -14,10 +14,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/operation"
+	"kcloud-operator/internal/upgrade"
 	"kcloud-operator/internal/verification"
 )
 
@@ -57,6 +59,19 @@ func NewRecoverDeviceParticipant(r *AcceleratorPartitionPolicyReconciler) operat
 // 세 번이면 격리로 올라가 사람을 부른다.
 func (p *recoverDeviceParticipant) Apply(ctx context.Context,
 	op *npuv1alpha1.AcceleratorOperation) (operation.Outcome, error) {
+	// 드라이버 업그레이드 사이클 안이면 아무것도 지우지 않는다. 그 구간의 driverLoaded=false 는
+	// 고장이 아니라 설치가 스스로 구 모듈을 내린 예정된 상태다. 여기서 설치 주체를 지우면 노드의
+	// apt 가 DKMS 빌드 도중 죽어 패키지가 half-configured 로 남고, 버전 보고가 막혀 검증이 영원히
+	// 실패하는 자기강화 루프가 된다(2026-08-10 라이브,
+	// docs/impl/furiosa-version-swap-20260812.md §3.4).
+	//
+	// 실패가 아니라 완료로 보고한다 — ApplyFailed 는 세 번 쌓이면 멀쩡한 노드를 격리로 보낸다.
+	if p.upgradingDriver(ctx, op.Spec.NodeName) {
+		return operation.Outcome{
+			Event:   operation.EventApplyDone,
+			Message: "드라이버 업그레이드 중인 노드; 드라이버 pod 을 건드리지 않는다",
+		}, nil
+	}
 	deleted, err := p.restartDriverPods(ctx, op.Spec.NodeName, op.Spec.Vendor)
 	if err != nil {
 		return operation.Outcome{}, err
@@ -68,6 +83,20 @@ func (p *recoverDeviceParticipant) Apply(ctx context.Context,
 		}, nil
 	}
 	return operation.Outcome{Event: operation.EventApplyDone, Message: "드라이버 pod 재시작 요청"}, nil
+}
+
+// upgradingDriver 는 그 노드가 드라이버 업그레이드 사이클 안인지다. 상태기계가 Cordoning 에서
+// `npu.ai/driver-upgrading` 라벨을 붙이고 Uncordoning 에서 뗀다.
+//
+// 노드를 못 읽으면 **업그레이드 중이 아닌 것으로 본다.** 못 읽었다고 복구를 건너뛰면 노드 객체가
+// 잠시 안 보이는 순간마다 복구가 조용히 사라진다 — 그쪽이 더 나쁜 실패다.
+func (p *recoverDeviceParticipant) upgradingDriver(ctx context.Context, node string) bool {
+	var n corev1.Node
+	if err := p.r.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		return false
+	}
+	_, upgrading := n.Labels[upgrade.DriverUpgradingLabelKey]
+	return upgrading
 }
 
 // restartDriverPods 는 그 노드의 드라이버 pod 을 지우고 지운 개수를 돌려준다(멱등). vendor 가

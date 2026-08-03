@@ -1,0 +1,17 @@
+# nvidia-a30.yaml: 유효 descriptor archetype - NVIDIA A30 | 생성일: 2026-08-10
+vendor: nvidia
+product: a30
+allocationUnit: device
+identity:
+  source: uuid
+  stableAcrossReboot: true
+# identity.source 가 uuid 라 {{id}} 치환자를 쓰면 결과가 /dev/nvidiaGPU-xxxx 같은
+# 실재하지 않는 경로가 된다 - 실측(validate_test.go 의 validSpec())대로 고정 노드로 쓴다.
+# 고정 노드라 이 archetype 은 장치 하나까지만 표현한다 - 라이브 k8s-worker1 의 A30
+# 2장 구성은 descriptor 언어에 인덱스 치환자가 없어 현재로선 표현되지 않는다.
+deviceNodes:
+  - /dev/nvidia0
+  - /dev/nvidiactl
+backends:
+  - devicePlugin
+  - dra

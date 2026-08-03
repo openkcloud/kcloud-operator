@@ -422,6 +422,22 @@ func TestHandleRollbackJob_CreatesRollbackJob(t *testing.T) {
 	if jobContainerImage(&job) != imgOld {
 		t.Errorf("rollback job image=%q, want %q (이전 버전)", jobContainerImage(&job), imgOld)
 	}
+
+	// 정책은 allowDowngrade 를 켜지 않았다(makeJobDIP 는 이 필드를 건드리지 않는다). 그래도
+	// 롤백 Job 은 다운그레이드를 허용받아야 한다 — 아니면 installer 자신의 가드가 설치를
+	// 거부해 롤백이 무동작이 된다(2026-08-10 라이브).
+	//
+	// **이 단언이 호출부를 지킨다.** 렌더러 쪽 시험(driverjob/rollbackjob_test.go)만으로는
+	// 이 자리를 RenderInstallJob 으로 되돌려도 아무도 실패하지 않는다.
+	var allowDowngrade string
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "ALLOW_DOWNGRADE" {
+			allowDowngrade = e.Value
+		}
+	}
+	if allowDowngrade != "true" {
+		t.Errorf("rollback job ALLOW_DOWNGRADE=%q, want \"true\" — 롤백이 자기 가드에 막힌다", allowDowngrade)
+	}
 }
 
 // ── install Job 신원(이미지+목표 버전) ────────────

@@ -374,9 +374,9 @@ func vendorRmmodCommand(vendor, model string) string {
 		return "rmmod npu_pdma npu_mgmt || true"
 	case "rebellions":
 		// Rebellions 드라이버는 호스트에서 관리되므로 rmmod 금지 (no-op).
-		return "true"
+		return "true" //nolint:goconst // 셸 no-op 관용구, 라벨 값 labelValueTrue 와 의미가 다르다
 	default:
-		return "true"
+		return "true" //nolint:goconst // 셸 no-op 관용구, 라벨 값 labelValueTrue 와 의미가 다르다
 	}
 }
 

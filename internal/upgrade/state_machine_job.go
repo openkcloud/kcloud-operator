@@ -365,7 +365,10 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 	}
 
 	metrics.RecordRollback(state.Spec.Vendor)
-	desired := driverjob.RenderInstallJob(policy, state.Spec.NodeName, prevImage, prevVersion)
+	// RenderInstallJob 이 아니라 RenderRollbackJob 이다 — 롤백 Job 은 다운그레이드를 허용받아야
+	// 하고 정책 선언 버전이 아니라 지시받은 이전 버전을 설치해야 한다. 일반 설치 Job 으로 렌더링하면
+	// installer 자신의 다운그레이드 가드가 거부해 롤백이 무동작이 된다(2026-08-10 라이브).
+	desired := driverjob.RenderRollbackJob(policy, state.Spec.NodeName, prevImage, prevVersion)
 	if err := m.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
 		return false, 0, fmt.Errorf("rollback install Job 생성 실패: %w", err)
 	}

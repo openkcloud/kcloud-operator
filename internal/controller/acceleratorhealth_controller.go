@@ -30,6 +30,7 @@ import (
 	"kcloud-operator/internal/health"
 	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/partition/nvidia"
+	"kcloud-operator/internal/upgrade"
 )
 
 // QuarantineLabel 은 격리 표시다. taint 가 아니라 라벨인 이유는 계약이 "신규 할당 차단" 이기
@@ -390,6 +391,19 @@ func (r *AcceleratorHealthReconciler) ensureRecovery(ctx context.Context, node *
 	plan := health.PlanRecovery(node.Name, res.Reason, r.devicePCIs(ctx, node.Name), r.now(), pol)
 	if !plan.Create {
 		return "", nil
+	}
+	// 드라이버 업그레이드 사이클 안이면 드라이버 복구를 요청하지 않는다. 그 구간의
+	// driverLoaded=false 는 설치가 스스로 구 모듈을 내린 예정된 상태이지 고장이 아니다.
+	// 참가자 쪽에도 같은 가드가 있지만(recoverdevice_participant.go) 애초에 만들지 않는 편이 낫다 —
+	// 작업이 생기면 조정자·저널·검증이 모두 돌고, 쿨다운 버킷에 남은 작업이 업그레이드가 끝난 뒤
+	// 뒤늦게 실행될 여지도 생긴다. 2026-08-10 라이브에서 이 경로가 설치 Job pod 을 지워 노드의
+	// apt 를 죽였다(docs/impl/furiosa-version-swap-20260812.md §3.4).
+	if plan.Type == operation.RecoverDevice {
+		if _, upgrading := node.Labels[upgrade.DriverUpgradingLabelKey]; upgrading {
+			logf.FromContext(ctx).Info("드라이버 업그레이드 중 — 복구 작업 생략",
+				"node", node.Name, "reason", res.Reason)
+			return "", nil
+		}
 	}
 	name := healthOperationName(plan.TransactionID)
 	keys := make([]string, 0, len(plan.ResourceKeys))

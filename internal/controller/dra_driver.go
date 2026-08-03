@@ -223,43 +223,77 @@ func mergeEnv(base, extra []corev1.EnvVar) []corev1.EnvVar {
 // renderCDIInitContainer 는 containerd 에 CDI 를 켜는 init container 다.
 // 이미 켜져 있으면 아무것도 하지 않는다 — 매번 재시작하면 노드가 흔들린다.
 //
+// 판정과 기록 위치가 둘 다 "유효 설정" 기준이다. 파일에 값이 있어도 같은 plugin
+// 테이블을 다시 선언하는 drop-in 이 있으면 그쪽이 이긴다. 그래서 base 가 conf.d 를
+// import 하면 거기에 쓰고, 마지막에 실제로 켜졌는지 다시 확인한 뒤 끝낸다.
+//
 // 이미지는 mig-tool 을 재사용한다(ACPP_MIG_JOB_IMAGE). 그 이미지에 python3 은
 // 없고 awk·grep·nsenter 는 있다(2026-08-07 실측). systemctl 도 이미지에는 없으나
 // nsenter 로 호스트 것을 부르므로 무관하다.
 func renderCDIInitContainer(_ *npuv1alpha1.NPUClusterPolicy) corev1.Container {
 	const script = `set -eu
-CFG=/host/etc/containerd/config.toml
+DIR=/host/etc/containerd
+CFG=$DIR/config.toml
 SEC='[plugins."io.containerd.grpc.v1.cri"]'
 
-if grep -q 'enable_cdi[[:space:]]*=[[:space:]]*true' "$CFG"; then
-  echo "CDI already enabled - no-op"
+# 유효 설정이 이미 켜져 있으면 아무것도 하지 않는다. 파일이 아니라 containerd 가
+# 실제로 읽은 값을 본다 — 파일에 true 가 있어도 뒤 파일이 덮으면 꺼져 있다.
+if nsenter -t 1 -m -u -i -n -p -- containerd config dump 2>/dev/null |
+     grep -q 'enable_cdi[[:space:]]*=[[:space:]]*true'; then
+  echo "CDI already enabled (effective) - no-op"
   exit 0
 fi
 
-cp "$CFG" "$CFG.bak.cdi"
+# 이 plugin 테이블을 선언하는 파일 중 **마지막에 로드되는 것**을 고른다.
+# containerd 의 import 병합은 같은 plugin 테이블을 재선언하면 앞 파일의 그 테이블을
+# 통째로 대체한다. 새 drop-in 을 만들어 넣으면 거기 있던 다른 설정(예: nvidia 런타임
+# 등록)이 사라진다 — 2026-08-10 k8s-worker1 에서 실제로 그렇게 만들어 device-plugin 이
+# "no runtime for nvidia" 로 뜨지 못했다. 그래서 새 파일을 만들지 않는다.
+TARGET=$CFG
+if grep -qE '^[[:space:]]*imports[[:space:]]*=' "$CFG" && [ -d "$DIR/conf.d" ]; then
+  for f in $(ls "$DIR"/conf.d/*.toml 2>/dev/null | sort); do
+    if grep -qF "$SEC" "$f"; then TARGET=$f; fi
+  done
+fi
+echo "CDI target: $TARGET"
+cp "$TARGET" "$TARGET.bak.cdi"
 
-# 공백을 걷어낸 줄이 대상 섹션과 정확히 같을 때만 그 뒤에 두 줄을 넣는다.
-# 부분일치를 쓰면 하위 섹션에도 걸려 중복 섹션이 생기고 containerd 가 안 뜬다.
-# 실측 config 에서 이 헤더는 두 칸 들여쓰기돼 있으므로 열 1 고정도 쓸 수 없다.
-awk -v sec="$SEC" '
+if grep -qE '^[[:space:]]*enable_cdi[[:space:]]*=' "$TARGET"; then
+  # 이미 키가 있으면 값만 바꾼다. 같은 테이블에 키가 두 번 있으면 TOML 파싱이
+  # 실패해 containerd 가 아예 안 뜬다.
+  sed -i -E 's/^([[:space:]]*)enable_cdi[[:space:]]*=.*/\1enable_cdi = true/' "$TARGET"
+else
+  # 공백을 걷어낸 줄이 대상 섹션과 정확히 같을 때만 그 뒤에 넣는다. 부분일치를
+  # 쓰면 하위 섹션에 걸려 중복 섹션이 생기고 containerd 가 안 뜬다.
+  awk -v sec="$SEC" '
 { line = $0; t = line; sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t); print line }
 t == sec && !done {
   ind = line; sub(/[^[:space:]].*$/, "", ind)
   print ind "  enable_cdi = true"
-  print ind "  cdi_spec_dirs = [\"/etc/cdi\", \"/var/run/cdi\"]"
   done = 1
 }
-' "$CFG" > "$CFG.new"
-
-if grep -q 'enable_cdi' "$CFG.new"; then
-  mv "$CFG.new" "$CFG"
-else
-  # 섹션 자체가 없는 파일 — 통째로 덧붙인다.
-  rm -f "$CFG.new"
-  printf '\n%s\n  enable_cdi = true\n  cdi_spec_dirs = ["/etc/cdi", "/var/run/cdi"]\n' "$SEC" >> "$CFG"
+' "$TARGET" > "$TARGET.new"
+  if grep -q 'enable_cdi' "$TARGET.new"; then
+    mv "$TARGET.new" "$TARGET"
+  else
+    rm -f "$TARGET.new"
+    printf '\n%s\n  enable_cdi = true\n' "$SEC" >> "$TARGET"
+  fi
 fi
 
+# spec 경로는 containerd 기본값이 이미 /etc/cdi 와 /var/run/cdi 다. 다시 쓰지 않는다 —
+# 쓸수록 덮어쓰기 사고 면적만 넓어진다.
+
 nsenter -t 1 -m -u -i -n -p -- systemctl restart containerd
+
+# 적용을 확인한다. 실패하면 되돌리고 종료 코드로 드러낸다 — 조용한 미작동 금지.
+if ! nsenter -t 1 -m -u -i -n -p -- containerd config dump 2>/dev/null |
+       grep -q 'enable_cdi[[:space:]]*=[[:space:]]*true'; then
+  echo "CDI 적용 실패 — 유효 설정이 여전히 꺼져 있다. 원복한다" >&2
+  cp "$TARGET.bak.cdi" "$TARGET"
+  nsenter -t 1 -m -u -i -n -p -- systemctl restart containerd
+  exit 1
+fi
 echo "CDI enabled; containerd restarted"
 `
 	priv := true

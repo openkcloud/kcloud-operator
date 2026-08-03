@@ -511,3 +511,38 @@ func TestEnsureDRADriver_ExcludesControlPlane(t *testing.T) {
 		t.Errorf("control-plane 라벨 부재 조건이 없다: %+v", aff.NodeAffinity)
 	}
 }
+
+// CDI 활성화는 "파일에 썼다" 가 아니라 "containerd 가 실제로 켰다" 로 판정해야 한다.
+// 같은 plugin 테이블을 다시 선언하는 drop-in 이 있으면 base 에 쓴 값이 덮인다
+// (2026-08-10 k8s-worker1 실측: conf.d/99-nvidia.toml 때문에 enable_cdi 가 false).
+func TestRenderCDIInitContainer_UsesEffectiveConfigAndDropIn(t *testing.T) {
+	c := renderCDIInitContainer(furiosaDRAPolicy())
+	script := strings.Join(c.Command, " ")
+
+	for _, want := range []string{
+		"containerd config dump", // 파일이 아니라 유효 설정으로 판정
+		"CDI target",             // 마지막에 선언한 파일을 골라 거기에 쓴다
+		"imports",                // drop-in 을 쓰는지 base 를 고치는지 가르는 조건
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("스크립트에 %q 가 없다", want)
+		}
+	}
+	// 적용 확인 없이 성공으로 끝나면 장치 주입이 안 되는 채로 드라이버만 뜬다.
+	if !strings.Contains(script, "CDI 적용 실패") {
+		t.Error("적용 확인 실패 시 종료하는 경로가 없다")
+	}
+	// 같은 테이블에 키가 두 번 들어가면 containerd 가 파싱에 실패한다.
+	if !strings.Contains(script, "enable_cdi[[:space:]]*=") {
+		t.Error("기존 키 존재 여부를 보지 않는다 — 중복 키를 만들 수 있다")
+	}
+	// 새 drop-in 을 만들면 그 plugin 테이블의 다른 설정(nvidia 런타임 등록 등)이
+	// 통째로 사라진다. 파일을 만들지 않고 기존 선언 파일을 고쳐야 한다.
+	if strings.Contains(script, "99-zz-cdi.toml") || strings.Contains(script, "cat > $DROPIN") {
+		t.Error("새 drop-in 을 만든다 — 같은 테이블의 다른 설정을 지운다")
+	}
+	// 실패하면 되돌려야 한다. 반쯤 고친 채로 두면 노드가 망가진 상태로 남는다.
+	if !strings.Contains(script, "원복한다") {
+		t.Error("적용 실패 시 원복 경로가 없다")
+	}
+}

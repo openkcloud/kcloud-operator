@@ -12,10 +12,17 @@
 global:
   registry: "<your-registry>"
 
+# metrics: controller-runtime 지표 노출. 기본은 끈다 — 라이브에 인증 없는 포트를
+# 열지 않기 위해서다. 제어면 비용 측정(KWOK 하네스)에서만 켠다.
+metrics:
+  enabled: false
+  port: 8080
+  secure: false
+
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.9
+  tag: v0.7.13
   pullPolicy: IfNotPresent
 
 # acpp: AcceleratorPartitionPolicy 관련 설정.
@@ -101,7 +108,7 @@ clusterPolicy:
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   repository: "kcloud-node-manager"
-  tag: "0.6.11"
+  tag: "0.6.12"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +158,7 @@ furiosa:
   exporter:
     enabled: false
     repository: "furiosa-exporter"
-    tag: "0.1.0"
+    tag: "0.1.2"
     interval: "10s"
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin (Phase 1, 2026-04-21)
@@ -306,10 +313,10 @@ driverInstallPolicies:
       # #13 완전 전환: Warboy Mode=job 기본화(privileged driver DS 상주 0). 설치=일회성 install Job,
       # RUN_MODE=job 지원 이미지(-v5) 필요. daemonset 코드 경로는 fallback 보존(회귀 시 mode=daemonset 복귀).
       mode: job
-      version: "1.9.8-3"
+      version: "1.9.9-3"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-driver-ds"
-      tag: "1.9.8-3-v5"
+      tag: "1.9.9-3-v5"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false
@@ -421,6 +428,8 @@ driverInstallPolicies:
     # verifiedVersions: 검증된 driver version 화이트리스트.
     verifiedVersions:
       - "2026.1.0"
+      - "2026.2.0"
+      - "2026.3.0"
     # 자립 셀렉터(node-manager 부여). 수동/NFD 라벨 비의존.
     nodeSelector:
       kcloud.ai/rngd.present: "true"
@@ -428,10 +437,10 @@ driverInstallPolicies:
       # #13 완전 전환: RNGD Mode=job 기본화. RUN_MODE=job 지원 이미지(-v1) 필요.
       # daemonset 코드 경로 fallback 보존(회귀 시 mode=daemonset 복귀).
       mode: job
-      version: "2026.1.0"
+      version: "2026.3.0"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-rngd-driver-installer"
-      tag: "2026.1.0-v1"
+      tag: "2026.3.0-v1"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false
