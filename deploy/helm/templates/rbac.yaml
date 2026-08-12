@@ -19,9 +19,14 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["npuclusterpolicies", "npuclusterpolicies/status", "npuclusterpolicies/finalizers"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # ACPP: 사용자 생성 CR — reconciler get/list/watch + status/finalizer update (owner-lock 는 DS annotation).
+  # ACPP: reconciler get/list/watch + status/finalizer update (owner-lock 는 DS annotation).
+  # create/delete 는 관리 API 의 정책 생성·되돌리기 라우트(POST/DELETE /api/v1/policies)가 쓴다 —
+  # 그 라우트는 이 SA 의 클라이언트로 만들고, 호출자 인가(SubjectAccessReview)도 같은 verb 를 본다.
   - apiGroups: ["npu.ai"]
-    resources: ["acceleratorpartitionpolicies", "acceleratorpartitionpolicies/status", "acceleratorpartitionpolicies/finalizers"]
+    resources: ["acceleratorpartitionpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorpartitionpolicies/status", "acceleratorpartitionpolicies/finalizers"]
     verbs: ["get", "list", "watch", "update", "patch"]
   # 추상 사용자 API: AcceleratorClass 는 read-only(사용자/관리자가 만든다), AcceleratorWorkload 는
   # 컨트롤러가 status 를 쓴다. Deployment 는 워크로드 렌더용으로 아래 apps 규칙에서 create 를 받는다.

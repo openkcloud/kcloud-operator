@@ -195,6 +195,11 @@ func buildNodeStatuses(
 		ns := ensure(ndr.Spec.NodeName)
 		ns.PassthroughReserved = ndr.Status.PassthroughReserved
 		for _, d := range ndr.Status.Devices {
+			// 모델 미판정은 감추지 않고 "generic" 으로 드러낸다.
+			product := d.Vendor + "/" + d.Model
+			if d.Model == "" {
+				product = d.Vendor + "/generic"
+			}
 			ns.Devices = append(ns.Devices, DeviceStatus{
 				Vendor:        d.Vendor,
 				Model:         d.Model,
@@ -203,6 +208,8 @@ func buildNodeStatuses(
 				DriverVersion: d.DriverVersion,
 				DriverBinding: d.DriverBinding,
 				NeedsReboot:   d.NeedsReboot,
+				PCIeAddress:   d.PCIeAddress,
+				Product:       product,
 			})
 		}
 	}

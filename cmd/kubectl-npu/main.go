@@ -112,10 +112,23 @@ func printStatusText(status *npuctl.ClusterStatus) {
 	}
 
 	fmt.Println("\n=== NodeDeviceReports ===")
-	fmt.Printf("%-15s %-12s %-10s %-6s %-8s %-15s\n", "NODE", "VENDOR", "MODEL", "COUNT", "LOADED", "VERSION")
+	// 노드 이름과 장치 표시명은 고정폭으로 담기지 않는다 — 실측만 봐도
+	// rngd-1.cluster.local(20자)과 tenstorrent/blackhole-p150(26자)이 있고, 벤더나
+	// 모델명이 더 긴 장치가 들어오면 하드코딩한 폭은 다시 넘친다. 한 행만 넘쳐도
+	// 그 행부터 열이 밀려 표를 눈으로 훑을 수 없다. 그래서 폭을 데이터에서 잰다.
+	nodeW, devW := len("NODE"), len("DEVICE")
+	for _, n := range status.Nodes {
+		nodeW = maxInt(nodeW, len(n.Name))
+		for _, d := range n.Devices {
+			devW = maxInt(devW, len(d.Product))
+		}
+	}
+	ndrFmt := fmt.Sprintf("%%-%ds %%-%ds %%-14s %%-6s %%-7s %%-15s\n", nodeW, devW)
+	fmt.Printf(ndrFmt, "NODE", "DEVICE", "PCI", "COUNT", "LOADED", "VERSION")
+	rowFmt := fmt.Sprintf("%%-%ds %%-%ds %%-14s %%-6d %%-7t %%-15s\n", nodeW, devW)
 	for _, n := range status.Nodes {
 		for _, d := range n.Devices {
-			fmt.Printf("%-15s %-12s %-10s %-6d %-8t %-15s\n", n.Name, d.Vendor, d.Model, d.Count, d.DriverLoaded, d.DriverVersion)
+			fmt.Printf(rowFmt, n.Name, d.Product, d.PCIeAddress, d.Count, d.DriverLoaded, d.DriverVersion)
 		}
 	}
 
@@ -250,4 +263,12 @@ func cmdToggle(args []string) {
 		return
 	}
 	fmt.Printf("✓ NPUClusterPolicy.spec.%s.enabled patched: %v → %v\n", result.Vendor, result.PreviousEnabled, result.NewEnabled)
+}
+
+// maxInt 는 두 정수 중 큰 값. 표 열 폭을 데이터에서 잴 때 쓴다.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

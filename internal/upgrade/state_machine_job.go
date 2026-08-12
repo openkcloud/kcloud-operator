@@ -57,7 +57,7 @@ func (m *UpgradeStateMachine) driverNotLoaded(ctx context.Context, nodeName, ven
 		if !strings.EqualFold(d.Vendor, vendor) {
 			continue
 		}
-		if model != "" && !strings.EqualFold(d.Model, model) {
+		if !deviceModelMatches(d.Model, model) {
 			continue
 		}
 		if !d.DriverLoaded {

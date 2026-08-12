@@ -189,6 +189,55 @@ func TestCollectStatus_Aggregation(t *testing.T) {
 	}
 }
 
+// TestBuildNodeStatusesCarriesPCIAndProduct 는 같은 노드에 붙은 서로 다른 모델 두 장이
+// 화면에서 구분 가능한지 본다. 구분 축은 PCI 주소이고, 표시명은 벤더/모델 합성이다.
+func TestBuildNodeStatusesCarriesPCIAndProduct(t *testing.T) {
+	ndr := npuv1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker1"},
+		Spec:       npuv1alpha1.NodeDeviceReportSpec{NodeName: "k8s-worker1"},
+		Status: npuv1alpha1.NodeDeviceReportStatus{
+			Devices: []npuv1alpha1.DeviceEntry{
+				{
+					Vendor: "nvidia", Model: "a30", Count: 1,
+					DriverLoaded: true, DriverVersion: "580.173.02", DriverBinding: "nvidia",
+					PCIeAddress: "0000:18:00.0",
+				},
+				{
+					Vendor: "nvidia", Model: "a2", Count: 1,
+					DriverLoaded: true, DriverVersion: "580.173.02", DriverBinding: "nvidia",
+					PCIeAddress: "0000:86:00.0",
+				},
+				{
+					// 모델 미판정 장치. "모른다"는 사실이 표시명에 남아야 한다.
+					Vendor: "nvidia", Model: "", Count: 1,
+					DriverLoaded: true, DriverVersion: "580.173.02", DriverBinding: "nvidia",
+					PCIeAddress: "0000:af:00.0",
+				},
+			},
+		},
+	}
+
+	out := buildNodeStatuses([]npuv1alpha1.NodeDeviceReport{ndr}, nil, nil)
+	if len(out) != 1 || len(out[0].Devices) != 3 {
+		t.Fatalf("노드 1개·장치 3개가 나와야 함: %+v", out)
+	}
+
+	want := []DeviceStatus{
+		{Product: "nvidia/a30", PCIeAddress: "0000:18:00.0"},
+		{Product: "nvidia/a2", PCIeAddress: "0000:86:00.0"},
+		{Product: "nvidia/generic", PCIeAddress: "0000:af:00.0"},
+	}
+	for i, w := range want {
+		got := out[0].Devices[i]
+		if got.Product != w.Product {
+			t.Errorf("devices[%d].Product = %q, want %q", i, got.Product, w.Product)
+		}
+		if got.PCIeAddress != w.PCIeAddress {
+			t.Errorf("devices[%d].PCIeAddress = %q, want %q", i, got.PCIeAddress, w.PCIeAddress)
+		}
+	}
+}
+
 func TestCollectStatus_EmptyCluster(t *testing.T) {
 	c := newTestClient(t)
 	status, err := c.CollectStatus(context.Background())

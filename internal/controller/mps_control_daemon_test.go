@@ -163,6 +163,32 @@ func TestMpsControlDaemon_SkipsMigActiveNodes(t *testing.T) {
 		ds.Spec.Template.Spec.NodeSelector, ds.Spec.Template.Spec.Affinity)
 }
 
+// 라이브 결함: kcloud-nvidia-toolkit(toolkit_daemonset_controller.go)은 control-plane/master
+// 노드를 제외하고 그 노드에는 containerd nvidia 런타임이 없다. daemon 은 RuntimeClassName: nvidia
+// 를 요구하므로 exclusion 없이 control-plane 노드(kcloud.ai/nvidia.present=true 라벨을 가진
+// k8s-master)로 스케줄되면 FailedCreatePodSandBox("no runtime for nvidia")로 영구 대기한다.
+// toolkit 이 이미 쓰는 applyControlPlaneExclusion(control-plane·master 두 라벨 DoesNotExist)과
+// 같은 규칙을 daemon 도 걸어야 한다.
+func TestMpsControlDaemon_SkipsControlPlaneNodes(t *testing.T) {
+	ds := renderMpsControlDaemonDS()
+	for _, term := range nodeSelectorTerms(ds) {
+		hasControlPlane, hasMaster := false, false
+		for _, e := range term.MatchExpressions {
+			if e.Key == controlPlaneNodeLabel && e.Operator == corev1.NodeSelectorOpDoesNotExist {
+				hasControlPlane = true
+			}
+			if e.Key == masterNodeLabel && e.Operator == corev1.NodeSelectorOpDoesNotExist {
+				hasMaster = true
+			}
+		}
+		if hasControlPlane && hasMaster {
+			return
+		}
+	}
+	t.Fatalf("★ control-plane/master 노드를 제외하지 않는다 — nvidia 런타임 없는 노드에 스케줄되면 "+
+		"영구 ContainerCreating 이 된다: affinity=%+v", ds.Spec.Template.Spec.Affinity)
+}
+
 // 라이브 결함의 본질은 비대칭이었다 — control daemon 은 호스트 MPS root 를 컨테이너 /mps 로
 // 보는데 device-plugin 은 /tmp/nvidia-mps 로 봐서, 둘이 같은 파이프 디렉터리를 못 봤다.
 // 두 렌더러가 서로 다른 패키지에 있으므로 여기서 실제 산출물을 맞대어 고정한다.

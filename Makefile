@@ -131,6 +131,9 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+# cmd/kubectl-npu 는 자체 go.mod 를 가진 중첩 모듈이라 위의 go list ./... 에 잡히지 않는다.
+# 따로 부르지 않으면 그 안의 시험은 있는데 한 번도 돌지 않는다.
+	cd cmd/kubectl-npu && go test ./...
 
 .PHONY: fault-test
 fault-test: manifests generate setup-envtest ## Run the fault-injection harness only (test/fault).

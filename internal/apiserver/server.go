@@ -147,6 +147,13 @@ func (s *Server) Handler() http.Handler {
 	// 전부를 인가한다(Task 3/4 의 "읽는 리소스는 전부 인가한다" 규칙 — acceleratorworkloads
 	// 자체는 읽지 않으므로 요구하지 않는다. nodes 는 core 그룹이라 별도 게이트가 필요하다).
 	mux.HandleFunc("POST /api/v1/preview", s.authzAll([]authzPair{nodeGate, acppGate, ndrGate, classGate}, s.handlePreview))
+	// 정책 쓰기: 생성은 create, 삭제는 delete 인가를 요구한다. 수정(PUT)은 만들지 않는다 —
+	// 상태기계가 중간 단계에 있는 채로 spec 이 바뀌면 되돌릴 기준이 흐려진다.
+	// dryRun=true 면 같은 핸들러가 client.DryRunAll 로 webhook 만 돌린다(인가는 동일).
+	mux.HandleFunc("POST /api/v1/policies",
+		s.authz("create", "acceleratorpartitionpolicies", s.handleCreatePolicy))
+	mux.HandleFunc("DELETE /api/v1/policies/{name}",
+		s.authz("delete", "acceleratorpartitionpolicies", s.handleDeletePolicy))
 	// 정적 대시보드. "{$}" 는 정확히 그 경로만 매칭하므로 /api/* 를 가리지 않는다.
 	mux.HandleFunc("GET /ui/{$}", s.handleUI)
 	mux.HandleFunc("GET /{$}", s.handleUI)

@@ -219,7 +219,7 @@ func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 	hostPathDir := corev1.HostPathDirectoryOrCreate
 	bidirectional := corev1.MountPropagationBidirectional
 
-	return &appsv1.DaemonSet{
+	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mpsControlDaemonDSName,
 			Namespace: "kube-system",
@@ -306,4 +306,10 @@ func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 			},
 		},
 	}
+	// control-plane/master 는 제외 — kcloud-nvidia-toolkit(toolkit_daemonset_controller.go)이
+	// 이미 같은 이유로 그 노드를 건너뛰어 containerd 에 nvidia 런타임이 없다. 이 daemon 도
+	// RuntimeClassName: nvidia 를 요구하므로 exclusion 없이 control-plane 라벨(kcloud.ai/nvidia.present)이
+	// 붙은 노드로 스케줄되면 FailedCreatePodSandBox("no runtime for nvidia")로 영구 대기한다.
+	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	return ds
 }

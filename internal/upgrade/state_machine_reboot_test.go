@@ -387,3 +387,32 @@ func TestNodeNeedsReboot_And_MaxReboots(t *testing.T) {
 		t.Errorf("maxReboots default=%d, want 1", got)
 	}
 }
+
+// 라이브(2026-08-11)에서 detector 가 제품명을 싣기 시작하자 NodeDeviceReport 는 "a30" 을,
+// DriverUpgradeState.spec.model 은 생성 시점 값인 "generic" 을 갖게 됐다. 그 조합에서
+// 두 게이트가 모든 장치를 걸러 항상 false 를 냈고, 증상이 "아무 일도 안 일어남" 이라
+// 아무도 알아채지 못했다. 헬퍼 단위 시험만으로는 호출부가 헬퍼를 실제로 쓰는지 고정되지
+// 않으므로 게이트 두 곳을 직접 부른다.
+func TestGatesSurviveDeviceModelBecomingSpecific(t *testing.T) {
+	ndr := &v1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: jNode},
+		Status: v1alpha1.NodeDeviceReportStatus{
+			Devices: []v1alpha1.DeviceEntry{
+				// 장치 쪽만 판정됨. spec.model 은 여전히 jModel("generic").
+				{Vendor: jVendor, Model: "a30", DriverLoaded: false, DriverVersion: verNew,
+					NeedsReboot: true, Count: 1},
+			},
+		},
+	}
+	sm := newUpgradeSMWithRecorder(ndr)
+
+	need, err := sm.nodeNeedsReboot(context.Background(), jNode, jVendor, jModel)
+	if err != nil || !need {
+		t.Errorf("nodeNeedsReboot=%v err=%v, want true — 재부팅 게이트가 죽었다", need, err)
+	}
+	notLoaded, err := sm.driverNotLoaded(context.Background(), jNode, jVendor, jModel)
+	if err != nil || !notLoaded {
+		t.Errorf("driverNotLoaded=%v err=%v, want true — 자가복구 게이트가 죽었다", notLoaded, err)
+	}
+}

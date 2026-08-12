@@ -938,3 +938,50 @@ func TestNvidiaDiscover_EnabledModeWithUnreadableLgipStaysUnverified(t *testing.
 		})
 	}
 }
+
+// detector 가 PCI 식별자로 실제 제품명을 싣기 시작하면 이 판정에 들어오는 문자열이
+// "generic" 에서 "a30"·"a2" 로 바뀐다. 관측 주입 경로는 model 을 보지 않지만
+// (backend.go 의 observations 분기가 migCap 을 덮어쓴다) envtest 폴백 경로는 이 정규식이
+// 유일한 판정이므로, 새 표기에서도 A30 은 통과하고 A2 는 걸러지는 것을 고정한다.
+func TestMigCapableAcceptsDetectorProductNames(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  bool
+	}{
+		{"a30", true},
+		{"a2", false},
+		{"generic", false},
+		{"", false},
+		{"NVIDIA-A30", true},
+		{"a3000", false}, // RTX A3000 은 비-MIG — 토큰 경계가 지키는 자리
+	} {
+		if got := migCapable(tc.model); got != tc.want {
+			t.Errorf("migCapable(%q) = %v, want %v", tc.model, got, tc.want)
+		}
+	}
+}
+
+// detector 가 실제 제품명을 싣기 시작해도 라이브 판정이 달라지지 않아야 한다. 라이브
+// (2026-08-11) 값은 A30 이 migModeCurrent=Disabled, A2 가 NA 다.
+//
+// 첫 판은 generic 호출과 제품명 호출의 결과가 "같은지" 만 봤는데, 분기 순서를 뒤집는
+// 변형에도 통과했다 — 두 입력의 결과가 우연히 같아 항진 단언이었다. 그래서 구체적인
+// 기대값을 못박는다. 값이 무엇인지 적어야 다음 회차가 무엇이 바뀌었는지 안다.
+func TestMpsSupportForLiveDeviceValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, mc, model string
+		wantSupported   bool
+		wantReason      string
+	}{
+		{"A30 제품명, mode Disabled", modeDisabled, "a30", false, reasonMPSModeUnobserved},
+		{"A30 제품명 도입 전(generic)", modeDisabled, "generic", false, reasonMPSModeUnobserved},
+		{"A2 제품명, mode N/A", modeNA, "a2", true, reasonMPSNoMigHardware},
+		{"A2 제품명 도입 전(generic)", modeNA, "generic", true, reasonMPSNoMigHardware},
+	} {
+		got := mpsSupportForNonMigDevice(tc.mc, "", tc.model)
+		if got.Supported != tc.wantSupported || got.Reason != tc.wantReason {
+			t.Errorf("%s: supported=%v reason=%q, want %v %q",
+				tc.name, got.Supported, got.Reason, tc.wantSupported, tc.wantReason)
+		}
+	}
+}

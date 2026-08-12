@@ -6,11 +6,12 @@
 //	반영되지 않는다(2026-08-04 라이브 핫루프의 절반 원인 — nodedevicereports/status 의
 //	update/patch 가 생성본에만 있었다). 완전 자동 동기화는 이 시험의 범위 밖이다 — 이
 //	컨트롤러가 실제로 쓰는 리소스만 좁혀서, 갈라짐을 드러내는 것만 한다. (npu.ai 전 리소스로
-//	넓히면 acceleratorpartitionpolicies/npuclusterpolicies 의 create/delete 처럼 kubebuilder
-//	마커에는 있지만 코드가 쓴 적 없는 오래된 항목까지 걸려 노이즈가 된다 — 그건 이 컨트롤러의
-//	사고와 무관한 별개 정리 대상이다.)
+//	넓히면 npuclusterpolicies 의 create/delete 처럼 kubebuilder 마커에는 있지만 코드가 쓴 적
+//	없는 오래된 항목까지 걸려 노이즈가 된다 — 그건 이 컨트롤러의 사고와 무관한 별개 정리 대상이다.
+//	acceleratorpartitionpolicies 의 create/delete 는 2026-08-11 부터 관리 API 정책 라우트가
+//	실제로 쓰므로 더는 노이즈가 아니고, 아래 세 번째 시험이 그것을 본다.)
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-08-11
 // ============================================================
 package controller
 
@@ -136,6 +137,27 @@ func TestHelmRBACGrantsWhatDRACapabilityNeeds(t *testing.T) {
 			if !contains(got, v) {
 				t.Errorf("%s: 생성본 verb %q 가 helm 배포본에 없다 — 생성본 %v, 배포본 %v", res, v, want, got)
 			}
+		}
+	}
+}
+
+// TestHelmRBACGrantsWhatPolicyWriteNeeds 는 관리 API 의 정책 생성·삭제 라우트가 쓰는
+// acceleratorpartitionpolicies create/delete 가 배포 helm 차트에도 있는지 본다. 생성본에는
+// 처음부터 있었지만 helm 차트에는 없어서, 라우트를 붙인 뒤 라이브에서 403 이 났다(2026-08-11).
+// 호출자 인가(SubjectAccessReview)도 같은 verb 를 보므로 이 한 줄이 두 경로를 함께 막았다.
+// 깨는 뮤테이션: helm rbac.yaml 에서 acceleratorpartitionpolicies 의 create 나 delete 를 지우면 실패한다.
+func TestHelmRBACGrantsWhatPolicyWriteNeeds(t *testing.T) {
+	deployed := deployedOperatorRules(t)
+
+	const res = "acceleratorpartitionpolicies"
+	got, ok := deployed[res]
+	if !ok {
+		t.Fatalf("%s: deploy/helm/templates/rbac.yaml 의 operator role 에 없다", res)
+	}
+	for _, v := range []string{"create", "delete"} {
+		if !contains(got, v) {
+			t.Errorf("%s: verb %q 가 helm 배포본에 없다 — 배포본 %v. "+
+				"POST/DELETE /api/v1/policies 가 403 으로 막힌다", res, v, got)
 		}
 	}
 }

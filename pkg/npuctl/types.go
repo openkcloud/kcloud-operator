@@ -82,6 +82,12 @@ type DeviceStatus struct {
 	// DriverBinding: "nvidia" 등 드라이버 바인딩 | "vfio-pci"(passthrough) | "none"(미바인딩).
 	DriverBinding string `json:"driverBinding,omitempty"`
 	NeedsReboot   bool   `json:"needsReboot,omitempty"`
+	// PCIeAddress 는 NodeDeviceReport 의 대표 PCI 주소다. 같은 모델 여러 장을
+	// 사람이 구분하는 유일한 축이므로 화면·CLI 가 이것으로 행을 가른다.
+	PCIeAddress string `json:"pcieAddress,omitempty"`
+	// Product 는 "<vendor>/<model>" 표시명이다(예: nvidia/a30). model 이
+	// 비면 "<vendor>/generic" 이 되어 모른다는 사실이 화면에 남는다.
+	Product string `json:"product,omitempty"`
 }
 
 // UpgradeStatus는 DriverUpgradeState 한 건입니다.

@@ -674,3 +674,27 @@ func TestHandleValidatingJob_BudgetStartsAfterJobCompletion(t *testing.T) {
 		t.Error("완료 직후인데 검증 타임아웃으로 롤백됐다")
 	}
 }
+
+// detector 가 PCI 식별자로 제품명을 싣기 시작하면 장치 쪽 model 만 "generic" 에서 "a30" 으로
+// 바뀐다 — DriverUpgradeState.spec.model 은 생성 시점 값이라 갱신되지 않는다. 두 값이 갈린
+// 조합이 기존 픽스처에 없어서(양쪽 다 "generic") 이 불일치가 시험에 잡히지 않았고, 라이브에서
+// 재부팅 게이트와 자가복구 게이트가 모든 장치를 걸러 조용히 죽었다. 양방향을 다 고정한다.
+func TestDeviceModelMatchesTreatsGenericAsWildcard(t *testing.T) {
+	for _, tc := range []struct {
+		name, deviceModel, specModel string
+		want                         bool
+	}{
+		{"둘 다 미판정", "generic", "generic", true},
+		{"장치만 판정됨 — 기록은 미판정 시점 값", "a30", "generic", true},
+		{"기록만 판정됨 — 이미지 되돌린 뒤", "generic", "a30", true},
+		{"둘 다 판정됐고 같다", "a30", "a30", true},
+		{"둘 다 판정됐고 다르다", "a2", "a30", false},
+		{"spec 이 비면 벤더 전체", "a30", "", true},
+		{"대소문자 무시", "A30", "a30", true},
+	} {
+		if got := deviceModelMatches(tc.deviceModel, tc.specModel); got != tc.want {
+			t.Errorf("%s: deviceModelMatches(%q, %q) = %v, want %v",
+				tc.name, tc.deviceModel, tc.specModel, got, tc.want)
+		}
+	}
+}

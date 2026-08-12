@@ -22,7 +22,7 @@ metrics:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.13
+  tag: v0.7.16
   pullPolicy: IfNotPresent
 
 # acpp: AcceleratorPartitionPolicy 관련 설정.

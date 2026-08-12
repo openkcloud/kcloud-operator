@@ -1055,7 +1055,7 @@ func (m *UpgradeStateMachine) nodeNeedsReboot(ctx context.Context, nodeName, ven
 		if !strings.EqualFold(d.Vendor, vendor) {
 			continue
 		}
-		if model != "" && !strings.EqualFold(d.Model, model) {
+		if !deviceModelMatches(d.Model, model) {
 			continue
 		}
 		if d.NeedsReboot {
@@ -1981,4 +1981,26 @@ func containsString(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// deviceModelMatches 는 DriverUpgradeState.spec.model 이 NodeDeviceReport 의 장치 모델과
+// 같은 대상을 가리키는지 판정한다.
+//
+// "generic" 은 이름이 아니라 **모른다는 표시**다 — detector 가 제품을 판정하지 못했을 때
+// 남기는 값이라 어느 쪽에 있든 와일드카드로 봐야 한다. `findPolicy`
+// (driver_upgrade_controller.go)와 `partition/nvidia/backend.go` 가 이미 같은 관례를 쓴다.
+//
+// 왜 필요한가 — spec.model 은 DriverUpgradeState 를 처음 만들 때 한 번만 기록되고 그 뒤
+// 갱신되지 않는데, detector 가 PCI 식별자로 제품명을 싣기 시작하면(2026-08-11) 장치 쪽만
+// "generic" 에서 "a30" 으로 바뀐다. 문자열 비교만 하면 두 값이 갈라져 **모든 장치가 걸러지고**
+// 재부팅 게이트와 자가복구 게이트가 조용히 죽는다(증상이 "아무 일도 안 일어남" 이라 탐지되지
+// 않는다). detector 이미지를 되돌리면 반대 방향으로 같은 일이 생기므로 양쪽을 다 본다.
+func deviceModelMatches(deviceModel, specModel string) bool {
+	if specModel == "" || strings.EqualFold(specModel, "generic") {
+		return true
+	}
+	if strings.EqualFold(deviceModel, "generic") {
+		return true
+	}
+	return strings.EqualFold(deviceModel, specModel)
 }
