@@ -1,7 +1,8 @@
 // ============================================================
-// webhook.go: Admission webhook 핸들러 (DIP/NCP/AcceleratorClass/AcceleratorWorkload validating + Pod mutating)
+// webhook.go: Admission webhook 핸들러 (DIP/NCP/AcceleratorClass/AcceleratorWorkload/
+// AcceleratorPartitionPolicy validating + Pod mutating)
 // 상세: spec 검증 거부 + 추상 워크로드 변환 검증 + opt-in 라벨 Pod 에 NVIDIA runtimeClass 주입
-// 생성일: 2026-07-20 | 수정일: 2026-07-30
+// 생성일: 2026-07-20 | 수정일: 2026-08-24
 // ============================================================
 
 package webhook
@@ -39,7 +40,8 @@ var knownVendors = map[string]bool{
 	"rebellions":       true,
 }
 
-// Setup 은 세 개의 admission webhook(DIP/NCP validating, Pod mutating)을 매니저에 등록한다.
+// Setup 은 여섯 개의 admission webhook(DIP/NCP/AcceleratorClass/AcceleratorWorkload/
+// AcceleratorPartitionPolicy validating, Pod mutating)을 매니저에 등록한다.
 // WebhookConfiguration(외부)이 없으면 admission 호출이 서버에 도달하지 않으므로,
 // webhook.enabled=false 배포에서는 무해하게 미사용 상태로 남는다.
 func Setup(mgr ctrl.Manager) error {
@@ -66,6 +68,12 @@ func Setup(mgr ctrl.Manager) error {
 		WithValidator(&AWValidator{Client: mgr.GetClient()}).
 		Complete(); err != nil {
 		return fmt.Errorf("register AcceleratorWorkload validator: %w", err)
+	}
+	if err := ctrl.NewWebhookManagedBy(mgr).
+		For(&npuv1alpha1.AcceleratorPartitionPolicy{}).
+		WithValidator(&ACPPValidator{Client: mgr.GetClient()}).
+		Complete(); err != nil {
+		return fmt.Errorf("register AcceleratorPartitionPolicy validator: %w", err)
 	}
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&corev1.Pod{}).

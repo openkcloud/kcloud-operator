@@ -346,7 +346,7 @@ func (p *acppParticipant) runOnce(ctx context.Context, op *npuv1alpha1.Accelerat
 	}
 	target := partition.Target{
 		Ctx: ctx, NodeName: op.Spec.NodeName, Owner: acpp.Name,
-		DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS,
+		DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS(),
 	}
 	ec := &evidenceCtx{}
 	ts, runErr := p.r.runTarget(&acpp, backend, target, ec)

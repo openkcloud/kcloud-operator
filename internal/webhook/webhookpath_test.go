@@ -5,7 +5,7 @@
 // 손으로 적는다(Task 8 리뷰 C1). 여기서 코드가 등록한 각 타입의 경로를 controller-runtime 이
 // 실제로 만드는 것과 같은 공식으로 계산해 그 yaml 텍스트에 있는지 대조한다 — validator 를
 // 등록만 하고 yaml 을 안 고치면 이 테스트가 잡는다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-08-24
 // ============================================================
 package webhook
 
@@ -34,6 +34,7 @@ func TestWebhookConfigMatchesRegisteredValidators(t *testing.T) {
 		{"NPUClusterPolicy", "npuclusterpolicies"},
 		{"AcceleratorClass", "acceleratorclasses"},
 		{"AcceleratorWorkload", "acceleratorworkloads"},
+		{"AcceleratorPartitionPolicy", "acceleratorpartitionpolicies"},
 	}
 
 	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "templates", "webhook.yaml"))

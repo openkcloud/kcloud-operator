@@ -691,9 +691,16 @@ func TestDeviceModelMatchesTreatsGenericAsWildcard(t *testing.T) {
 		{"둘 다 판정됐고 다르다", "a2", "a30", false},
 		{"spec 이 비면 벤더 전체", "a30", "", true},
 		{"대소문자 무시", "A30", "a30", true},
+		// 표준 PCI DB 계층이 붙으면 장치 이름만 구체화된다(실측 10de:20f1 → a100-pcie-40gb).
+		// 제품군 이름으로 쓴 spec 이 안 걸리면 정책이 nil 이 되어 아무 일도 안 일어난다.
+		{"장치가 구체화됨 — spec 은 제품군", "a100-pcie-40gb", "a100", true},
+		{"기록이 구체적 — 장치가 제품군", "a100", "a100-pcie-40gb", true},
+		{"제품군이 다르다", "a100-pcie-40gb", "a30", false},
+		{"접두어 경계 없음 — a1 은 a100 이 아니다", "a100-pcie-40gb", "a1", false},
+		{"표기가 통째로 바뀜 — 접두어로 못 덮는다", "a100-sxm4-40gb", "a100-pcie-40gb", false},
 	} {
-		if got := deviceModelMatches(tc.deviceModel, tc.specModel); got != tc.want {
-			t.Errorf("%s: deviceModelMatches(%q, %q) = %v, want %v",
+		if got := DeviceModelMatches(tc.deviceModel, tc.specModel); got != tc.want {
+			t.Errorf("%s: DeviceModelMatches(%q, %q) = %v, want %v",
 				tc.name, tc.deviceModel, tc.specModel, got, tc.want)
 		}
 	}

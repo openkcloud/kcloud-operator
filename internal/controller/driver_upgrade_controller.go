@@ -3,7 +3,7 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-04-15
+// 생성일: 2026-04-13 | 수정일: 2026-08-12
 // ============================================================
 
 package controller
@@ -183,6 +183,10 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 			continue
 		}
 
+		// DUS 는 (노드, 벤더) 당 하나인데 이 루프는 장치마다 돈다 — spec.model 은 장치 단위가
+		// 아니라 벤더 단위 값이어야 한다. 정책 선택(findPolicy)은 계속 장치별 model 을 쓴다.
+		vendorModels := vendorRepresentativeModels(ndr.Status.Devices)
+
 		for _, device := range ndr.Status.Devices {
 			// 매칭 DIP 찾기
 			policy := findPolicy(dipList.Items, device.Vendor, device.Model)
@@ -197,16 +201,43 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 			// TrackOnly 정책: DUS 를 Idle 로 추적만 한다(설치/업그레이드 전이 없음).
 			// installer 이미지 미비 벤더(예: Tenstorrent, 실제 설치는 DKMS 2차)의 버전 관측용.
 			if policy.Spec.Driver.TrackOnly {
-				if err := r.ensureTrackOnlyState(ctx, nodeName, device, policy); err != nil {
+				if err := r.ensureTrackOnlyState(ctx, nodeName, device, policy, vendorModels[device.Vendor]); err != nil {
 					logger.Error(err, "TrackOnly DUS 동기화 실패", "node", nodeName, "vendor", device.Vendor)
 				}
 				continue
 			}
 
-			r.syncUpgradeState(ctx, nodeName, device, policy)
+			r.syncUpgradeState(ctx, nodeName, device, policy, vendorModels[device.Vendor])
 		}
 	}
 	return nil
+}
+
+// modelUnknown 은 제품명을 특정할 수 없다는 표시다. 이름이 아니라 "모른다" 라서
+// upgrade.DeviceModelMatches 가 양방향 와일드카드로 취급한다.
+const modelUnknown = "generic"
+
+// vendorRepresentativeModels 는 벤더별 대표 model 이다. DriverUpgradeState 는 (노드, 벤더) 당
+// 하나인데 NodeDeviceReport 의 장치는 벤더당 여럿일 수 있다(라이브 worker1 = nvidia a30 + a2).
+// 장치마다 spec.model 을 쓰면 두 장치가 같은 DUS 를 겨눠 매 reconcile 마다 a30 → a2 로 서로를
+// 덮는다 — API 서버에 영구 쓰기 루프다.
+//
+// 벤더 안에서 model 이 갈리면 "generic" 이다. generic 은 이름이 아니라 "모른다" 는 표시이고,
+// 혼재 노드는 벤더 단위로 정말 단일 제품명이 없다(detector 도 같은 이유로 벤더 단위 라벨을
+// generic 으로 둔다). upgrade.DeviceModelMatches 가 generic 을 양방향 와일드카드로 보므로
+// 재부팅 게이트와 자가복구 게이트는 그대로 걸린다 — 기능 손실이 없다.
+func vendorRepresentativeModels(devices []v1alpha1.DeviceEntry) map[string]string {
+	models := make(map[string]string, len(devices))
+	for _, d := range devices {
+		prev, seen := models[d.Vendor]
+		switch {
+		case !seen:
+			models[d.Vendor] = d.Model
+		case prev != d.Model:
+			models[d.Vendor] = modelUnknown
+		}
+	}
+	return models
 }
 
 // resetRebootTracking 은 새 업그레이드 사이클 진입 시 이전 사이클의 재부팅 추적 상태를 초기화한다.
@@ -222,7 +253,8 @@ func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 // syncUpgradeState 는 설치형(비-TrackOnly) 정책에 대해 device 하나의 DUS 를 생성/전이합니다.
 // 신규 생성(버전 비교로 초기 State), 정책 버전 변경, 버전 불일치→UpgradeRequired,
 // currentVersion 동기화를 처리합니다. 에러는 로깅 후 skip(기존 동작 보존).
-func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName string, device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy) {
+func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName string,
+	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string) {
 	logger := logf.FromContext(ctx)
 	dusName := driverUpgradeStateName(nodeName, device.Vendor)
 
@@ -240,7 +272,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 			Spec: v1alpha1.DriverUpgradeStateSpec{
 				NodeName: nodeName,
 				Vendor:   device.Vendor,
-				Model:    device.Model,
+				Model:    vendorModel,
 			},
 			Status: v1alpha1.DriverUpgradeStateStatus{
 				State:              initialState,
@@ -258,6 +290,9 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		logger.Error(err, "DriverUpgradeState 조회 실패", "name", dusName)
 		return
 	}
+
+	// 아래 두 분기가 조건부로 조기 return 하므로 model 동기화를 먼저 한다.
+	r.syncDUSModel(ctx, &existing, vendorModel)
 
 	// Bug #7 fix: desiredVersion이 정책과 다르면 업데이트 (상태에 무관)
 	desiredVersion := policy.Spec.Driver.Version
@@ -308,7 +343,8 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 // ensureTrackOnlyState 는 TrackOnly 정책에 대해 DUS 를 Idle 상태로만 유지합니다.
 // 설치/업그레이드 전이 없이 currentVersion(NDR) 과 desiredVersion(정책)만 동기화하여
 // 버전 관측·verifiedVersions 게이트 용도로 추적합니다(installer 미비 벤더 임시 편입).
-func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, nodeName string, device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy) error {
+func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, nodeName string,
+	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string) error {
 	const trackMsg = "TrackOnly: 버전 관측 전용(설치 경로 없음)"
 	dusName := driverUpgradeStateName(nodeName, device.Vendor)
 
@@ -320,7 +356,7 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 			Spec: v1alpha1.DriverUpgradeStateSpec{
 				NodeName: nodeName,
 				Vendor:   device.Vendor,
-				Model:    device.Model,
+				Model:    vendorModel,
 			},
 			Status: v1alpha1.DriverUpgradeStateStatus{
 				State:              v1alpha1.UpgradeStateIdle,
@@ -339,6 +375,8 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 		return err
 	}
 
+	r.syncDUSModel(ctx, &existing, vendorModel)
+
 	// 기존 DUS: currentVersion/desiredVersion 동기화, State 는 항상 Idle 로 강제.
 	if existing.Status.State != v1alpha1.UpgradeStateIdle ||
 		existing.Status.CurrentVersion != device.DriverVersion ||
@@ -352,6 +390,34 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 		return r.Status().Patch(ctx, &existing, patch)
 	}
 	return nil
+}
+
+// syncDUSModel 은 DriverUpgradeState.spec.model 을 NodeDeviceReport 가 보고한 장치 모델과
+// 맞춘다. spec.model 은 생성 시점 값이라 갱신되지 않아 이미 라이브에서 어긋나 있다
+// (DUS `generic` 대 장치 `a30`·`a2`).
+//
+// 왜 매칭 관대화(upgrade.DeviceModelMatches)만으로 부족한가 — 접두어·와일드카드 규칙은
+// 이름이 구체화되는 방향만 덮는다. `pcidb.go` 주석이 관리자에게 권하는 `update-pciids` 를
+// 돌리면 표기가 통째로 바뀔 수 있고(`a100-pcie-40gb` → `a100-sxm4-40gb`), 그때 두 값은
+// 서로 접두어도 아니고 어느 쪽도 "generic" 이 아니라 매칭이 끊긴다.
+//
+// spec 갱신은 CRD·webhook 제약이 없다(DriverUpgradeState 에 XValidation 0건, admission
+// webhook 미등록). 값이 같아지면 patch 가 안 나가므로 reconcile 마다 쓰기가 늘지 않는다.
+func (r *DriverUpgradeReconciler) syncDUSModel(
+	ctx context.Context, existing *v1alpha1.DriverUpgradeState, deviceModel string) {
+	if deviceModel == "" || existing.Spec.Model == deviceModel {
+		return
+	}
+	patch := client.MergeFrom(existing.DeepCopy())
+	old := existing.Spec.Model
+	existing.Spec.Model = deviceModel
+	if err := r.Patch(ctx, existing, patch); err != nil {
+		logf.FromContext(ctx).Error(err, "DriverUpgradeState spec.model 동기화 실패",
+			"name", existing.Name, "from", old, "to", deviceModel)
+		return
+	}
+	logf.FromContext(ctx).Info("DriverUpgradeState spec.model 동기화",
+		"name", existing.Name, "from", old, "to", deviceModel)
 }
 
 // findMatchingPolicy는 vendor/model에 맞는 DriverInstallPolicy를 반환합니다.
@@ -578,7 +644,11 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 }
 
 // findPolicy는 vendor/model이 일치하는 정책을 찾습니다.
-// model이 비어있거나 "generic"인 경우 fallback으로 매칭됩니다.
+//
+// 매칭 규칙은 upgrade.DeviceModelMatches 가 정본이다 — 규칙을 여기에 복제하면 한쪽만 고쳐진다
+// (실제로 그렇게 되어, detector 가 제품명을 구체화한 뒤 `spec.model: a100` 정책이 장치
+// `a100-pcie-40gb` 에 안 걸리고 nil 이 나갔다). 정확일치 우선은 유지한다 — 벤더에 정책이
+// 여럿이면 구체적인 것이 제품군 정책을 이겨야 한다.
 func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *v1alpha1.DriverInstallPolicy {
 	var fallback *v1alpha1.DriverInstallPolicy
 	for i := range policies {
@@ -586,11 +656,11 @@ func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *
 		if !strings.EqualFold(p.Spec.Vendor, vendor) {
 			continue
 		}
-		if p.Spec.Model == model {
+		if strings.EqualFold(p.Spec.Model, model) {
 			return p
 		}
-		// model이 비어있거나, 어느 쪽이든 "generic"이면 fallback 매칭 (처음 찾은 것만 사용)
-		if fallback == nil && (p.Spec.Model == "" || model == "generic" || p.Spec.Model == "generic") {
+		// 와일드카드("generic"·빈값)와 제품군 접두어는 fallback (처음 찾은 것만 사용)
+		if fallback == nil && upgrade.DeviceModelMatches(model, p.Spec.Model) {
 			fallback = p
 		}
 	}

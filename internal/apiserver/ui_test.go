@@ -2,7 +2,7 @@
 // ui_test.go: 정적 대시보드 서빙 테스트
 // 상세: 셸은 무인증 200 이어야 하고(브라우저가 헤더를 못 싣는다), 그 안에 클러스터 데이터가
 //       한 글자도 없어야 하며, 기존 /api 경로를 가로채지 않아야 한다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-11
+// 생성일: 2026-07-30 | 수정일: 2026-08-12
 // ============================================================
 
 package apiserver
@@ -420,6 +420,33 @@ func TestUIHasStatusTab(t *testing.T) {
 	}
 }
 
+// 배제 배지는 operator 가 붙인 라벨을 옮긴 값이다 — 여기서 사유를 다시 판정하면 규칙이
+// 두 곳으로 갈린다. 헬퍼 정의가 아니라 호출부(exclBadge(n) 를 실제로 부르는 자리)를
+// 고정한다(TestUI_HonestyBadgesAreActuallyCalled 와 같은 규율 — 정의만 남고 호출이 사라지면
+// 화면엔 안 나온다).
+//
+// 호출부는 둘이어야 한다. 가속기 없는 control-plane 은 status.devices 가 비어 장치 표에
+// 행이 0개이므로, 노드 단위 표(노드별 광고량)에도 배제 열이 있어야 배제 사실이 화면에
+// 남는다 — 장치 표에만 있으면 GPU 없는 master 에서 배지가 사라진다.
+func TestUIStatusTabRendersExclusionBadge(t *testing.T) {
+	body := blockAfter(t, string(indexHTML), "async function loadStatus()")
+	if n := strings.Count(body, "exclBadge(n)"); n < 2 {
+		t.Errorf("상태 탭의 exclBadge 호출이 %d 곳 — 장치 표와 노드별 광고량 표 둘 다여야 한다", n)
+	}
+	if !strings.Contains(body, `table(["노드", "가속기 리소스", "배제", "예약"], adv)`) {
+		t.Error("노드별 광고량 표에 배제 열이 없다 — 장치 0개 배제 노드가 이 표에만 나온다")
+	}
+}
+
+// 사유가 비면 빈 괄호(`제외됨()`)를 내지 않는다 — 사유가 있는 줄 알게 만든다. 헬퍼 본문의
+// 조건 분기 자체가 이 규칙이라 여기서는 정의를 고정한다.
+func TestUIExclusionBadgeOmitsEmptyReasonParens(t *testing.T) {
+	body := blockAfter(t, string(indexHTML), "function exclBadge(n)")
+	if !strings.Contains(body, `n.excludedReason ? "(" + esc(n.excludedReason) + ")" : ""`) {
+		t.Error("배제 사유가 빌 때 괄호를 생략하는 분기가 없다")
+	}
+}
+
 // dry-run 관문이 화면에 실제로 걸려 있는지 — 없으면 검증 없이 적용된다.
 func TestUI_적용_전_dryRun_호출(t *testing.T) {
 	html := string(indexHTML)
@@ -428,5 +455,23 @@ func TestUI_적용_전_dryRun_호출(t *testing.T) {
 	}
 	if !strings.Contains(html, "/api/v1/policies") {
 		t.Error("정책 쓰기 라우트를 부르지 않는다")
+	}
+}
+
+// 토큰 자동 적용(#token=...)은 두 성질을 함께 만족해야 한다: fragment 에서 읽을 것,
+// 읽은 뒤 주소창에서 지울 것. 하나만 있으면 토큰이 새로고침·북마크·화면 공유로 다시 샌다.
+// 셸 JS 를 여기서 실행할 수 없으니 두 호출부가 존재한다는 사실을 고정한다.
+func TestUI_AcceptsTokenFromFragmentAndClearsIt(t *testing.T) {
+	body := string(indexHTML)
+	// 주석이 아니라 호출부를 고정한다 — 같은 낱말이 위 설명에도 있어서, 낱말만 세면
+	// 코드를 지워도 통과한다(2026-09-03 삭제 실험).
+	for _, want := range []string{"location.hash", `get("token")`, `history.replaceState(null, ""`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("fragment 토큰 처리 누락: %q", want)
+		}
+	}
+	// 질의 문자열로 받으면 접근 로그·Referer 에 토큰 원문이 남는다 — 그 경로를 만들지 않는다.
+	if strings.Contains(body, "location.search)") && strings.Contains(body, `searchParams.get("token")`) {
+		t.Fatal("토큰을 질의 문자열에서 읽으면 서버 로그에 남는다")
 	}
 }

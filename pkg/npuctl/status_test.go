@@ -1,6 +1,6 @@
 // status_test.go: CollectStatus 단위 테스트(fake client, envtest 불필요)
 // 상세: NCP/DIP(+rngd 서브벤더)/NDR/DUS/Node를 섞어 넣고 ClusterStatus 집약 결과를 검증한다.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-08-12
 package npuctl
 
 import (
@@ -235,6 +235,34 @@ func TestBuildNodeStatusesCarriesPCIAndProduct(t *testing.T) {
 		if got.PCIeAddress != w.PCIeAddress {
 			t.Errorf("devices[%d].PCIeAddress = %q, want %q", i, got.PCIeAddress, w.PCIeAddress)
 		}
+	}
+}
+
+// TestBuildNodeStatusesCarriesExclusionLabel 은 operator 가 붙인 kcloud.ai/excluded 라벨이
+// NodeStatus 로 그대로 옮겨지는지 본다. 여기서 배제 여부를 다시 판정하지 않는다 —
+// 라벨이 없는 노드는 Excluded=false 로 남아야 한다.
+func TestBuildNodeStatusesCarriesExclusionLabel(t *testing.T) {
+	master := corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "k8s-master",
+			Labels: map[string]string{"kcloud.ai/excluded": "true", "kcloud.ai/excluded-reason": "control-plane"},
+		},
+	}
+	worker := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker1"}}
+
+	out := buildNodeStatuses(nil, nil, []corev1.Node{master, worker})
+	byName := map[string]NodeStatus{}
+	for _, n := range out {
+		byName[n.Name] = n
+	}
+
+	m := byName["k8s-master"]
+	if !m.Excluded || m.ExcludedReason != "control-plane" {
+		t.Errorf("k8s-master 배제 라벨 미반영: %+v", m)
+	}
+	w := byName["k8s-worker1"]
+	if w.Excluded || w.ExcludedReason != "" {
+		t.Errorf("라벨 없는 노드가 배제로 나옴: %+v", w)
 	}
 }
 

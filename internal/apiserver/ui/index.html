@@ -1,4 +1,4 @@
-<!-- index.html: kcloud accelerator console — 관리 REST API(:9444) 단일 파일 대시보드 | 생성일: 2026-07-30 | 수정일: 2026-08-11 -->
+<!-- index.html: kcloud accelerator console — 관리 REST API(:9444) 단일 파일 대시보드 | 생성일: 2026-07-30 | 수정일: 2026-08-12 -->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -6,63 +6,166 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kcloud accelerator console</title>
 <style>
-:root { --bg:#fff; --fg:#16161a; --muted:#6b7280; --line:#e5e7eb; --card:#fafafa;
-        --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#111827; }
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#0f1115; --fg:#e5e7eb; --muted:#9ca3af; --line:#262b33; --card:#161a21;
-          --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#e5e7eb; }
+/* 색·간격 토큰. 관찰 콘솔(tester/api-demo)과 같은 팔레트를 쓴다 — 두 화면을 나란히 놓고
+   보는 사람에게 같은 제품으로 읽혀야 한다. 옛 이름(--bg/--fg/--line/--card/--accent)은
+   본문 곳곳의 인라인 style 이 참조하므로 지우지 않고 새 값으로 잇는다. */
+:root {
+  --canvas:#ffffff; --surface-soft:#f8fafc; --surface-strong:#e0e2e6;
+  --ink:#181d26; --body:#333840; --muted:#41454d; --hairline:#dddddd; --border-strong:#9297a0;
+  --primary:#181d26; --primary-active:#0d1218; --on-primary:#ffffff;
+  --coral:#aa2d00; --mustard:#d9a441; --info:#254fad; --info-border:#458fff; --success:#006400;
+  --bg:var(--canvas); --fg:var(--ink); --line:var(--hairline); --card:var(--surface-soft);
+  --accent:var(--primary); --ok:var(--success); --warn:#8a5a00; --bad:var(--coral);
+  --r-sm:6px; --r-md:10px;
+  --font:"Inter Display",-apple-system,BlinkMacSystemFont,"Segoe UI","Pretendard","Noto Sans KR","Apple SD Gothic Neo",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
-/* 강제 선택. OS 추종(@media)보다 뒤에 두어 우선한다. 변수 목록을 기존 :root 와 맞춘다 —
-   하나라도 빠지면 그 색만 밝은 값이 남아 대비가 깨진다. */
+/* OS 추종. 아래 [data-theme] 오버라이드보다 앞에 두어 강제 선택이 이긴다.
+   변수 목록은 :root[data-theme="dark"] 와 같아야 한다 — 하나라도 빠지면 그 색만 밝은 값이
+   남아 대비가 깨진다. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas:#181d26; --surface-soft:#1d1f25; --surface-strong:#2a2f39;
+    --ink:#ffffff; --body:#e0e2e6; --muted:#9297a0; --hairline:#333840; --border-strong:#4a515e;
+    --primary:#ffffff; --primary-active:#e0e2e6; --on-primary:#181d26;
+    --coral:#ff7043; --mustard:#f4d35e; --info:#5b8def; --info-border:#5b8def; --success:#4cc95a;
+    --warn:#f4d35e;
+  }
+}
 :root[data-theme="dark"] {
-  --bg:#0f1115; --fg:#e5e7eb; --muted:#9ca3af; --line:#262b33; --card:#161a21;
-  --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#e5e7eb;
+  --canvas:#181d26; --surface-soft:#1d1f25; --surface-strong:#2a2f39;
+  --ink:#ffffff; --body:#e0e2e6; --muted:#9297a0; --hairline:#333840; --border-strong:#4a515e;
+  --primary:#ffffff; --primary-active:#e0e2e6; --on-primary:#181d26;
+  --coral:#ff7043; --mustard:#f4d35e; --info:#5b8def; --info-border:#5b8def; --success:#4cc95a;
+  --warn:#f4d35e;
 }
 :root[data-theme="light"] {
-  --bg:#fff; --fg:#16161a; --muted:#6b7280; --line:#e5e7eb; --card:#fafafa;
-  --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#111827;
+  --canvas:#ffffff; --surface-soft:#f8fafc; --surface-strong:#e0e2e6;
+  --ink:#181d26; --body:#333840; --muted:#41454d; --hairline:#dddddd; --border-strong:#9297a0;
+  --primary:#181d26; --primary-active:#0d1218; --on-primary:#ffffff;
+  --coral:#aa2d00; --mustard:#d9a441; --info:#254fad; --info-border:#458fff; --success:#006400;
+  --warn:#8a5a00;
 }
 * { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
-header { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
-         padding:12px 20px; border-bottom:1px solid var(--line); }
-h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:-0.01em; }
-input[type=password], input[type=text] { padding:6px 8px; border:1px solid var(--line);
-         border-radius:6px; background:var(--bg); color:var(--fg); min-width:260px; }
+/* 스크롤바 자리를 늘 비워 둔다 — 탭을 옮길 때 본문이 스크롤바 폭만큼 밀리지 않는다. */
+html { scrollbar-gutter:stable; }
+body { margin:0; background:var(--canvas); color:var(--body);
+       font:14px/1.5 var(--font); -webkit-font-smoothing:antialiased; }
+
+/* 좌측 내비 — 화면이 열이라 상단에 늘어놓으면 지금 어디에 있는지가 안 보인다.
+   묶음(자원·정책·관찰)을 세워 두면 보고 있는 것이 어느 축인지 남는다. */
+.app-shell { display:grid; grid-template-columns:216px 1fr; min-height:100vh; }
+.app-side { border-right:1px solid var(--hairline); background:var(--surface-soft);
+            padding:16px 0; position:sticky; top:0; height:100vh; overflow-y:auto;
+            display:flex; flex-direction:column; }
+.side-brand { display:flex; align-items:center; gap:8px; padding:0 18px 14px;
+              font-size:15px; font-weight:600; color:var(--ink); }
+.brand-dot { width:12px; height:12px; border-radius:9999px; background:var(--coral); }
+.side-group { color:var(--muted); font-size:12px; font-weight:600; padding:14px 18px 6px; }
+.side-foot { margin-top:auto; padding:14px 18px 0; font-size:12px; color:var(--muted);
+             border-top:1px solid var(--hairline); }
+.app-main { min-width:0; }
+
+header { display:flex; gap:10px; align-items:center; flex-wrap:wrap; min-height:60px;
+         padding:12px 24px; background:var(--canvas); border-bottom:1px solid var(--hairline);
+         position:sticky; top:0; z-index:9; }
+header input, header select, header button { height:32px; font-size:13px; border-radius:var(--r-sm); }
+h1 { font-size:16px; margin:0; font-weight:500; color:var(--ink); }
+input[type=password], input[type=text] { padding:6px 10px; border:1px solid var(--hairline);
+         border-radius:var(--r-sm); background:var(--canvas); color:var(--ink); min-width:260px; }
+input:focus, select:focus { outline:none; border-color:var(--info-border); }
 /* select 에 규칙이 없으면 브라우저 기본색(밝게)이 남아 어두운 테마에서 이 칸만 하얗다. */
-select { padding:6px 8px; border:1px solid var(--line); border-radius:6px;
-         background:var(--bg); color:var(--fg); }
-button { padding:6px 12px; border:1px solid var(--line); border-radius:6px; cursor:pointer;
-         background:var(--accent); color:var(--bg); font-weight:500; }
-button.ghost { background:transparent; color:var(--fg); }
-nav { display:flex; gap:4px; padding:8px 20px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
-nav button { background:transparent; color:var(--muted); border:1px solid transparent; }
-nav button[aria-current=page] { color:var(--fg); border-color:var(--line); background:var(--card); }
-main { padding:20px; }
+select { padding:6px 10px; border:1px solid var(--hairline); border-radius:var(--r-sm);
+         background:var(--canvas); color:var(--ink); font:inherit; }
+button { padding:0 14px; border:1px solid var(--primary); border-radius:var(--r-sm); cursor:pointer;
+         background:var(--primary); color:var(--on-primary); font:inherit; font-weight:500; }
+button:active { background:var(--primary-active); border-color:var(--primary-active); }
+button.ghost { background:var(--canvas); color:var(--ink); border-color:var(--hairline); }
+
+/* 내비 항목은 버튼이지만 조작 버튼과 같게 그리면 안 된다 — 열 개가 검은 덩어리로 보인다. */
+nav { display:flex; flex-direction:column; }
+nav button { background:transparent; color:var(--body); border:0; border-left:3px solid transparent;
+             border-radius:0; text-align:left; padding:8px 18px 8px 26px; font-size:13px;
+             font-weight:400; height:auto; }
+nav button:hover { background:var(--surface-strong); }
+nav button[aria-current=page] { background:var(--surface-strong); color:var(--ink);
+             font-weight:600; border-left-color:var(--coral); }
+
+main { padding:24px; max-width:1600px; }
 section { display:none; } section.active { display:block; }
-table { border-collapse:collapse; width:100%; margin:8px 0 20px; font-size:13px; }
-th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-th { color:var(--muted); font-weight:500; white-space:nowrap; }
-.cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
-.card { border:1px solid var(--line); border-radius:8px; padding:12px 16px; background:var(--card); min-width:150px; }
-.card b { display:block; font-size:22px; font-weight:600; }
+
+/* 표 — 머리줄에 바탕을 깔고 가로 넘침은 표 안에서만 흐르게 한다. */
+table { border-collapse:collapse; width:100%; margin:0 0 20px; font-size:13px;
+        border:1px solid var(--hairline); border-radius:var(--r-md); overflow:hidden; }
+th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--hairline); vertical-align:top; }
+th { color:var(--ink); font-weight:500; font-size:12px; white-space:nowrap; background:var(--surface-soft); }
+td { color:var(--body); }
+tbody tr:last-child td { border-bottom:0; }
+
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+         gap:12px; margin-bottom:24px; }
+.card { border:1px solid var(--hairline); border-radius:var(--r-md); padding:14px 16px;
+        background:var(--canvas); }
+.card b { display:block; font-size:24px; font-weight:600; color:var(--ink); line-height:1.2;
+          font-variant-numeric:tabular-nums; }
 .card span { color:var(--muted); font-size:12px; }
-.badge { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px;
-         border:1px solid currentColor; white-space:nowrap; }
+
+/* 배지 — 테두리만 있는 알약은 어두운 테마에서 묻힌다. 옅은 바탕을 깔아 등급이 먼저 보이게. */
+.badge { display:inline-block; padding:2px 8px; border-radius:var(--r-sm); font-size:12px;
+         font-weight:500; line-height:1.4; border:1px solid transparent; white-space:nowrap;
+         background:var(--surface-strong); color:var(--ink); border-color:var(--border-strong); }
+.badge.ok   { background:rgba(0,100,0,.10);   color:var(--success); border-color:rgba(57,191,69,.35); }
+.badge.warn { background:rgba(217,164,65,.16); color:var(--ink);    border-color:rgba(217,164,65,.5); }
+.badge.bad  { background:rgba(170,45,0,.10);   color:var(--coral);  border-color:rgba(170,45,0,.30); }
+.badge.muted{ background:var(--surface-strong); color:var(--muted); border-color:var(--border-strong); }
 .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .muted { color:var(--muted); }
-pre { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:10px;
-      overflow:auto; font-size:12px; margin:8px 0; }
-#err { color:var(--bad); padding:0 20px; }
+
+pre { background:var(--surface-soft); border:1px solid var(--hairline); border-radius:var(--r-md);
+      padding:12px; overflow:auto; font-size:12px; font-family:var(--mono); margin:8px 0;
+      color:var(--ink); }
+code { font-family:var(--mono); font-size:12px; }
+#err { color:var(--coral); padding:0 24px; }
+#err:not(:empty) { background:rgba(170,45,0,.10); border:1px solid rgba(170,45,0,.30);
+      border-radius:var(--r-md); margin:16px 24px 0; padding:12px 14px; }
 label { color:var(--muted); font-size:12px; }
-fieldset { border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:0 0 16px; }
+fieldset { border:1px solid var(--hairline); border-radius:var(--r-md); padding:16px 18px;
+      margin:0 0 20px; background:var(--canvas); }
 legend { color:var(--muted); font-size:12px; padding:0 6px; }
 .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
-.opt { display:block; margin:4px 0; color:var(--fg); font-size:13px; }
-.opt input { margin-right:6px; }
-details summary { color:var(--muted); font-size:12px; cursor:pointer; }
+/* 선택지 한 줄은 눌리는 영역이 넓어야 한다 — 라디오 동그라미만 과녁이면 고르기 어렵다. */
+.opt { display:block; margin:2px 0; padding:7px 10px; border-radius:var(--r-sm);
+       color:var(--ink); font-size:13px; cursor:pointer; }
+.opt:hover { background:var(--surface-soft); }
+.opt input { margin-right:8px; }
+.opt:has(input:checked) { background:var(--surface-soft); box-shadow:inset 3px 0 0 var(--coral); }
+details summary { color:var(--muted); font-size:12px; cursor:pointer; margin:10px 0 4px; }
+h2 { font-size:16px; font-weight:500; color:var(--ink); border-bottom:1px solid var(--hairline);
+     padding-bottom:8px; margin:0 0 14px; }
+h3 { font-size:14px; font-weight:600; color:var(--ink); margin:18px 0 8px; }
 </style>
 </head>
 <body>
+<div class="app-shell">
+<aside class="app-side">
+  <div class="side-brand"><span class="brand-dot"></span>kcloud operator</div>
+<nav>
+  <div class="side-group">자원</div>
+  <button data-tab="dash" aria-current="page">대시보드</button>
+  <button data-tab="st">상태</button>
+  <button data-tab="inv">인벤토리</button>
+  <button data-tab="cap">Capability</button>
+  <div class="side-group">정책</div>
+  <button data-tab="pol">정책</button>
+  <button data-tab="wl">워크로드</button>
+  <button data-tab="cls">등급</button>
+  <button data-tab="prev">미리보기</button>
+  <div class="side-group">관찰</div>
+  <button data-tab="use">사용 중</button>
+  <button data-tab="ev">이력</button>
+</nav>
+  <div class="side-foot">관리 API 콘솔 · 화면 안에서 사용자 토큰으로 호출한다</div>
+</aside>
+<div class="app-main">
 <header>
   <h1>kcloud accelerator console</h1>
   <label for="tok">Bearer 토큰</label>
@@ -76,18 +179,6 @@ details summary { color:var(--muted); font-size:12px; cursor:pointer; }
   </select>
   <span id="status" class="muted"></span>
 </header>
-<nav>
-  <button data-tab="dash" aria-current="page">대시보드</button>
-  <button data-tab="st">상태</button>
-  <button data-tab="inv">인벤토리</button>
-  <button data-tab="cap">Capability</button>
-  <button data-tab="pol">정책</button>
-  <button data-tab="wl">워크로드</button>
-  <button data-tab="cls">등급</button>
-  <button data-tab="use">사용 중</button>
-  <button data-tab="prev">미리보기</button>
-  <button data-tab="ev">이력</button>
-</nav>
 <div id="err"></div>
 <main>
   <section id="dash" class="active"><div class="cards" id="dashCards"></div><div id="dashTable"></div></section>
@@ -168,9 +259,30 @@ details summary { color:var(--muted); font-size:12px; cursor:pointer; }
   </section>
   <section id="ev"><div id="evTable"></div></section>
 </main>
+</div>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
-let token = sessionStorage.getItem("kcloud-token") || "";
+
+// 토큰 받는 곳 두 군데: 주소의 fragment(#token=...) 와 sessionStorage.
+//
+// fragment 를 쓰는 이유는 브라우저가 그것을 서버로 보내지 않기 때문이다 — 질의 문자열
+// (?token=)로 받으면 operator 접근 로그·중간 프록시·Referer 에 토큰 원문이 남는다. 읽은
+// 즉시 history.replaceState 로 주소창에서도 지운다(새로고침·북마크로 재유출되지 않게).
+//
+// 인가 모델은 그대로다. 이 값은 여전히 사용자의 Bearer 토큰이고, /api/v1/* 호출은 종전대로
+// TokenReview/SAR 를 통과한다 — 서버가 대신 읽어주는 경로는 여기서도 생기지 않는다.
+function tokenFromFragment() {
+  const h = location.hash || "";
+  if (!h.startsWith("#")) return "";
+  const v = new URLSearchParams(h.slice(1)).get("token");
+  if (!v) return "";
+  history.replaceState(null, "", location.pathname + location.search);
+  return v.trim();
+}
+let token = tokenFromFragment();
+if (token) sessionStorage.setItem("kcloud-token", token);
+else token = sessionStorage.getItem("kcloud-token") || "";
 $("tok").value = token;
 
 // 테마: system 이면 data-theme 속성을 지워 @media 가 다시 결정하게 한다.
@@ -226,6 +338,14 @@ function shareSelectable(m) {
 function isoBadge(v) {
   if (!v) return '<span class="badge muted">unknown</span>';
   return '<span class="badge">' + esc(v) + "</span>";
+}
+// exclBadge: 배제 표시. operator 가 붙인 라벨을 옮긴 값이라 여기서 사유를 다시 판정하지
+// 않는다. 사유가 비면 괄호를 붙이지 않는다 — `제외됨()` 은 사유가 있는 줄 알게 만든다.
+// 장치 표와 노드별 광고량 표가 같은 함수를 쓴다(장치 0개 노드는 장치 표에 행이 없다).
+function exclBadge(n) {
+  if (!n.excluded) return "";
+  return '<span class="badge warn">제외됨'
+    + (n.excludedReason ? "(" + esc(n.excludedReason) + ")" : "") + "</span>";
 }
 // partitionBadge: profiles[].supportLevel 도 같은 등급의 정직성 축이다(Verified 만 검증됨).
 function partitionBadge(p) {
@@ -437,15 +557,20 @@ async function loadStatus() {
         // 화면에서만 되는 축 ①: 바인딩. vfio-pci 는 호스트 드라이버가 아니라 통째 넘김이다.
         isoBadge(d.driverBinding)
           + (d.driverBinding === "vfio-pci" ? ' <span class="badge warn">passthrough</span>' : "")
-          + (d.needsReboot ? ' <span class="badge bad">재부팅 필요</span>' : "")]);
+          + (d.needsReboot ? ' <span class="badge bad">재부팅 필요</span>' : ""),
+        // 화면에서만 되는 축 ④: 배제. 배제 아닌 노드는 빈 문자열(배지 없음)이다.
+        exclBadge(n)]);
     }
     // 화면에서만 되는 축 ②: 노드별 광고량. 가속기 리소스 판별은 규칙이지 목록이 아니다 —
     // 벤더 리소스명이 설정에 따라 달라지므로 이름을 박아두면 새 벤더의 광고량이 조용히 빠진다.
     const acc = Object.entries(n.allocatable || {}).filter(([k]) => k.includes("/")
       && !/^(cpu|memory|pods|ephemeral-storage|hugepages-|attachable-volumes-)/.test(k));
+    // 배제 열이 이 표에도 있어야 한다 — 노드 단위 표라 장치 0개 노드도 나오는데, 배제
+    // 표시가 없으면 배제된 control-plane 이 `가속기 광고 없음` 으로만 보인다.
     adv.push([esc(n.name),
       acc.length ? acc.map(([k, q]) => esc(k) + " ×" + esc(q)).join("<br>")
                  : "<span class='muted'>가속기 광고 없음</span>",
+      exclBadge(n),
       n.passthroughReserved ? '<span class="badge warn">passthrough 예약</span>' : ""]);
     // 화면에서만 되는 축 ③: 드라이버 갱신 상태. Idle 이 아닌 것만 눈에 띄게 한다.
     for (const u of n.upgrades || []) {
@@ -456,9 +581,9 @@ async function loadStatus() {
     }
   }
   html += "<h3>노드 장치</h3>" + (devs.length
-    ? table(["노드", "장치", "PCI", "개수", "드라이버", "버전", "바인딩"], devs) : none)
+    ? table(["노드", "장치", "PCI", "개수", "드라이버", "버전", "바인딩", "배제"], devs) : none)
     + "<h4>노드별 광고량</h4>" + (adv.length
-      ? table(["노드", "가속기 리소스", "예약"], adv) : none)
+      ? table(["노드", "가속기 리소스", "배제", "예약"], adv) : none)
     + "<h4>드라이버 갱신</h4>" + (ups.length
       ? table(["노드", "작업", "벤더/모델", "상태", "버전", "재시도", "메시지"], ups) : none);
 

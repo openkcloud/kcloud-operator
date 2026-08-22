@@ -16,6 +16,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,8 +27,11 @@ import (
 )
 
 const (
-	// dcgmExporterDSName 은 배포되는 DaemonSet 이름이다(kube-system, 3rd party 이미지 규약).
-	dcgmExporterDSName = "kcloud-dcgm-exporter"
+	// dcgmExporterDSName 은 배포되는 DaemonSet 이름이다. 벤더 이미지를 그대로 쓰므로
+	// kcloud- 접두사를 붙이지 않는다(kube-system, 3rd party 이미지 규약).
+	dcgmExporterDSName = "dcgm-exporter"
+	// dcgmExporterLegacyDSName 은 접두사를 떼기 전 이름이다. 한 번 정리하고 나면 없는 이름이다.
+	dcgmExporterLegacyDSName = "kcloud-dcgm-exporter"
 	// dcgmExporterImageDefault 는 spec 미지정 시 기본 이미지다. air-gap 은 helm values 로
 	// Harbor 미러 경로를 넘긴다(운영 기본값은 values.yaml 에서 미러 경로로 지정).
 	dcgmExporterImageDefault = "nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
@@ -44,7 +48,15 @@ func (r *NPUClusterPolicyReconciler) ensureDcgmExporter(ctx context.Context, pol
 
 	spec := policy.Spec.Nvidia.DcgmExporter
 	if !policy.Spec.Nvidia.Enabled || spec == nil || !spec.Enabled {
-		return r.deleteDaemonSetIfExists(ctx, dcgmExporterDSName)
+		// 새 이름 삭제가 실패해도 옛 이름(dcgmExporterLegacyDSName) 삭제를 계속 시도한다 —
+		// 하나가 막혔다고 나머지 정리를 포기하지 않는다. 두 오류 다 잃지 않고 합쳐 돌려준다.
+		errNew := r.deleteDaemonSetIfExists(ctx, dcgmExporterDSName)
+		errLegacy := r.deleteDaemonSetIfExists(ctx, dcgmExporterLegacyDSName)
+		return errors.Join(errNew, errLegacy)
+	}
+
+	if err := r.deleteDaemonSetIfExists(ctx, dcgmExporterLegacyDSName); err != nil {
+		return err
 	}
 
 	ds := renderDcgmExporterDS(policy)

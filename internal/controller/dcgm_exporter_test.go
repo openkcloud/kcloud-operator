@@ -9,11 +9,16 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
@@ -138,5 +143,67 @@ func TestDcgmExporter_DisabledNoopWhenAbsent(t *testing.T) {
 	r := newNPUReconciler(policy)
 	if err := r.ensureDcgmExporter(context.Background(), policy); err != nil {
 		t.Fatalf("no-op 이어야 하는데 오류: %v", err)
+	}
+}
+
+// 새 이름(dcgmExporterDSName) 삭제가 실패해도 옛 이름(dcgmExporterLegacyDSName) 삭제는
+// 계속 시도되어야 한다 — 첫 삭제 실패로 곧장 return 하면 옛 이름이 고아로 남는다.
+func TestDcgmExporter_DisabledTriesLegacyEvenWhenNewNameDeleteFails(t *testing.T) {
+	newDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterDSName, Namespace: "kube-system"}}
+	legacyDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"}}
+	injected := errors.New("injected delete failure")
+
+	c := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(newDS, legacyDS).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() == dcgmExporterDSName {
+					return injected
+				}
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &NPUClusterPolicyReconciler{Client: c, Scheme: newTestScheme()}
+
+	policy := dcgmPolicy(&npuv1alpha1.DcgmExporterSpec{Enabled: false})
+	err := r.ensureDcgmExporter(context.Background(), policy)
+	if err == nil || !errors.Is(err, injected) {
+		t.Fatalf("새 이름 삭제 오류가 반환값에 있어야 한다: got %v", err)
+	}
+
+	var legacy appsv1.DaemonSet
+	getErr := r.Get(context.Background(), types.NamespacedName{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"}, &legacy)
+	if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("새 이름 삭제가 실패해도 옛 이름은 지워져야 한다: err=%v", getErr)
+	}
+}
+
+// 벤더 이미지를 그대로 쓰는 워크로드가 kcloud- 접두사 없이, 옛 이름 오브젝트를
+// 지우고 만들어지는지 검증한다.
+func TestDcgmExporter_VendorNameNoPrefix(t *testing.T) {
+	legacy := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"},
+	}
+	policy := dcgmPolicy(&npuv1alpha1.DcgmExporterSpec{Enabled: true})
+	r := newNPUReconciler(policy, legacy)
+	ctx := context.Background()
+
+	if err := r.ensureDcgmExporter(ctx, policy); err != nil {
+		t.Fatalf("ensureDcgmExporter 오류: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(ctx, dcgmKey, &ds); err != nil {
+		t.Fatalf("새 이름 DaemonSet 없음: %v", err)
+	}
+	if _, ok := ds.Annotations[ownerAnnotation]; !ok {
+		t.Error("소유 표식이 없다 — 벤더 배포물과 구분되지 않는다")
+	}
+	var old appsv1.DaemonSet
+	err := r.Get(ctx, types.NamespacedName{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"}, &old)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("옛 이름 DaemonSet 이 남아 있다: err=%v", err)
 	}
 }

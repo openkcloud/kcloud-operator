@@ -1055,7 +1055,7 @@ func (m *UpgradeStateMachine) nodeNeedsReboot(ctx context.Context, nodeName, ven
 		if !strings.EqualFold(d.Vendor, vendor) {
 			continue
 		}
-		if !deviceModelMatches(d.Model, model) {
+		if !DeviceModelMatches(d.Model, model) {
 			continue
 		}
 		if d.NeedsReboot {
@@ -1983,24 +1983,42 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-// deviceModelMatches 는 DriverUpgradeState.spec.model 이 NodeDeviceReport 의 장치 모델과
-// 같은 대상을 가리키는지 판정한다.
+// DeviceModelMatches 는 정책·상태에 적힌 모델 이름(specModel)이 NodeDeviceReport 의 장치
+// 모델(deviceModel)과 같은 대상을 가리키는지 판정한다. 모델 매칭 규칙의 정본이다 —
+// DriverUpgradeState 소비자 둘(state_machine.go·state_machine_job.go)과 정책 선택
+// (findPolicy, controller/driver_upgrade_controller.go)이 모두 이 함수만 부른다.
+// 규칙을 복제하면 다음에 또 한 곳만 고친다(2026-08-11 에 그렇게 findPolicy 가 빠졌다).
 //
 // "generic" 은 이름이 아니라 **모른다는 표시**다 — detector 가 제품을 판정하지 못했을 때
-// 남기는 값이라 어느 쪽에 있든 와일드카드로 봐야 한다. `findPolicy`
-// (driver_upgrade_controller.go)와 `partition/nvidia/backend.go` 가 이미 같은 관례를 쓴다.
+// 남기는 값이라 어느 쪽에 있든 와일드카드로 봐야 한다.
 //
-// 왜 필요한가 — spec.model 은 DriverUpgradeState 를 처음 만들 때 한 번만 기록되고 그 뒤
-// 갱신되지 않는데, detector 가 PCI 식별자로 제품명을 싣기 시작하면(2026-08-11) 장치 쪽만
-// "generic" 에서 "a30" 으로 바뀐다. 문자열 비교만 하면 두 값이 갈라져 **모든 장치가 걸러지고**
-// 재부팅 게이트와 자가복구 게이트가 조용히 죽는다(증상이 "아무 일도 안 일어남" 이라 탐지되지
-// 않는다). detector 이미지를 되돌리면 반대 방향으로 같은 일이 생기므로 양쪽을 다 본다.
-func deviceModelMatches(deviceModel, specModel string) bool {
+// 구체명이 붙는 방향도 같은 문제다. detector 가 표준 PCI DB 계층을 붙이면 장치 이름이
+// `a100` 이 아니라 `a100-pcie-40gb`(실측 10de:20f1), GTX 970 은 `geforce-gtx-970` 이 된다.
+// 사용자가 쓰는 `spec.model: a100` 은 제품군 이름이라 문자열 비교로는 영영 안 걸리고,
+// 양쪽 다 "generic" 이 아니어서 와일드카드도 안 걸린다 — findPolicy 가 nil 을 돌려주고
+// 증상은 "아무 일도 안 일어남" 이다. 그래서 한쪽이 다른 쪽의 `-` 경계 접두어면 같은 대상으로
+// 본다. 경계를 요구하므로 `a30` 은 `a100-pcie-40gb` 에 안 걸린다(과잉 매칭 방어).
+//
+// 양방향인 이유: spec.model 은 만들어질 때 한 번 기록된 값이라 detector 가 갱신되면 장치
+// 쪽만 구체화되고, detector 를 되돌리거나 `update-pciids` 로 표기가 바뀌면 반대 방향으로
+// 같은 일이 생긴다. 한 방향만 보면 그때 모든 장치가 걸러져 재부팅 게이트와 자가복구
+// 게이트가 조용히 죽는다.
+func DeviceModelMatches(deviceModel, specModel string) bool {
 	if specModel == "" || strings.EqualFold(specModel, "generic") {
 		return true
 	}
 	if strings.EqualFold(deviceModel, "generic") {
 		return true
 	}
-	return strings.EqualFold(deviceModel, specModel)
+	if strings.EqualFold(deviceModel, specModel) {
+		return true
+	}
+	return modelFamilyPrefix(specModel, deviceModel) || modelFamilyPrefix(deviceModel, specModel)
+}
+
+// modelFamilyPrefix 는 short 가 long 의 제품군 접두어인지 본다 — `-` 경계까지 요구해
+// `a1` 이 `a100-pcie-40gb` 에 걸리지 않게 한다.
+func modelFamilyPrefix(short, long string) bool {
+	return len(long) > len(short) && long[len(short)] == '-' &&
+		strings.EqualFold(long[:len(short)], short)
 }

@@ -14,6 +14,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/naming"
 )
 
 // toolkitTestPolicy 는 toolkit 활성화된 최소 NVIDIA DIP 를 만든다(toolkit 은 현재
@@ -62,8 +64,9 @@ func TestToolkitVendorSupported(t *testing.T) {
 func TestRenderToolkitDaemonSet_Nvidia(t *testing.T) {
 	ds := renderToolkitDaemonSet(toolkitTestPolicy(""))
 
-	if ds.Name != "kcloud-nvidia-toolkit" {
-		t.Errorf("DS name=%q, want kcloud-nvidia-toolkit", ds.Name)
+	wantName := naming.ToolkitDSName("nvidia", "generic")
+	if ds.Name != wantName {
+		t.Errorf("DS name=%q, want %q", ds.Name, wantName)
 	}
 	if ds.Namespace != "kube-system" {
 		t.Errorf("DS namespace=%q, want kube-system", ds.Namespace)
@@ -211,5 +214,34 @@ func TestCreateOrUpdateDS_RetriesOnConflict(t *testing.T) {
 	}
 	if len(got.Spec.Template.Spec.Containers) == 0 {
 		t.Fatalf("재시도 후 DS spec 이 desired 로 수렴하지 않음")
+	}
+}
+
+// TestCreateOrUpdateToolkitDS_DeletesLegacy 는 접두사를 뗀 새 이름으로 ensure 하기 전에
+// 옛 이름(kcloud-nvidia-toolkit) DS 를 지우는지 검증한다. 두 DS 가 남으면 같은 노드의
+// containerd 설정을 서로 덮어써 유효 설정을 알 수 없게 된다.
+func TestCreateOrUpdateToolkitDS_DeletesLegacy(t *testing.T) {
+	legacy := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: naming.ToolkitLegacyDSName, Namespace: naming.KubeSystemNamespace},
+	}
+	c := fake.NewClientBuilder().WithScheme(newTestScheme()).WithObjects(legacy).Build()
+	r := &ToolkitDaemonSetReconciler{Client: c}
+
+	if err := r.createOrUpdateToolkitDS(context.Background(), toolkitTestPolicy("")); err != nil {
+		t.Fatalf("createOrUpdateToolkitDS 오류: %v", err)
+	}
+
+	var old appsv1.DaemonSet
+	err := c.Get(context.Background(), types.NamespacedName{
+		Name: naming.ToolkitLegacyDSName, Namespace: naming.KubeSystemNamespace}, &old)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("옛 이름 DaemonSet 이 남아 있다: err=%v", err)
+	}
+
+	var newDS appsv1.DaemonSet
+	newName := naming.ToolkitDSName("nvidia", "generic")
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: newName, Namespace: naming.KubeSystemNamespace}, &newDS); err != nil {
+		t.Fatalf("새 이름 DaemonSet 없음: %v", err)
 	}
 }

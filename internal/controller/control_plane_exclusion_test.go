@@ -14,12 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// control_plane_exclusion_test.go: control-plane 배제·정책 배제 affinity 합성 검증
+// 수정일: 2026-08-12
+
 package controller
 
 import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kcloud-operator/internal/upgrade"
 )
@@ -66,5 +70,73 @@ func TestApplyControlPlaneExclusion(t *testing.T) {
 	// 기존 driver-upgrade 제약이 보존되어야 한다(term 내 AND 누적).
 	if !hasDoesNotExist(spec, upgrade.DriverUpgradingBlockingLabelKey) {
 		t.Errorf("기존 driver-upgrade 제약이 손실됨")
+	}
+}
+
+// hasRequirement 는 term 전부에 (key, operator, values) 요구사항이 있는지 확인한다.
+func hasRequirement(spec *corev1.PodSpec, key string, op corev1.NodeSelectorOperator, values ...string) bool {
+	if spec.Affinity == nil || spec.Affinity.NodeAffinity == nil {
+		return false
+	}
+	ns := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if ns == nil || len(ns.NodeSelectorTerms) == 0 {
+		return false
+	}
+	sameValues := func(a []string) bool {
+		if len(a) != len(values) {
+			return false
+		}
+		for i := range a {
+			if a[i] != values[i] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, term := range ns.NodeSelectorTerms {
+		found := false
+		for _, req := range term.MatchExpressions {
+			if req.Key == key && req.Operator == op && sameValues(req.Values) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// TestApplyExcludeNodeSelector 는 matchLabels·matchExpressions 각 연산자가 반대 방향
+// nodeAffinity 요구사항으로 뒤집혀 얹히는 것을 단정한다. nil selector 는 아무것도 안 붙인다.
+func TestApplyExcludeNodeSelector(t *testing.T) {
+	spec := &corev1.PodSpec{}
+	applyDriverUpgradeAntiAffinity(spec) // 기존 제약 보존 확인용
+	applyExcludeNodeSelector(spec, &metav1.LabelSelector{
+		MatchLabels: map[string]string{"maintenance": "true"},
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"canary"}},
+			{Key: "cordoned", Operator: metav1.LabelSelectorOpExists},
+		},
+	})
+
+	if !hasRequirement(spec, "maintenance", corev1.NodeSelectorOpNotIn, "true") {
+		t.Errorf("matchLabels 가 NotIn 으로 뒤집히지 않음")
+	}
+	if !hasRequirement(spec, "tier", corev1.NodeSelectorOpNotIn, "canary") {
+		t.Errorf("In 이 NotIn 으로 뒤집히지 않음")
+	}
+	if !hasRequirement(spec, "cordoned", corev1.NodeSelectorOpDoesNotExist) {
+		t.Errorf("Exists 가 DoesNotExist 로 뒤집히지 않음")
+	}
+	if !hasDoesNotExist(spec, upgrade.DriverUpgradingBlockingLabelKey) {
+		t.Errorf("기존 driver-upgrade 제약이 손실됨")
+	}
+
+	before := &corev1.PodSpec{}
+	applyExcludeNodeSelector(before, nil)
+	if before.Affinity != nil {
+		t.Errorf("nil selector 인데 affinity 가 생김: %+v", before.Affinity)
 	}
 }

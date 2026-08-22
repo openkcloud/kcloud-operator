@@ -3,7 +3,7 @@
 //
 //	안정 필드명의 JSON 계약. 필드는 모두 omitempty로 두어 벤더/리소스가 없을 때 생략된다.
 //
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-08-24
 package npuctl
 
 // 벤더 식별자 상수. NPUClusterPolicy.spec의 최상위 키와 1:1 대응하며(rngd는 furiosa의 서브벤더),
@@ -60,6 +60,11 @@ type DIPStatus struct {
 // NodeStatus는 노드 하나의 디바이스/allocatable/업그레이드 상태 요약입니다.
 type NodeStatus struct {
 	Name string `json:"name"`
+	// Excluded 는 이 노드가 배포 대상에서 제외됐는지다. operator 가 붙인
+	// kcloud.ai/excluded 라벨을 그대로 옮긴다 — 여기서 다시 판정하지 않는다.
+	Excluded bool `json:"excluded,omitempty"`
+	// ExcludedReason 은 고정 어휘다: control-plane | policy
+	ExcludedReason string `json:"excludedReason,omitempty"`
 	// Devices는 NodeDeviceReport.status.devices 입니다.
 	Devices []DeviceStatus `json:"devices,omitempty"`
 	// PassthroughReserved는 NodeDeviceReport.status.passthroughReserved 입니다(전량 vfio-pci 바인딩 시 true).
@@ -111,4 +116,46 @@ type ClusterPolicyStatus struct {
 	Ready        string `json:"ready,omitempty"` // "True"|"False"|"Unknown"|"" (조건 없음)
 	ReadyReason  string `json:"readyReason,omitempty"`
 	ReadyMessage string `json:"readyMessage,omitempty"`
+}
+
+// NodeDetail 은 노드 하나의 상세다. 여기 실리는 값은 전부 다른 컨트롤러가 이미 판정해
+// CRD 에 적어 둔 것이다 — 이 패키지는 옮기기만 하고 다시 판정하지 않는다.
+type NodeDetail struct {
+	Name           string            `json:"name"`
+	Excluded       bool              `json:"excluded,omitempty"`
+	ExcludedReason string            `json:"excludedReason,omitempty"`
+	Devices        []DeviceStatus    `json:"devices,omitempty"`
+	Allocatable    map[string]string `json:"allocatable,omitempty"`
+	Health         *HealthView       `json:"health,omitempty"`
+	Evidence       []EvidenceView    `json:"evidence,omitempty"`
+	Policies       []PolicyView      `json:"policies,omitempty"`
+}
+
+// HealthView 는 AcceleratorHealth.status 의 표시용 사본이다.
+type HealthView struct {
+	State             string             `json:"state,omitempty"`
+	Reason            string             `json:"reason,omitempty"`
+	AllocationAllowed bool               `json:"allocationAllowed,omitempty"`
+	Devices           []DeviceHealthView `json:"devices,omitempty"`
+}
+
+// DeviceHealthView 는 AcceleratorHealth.status.devices 의 한 항목이다.
+type DeviceHealthView struct {
+	PCIAddress string `json:"pciAddress,omitempty"`
+	State      string `json:"state,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// EvidenceView 는 AcceleratorEvidence 의 표시용 사본이다. 벤더별로 여러 건일 수 있다.
+type EvidenceView struct {
+	Vendor    string `json:"vendor,omitempty"`
+	Level     string `json:"level,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
+// PolicyView 는 이 노드를 대상으로 삼은 AcceleratorPartitionPolicy 다.
+type PolicyView struct {
+	Name   string `json:"name,omitempty"`
+	Vendor string `json:"vendor,omitempty"`
+	Phase  string `json:"phase,omitempty"`
 }

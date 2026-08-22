@@ -4,7 +4,7 @@
 //	core/v1 Node(allocatable)를 한 번에 조회해 ClusterStatus로 합친다.
 //	kubectl-npu status --json 및 사람용 텍스트 출력이 공통으로 사용하는 단일 진입점.
 //
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-08-12
 package npuctl
 
 import (
@@ -15,6 +15,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+)
+
+// nodeExcludedLabel·nodeExcludedReasonLabel 은 internal/controller/node_exclusion.go 가
+// 발행하는 라벨 키의 사본이다. 판정은 operator 한 곳(nodeExclusion)에서만 하고, 여기서는
+// 그 결과를 읽기만 한다 — 값을 다시 계산하지 않는다.
+const (
+	nodeExcludedLabel       = "kcloud.ai/excluded"
+	nodeExcludedReasonLabel = "kcloud.ai/excluded-reason"
+	// labelValueTrue 는 노드 라벨의 참 값이다(internal/controller 의 같은 이름 상수와 동일 관례).
+	labelValueTrue = "true"
 )
 
 // CollectStatus는 클러스터의 NCP/DIP/NDR/DUS/Node를 조회하여 ClusterStatus로 집약합니다.
@@ -232,6 +242,10 @@ func buildNodeStatuses(
 	for i := range nodes {
 		node := nodes[i]
 		ns := ensure(node.Name)
+		if node.Labels[nodeExcludedLabel] == labelValueTrue {
+			ns.Excluded = true
+			ns.ExcludedReason = node.Labels[nodeExcludedReasonLabel]
+		}
 		if len(node.Status.Allocatable) == 0 {
 			continue
 		}

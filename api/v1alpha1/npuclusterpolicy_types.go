@@ -17,7 +17,7 @@ limitations under the License.
 // ============================================================
 // npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
 // 상세: Detector/Nvidia/Furiosa/Rebellions/Tenstorrent vendor spec 포함
-// 생성일: 2025-01-01 | 수정일: 2026-07-15
+// 생성일: 2025-01-01 | 수정일: 2026-08-12
 // ============================================================
 
 package v1alpha1
@@ -41,7 +41,13 @@ type FuriosaSpec struct {
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ConfigMapName     string            `json:"configMapName,omitempty"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
-	Rngd              RngdSpec          `json:"rngd,omitempty"`
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다.
+	// nodeSelector 는 양성 선택이라 노드 하나를 빼려면 나머지 전부에 라벨을 붙여야
+	// 한다 — 노드가 늘수록 나빠진다. 이 축은 그 반대 방향이다.
+	// control-plane 배제는 이 필드와 무관하게 항상 걸린다(정책으로 끌 수 없다).
+	// +optional
+	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
+	Rngd                RngdSpec              `json:"rngd,omitempty"`
 	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
 	// +optional
 	DRA *DRASpec `json:"dra,omitempty"`
@@ -66,6 +72,9 @@ type RngdSpec struct {
 	ResourceName      string            `json:"resourceName,omitempty"` // default "furiosa.ai/rngd"
 	ConfigMapName     string            `json:"configMapName,omitempty"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
+	// +optional
+	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
 	// PartitionPolicy: "none" (default, 1 instance/card), "single-core" (8), "dual-core" (4), "quad-core" (2).
 	// Furiosa libfuriosa-kubernetes PartitioningPolicy 와 1:1 매핑.
 	// +kubebuilder:validation:Enum=none;single-core;dual-core;quad-core
@@ -82,6 +91,9 @@ type NvidiaSpec struct {
 	Enabled           bool              `json:"enabled"`
 	DevicePluginImage string            `json:"devicePluginImage"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
+	// +optional
+	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
 	// DcgmExporter 는 NVIDIA GPU 텔레메트리(온도/사용률/메모리/전력) exporter 설정이다.
 	// NPU 4벤더는 node-manager 가 hwmon 으로 수집하지만 NVIDIA 드라이버는 hwmon 을 등록하지
 	// 않아 NVML 경로가 필요하므로, upstream dcgm-exporter 를 operand 로 배포한다.
@@ -113,6 +125,9 @@ type RebellionsSpec struct {
 	Namespace         string            `json:"namespace,omitempty"`      // default "rbln-system"
 	ConfigMapName     string            `json:"configMapName,omitempty"`  // default "rbln-device-plugin-config"
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
+	// +optional
+	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
 }
 
 // TenstorrentSpec defines the Tenstorrent Blackhole NPU device plugin configuration.
@@ -124,6 +139,9 @@ type TenstorrentSpec struct {
 	DevicePluginImage string            `json:"devicePluginImage,omitempty"`
 	ResourceName      string            `json:"resourceName,omitempty"` // default "tenstorrent.com/blackhole"
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
+	// +optional
+	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
 	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
 	// +optional
 	DRA *DRASpec `json:"dra,omitempty"`

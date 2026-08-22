@@ -353,6 +353,201 @@ func TestFindPolicy_FallbackFirstWins(t *testing.T) {
 	}
 }
 
+// TestFindPolicy_ProductFamilyPrefix 는 detector 가 제품명을 구체화한 뒤에도 제품군 이름으로
+// 쓴 정책이 걸리는지 본다. 표준 PCI DB 계층이 붙으면 NVIDIA 장치 model 이 `a100` 이 아니라
+// `a100-pcie-40gb`(실측 10de:20f1)가 되고, 양쪽 다 "generic" 이 아니어서 와일드카드도 안
+// 걸려 findPolicy 가 nil 을 돌려줬다 — 증상이 "아무 일도 안 일어남" 이라 탐지되지 않는다.
+// 접두어 경계를 요구하므로 다른 제품군은 걸리지 않아야 한다(과잉 매칭 방어).
+func TestFindPolicy_ProductFamilyPrefix(t *testing.T) {
+	family := *makeNvidiaDIP("nvidia-a100", "a100")
+	other := *makeNvidiaDIP("nvidia-a30", "a30")
+
+	got := findPolicy([]v1alpha1.DriverInstallPolicy{family}, "nvidia", "a100-pcie-40gb")
+	if got == nil {
+		t.Fatal("제품군 정책 a100 이 장치 a100-pcie-40gb 에 안 걸린다")
+	}
+	if got.Name != "nvidia-a100" {
+		t.Errorf("걸린 정책 = %q, want nvidia-a100", got.Name)
+	}
+
+	if got := findPolicy([]v1alpha1.DriverInstallPolicy{other}, "nvidia", "a100-pcie-40gb"); got != nil {
+		t.Errorf("다른 제품군 정책 a30 이 장치 a100-pcie-40gb 에 걸렸다: %q", got.Name)
+	}
+
+	// 정확일치가 제품군 정책을 이겨야 한다 — 순서상 제품군이 먼저 나와도.
+	exact := *makeNvidiaDIP("nvidia-exact", "a100-pcie-40gb")
+	got = findPolicy([]v1alpha1.DriverInstallPolicy{family, exact}, "nvidia", "a100-pcie-40gb")
+	if got == nil || got.Name != "nvidia-exact" {
+		t.Errorf("정확일치 우선이 깨졌다: got %v", got)
+	}
+}
+
+// makeNvidiaDIP 는 nvidia DIP 픽스처다. 기존 makeDIP 는 vendor 가 furiosa 로 고정돼 있어
+// 제품명 구체화(NVIDIA PCI DB) 시험에 쓸 수 없다.
+func makeNvidiaDIP(name, model string) *v1alpha1.DriverInstallPolicy {
+	return &v1alpha1.DriverInstallPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: v1alpha1.DriverInstallPolicySpec{
+			Vendor: "nvidia",
+			Model:  model,
+			Driver: v1alpha1.DriverSpec{Version: "580.173.02", Mode: "daemonset"},
+		},
+	}
+}
+
+// TestSyncDUSModel_FollowsDeviceModel 는 장치 model 표기가 바뀌면 DriverUpgradeState.spec.model
+// 이 따라오는지 본다. spec.model 은 생성 시점 값이라 갱신되지 않아 라이브에서 이미 어긋나 있었고
+// (DUS `generic` 대 장치 `a30`), `update-pciids` 로 표기가 통째로 바뀌면 접두어·와일드카드
+// 규칙으로도 매칭이 끊겨 재부팅 게이트와 자가복구 게이트가 조용히 죽는다.
+func TestSyncDUSModel_FollowsDeviceModel(t *testing.T) {
+	dus := &v1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker1-nvidia"},
+		Spec: v1alpha1.DriverUpgradeStateSpec{
+			NodeName: "k8s-worker1", Vendor: "nvidia", Model: "generic",
+		},
+	}
+	r := newReconciler(dus)
+
+	r.syncDUSModel(context.Background(), dus, "a100-pcie-40gb")
+
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker1-nvidia"}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Spec.Model != "a100-pcie-40gb" {
+		t.Errorf("spec.model = %q, want a100-pcie-40gb", got.Spec.Model)
+	}
+
+	// 장치 model 이 비면(관측 실패) 기록을 지우지 않는다 — 지우면 벤더 전체 와일드카드가 된다.
+	r.syncDUSModel(context.Background(), &got, "")
+	var after v1alpha1.DriverUpgradeState
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker1-nvidia"}, &after); err != nil {
+		t.Fatalf("DUS 재조회 실패: %v", err)
+	}
+	if after.Spec.Model != "a100-pcie-40gb" {
+		t.Errorf("빈 장치 model 에 기록이 덮였다: %q", after.Spec.Model)
+	}
+}
+
+// TestVendorRepresentativeModels 는 벤더별 대표 model 선정을 본다. DUS 는 (노드, 벤더) 당
+// 하나인데 장치는 벤더당 여럿일 수 있어(라이브 worker1 = nvidia a30 + a2), model 이 갈리면
+// 단일 제품명이 없다는 뜻이라 "모른다"(generic) 로 남겨야 한다.
+func TestVendorRepresentativeModels(t *testing.T) {
+	for name, tc := range map[string]struct {
+		devices []v1alpha1.DeviceEntry
+		want    map[string]string
+	}{
+		"벤더 안에서 model 이 갈린다": {
+			devices: []v1alpha1.DeviceEntry{
+				{Vendor: "nvidia", Model: "a30"}, {Vendor: "nvidia", Model: "a2"},
+			},
+			want: map[string]string{"nvidia": modelUnknown},
+		},
+		"셋 중 하나만 다르다": {
+			devices: []v1alpha1.DeviceEntry{
+				{Vendor: "nvidia", Model: "a30"}, {Vendor: "nvidia", Model: "a2"},
+				{Vendor: "nvidia", Model: "a30"},
+			},
+			want: map[string]string{"nvidia": modelUnknown},
+		},
+		"벤더 안에서 model 이 같다": {
+			devices: []v1alpha1.DeviceEntry{
+				{Vendor: "nvidia", Model: "a30"}, {Vendor: "nvidia", Model: "a30"},
+			},
+			want: map[string]string{"nvidia": "a30"},
+		},
+		"장치 하나 — 기존 동작": {
+			devices: []v1alpha1.DeviceEntry{{Vendor: "nvidia", Model: "a30"}},
+			want:    map[string]string{"nvidia": "a30"},
+		},
+		"벤더가 섞여 있어도 벤더별로 판정": {
+			devices: []v1alpha1.DeviceEntry{
+				{Vendor: "furiosa", Model: "warboy"},
+				{Vendor: "nvidia", Model: "a30"}, {Vendor: "nvidia", Model: "a2"},
+			},
+			want: map[string]string{"furiosa": "warboy", "nvidia": modelUnknown},
+		},
+	} {
+		got := vendorRepresentativeModels(tc.devices)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: 벤더 수 = %d, want %d (%v)", name, len(got), len(tc.want), got)
+		}
+		for vendor, want := range tc.want {
+			if got[vendor] != want {
+				t.Errorf("%s: %s 대표 model = %q, want %q", name, vendor, got[vendor], want)
+			}
+		}
+	}
+}
+
+// TestEnsureUpgradeStates_MixedModelsDoNotLoopWrites 는 혼재 노드에서 spec.model 이 서로를
+// 덮는 영구 쓰기 루프가 없는지 본다. DUS 는 (노드, 벤더) 당 하나인데 장치마다 동기화하면
+// 매 reconcile 마다 a30 → a2 로 patch 가 두 번 나간다 — API 서버에 쓰기 루프다.
+// 같은 NDR 로 두 번 돌려 ResourceVersion 이 안 움직이는 것으로 고정한다.
+func TestEnsureUpgradeStates_MixedModelsDoNotLoopWrites(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker1"}}
+	ndr := &v1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker1"},
+		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: "k8s-worker1"},
+		Status: v1alpha1.NodeDeviceReportStatus{Devices: []v1alpha1.DeviceEntry{
+			{Vendor: "nvidia", Model: "a30", DriverVersion: "580.173.02"},
+			{Vendor: "nvidia", Model: "a2", DriverVersion: "580.173.02"},
+		}},
+	}
+	dip := makeNvidiaDIP("nvidia-generic", modelUnknown)
+	r := newReconciler(node, ndr, dip)
+
+	if err := r.ensureUpgradeStates(context.Background()); err != nil {
+		t.Fatalf("1차 ensureUpgradeStates: %v", err)
+	}
+	var first v1alpha1.DriverUpgradeState
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker1-nvidia"}, &first); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if first.Spec.Model != modelUnknown {
+		t.Errorf("혼재 노드의 spec.model = %q, want %q", first.Spec.Model, modelUnknown)
+	}
+
+	if err := r.ensureUpgradeStates(context.Background()); err != nil {
+		t.Fatalf("2차 ensureUpgradeStates: %v", err)
+	}
+	var second v1alpha1.DriverUpgradeState
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker1-nvidia"}, &second); err != nil {
+		t.Fatalf("DUS 재조회 실패: %v", err)
+	}
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Errorf("두 번째 reconcile 이 또 썼다: ResourceVersion %s → %s (model %q)",
+			first.ResourceVersion, second.ResourceVersion, second.Spec.Model)
+	}
+}
+
+// TestEnsureUpgradeStates_UniformModelIsKept 는 벤더 안 model 이 같으면 그 이름이 그대로
+// spec.model 에 들어가는지 본다(혼재 대응이 단일 제품 노드를 generic 으로 뭉개면 안 된다).
+func TestEnsureUpgradeStates_UniformModelIsKept(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker2"}}
+	ndr := &v1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8s-worker2"},
+		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: "k8s-worker2"},
+		Status: v1alpha1.NodeDeviceReportStatus{Devices: []v1alpha1.DeviceEntry{
+			{Vendor: "nvidia", Model: "a30", DriverVersion: "580.173.02"},
+			{Vendor: "nvidia", Model: "a30", DriverVersion: "580.173.02"},
+		}},
+	}
+	dip := makeNvidiaDIP("nvidia-a30", "a30")
+	r := newReconciler(node, ndr, dip)
+
+	if err := r.ensureUpgradeStates(context.Background()); err != nil {
+		t.Fatalf("ensureUpgradeStates: %v", err)
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker2-nvidia"}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Spec.Model != "a30" {
+		t.Errorf("단일 제품 노드의 spec.model = %q, want a30", got.Spec.Model)
+	}
+}
+
 // TestFindPolicy_RngdModelMatch 는 같은 vendor(furiosa) 아래 warboy/rngd 2개 DIP 중
 // vendor=furiosa, model=rngd 요청에 rngd DIP 가 정확히 매칭되는지 검증합니다.
 // (B-5 RNGD 호환성 확인: findPolicy 가 model 기반 분기를 지원해야 함)

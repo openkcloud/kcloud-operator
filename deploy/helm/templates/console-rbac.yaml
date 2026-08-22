@@ -1,0 +1,92 @@
+{{/* --reuse-values 로 올라온 릴리스는 api 맵에 console 키가 없다 — 값 조회를 nil-safe 하게
+     한다. enabled 는 hasKey 로 본다(default true 는 사용자가 명시한 false 를 뒤집는다). */}}
+{{- $csa := ((.Values.api.console | default dict).serviceAccount | default dict) -}}
+{{- $csaOn := ternary (default false $csa.enabled) true (hasKey $csa "enabled") -}}
+{{- if and .Values.api.enabled $csaOn }}
+# ============================================================
+# console-rbac.yaml: 관리 콘솔(/ui/) 접속용 ServiceAccount + ClusterRole
+# 상세: 콘솔은 브라우저가 화면 안에서 사용자 Bearer 토큰으로 /api/v1/* 를 부르는 구조라
+#       (internal/apiserver/ui.go), 사람이 토큰을 하나 들고 있어야 한다. 그 토큰으로
+#       operator SA 를 쓰면 콘솔이 필요로 하지 않는 권한(드라이버 DS 생성, Pod 축출 등)까지
+#       브라우저에 들어간다 — 콘솔 라우트가 SubjectAccessReview 로 실제 요구하는 verb 만
+#       담은 SA 를 따로 둔다.
+#       viewer 는 조회 라우트만, operator 는 정책 생성·삭제와 드라이버 제어까지 포함한다.
+#       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
+# 생성일: 2026-09-03
+# ============================================================
+{{- $fullname := include "npu-operator.fullname" . -}}
+{{- $sa := printf "%s-console" $fullname }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-console-viewer
+rules:
+  # 조회 라우트가 거는 게이트 그대로다(internal/apiserver/server.go Handler).
+  # status·nodes/{node}·accelerators·capabilities·preview 가 corev1.Node 를 읽는다.
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "events"]
+    verbs: ["list"]
+  - apiGroups: ["npu.ai"]
+    resources:
+      - "driverinstallpolicies"
+      - "nodedevicereports"
+      - "acceleratorpartitionpolicies"
+      - "acceleratorclasses"
+      - "acceleratorworkloads"
+    verbs: ["list"]
+  # 1.28 라인에는 이 리소스가 없을 수 있지만 SAR 은 RBAC 만 보므로 게이트는 선다.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-console-operator
+rules:
+  # 정책 만들기·되돌리기(POST/DELETE /api/v1/policies).
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorpartitionpolicies"]
+    verbs: ["create", "delete"]
+  # 드라이버 업그레이드·롤백은 DIP patch, 벤더 토글은 NCP patch 를 요구한다.
+  - apiGroups: ["npu.ai"]
+    resources: ["driverinstallpolicies", "npuclusterpolicies"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-console-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-console-viewer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- if eq (default "viewer" $csa.role) "operator" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-console-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-console-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

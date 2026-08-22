@@ -31,9 +31,13 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/metrics"
@@ -83,12 +87,19 @@ const (
 const (
 	furiosaLegacyWarboyDSName = "furiosa-device-plugin"
 	furiosaLegacyRngdDSName   = "furiosa-rngd-device-plugin"
-	furiosaUnifiedDSName      = "furiosa-unified-device-plugin"
-	furiosaUnifiedImgDefault  = "kcloud/furiosa-unified-device-plugin:0.1.0"
+	// 자체 구현이므로 operator 네임스페이스에 kcloud- 접두사로 둔다(TT plugin 과 같은 규칙).
+	// 옛 이름·자리는 furiosaUnifiedLegacy* 로 남겨 한 번 정리한다.
+	furiosaUnifiedDSName       = "kcloud-furiosa-device-plugin"
+	furiosaUnifiedLegacyDSName = "furiosa-unified-device-plugin"
+	furiosaUnifiedImgDefault   = "kcloud/furiosa-unified-device-plugin:0.1.0"
 	// 양 Furiosa 노드(Warboy/RNGD)가 공통으로 갖는 자립 라벨(node-manager 부여, PCI 0x1ed2).
 	// NFD 비의존 — 통합 DS 공통 셀렉터.
 	furiosaFamilyNodeLabel = "kcloud.ai/furiosa-family.present"
 )
+
+// furiosaUnifiedDSNamespace 는 통합 device-plugin 이 사는 네임스페이스다.
+// 자체 구현이라 operator 네임스페이스를 따른다 — 벤더 device-plugin(kube-system)과 다르다.
+func furiosaUnifiedDSNamespace() string { return naming.OperatorNamespace() }
 
 // NPUClusterPolicyReconciler reconciles a NPUClusterPolicy object
 type NPUClusterPolicyReconciler struct {
@@ -198,12 +209,10 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// -- 광고 주체 스위치: DaemonSet 을 만들기 전에 노드 라벨을 spec 과 맞춘다.
-	// 순서가 뒤바뀌면 라벨이 붙기 전 렌더가 한 박자 먼저 나가 두 광고가 겹칠 수 있다.
-	if err := r.reconcileDRAOwnedLabels(ctx, &policy); err != nil {
-		logger.Error(err, "DRA 소유 라벨 동기화 실패")
-		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "AdvertiseSwitchFailed", "%v", err)
-		r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "AdvertiseSwitchFailed", err.Error())
+	// -- 노드 라벨 동기화: DaemonSet 을 만들기 전에 광고 주체 전환·배제 노드 표시 두 축을
+	// spec 과 맞춘다. 순서가 뒤바뀌면 라벨이 붙기 전 렌더가 한 박자 먼저 나가 두 광고가
+	// 겹칠 수 있다. 두 축을 한 호출로 묶어 Reconcile 의 분기 수를 늘리지 않는다(gocyclo).
+	if err := r.syncNodeLabels(ctx, &policy); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -288,10 +297,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				return ctrl.Result{}, err
 			}
 		}
-		// 롤백: 통합 DS 가 남아있으면 제거(furiosaUnified=false 복원).
-		if err := r.deleteDaemonSetIfExists(ctx, furiosaUnifiedDSName); err != nil {
-			logger.Error(err, "failed to delete unified Furiosa DS during rollback")
-		}
+		r.rollbackFuriosaUnified(ctx, &policy)
 	}
 
 	// -- Rebellions ATOM+ (separate namespace rbln-system + PSA privileged + ClusterRole/Binding)
@@ -335,6 +341,27 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 생기는데 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가 없으면 상태가
 	// Installing 에 굳는다(2026-08-07 실측).
 	return ctrl.Result{RequeueAfter: draRequeue(&policy)}, nil
+}
+
+// syncNodeLabels 는 DaemonSet 렌더링 전에 노드 라벨을 정책과 맞추는 두 축을 순서대로
+// 적용한다: 광고 주체 전환(reconcileDRAOwnedLabels), 배제 노드 표시
+// (reconcileNodeExclusionLabels, node_exclusion.go). 실패한 축에 맞는 이벤트·Ready 조건을
+// 여기서 기록해, Reconcile 은 단일 분기로 두 축을 함께 처리하고 분기 수를 늘리지 않는다(gocyclo).
+func (r *NPUClusterPolicyReconciler) syncNodeLabels(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	logger := logf.FromContext(ctx)
+	if err := r.reconcileDRAOwnedLabels(ctx, policy); err != nil {
+		logger.Error(err, "DRA 소유 라벨 동기화 실패")
+		r.Recorder.Eventf(policy, corev1.EventTypeWarning, "AdvertiseSwitchFailed", "%v", err)
+		r.setReadyCondition(ctx, policy, metav1.ConditionFalse, "AdvertiseSwitchFailed", err.Error())
+		return err
+	}
+	if err := r.reconcileNodeExclusionLabels(ctx, policy); err != nil {
+		logger.Error(err, "배제 노드 라벨 동기화 실패")
+		r.Recorder.Eventf(policy, corev1.EventTypeWarning, "NodeExclusionLabelFailed", "%v", err)
+		r.setReadyCondition(ctx, policy, metav1.ConditionFalse, "NodeExclusionLabelFailed", err.Error())
+		return err
+	}
+	return nil
 }
 
 // draRequeue 는 발행 관측을 기다리는 DRA 드라이버가 있으면 재확인 간격을 준다.
@@ -384,6 +411,7 @@ func isDevicePluginResource(name string) bool {
 
 // cleanupOwnedResources deletes all DaemonSets and ConfigMaps with the owner annotation matching this policy.
 // device-plugin(3rd party)은 보존한다(#19 무중단 이관 — isDevicePluginResource).
+// 배제 라벨(kcloud.ai/excluded·excluded-reason)도 이 정책이 남긴 것이라 함께 회수한다.
 func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	ownerValue := fmt.Sprintf("%s/%s", policy.Namespace, policy.Name)
 
@@ -420,7 +448,11 @@ func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, 
 		}
 	}
 
-	return nil
+	// 배제 라벨 회수. 부여 로직을 복제하지 않고 policy=nil 로 같은 함수를 돌린다 —
+	// nodeExclusion 이 nil 을 "배제 없음" 으로 판정하므로 control-plane 사유까지 지워진다.
+	// 배포가 없으면 배제도 없다: 정책이 사라진 클러스터에서 "제외됨(control-plane)" 이
+	// 남으면 CLI·콘솔이 없는 정책을 보고하고 detector 는 그 노드 검증을 계속 접는다.
+	return r.reconcileNodeExclusionLabels(ctx, nil)
 }
 
 // ensureSideOperands 는 광고 경로 밖의 operand 를 순서대로 맞춘다. 실패한 operand
@@ -482,6 +514,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 		setOwnerAnnotation(&ds.ObjectMeta, policy)
 		applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
 		applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+		applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Nvidia.ExcludeNodeSelector)
 		applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 		// 두 writer 조정: ACPP 가 sharing config 를 소유하면 live 배선을 보존한다(Task 3).
@@ -700,6 +733,7 @@ interval: 10`,
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
 	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorFuriosa)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Furiosa.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
@@ -823,6 +857,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
 	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorRngd)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Furiosa.Rngd.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
@@ -833,18 +868,52 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	return nil
 }
 
-// deleteDaemonSetIfExists deletes a DaemonSet in kube-system by name, ignoring NotFound.
+// rollbackFuriosaUnified 는 furiosaUnified=false 로 되돌아간 정책이 남긴 통합 경로 자원을 회수한다.
+// 레거시 2-DS 경로가 도는 중이므로 하나가 실패해도 나머지를 마저 지운다 — 실패를 올리면 그 회차의
+// 2-DS 보장이 통째로 중단되고, 그 사이 광고가 비는 쪽이 더 나쁘다.
+//
+// Reconcile 안에 인라인으로 두면 이 함수의 분기가 그대로 Reconcile 의 순환 복잡도에 실린다
+// (gocyclo 임계 30 을 이 블록이 넘겼다).
+func (r *NPUClusterPolicyReconciler) rollbackFuriosaUnified(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) {
+	logger := logf.FromContext(ctx)
+	// 새 자리와 옛 자리 둘 다 확인한다 — 이름·네임스페이스를 바꾼 회차가 섞여 있다.
+	if err := r.deleteDaemonSetIn(ctx, furiosaUnifiedDSNamespace(), furiosaUnifiedDSName); err != nil {
+		logger.Error(err, "failed to delete unified Furiosa DS during rollback")
+	}
+	if err := r.deleteDaemonSetIn(ctx, naming.KubeSystemNamespace, furiosaUnifiedLegacyDSName); err != nil {
+		logger.Error(err, "failed to delete legacy unified Furiosa DS during rollback")
+	}
+	// 통합 경로가 만든 ConfigMap(furiosaUnifiedDSNamespace())도 같이 회수 — 안 그러면 고아로 남는다.
+	// ConfigMapName 이 비어 있으면 통합 경로가 애초에 안 만들었으니 건너뛴다. kube-system 의
+	// 같은 이름 ConfigMap 은 절대 건드리지 않는다 — 레거시 2-DS 경로(ensureFuriosaDevicePlugin)가
+	// 그것을 마운트한다.
+	cmName := policy.Spec.Furiosa.ConfigMapName
+	if cmName == "" {
+		return
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: furiosaUnifiedDSNamespace()}}
+	if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to delete unified Furiosa configmap during rollback")
+	}
+}
+
+// deleteDaemonSetIn 은 지정한 네임스페이스의 DaemonSet 을 이름으로 지운다. 없으면 조용히 넘어간다.
+func (r *NPUClusterPolicyReconciler) deleteDaemonSetIn(ctx context.Context, ns, name string) error {
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+	if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// deleteDaemonSetIfExists 는 kube-system 의 DS 를 이름으로 지운다(deleteDaemonSetIn 의 얇은 감싸개).
 // 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다. 이 함수가 지우는 이름
 // (furiosaLegacyWarboyDSName/furiosaLegacyRngdDSName/furiosaUnifiedDSName)은 전부 이 operator 만
 // 만드는 이름이라 소유권 검사가 필요 없다. 이름을 흡수 대상(nvidia device-plugin)에 재사용하려면
 // deleteOwnedDaemonSetIfExists 를 쓸 것 — 그쪽은 이름만으로 지우면 흡수 대상 3rd-party 리소스까지
 // 지울 위험이 있다.
 func (r *NPUClusterPolicyReconciler) deleteDaemonSetIfExists(ctx context.Context, name string) error {
-	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"}}
-	if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	return nil
+	return r.deleteDaemonSetIn(ctx, naming.KubeSystemNamespace, name)
 }
 
 // deleteOwnedDaemonSetIfExists 는 owner annotation 이 이 policy 와 일치할 때만 지운다.
@@ -874,6 +943,15 @@ func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetIfExists(ctx context.Co
 func (r *NPUClusterPolicyReconciler) ensureFuriosaUnifiedDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
+	// 옛 자리(kube-system)의 통합 DS 를 먼저 치운다. 두 DS 가 같은 노드에서 같은 자원을
+	// 등록하면 kubelet 등록이 충돌한다. 이름·네임스페이스를 바꾼 회차에만 실제로 지워진다.
+	// 실패 시 여기서 return err 로 새 DS 생성을 막는다 — 옛 DS 를 못 지운 채 새 DS 를 만들면
+	// 두 DS 가 같은 자원(beta.furiosa.ai/npu, furiosa.ai/rngd)을 중복 등록해 kubelet 이 충돌한다.
+	if err := r.deleteDaemonSetIn(ctx, naming.KubeSystemNamespace, furiosaUnifiedLegacyDSName); err != nil {
+		log.Error(err, "failed to delete legacy unified Furiosa DS before creating new one")
+		return err
+	}
+
 	image := policy.Spec.Furiosa.UnifiedDevicePluginImage
 	if image == "" {
 		image = furiosaUnifiedImgDefault
@@ -883,7 +961,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaUnifiedDevicePlugin(ctx contex
 	cmName := policy.Spec.Furiosa.ConfigMapName
 	if cmName != "" {
 		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: "kube-system"},
+			ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: furiosaUnifiedDSNamespace()},
 		}
 		setOwnerAnnotation(&cm.ObjectMeta, policy)
 		cm.Data = map[string]string{
@@ -901,7 +979,7 @@ interval: 10`,
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      furiosaUnifiedDSName,
-			Namespace: "kube-system",
+			Namespace: furiosaUnifiedDSNamespace(),
 			Labels:    labels,
 		},
 	}
@@ -969,6 +1047,9 @@ interval: 10`,
 	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorFuriosa)
 	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorRngd)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	// 같은 이유로 둘 중 하나라도 정책 배제 대상이면 물러난다.
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Furiosa.ExcludeNodeSelector)
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Furiosa.Rngd.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	// 두 writer 조정: ACPP 가 partition env 를 소유하면(owner 어노테이션) live 값을 보존한다.
@@ -1105,6 +1186,7 @@ func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.C
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
 	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorTenstorrent)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Tenstorrent.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
@@ -1464,6 +1546,7 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
+	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Rebellions.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 
 	if err := r.createOrUpdateDS(ctx, ds); err != nil {
@@ -1607,12 +1690,51 @@ func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *
 	return ds
 }
 
+// nodeEventFilter 는 노드 이벤트 중 reconcile 로 보낼 것을 고른다. 노드 Update 는 kubelet
+// 하트비트로 매우 잦으므로 라벨이 바뀐 것만 통과시킨다 — 배제 축이 보는 것은 라벨뿐이다.
+// LabelChangedPredicate 는 Update 만 걸러내고 Create·Delete·Generic 은 TypedFuncs 의 nil
+// 기본값이라 그대로 통과한다(predicate.Or 로 감쌀 필요가 없다). 새 control-plane 노드 합류가
+// Create 경로이므로 Create 통과는 필수다.
+var nodeEventFilter predicate.Predicate = predicate.LabelChangedPredicate{}
+
 // SetupWithManager sets up the controller with the Manager.
+//
+// Node watch 가 필요한 이유: 배제 라벨은 노드 라벨을 보고 붙는데 NCP 만 watch 하면 노드가
+// 합류하거나 사용자가 배제 라벨을 붙여도 그 사건으로는 reconcile 이 돌지 않는다. 남는
+// 트리거는 캐시 re-sync 뿐이다 — cmd/main.go 가 SyncPeriod 를 60초로 줄여 뒀으므로
+// (controller-runtime 기본 10시간이 아니다) 낡음 창은 최대 60초 + detector 스캔 최대 30초
+// ≈ 90초다. 즉 정확성 결함이 아니라 응답성 문제다. 그래도 watch 를 붙이는 이유는 "노드에
+// 라벨을 붙여 뺀다" 가 이 축의 대표 사용법이고, 90초 지연과 즉시 반응은 사용감이 다르며
+// 하트비트를 걸러내는 비용이 predicate 하나로 끝나서다. 주기 재큐를 새로 넣거나 SyncPeriod
+// 를 건드리지는 않는다 — re-sync 가 이미 안전망이다.
 func (r *NPUClusterPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&npuv1alpha1.NPUClusterPolicy{}).
+		Watches(
+			&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(r.mapNodeToClusterPolicies),
+			builder.WithPredicates(nodeEventFilter),
+		).
 		Named("npuclusterpolicy").
 		Complete(r)
+}
+
+// mapNodeToClusterPolicies 는 노드 이벤트를 NCP 요청으로 옮긴다. 배제 판정은 클러스터 전체
+// 노드를 훑으므로 어느 노드가 바뀌었는지는 쓰지 않는다(NCP 는 보통 1개).
+func (r *NPUClusterPolicyReconciler) mapNodeToClusterPolicies(
+	ctx context.Context, _ client.Object) []reconcile.Request {
+	var list npuv1alpha1.NPUClusterPolicyList
+	if err := r.List(ctx, &list); err != nil {
+		logf.FromContext(ctx).Error(err, "노드 이벤트 매핑 중 NPUClusterPolicy 목록 조회 실패")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: list.Items[i].Namespace, Name: list.Items[i].Name,
+		}})
+	}
+	return reqs
 }
 
 // -- Add
@@ -1684,4 +1806,35 @@ func applyControlPlaneExclusion(spec *corev1.PodSpec) {
 		corev1.NodeSelectorRequirement{Key: controlPlaneNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
 		corev1.NodeSelectorRequirement{Key: masterNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
 	)
+}
+
+// applyExcludeNodeSelector 는 sel 이 고르는 노드를 이 벤더 배포 대상에서 뺀다. 기존
+// nodeSelector(map[string]string, 양성 선택)의 반대 방향 축 — 노드 하나를 빼려고 나머지
+// 전부에 라벨을 붙이지 않아도 된다. applyControlPlaneExclusion 과 별개로 위에 얹는다
+// (control-plane 배제는 이 축과 무관하게 항상 걸린다). nodeExclusion(node_exclusion.go)
+// 이 같은 필드를 보고 kcloud.ai/excluded 라벨의 policy 사유를 판정하므로 조건이 갈라지지 않는다.
+//
+// 배제 의미론은 "조건 하나라도 맞으면 뺀다" 다 — 조건별 NOT 을 requiredDuringScheduling
+// term 하나에 AND 로 합성해 그것을 표현한다. 조건 목록은 exclusionConditions 가 만들고
+// 라벨 경로(matchesAnyExcludeNodeSelector)가 같은 목록을 소비하므로, 조건이 여럿이어도
+// 두 경로가 같은 노드를 뺀다. 유효하지 않은 조건은 exclusionConditions 가 이미 버렸다.
+func applyExcludeNodeSelector(spec *corev1.PodSpec, sel *metav1.LabelSelector) {
+	conds, _ := exclusionConditions(sel)
+	reqs := make([]corev1.NodeSelectorRequirement, 0, len(conds))
+	for _, e := range conds {
+		switch e.Operator {
+		case metav1.LabelSelectorOpIn:
+			reqs = append(reqs, corev1.NodeSelectorRequirement{Key: e.Key, Operator: corev1.NodeSelectorOpNotIn, Values: e.Values})
+		case metav1.LabelSelectorOpNotIn:
+			reqs = append(reqs, corev1.NodeSelectorRequirement{Key: e.Key, Operator: corev1.NodeSelectorOpIn, Values: e.Values})
+		case metav1.LabelSelectorOpExists:
+			reqs = append(reqs, corev1.NodeSelectorRequirement{Key: e.Key, Operator: corev1.NodeSelectorOpDoesNotExist})
+		case metav1.LabelSelectorOpDoesNotExist:
+			reqs = append(reqs, corev1.NodeSelectorRequirement{Key: e.Key, Operator: corev1.NodeSelectorOpExists})
+		}
+	}
+	if len(reqs) == 0 {
+		return
+	}
+	appendNodeAffinityRequirements(spec, reqs...)
 }

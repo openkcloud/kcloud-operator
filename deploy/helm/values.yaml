@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-08-07 (operator 기본 이미지 태그를 v0.7.1 로 정합)
+# 생성일: 2026-03-25 | 수정일: 2026-08-12 (operator·detector 기본 태그를 라이브와 정합)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # global.registry: 사설 이미지(operator/detector/device-plugin/driver)의 레지스트리.
@@ -22,7 +22,7 @@ metrics:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.16
+  tag: v0.7.26
   pullPolicy: IfNotPresent
 
 # acpp: AcceleratorPartitionPolicy 관련 설정.
@@ -108,7 +108,7 @@ clusterPolicy:
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   repository: "kcloud-node-manager"
-  tag: "0.6.12"
+  tag: "0.6.16"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,7 +203,10 @@ furiosa:
   # ─────────────────────────────────────────────────────────────────────
   unified:
     enabled: false
-    # ⚠️ kcloud/ 접두는 오타가 아니다 — 위 rngd.devicePluginRepository 주석 참조.
+    # 자체 구현 device-plugin. global.registry 가 앞에 붙어
+    # <registry>/kcloud/furiosa-unified-device-plugin 이 된다 — 저장소 경로가 프로젝트
+    # 이름과 겹치는 것은 harbor 프로젝트(kcloud) 아래에 kcloud/ 경로로 올렸기 때문이다.
+    # 워크로드는 kcloud 네임스페이스에 kcloud-furiosa-device-plugin 이름으로 뜬다.
     devicePluginRepository: "kcloud/furiosa-unified-device-plugin"
     devicePluginTag: "0.1.0"
 
@@ -279,6 +282,16 @@ api:
     # cert SAN 에 더할 IP. **IP 로 접속하려면 반드시 여기에 넣는다** — IP 를 DNS SAN 에
     # 넣으면 브라우저가 매칭하지 않아 경고가 그대로 뜬다.
     extraAltIPs: []
+  console:
+    # 콘솔 접속용 ServiceAccount. 콘솔은 사람이 든 Bearer 토큰으로만 데이터를 읽으므로
+    # (서버가 대신 읽어주는 경로 없음) 토큰을 발급할 주체가 하나 필요하다. operator SA 를
+    # 쓰면 콘솔이 요구하지 않는 권한까지 브라우저에 들어가므로 별도로 둔다.
+    #   kubectl -n <ns> create token <release>-console
+    serviceAccount:
+      enabled: true
+      # viewer   = 조회 라우트만
+      # operator = 정책 생성·삭제와 드라이버 업그레이드·토글까지
+      role: viewer
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DriverInstallPolicy CR 자동 생성 설정 (driverInstallPolicies와 nvidia/furiosa 구분)
@@ -430,6 +443,7 @@ driverInstallPolicies:
       - "2026.1.0"
       - "2026.2.0"
       - "2026.3.0"
+      - "2026.3.1"
     # 자립 셀렉터(node-manager 부여). 수동/NFD 라벨 비의존.
     nodeSelector:
       kcloud.ai/rngd.present: "true"
@@ -437,10 +451,10 @@ driverInstallPolicies:
       # #13 완전 전환: RNGD Mode=job 기본화. RUN_MODE=job 지원 이미지(-v1) 필요.
       # daemonset 코드 경로 fallback 보존(회귀 시 mode=daemonset 복귀).
       mode: job
-      version: "2026.3.0"
+      version: "2026.3.1"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "furiosa-rngd-driver-installer"
-      tag: "2026.3.0-v1"
+      tag: "2026.3.1-v1"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false

@@ -104,6 +104,11 @@ type ValidationStep struct {
 	Name string `json:"name"`
 	// Passed 는 해당 step 통과 여부입니다.
 	Passed bool `json:"passed"`
+	// NotApplicable 은 Passed 와 별개 축입니다 — 통과도 실패도 아닌 "해당없음" 상태를
+	// 표시합니다(예: control-plane 배제 노드의 devicePlugin/sampleWorkload). 이 이름·json
+	// 태그는 detector(node-device-detector/types.go 의 ValidationStep)와 정확히 같아야
+	// 합니다 — 다르면 구조적 스키마가 detector 가 쓰는 값을 조용히 잘라냅니다.
+	NotApplicable bool `json:"notApplicable,omitempty"`
 	// Message 는 실패/보조 사유입니다(운영자 디버깅).
 	Message string `json:"message,omitempty"`
 }

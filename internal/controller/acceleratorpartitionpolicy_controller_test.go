@@ -126,9 +126,9 @@ func wipeACPPs() {
 // upsertUnifiedDS 는 singleton unified DS 를 주어진 pod-template nodeSelector 로 생성/갱신한다.
 func upsertUnifiedDS(nodeSelector map[string]string) {
 	var ds appsv1.DaemonSet
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds); err != nil {
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err != nil {
 		ds = appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS},
+			ObjectMeta: metav1.ObjectMeta{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()},
 			Spec: appsv1.DaemonSetSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": rngdUnifiedDSName}},
 				Template: corev1.PodTemplateSpec{
@@ -330,7 +330,7 @@ func (uidBustingFailVerifier) VerifyAllocatable(partition.Target, map[string]int
 }
 func (uidBustingFailVerifier) VerifyAllocation(partition.Target, string) (*partition.VerifyResult, error) {
 	var ds appsv1.DaemonSet
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds); err == nil {
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err == nil {
 		fresh := ds.DeepCopy()
 		fresh.ResourceVersion = ""
 		fresh.UID = ""
@@ -375,7 +375,7 @@ var _ = Describe("ACPP rollback on failure", func() {
 		Expect(rb.Reason).To(Equal("RollbackSucceeded"))
 
 		var ds appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds)).To(Succeed())
 		Expect(envValueOf(&ds)).To(Equal(testDualCorePolicy), "DS env must be restored to the pre-apply value")
 	})
 
@@ -487,7 +487,7 @@ var _ = Describe("ACPP no-diff and idempotency", func() {
 		upsertUnifiedDS(sel) // 기본 env RNGD_PARTITION_POLICY=dual-core
 
 		var dsBefore appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsBefore)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsBefore)).To(Succeed())
 
 		acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: "no-diff-acpp"},
@@ -516,7 +516,7 @@ var _ = Describe("ACPP no-diff and idempotency", func() {
 		Expect(c.Message).To(ContainSubstring("changed=false"))
 
 		var dsAfter appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfter)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfter)).To(Succeed())
 		// no-diff 여도 env(RNGD_PARTITION_POLICY) 자체는 절대 재기록되면 안 된다(Apply skip 은 여전히 유효).
 		Expect(envValueOf(&dsAfter)).To(Equal(testDualCorePolicy), "Apply must be skipped on no-diff — env must not be rewritten")
 		// finding #1: no-diff 로 Ready 에 도달한 ACPP 도 owner-lock 을 주장해야 한다(ensureOwnerLock 이
@@ -553,7 +553,7 @@ var _ = Describe("ACPP no-diff and idempotency", func() {
 		Expect(cv.calls).To(Equal(1), "first reconcile must verify once")
 
 		var dsAfterFirst appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfterFirst)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfterFirst)).To(Succeed())
 
 		By("reconciling again with no spec change — must not rewrite DS or re-verify")
 		_, err := r.Reconcile(ctx, reconcileReq("idem-acpp"))
@@ -565,7 +565,7 @@ var _ = Describe("ACPP no-diff and idempotency", func() {
 		Expect(cv.calls).To(Equal(1), "evidence-reuse gate must skip re-verify on unchanged generation/config")
 
 		var dsAfterSecond appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfterSecond)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfterSecond)).To(Succeed())
 		Expect(dsAfterSecond.ResourceVersion).To(Equal(dsAfterFirst.ResourceVersion), "repeated reconcile must not rewrite the DS")
 	})
 })
@@ -613,7 +613,7 @@ var _ = Describe("ACPP validation rejection", func() {
 		// DS env 는 apply 이전 상태(dual-core)로 절대 mutate 되지 않아야 한다(criterion 9).
 		Consistently(func() string {
 			var ds appsv1.DaemonSet
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds)).To(Succeed())
 			return envValueOf(&ds)
 		}, "2s", "200ms").Should(Equal(testDualCorePolicy))
 	}
@@ -725,7 +725,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 		}, "10s", "200ms").Should(Equal(npuv1alpha1.ACPPPhaseReady))
 
 		var dsReady appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsReady)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsReady)).To(Succeed())
 		Expect(envValueOf(&dsReady)).To(Equal("quad-core"))
 		Expect(dsReady.Annotations[rngd.PartitionOwnerAnnotation]).To(Equal("deletion-retain-acpp"), "changed apply must stamp the owner lock with the ACPP's own name")
 
@@ -741,7 +741,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 		}, "5s", "200ms").Should(BeTrue())
 
 		var dsAfter appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfter)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfter)).To(Succeed())
 		Expect(envValueOf(&dsAfter)).To(Equal("quad-core"), "Retain: partition must be kept, not rolled back")
 		_, hasOwnerAfter := dsAfter.Annotations[rngd.PartitionOwnerAnnotation]
 		Expect(hasOwnerAfter).To(BeFalse(), "owner lock must be released on delete")
@@ -771,7 +771,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 
 		By("deleting the unified DS, then the ACPP")
 		var ds appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, &ds)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, acpp)).To(Succeed())
 
@@ -823,7 +823,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 		}, "10s", "200ms").Should(Equal(npuv1alpha1.ACPPPhaseReady))
 
 		var dsAfterWinner appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfterWinner)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfterWinner)).To(Succeed())
 		Expect(dsAfterWinner.Annotations[rngd.PartitionOwnerAnnotation]).To(Equal("owner-lock-winner"))
 
 		By("loser reconciles — gets a finalizer but loses with TargetConflict")
@@ -843,7 +843,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 		}, "5s", "200ms").Should(BeTrue())
 
 		var dsAfterLoserDelete appsv1.DaemonSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &dsAfterLoserDelete)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfterLoserDelete)).To(Succeed())
 		Expect(dsAfterLoserDelete.Annotations[rngd.PartitionOwnerAnnotation]).To(Equal("owner-lock-winner"), "loser deletion must not release the winner's owner lock")
 	})
 })

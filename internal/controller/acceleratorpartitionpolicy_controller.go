@@ -47,11 +47,11 @@ const migOwnerAnnotation = "npu.ai/mig-partition-owner"
 const nvidiaGPUResource = "nvidia.com/gpu"
 
 // MVP-1: RNGD 는 DS 전역이므로 target = DaemonSet 고정(spec §2.3).
-// furiosaUnifiedDSName 은 npuclusterpolicy_controller.go 에 이미 정의된 값을 재사용한다.
-const (
-	rngdUnifiedDSName = furiosaUnifiedDSName
-	rngdUnifiedDSNS   = "kube-system"
-)
+// 이름·네임스페이스 모두 npuclusterpolicy_controller.go 의 값을 그대로 따른다 —
+// 두 컨트롤러가 같은 DS 를 가리켜야 파티션 적용이 대상을 찾는다.
+const rngdUnifiedDSName = furiosaUnifiedDSName
+
+func rngdUnifiedDSNS() string { return furiosaUnifiedDSNamespace() }
 
 // AcceleratorPartitionPolicyReconciler reconciles a AcceleratorPartitionPolicy object.
 type AcceleratorPartitionPolicyReconciler struct {
@@ -152,7 +152,7 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 
 	// 충돌 판정 — MVP-1 RNGD 단일 DS target: DS-UID 충돌/scope 부분집합/vendor 불일치.
 	target := partition.Target{Ctx: ctx, NodeName: firstNodeName(ctx, r.Client, acpp.Spec.NodeSelector), Owner: acpp.Name,
-		DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS}
+		DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS()}
 
 	if win, reason := r.resolveConflict(ctx, &acpp); !win {
 		ts := npuv1alpha1.TargetStatus{NodeName: target.NodeName, Phase: npuv1alpha1.ACPPPhaseFailed}
@@ -1200,7 +1200,7 @@ func setNvidiaReady(ts *npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorP
 func (r *AcceleratorPartitionPolicyReconciler) ensureOwnerLock(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy) {
 	logger := logf.FromContext(ctx)
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err != nil {
 		if !apierrors.IsNotFound(err) {
 			logger.Error(err, "ensureOwnerLock: get DS failed")
 		}
@@ -1303,7 +1303,7 @@ const labelValueTrue = "true"
 // DS 에 nodeSelector 가 없으면 scope 제약을 걸지 않는다(빈 슬라이스 → selectorCoversAll 무조건 통과).
 func (r *AcceleratorPartitionPolicyReconciler) dsManagedNodes(ctx context.Context) ([]string, error) {
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err != nil {
 		return nil, err
 	}
 	if len(ds.Spec.Template.Spec.NodeSelector) == 0 {
@@ -1488,7 +1488,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 
 	{
 		var ds appsv1.DaemonSet
-		if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS}, &ds); err == nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err == nil {
 			// 이 ACPP 가 실제 소유자일 때만 lock 해제 — TargetConflict 패자 삭제가 승자의 lock 을
 			// 지우면 안 된다(finding #2). value 는 소유 ACPP 의 .metadata.name(Task 9).
 			if ds.Annotations[rngd.PartitionOwnerAnnotation] == acpp.Name {

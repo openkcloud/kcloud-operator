@@ -97,14 +97,29 @@ func toolkitVendorSupported(vendor string) bool {
 }
 
 func (r *ToolkitDaemonSetReconciler) createOrUpdateToolkitDS(ctx context.Context, pol *npuv1alpha1.DriverInstallPolicy) error {
+	if err := r.deleteLegacyToolkitDS(ctx); err != nil {
+		return err
+	}
 	ds := renderToolkitDaemonSet(pol)
 	return r.createOrUpdateDS(ctx, ds)
+}
+
+// deleteLegacyToolkitDS 는 접두사를 떼기 전 이름(naming.ToolkitLegacyDSName)의 DS 를
+// 새 DS ensure 전에 지운다. 두 DS 가 같은 노드에서 containerd 설정을 서로 덮으면
+// 유효 설정이 어느 쪽인지 알 수 없게 되므로, 접두사를 뗀 회차엔 실제로 지워져야 한다.
+func (r *ToolkitDaemonSetReconciler) deleteLegacyToolkitDS(ctx context.Context) error {
+	legacy := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{
+		Name: naming.ToolkitLegacyDSName, Namespace: naming.KubeSystemNamespace}}
+	if err := r.Delete(ctx, legacy); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // createOrUpdateDS 는 DaemonSet 을 생성하거나 스펙/레이블/어노테이션/ownerRef 변경 시
 // 업데이트하는 idempotent upsert (driver reconciler 와 동일 규약).
 func (r *ToolkitDaemonSetReconciler) createOrUpdateDS(ctx context.Context, desired *appsv1.DaemonSet) error {
-	// 모든 DIP 트리거가 all-DIP List 후 동일 kcloud-nvidia-toolkit DS 를 ensure 하므로
+	// 모든 DIP 트리거가 all-DIP List 후 동일 nvidia-toolkit DS 를 ensure 하므로
 	// 동시 reconcile 의 Get→Update 가 stale resourceVersion 으로 409 Conflict 가 날 수 있다.
 	// RetryOnConflict 가 Conflict 시 아래 함수를 재실행(=fresh Get→Update)하여 흡수한다.
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {

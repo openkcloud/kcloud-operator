@@ -14,8 +14,11 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/partition/rngd"
@@ -23,6 +26,8 @@ import (
 
 // TestFuriosaUnified_DSCreated는 통합 DS 가 공통 PCI nodeSelector·기본 이미지·정책 env 로 생성되는지 검증한다.
 func TestFuriosaUnified_DSCreated(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
 	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
 		Furiosa: npuv1alpha1.FuriosaSpec{
 			Enabled:       true,
@@ -40,7 +45,7 @@ func TestFuriosaUnified_DSCreated(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: furiosaUnifiedDSNamespace()}, &ds); err != nil {
 		t.Fatalf("통합 DaemonSet 생성 실패: %v", err)
 	}
 
@@ -80,6 +85,8 @@ func TestFuriosaUnified_DSCreated(t *testing.T) {
 
 // TestFuriosaUnified_DefaultImage는 UnifiedDevicePluginImage 미지정 시 기본 이미지가 사용되는지 검증한다.
 func TestFuriosaUnified_OverrideImage(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
 	const custom = "registry.example.com:5000/kcloud/furiosa-unified-device-plugin:0.2.0"
 	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
 		Furiosa: npuv1alpha1.FuriosaSpec{
@@ -94,7 +101,7 @@ func TestFuriosaUnified_OverrideImage(t *testing.T) {
 		t.Fatalf("ensureFuriosaUnifiedDevicePlugin 오류: %v", err)
 	}
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: furiosaUnifiedDSNamespace()}, &ds); err != nil {
 		t.Fatalf("통합 DaemonSet 생성 실패: %v", err)
 	}
 	if got := ds.Spec.Template.Spec.Containers[0].Image; got != custom {
@@ -106,10 +113,12 @@ func TestFuriosaUnified_OverrideImage(t *testing.T) {
 // 가질 때 NPUClusterPolicy 가 RNGD_PARTITION_POLICY 를 덮어쓰지 않고 live 값을 보존하는지 검증한다
 // (두 writer 조정, Task 9).
 func TestFuriosaUnified_PreservesPartitionEnvWhenACPPOwns(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
 	existing := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        furiosaUnifiedDSName,
-			Namespace:   "kube-system",
+			Namespace:   furiosaUnifiedDSNamespace(),
 			Annotations: map[string]string{rngd.PartitionOwnerAnnotation: "acpp-uid-1"},
 		},
 		Spec: appsv1.DaemonSetSpec{
@@ -142,7 +151,7 @@ func TestFuriosaUnified_PreservesPartitionEnvWhenACPPOwns(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: furiosaUnifiedDSNamespace()}, &ds); err != nil {
 		t.Fatalf("통합 DaemonSet 조회 실패: %v", err)
 	}
 
@@ -163,10 +172,12 @@ func TestFuriosaUnified_PreservesPartitionEnvWhenACPPOwns(t *testing.T) {
 // TestFuriosaUnified_OverwritesPartitionEnvWithoutOwner는 owner 어노테이션이 없는 기존 DS 는
 // 종전대로 NPUClusterPolicy 값으로 덮이는지 검증한다(회귀 방지).
 func TestFuriosaUnified_OverwritesPartitionEnvWithoutOwner(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
 	existing := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      furiosaUnifiedDSName,
-			Namespace: "kube-system",
+			Namespace: furiosaUnifiedDSNamespace(),
 		},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": furiosaUnifiedDSName}},
@@ -198,7 +209,7 @@ func TestFuriosaUnified_OverwritesPartitionEnvWithoutOwner(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: "kube-system"}, &ds); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: furiosaUnifiedDSNamespace()}, &ds); err != nil {
 		t.Fatalf("통합 DaemonSet 조회 실패: %v", err)
 	}
 
@@ -210,6 +221,37 @@ func TestFuriosaUnified_OverwritesPartitionEnvWithoutOwner(t *testing.T) {
 	}
 	if got != "dual-core" {
 		t.Errorf("RNGD_PARTITION_POLICY: got %q, want overwritten %q (no owner)", got, "dual-core")
+	}
+}
+
+// TestFuriosaUnified_LegacyObjectRemoved 는 옛 자리(kube-system)의 통합 DS 가
+// 새 DS 를 만들 때 함께 지워지는지 검증한다. 둘이 공존하면 같은 자원을 두 번 등록한다.
+func TestFuriosaUnified_LegacyObjectRemoved(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
+	legacy := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "furiosa-unified-device-plugin",
+			Namespace: "kube-system",
+		},
+	}
+	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
+		Furiosa: npuv1alpha1.FuriosaSpec{
+			Enabled: true, Unified: true, ConfigMapName: "npu-device-plugin",
+		},
+	})
+	r := newNPUReconciler(policy, legacy)
+	ctx := context.Background()
+
+	if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, policy); err != nil {
+		t.Fatalf("ensureFuriosaUnifiedDevicePlugin 오류: %v", err)
+	}
+
+	var old appsv1.DaemonSet
+	err := r.Get(ctx, types.NamespacedName{
+		Name: "furiosa-unified-device-plugin", Namespace: "kube-system"}, &old)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("옛 DaemonSet 이 남아 있다: err=%v", err)
 	}
 }
 
@@ -233,5 +275,119 @@ func TestDeleteDaemonSetIfExists(t *testing.T) {
 	// 부재 DS 삭제는 NotFound 무시(멱등)
 	if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyRngdDSName); err != nil {
 		t.Errorf("부재 DS 삭제는 nil 이어야 함: %v", err)
+	}
+}
+
+// TestFuriosaUnified_KcloudNamespace 는 통합 DS 가 operator 네임스페이스에
+// 자체 구현 접두사 이름으로 생성되는지 검증한다.
+func TestFuriosaUnified_KcloudNamespace(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
+	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
+		Furiosa: npuv1alpha1.FuriosaSpec{
+			Enabled:       true,
+			Unified:       true,
+			ConfigMapName: "npu-device-plugin",
+			Rngd:          npuv1alpha1.RngdSpec{PartitionPolicy: "dual-core"},
+		},
+	})
+	r := newNPUReconciler(policy)
+	ctx := context.Background()
+
+	if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, policy); err != nil {
+		t.Fatalf("ensureFuriosaUnifiedDevicePlugin 오류: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	key := types.NamespacedName{Name: "kcloud-furiosa-device-plugin", Namespace: "kcloud"}
+	if err := r.Get(ctx, key, &ds); err != nil {
+		t.Fatalf("kcloud 네임스페이스에 통합 DaemonSet 없음: %v", err)
+	}
+	if ds.Labels["app.kubernetes.io/name"] != "kcloud-furiosa-device-plugin" {
+		t.Errorf("이름 라벨: got %q", ds.Labels["app.kubernetes.io/name"])
+	}
+}
+
+// TestFuriosaUnified_ConfigMapFollowsDSNamespace 는 Warboy config ConfigMap 이 통합 DS 와
+// 같은 네임스페이스(kcloud)에 생성되는지 검증한다. 파드는 자기 네임스페이스의 ConfigMap 만
+// 마운트할 수 있어, 어긋나면 ContainerCreating 에 고정된다(라이브에서 실제로 발생).
+func TestFuriosaUnified_ConfigMapFollowsDSNamespace(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
+	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
+		Furiosa: npuv1alpha1.FuriosaSpec{
+			Enabled:       true,
+			Unified:       true,
+			ConfigMapName: "npu-device-plugin",
+		},
+	})
+	r := newNPUReconciler(policy)
+	ctx := context.Background()
+
+	if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, policy); err != nil {
+		t.Fatalf("ensureFuriosaUnifiedDevicePlugin 오류: %v", err)
+	}
+
+	var cm corev1.ConfigMap
+	key := types.NamespacedName{Name: "npu-device-plugin", Namespace: furiosaUnifiedDSNamespace()}
+	if err := r.Get(ctx, key, &cm); err != nil {
+		t.Fatalf("kcloud 네임스페이스에 ConfigMap 없음: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedDSName, Namespace: furiosaUnifiedDSNamespace()}, &ds); err != nil {
+		t.Fatalf("통합 DaemonSet 조회 실패: %v", err)
+	}
+	var mounted string
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == "config" && v.ConfigMap != nil {
+			mounted = v.ConfigMap.Name
+		}
+	}
+	if mounted != cm.Name {
+		t.Errorf("DS volume 이 참조하는 ConfigMap: got %q, want %q", mounted, cm.Name)
+	}
+}
+
+// TestFuriosaUnified_RollbackDeletesConfigMap 는 Unified=false 로 되돌릴 때(전체 Reconcile 의
+// 롤백 분기) 통합 경로가 만든 ConfigMap(furiosaUnifiedDSNamespace()=kcloud)이 함께 회수되는지,
+// kube-system 의 동명 ConfigMap(레거시 2-DS 경로가 마운트)은 절대 지워지지 않는지 검증한다.
+func TestFuriosaUnified_RollbackDeletesConfigMap(t *testing.T) {
+	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+
+	const cmName = "npu-device-plugin"
+	unifiedCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: furiosaUnifiedDSNamespace()},
+	}
+	legacyCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: "kube-system"},
+	}
+	policy := makePolicy("test-policy", npuv1alpha1.NPUClusterPolicySpec{
+		Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/npu-op-detector:test"},
+		Furiosa: npuv1alpha1.FuriosaSpec{
+			Enabled:       true,
+			Unified:       false, // 롤백 상태 — 옛 2-DS 경로 유지
+			ConfigMapName: cmName,
+		},
+	})
+	r := newNPUReconciler(policy, unifiedCM, legacyCM)
+	r.Recorder = record.NewFakeRecorder(50)
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace},
+	}); err != nil {
+		t.Fatalf("Reconcile 오류: %v", err)
+	}
+
+	var gone corev1.ConfigMap
+	err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: furiosaUnifiedDSNamespace()}, &gone)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("통합 경로 ConfigMap(kcloud)이 롤백 후에도 남아 있다: err=%v", err)
+	}
+
+	var kept corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: "kube-system"}, &kept); err != nil {
+		t.Fatalf("kube-system 의 레거시 ConfigMap 이 잘못 지워졌다: err=%v", err)
 	}
 }

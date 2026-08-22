@@ -39,7 +39,7 @@ type probe struct {
 func compareProbes() []probe {
 	return []probe{
 		{
-			id: "P1", title: "같은 자원을 다투는 두 작업", axis: "충돌 행렬",
+			id: "P1", title: "같은 자원에 경합하는 두 작업", axis: "충돌 행렬",
 			expect: "둘이 동시에 적용 구간에 있지 않다",
 			run:    probeConcurrentApply,
 		},
@@ -178,11 +178,11 @@ var _ = Describe("비교군 B0~B3 (§16.4)", func() {
 				})
 			}
 		}
-		// B2 는 네 축이 전부 켜진 구성이다 — 여기서 하나라도 잘못된 결말이 나오면 회귀다.
+		// B2 는 네 기능이 전부 켜진 구성이다 — 여기서 하나라도 잘못된 판정이 나오면 회귀다.
 		for _, c := range report.compares {
 			if c.Baseline == "B2" {
 				Expect(c.Bad).To(BeFalse(),
-					"B2(%s)에서 잘못된 결말: %s", c.ProbeID, c.Observed)
+					"B2(%s)에서 잘못된 판정: %s", c.ProbeID, c.Observed)
 			}
 		}
 	})

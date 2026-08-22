@@ -206,9 +206,9 @@ func TestToolkitDSName(t *testing.T) {
 		model  string
 		want   string
 	}{
-		{"nvidia", "generic", "kcloud-nvidia-toolkit"},
-		{"nvidia", "", "kcloud-nvidia-toolkit"},
-		{"NVIDIA", "a100", "kcloud-nvidia-toolkit"},
+		{"nvidia", "generic", "nvidia-toolkit"},
+		{"nvidia", "", "nvidia-toolkit"},
+		{"NVIDIA", "a100", "nvidia-toolkit"},
 		{"furiosa", "warboy", "kcloud-furiosa-warboy-toolkit"},
 		{"furiosa", "", "kcloud-furiosa-toolkit"},
 		{"rebellions", "", "kcloud-rebellions-toolkit"},
@@ -222,6 +222,14 @@ func TestToolkitDSName(t *testing.T) {
 		if strings.Contains(got, "--") {
 			t.Errorf("ToolkitDSName(%q, %q) = %q: 이중 하이픈 포함", tc.vendor, tc.model, got)
 		}
+	}
+}
+
+// TestToolkitLegacyDSName 은 접두사를 떼기 전 NVIDIA toolkit 이름 상수가 정리 대상과
+// 일치하는지 고정한다.
+func TestToolkitLegacyDSName(t *testing.T) {
+	if ToolkitLegacyDSName != "kcloud-nvidia-toolkit" {
+		t.Errorf("ToolkitLegacyDSName = %q, want kcloud-nvidia-toolkit", ToolkitLegacyDSName)
 	}
 }
 

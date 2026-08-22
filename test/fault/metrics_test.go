@@ -42,7 +42,7 @@ type compareResult struct {
 	Baseline, BaselineDesc string
 	ProbeID, Probe, Axis   string
 	Expect, Observed       string
-	Bad                    bool // 잘못된 결말이면 참
+	Bad                    bool // 잘못된 판정이면 참
 }
 
 type suiteReport struct {
@@ -112,7 +112,7 @@ func (r *suiteReport) write(path string) error {
 	fmt.Fprintf(&b, "| ManualRecoveryRequired 도달 | %d |\n", r.c.ManualRecovery)
 	if len(r.compares) > 0 {
 		b.WriteString("\n## 비교군 B0~B3 (§16.4)\n\n")
-		b.WriteString("같은 장애를 축별 게이트만 바꿔 네 구성에 주입했다. `잘못된 결말` 은 그 구성에서 " +
+		b.WriteString("같은 장애를 기능별 게이트만 바꿔 네 구성에 주입했다. `잘못된 판정` 은 그 구성에서 " +
 			"안전 기대가 깨진 표본 수다.\n\n")
 		byBase := map[string][]compareResult{}
 		var order []string
@@ -122,7 +122,7 @@ func (r *suiteReport) write(path string) error {
 			}
 			byBase[c.Baseline] = append(byBase[c.Baseline], c)
 		}
-		b.WriteString("| 구성 | 설명 | 잘못된 결말 / 표본 |\n|---|---|--:|\n")
+		b.WriteString("| 구성 | 설명 | 잘못된 판정 / 표본 |\n|---|---|--:|\n")
 		for _, name := range order {
 			bad := 0
 			for _, c := range byBase[name] {
@@ -134,7 +134,7 @@ func (r *suiteReport) write(path string) error {
 				name, byBase[name][0].BaselineDesc, bad, len(byBase[name]))
 		}
 		b.WriteString("\n### 장애별 상세\n\n")
-		b.WriteString("| 구성 | 장애 | 겨냥한 축 | 기대 | 관측 | 결말 |\n|---|---|---|---|---|:--:|\n")
+		b.WriteString("| 구성 | 장애 | 대상 기능 | 기대 | 관측 | 판정 |\n|---|---|---|---|---|:--:|\n")
 		for _, name := range order {
 			for _, c := range byBase[name] {
 				verdict := "OK"

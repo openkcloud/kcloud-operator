@@ -121,12 +121,18 @@ func AcppRebootJobName(nodeName string) string {
 	return RebootJobName(nodeName) + "-acpp"
 }
 
+// ToolkitLegacyDSName 은 접두사를 떼기 전 NVIDIA toolkit DaemonSet 이름이다.
+// nvidia-container-toolkit 은 벤더 이미지를 그대로 쓰는 워크로드라 접두사를 뗐고,
+// 옛 오브젝트는 생성 전에 한 번 정리한다(두 DS 가 같은 노드에서 containerd 설정을
+// 서로 덮으면 유효 설정이 어느 쪽인지 알 수 없다).
+const ToolkitLegacyDSName = "kcloud-nvidia-toolkit"
+
 // ToolkitDSName returns the container-toolkit DaemonSet name for a given vendor/model.
 // DriverDSName 과 동일한 규칙에 "-toolkit" 접미사만 다르게 하여, driver / toolkit DS 를
 // 노드에서 짝으로 식별할 수 있게 한다.
 //
 // Mapping:
-//   - nvidia   → "kcloud-nvidia-toolkit" (model 무시)
+//   - nvidia   → "nvidia-toolkit" (model 무시; 벤더 이미지 그대로라 접두사 없음)
 //   - furiosa  → "kcloud-furiosa-<model>-toolkit" (model 비면 "kcloud-furiosa-toolkit")
 //   - default  → "kcloud-<vendor>[-<model>]-toolkit"
 func ToolkitDSName(vendor, model string) string {
@@ -134,7 +140,7 @@ func ToolkitDSName(vendor, model string) string {
 	m := strings.ToLower(model)
 	switch v {
 	case vendorNvidia:
-		return "kcloud-nvidia-toolkit"
+		return "nvidia-toolkit"
 	case vendorFuriosa:
 		if m == "" {
 			return "kcloud-furiosa-toolkit"
