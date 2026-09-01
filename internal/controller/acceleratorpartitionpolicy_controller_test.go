@@ -1245,7 +1245,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-notenabled": "true"}
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1") // 재부팅 Job 이 쓰는 nsenter 이미지
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1") // 재부팅 Job 이 쓰는 nsenter 이미지
 		seedNvidiaNode("nv-notenabled-node", sel, false, a30Device("disabled", "Disabled", "Disabled", ""))
 		DeferCleanup(func() { cleanupNvidia("nv-notenabled-node") })
 

@@ -34,7 +34,7 @@ const maxOperationReboots int32 = 2
 // nodeRebooter 는 노드 하나를 재부팅하고 완료를 판정한다.
 type nodeRebooter struct {
 	Client client.Client
-	// Image 는 nsenter 를 포함한 실행 이미지다(mig-tool / driver-installer).
+	// Image 는 nsenter 를 포함한 실행 이미지다(kcloud-host-exec / driver-installer).
 	Image string
 }
 

@@ -50,6 +50,7 @@ import (
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/operation"
+	"kcloud-operator/internal/uninstall"
 	"kcloud-operator/internal/upgrade"
 	"kcloud-operator/internal/verification"
 	npuwebhook "kcloud-operator/internal/webhook"
@@ -80,6 +81,17 @@ func main() {
 			os.Exit(1)
 		}
 		setupLog.Info("apply-crds 완료")
+		return
+	}
+	// === uninstall-gate 서브명령 분기 (helm pre-delete hook) ===
+	// 실패는 exit 1 이고, helm 이 그 실패로 삭제를 멈춘다 — 사용 중인 클러스터에서
+	// 아무것도 지우지 않는 것이 이 서브명령의 목적이다.
+	if len(os.Args) > 1 && os.Args[1] == "uninstall-gate" {
+		ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
+		if err := uninstall.Run(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "uninstall-gate 실패: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	// === 기존 manager 로직 (변경 없음) ===
@@ -317,7 +329,7 @@ func main() {
 			operation.DevicePluginRestart:  controller.NewDevicePluginParticipant(acppReconciler),
 			operation.RecoverDevice:        controller.NewRecoverDeviceParticipant(acppReconciler),
 			operation.NodeReboot: controller.NewNodeRebootParticipant(
-				mgr.GetClient(), os.Getenv("ACPP_MIG_JOB_IMAGE")),
+				mgr.GetClient(), controller.HostExecImage()),
 		},
 		Leases: &operation.LeaseManager{
 			Client: mgr.GetClient(), Namespace: naming.OperatorNamespace(),

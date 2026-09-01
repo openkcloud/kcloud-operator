@@ -1,16 +1,34 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-08-12 (operator·detector 기본 태그를 라이브와 정합)
+# 생성일: 2026-03-25 | 수정일: 2026-09-09 (공개 배포 기본값: global.registry/vendorRegistry 분리)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# global.registry: 사설 이미지(operator/detector/device-plugin/driver)의 레지스트리.
-#   기본값은 placeholder("<your-registry>") 이므로 그대로 두면 사설 IP 가 노출되지 않음.
-#   설치 시 한 줄로 주입:  --set global.registry=<host:port>  또는  -f values-airgap.example.yaml
-#   비어있으면("") 사설 이미지는 registry-relative(repo:tag, Docker Hub 기본)로 렌더됨.
-#   public device-plugin 이미지(nvcr.io / ghcr.io)는 이 prefix 가 적용되지 않음.
-#   (bitnami/kubectl 은 crdUpgrade 블록에서 global.registry 로 미러 조립됨 — airgap 대응)
+# 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
+# deploy/helm/README.md 의 "레지스트리 구성" 절 표에 전부 적혀 있다.
+#
+# global.registry: **kcloud 가 빌드하는 이미지**의 레지스트리다. operator, node-manager,
+#   host-exec, furiosa-exporter, 드라이버 설치기 3종, Furiosa 통합 device-plugin,
+#   Tenstorrent device-plugin 이 여기에 속한다. 기본값은 공개 배포 경로이므로
+#   그대로 설치하면 GHCR 에서 당긴다. 사설 미러를 쓰면 한 줄로 바꾼다:
+#     --set global.registry=<host:port>/<project>
+#
+# global.vendorRegistry: **3rd-party(벤더) 이미지**를 어디서 당길지 정한다.
+#   비어 있으면(기본) 각 항목의 upstream 값이 가리키는 벤더 공개 레지스트리에서
+#   직접 당긴다 — 인터넷이 되는 클러스터는 아무것도 설정할 필요가 없다.
+#   air-gap 클러스터는 벤더 이미지를 사설 미러에 <미러>/<org>/<image> 규약으로
+#   올린 뒤 한 줄로 바꾼다:
+#     --set global.vendorRegistry=<host:port>/<project>
+#   대상: nvidia/k8s-device-plugin(MPS control daemon), bitnamilegacy/kubectl,
+#   dra-driver-nvidia/dra-driver-nvidia-gpu, furiosaai/furiosa-device-plugin,
+#   furiosaai/furiosa-dra-driver, rebellions/k8s-device-plugin.
+#
+#   전체 경로를 그대로 적는 값(nvidia.devicePluginImage, furiosa.devicePluginImage,
+#   nvidia.dcgmExporter.image, acpp.probeImage, crdUpgrade.kubectlImage,
+#   driverInstallPolicies.nvidia.toolkit.image)은 두 레지스트리 어느 쪽도 적용받지
+#   않는다. 사용자가 미러 경로를 직접 적는 자리이기 때문이다.
 # ─────────────────────────────────────────────────────────────────────────────
 global:
-  registry: "<your-registry>"
+  registry: "ghcr.io/openkcloud"
+  vendorRegistry: ""
 
 # metrics: controller-runtime 지표 노출. 기본은 끈다 — 라이브에 인증 없는 포트를
 # 열지 않기 위해서다. 제어면 비용 측정(KWOK 하네스)에서만 켠다.
@@ -22,27 +40,37 @@ metrics:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.26
+  tag: v0.7.30
   pullPolicy: IfNotPresent
+
+# hostExec: operator 가 호스트에서 명령을 대신 실행할 때 띄우는 특권 hostPID Job 이미지
+#   (alpine + util-linux nsenter). 소비처: NVIDIA MIG 관측·apply/rollback Job, ACPP 재부팅 Job,
+#   NodeReboot 작업, DRA CDI 활성화 init container. repository 는 레지스트리 상대 경로이고
+#   global.registry 가 앞에 붙는다. 비우면 env 가 주입되지 않아 위 경로가 전부 동작하지 않는다.
+#   구 이름 mig-tool(acpp.migJob) 을 대체한다. 차트는 v0.7.26 이하 operator 이미지를 위해
+#   옛 env ACPP_MIG_JOB_IMAGE 도 같은 값으로 한 릴리스 동안 함께 주입한다.
+hostExec:
+  repository: "kcloud-host-exec"
+  tag: "v0.1.0"
 
 # acpp: AcceleratorPartitionPolicy 관련 설정.
 #   probeImage: verify 단계 1-파티션 테스트 Pod 이미지. air-gap(Harbor mirror) 클러스터는
 #   미러 도달 가능 이미지로 지정. 빈 값이면 operator 코드 기본값(registry.k8s.io/pause:3.9) 사용.
 acpp:
   probeImage: docker.io/library/nginx:1.25.2-alpine
-  # migJobImage: MIG apply/rollback Job 이 host nvidia-smi 를 nsenter 로 호출할 때 쓰는 이미지(util-linux 포함).
-  # air-gap 은 Harbor 미러 경로로 지정. 미설정시 코드 기본값(env 미주입)으로 동작하지 않으므로 라이브에선 필수.
-  migJobImage: registry.example.com:5000/kcloud/mig-tool:v0.1.0
   # MPS 공유 모드에서 필요한 control daemon. ACPP 가 sharing.mode=mps 일 때만 배치한다
-  # (별도 토글 없음 — 정책이 켜면 뜨고 끄면 사라진다).
-  # migJobImage 와 같은 규약이다: 빈 값이면 env 가 주입되지 않아 코드 기본값(공개
+  # (별도 토글 없음. 정책이 켜면 뜨고 끄면 사라진다).
+  # hostExec 과 같은 규약이다: repository 가 비면 env 가 주입되지 않아 코드 기본값(공개
   # nvcr.io/nvidia/k8s-device-plugin)이 쓰이고, air-gap 클러스터에서는 당길 수 없어 daemon 이
-  # ImagePullBackOff 로 남는다. 그래서 기본값을 Harbor 미러 경로로 둔다 — 라이브에선 필수.
-  # 경로 규약은 미러된 upstream 이미지와 동일(kcloud/<upstream-org>/<image>). 이 태그가 Harbor 에
-  # 실제로 미러돼 있어야 한다 — 없으면 daemon 은 여전히 안 뜨지만, 이제 그 사실이 status 에
+  # ImagePullBackOff 로 남는다.
+  # 벤더 이미지다 — global.vendorRegistry 를 비워 두면 upstream(nvcr.io)에서 직접 당기고,
+  # 채우면 <vendorRegistry>/nvidia/k8s-device-plugin 으로 조립한다. air-gap 에서는
+  # 이 태그가 미러돼 있어야 한다. 없으면 daemon 은 여전히 안 뜨지만, 그 사실이 status 에
   # SharingDaemonNotReady 로 드러난다(Ready 로 위장하지 않는다).
   mpsControlDaemon:
-    image: registry.example.com:5000/kcloud/nvidia/k8s-device-plugin:v0.19.3
+    upstream: "nvcr.io"
+    repository: "nvidia/k8s-device-plugin"
+    tag: "v0.19.3"
   # measuredSharing: 이 클러스터에서 **실제로 시험한** 공유 기능을 기록한다. capability status 의
   # verification 축이 required → verified 로 올라간다. 유효값은 "verified" 뿐이고 그 외/미설정은
   # required 다. 코드는 이 값을 스스로 만들지 않는다 — 실측은 하드웨어·드라이버·device-plugin
@@ -84,9 +112,10 @@ operationCoordinator:
   mode: "off"
 
 # fullnameOverride: operator Deployment/SA/RBAC 리소스명(파드 prefix). 릴리스명과 분리.
-#   #28(2026-07-20): npu-operator-controller-manager → kcloud-operator-controller (가시성).
-#   selector 라벨은 chart/release 이름 기반이라 불변 → immutable selector 함정 없음. 릴리스명(npu-operator) 유지.
-fullnameOverride: kcloud-operator-controller
+#   2026-09-09: kcloud-operator-controller → kcloud-operator. NVIDIA gpu-operator 처럼 Deployment 이름에
+#   controller 를 병기하지 않는다. 파생 이름도 따라간다(kcloud-operator-api, -webhook, -role, -leader-election).
+#   selector 라벨은 chart/release 이름 기반이라 불변이므로 immutable selector 함정이 없다.
+fullnameOverride: kcloud-operator
 
 serviceAccount:
   create: true
@@ -108,7 +137,7 @@ clusterPolicy:
 detector:
   # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
   repository: "kcloud-node-manager"
-  tag: "0.6.16"
+  tag: "0.6.17"
   namespace: "kube-system"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,8 +168,10 @@ nvidia:
   # advertiseBy 가 dra 가 아니면 operator 가 거절한다(벤더 chart 가 device-plugin 과의
   # 공존을 막고, 광고를 끈 채로 깔면 발행물 없는 껍데기만 남는다).
   # 노드 일부만 넘기는 구성도 거절한다. 벤더 발행 스위치가 DaemonSet 단위다.
+  # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(registry.k8s.io)에서 직접 당긴다.
   dra:
     enabled: false
+    upstream: "registry.k8s.io"
     repository: "dra-driver-nvidia/dra-driver-nvidia-gpu"
     tag: "v0.4.0"
 
@@ -158,7 +189,7 @@ furiosa:
   exporter:
     enabled: false
     repository: "furiosa-exporter"
-    tag: "0.1.2"
+    tag: "0.1.3"
     interval: "10s"
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin (Phase 1, 2026-04-21)
@@ -168,29 +199,33 @@ furiosa:
     enabled: true
     # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
     advertiseBy: ""
-    # ⚠️ partitionPolicy != "none" 은 operator 가 device-plugin 에 `--policy <값>` 을
-    #    전달하므로, 그 flag 를 지원하는 파티션 가능 이미지(`furiosa-device-plugin-mi`)가
-    #    반드시 필요하다. 일반 `furiosaai/furiosa-device-plugin` 이미지는 `--policy` 미지원
-    #    → CrashLoopBackOff(unknown flag). 아래 기본값은 production(4 instance/card) 재현용.
-    # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-    # ⚠️ 아래 kcloud/ 접두는 오타가 아니다. global.registry 가 이미 Harbor 프로젝트
-    #    경로(.../kcloud)까지 가리키므로 최종 경로는 .../kcloud/kcloud/... 로 두 겹이
-    #    되는데, Harbor 에 실재하는 것이 그 두 겹 경로다. 접두를 지우면 없는 경로를
-    #    당겨 ImagePullBackOff. 한 겹으로 옮기려면 이미지를 먼저 올려야 한다.
-    #    (chart_image_path_test.go 가 이 접두를 고정)
-    devicePluginRepository: "kcloud/furiosa-device-plugin-mi"
-    devicePluginTag: "v0.1.0"
+    # 공개 벤더 device plugin 을 쓴다. 벤더 helm chart(furiosa-helm-charts/furiosa-device-plugin
+    # appVersion 2026.1.1)와 같은 docker.io/furiosaai/furiosa-device-plugin 이미지다.
+    # global.vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당기고, air-gap 에서는
+    # <vendorRegistry>/furiosaai/furiosa-device-plugin 으로 미러해 둔다.
+    # 이 이미지는 --debugMode 만 받고 --policy 는 없다. ghcr.io/furiosa-ai/furiosa-device-plugin
+    # (v0.0.x) 은 /etc/config/config.yaml 을 요구하는 다른 계열이라 쓰지 않는다(2026-09-09 라이브
+    # CrashLoopBackOff 로 확인). 파티션(quad/dual/single-core)이 필요하면 --policy 를 지원하는 내부
+    # 이미지(kcloud/furiosa-device-plugin-mi)로 바꾸고 partitionPolicy 를 함께 바꾼다. 파티션 기능은
+    # 공개 릴리스 범위 밖이다(2026-09-09 결정).
+    devicePluginUpstream: "docker.io"
+    devicePluginRepository: "furiosaai/furiosa-device-plugin"
+    devicePluginTag: "2026.1.1"
     # dra: 이 벤더의 DRA 드라이버를 operator 가 배포할 것인가. 광고 주체(advertiseBy)와
     # 독립이다 — 켜도 광고는 device-plugin 이 계속 맡는다.
-    # 이미지는 미러된 upstream 규약(kcloud/<upstream-org>/<image>)을 따른다.
+    # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당긴다.
     dra:
       enabled: false
+      upstream: "docker.io"
       repository: "furiosaai/furiosa-dra-driver"
       tag: "2026.1.1"
     resourceName: "furiosa.ai/rngd"
     # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
-    # "none" 으로 바꾸면 위 -mi 이미지든 일반 이미지든 동작(--policy 미전달).
-    partitionPolicy: "dual-core"
+    # "none" 이면 --policy 를 전달하지 않는다. 그 외 값은 위 공개 이미지에서 CrashLoopBackOff.
+    partitionPolicy: "none"
+    # debugMode: device plugin 에 --debugMode 를 넘길지. 공개 이미지도 이 flag 는 받지만 기본은 끈다.
+    #   값을 지우면 켠 것으로 해석한다(옛 동작 유지).
+    debugMode: false
     # 자립 셀렉터(node-manager 가 RNGD 감지 시 부여). 수동/NFD 라벨 비의존.
     nodeSelector:
       kcloud.ai/rngd.present: "true"
@@ -212,7 +247,8 @@ furiosa:
 
 rebellions:
   enabled: true
-  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당긴다.
+  devicePluginUpstream: "docker.io"
   devicePluginRepository: "rebellions/k8s-device-plugin"
   devicePluginTag: "v0.3.6"
   resourceName: "ATOM"
@@ -230,9 +266,9 @@ tenstorrent:
   enabled: true
   # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
   advertiseBy: ""
-  # 사설 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-  # Harbor 에 kcloud/tenstorrent/k8s-device-plugin:v0.1.0 로 push 예정.
-  devicePluginRepository: "tenstorrent/k8s-device-plugin"
+  # kcloud 가 빌드하는 이미지다(images 저장소 tenstorrent-device-plugin/).
+  # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+  devicePluginRepository: "kcloud-tt-device-plugin"
   devicePluginTag: "v0.1.0"
   resourceName: "tenstorrent.com/blackhole"
   # 자립 셀렉터(node-manager 가 Blackhole 감지 시 부여). 수동 라벨 비의존.
@@ -328,8 +364,10 @@ driverInstallPolicies:
       mode: job
       version: "1.9.9-3"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
+      # 이미지는 드라이버를 담지 않는다. 태그는 빌드 개정(vN)이고 드라이버 버전은 위 version 이 정한다.
+      # v1 부터 Warboy·RNGD 공용 통합 설치기다(driver-installer/furiosa/).
       repository: "furiosa-driver-ds"
-      tag: "1.9.9-3-v5"
+      tag: "v3"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false
@@ -384,7 +422,7 @@ driverInstallPolicies:
       version: "580.159.03"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "nvidia-driver-ds"
-      tag: "580.159.03-v179"
+      tag: "v1"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false
@@ -408,7 +446,7 @@ driverInstallPolicies:
       #    또는 불필요한 containerd 재시작 위험. runtime 미등록 fresh 노드에서만 true 로.
       enabled: false
       method: apt
-      # image: "registry.example.com:5000/kcloud/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
+      # image: "<your-registry>/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -453,8 +491,9 @@ driverInstallPolicies:
       mode: job
       version: "2026.3.1"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
-      repository: "furiosa-rngd-driver-installer"
-      tag: "2026.3.1-v1"
+      # v1 부터 Warboy 와 같은 통합 설치기 이미지를 쓴다. 모델은 PCI 로 자동 판별한다.
+      repository: "furiosa-driver-ds"
+      tag: "v3"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false
@@ -505,7 +544,7 @@ driverInstallPolicies:
       # job모드 실설치 이미지(Harbor kcloud/tenstorrent-driver-ds:0.2.0-kmd<ver>).
       # tag 의 kmd 버전과 version 을 함께 bump 한다(이미지↔버전 1:1 baked).
       repository: "tenstorrent-driver-ds"
-      tag: "0.2.0-kmd2.8.0"
+      tag: "2.8.0-v1"
       installer: script
       allowDowngrade: false
       skipOnPassthrough: true
@@ -531,11 +570,15 @@ rollingUpdate:
 crdUpgrade:
   enabled: true
   # pre-upgrade cleanup Job(구 이름 DaemonSet 삭제)이 사용하는 kubectl 이미지.
-  # 기본 동작: 다른 사설 이미지와 동일하게 global.registry 로 조립됨
-  #   - global.registry 설정 시 → <registry>/bitnami/kubectl:1.28 (사설 미러, airgap 정상)
-  #   - global.registry 가 비어("") 있으면 → bitnami/kubectl:1.28 (public Docker Hub)
-  # kubectlImage 를 명시하면 global.registry 를 무시하고 그 값을 그대로 사용(full override).
-  kubectlRepository: bitnami/kubectl
+  # 벤더 이미지이므로 global.vendorRegistry 로 조립된다.
+  #   - vendorRegistry 가 비어("") 있으면 → docker.io/bitnamilegacy/kubectl:1.28 (public)
+  #   - vendorRegistry 설정 시 → <vendorRegistry>/bitnamilegacy/kubectl:1.28 (사설 미러)
+  # kubectlImage 를 명시하면 조립을 무시하고 그 값을 그대로 사용(full override).
+  # 저장소 이름이 bitnamilegacy 인 이유: Bitnami 가 2025-08 에 공개 카탈로그를 정리하면서
+  # docker.io/bitnami/kubectl 의 태그를 모두 내리고 bitnamilegacy 로 옮겼다. 사설 미러를
+  # 옛 <registry>/bitnami/kubectl 경로에 두고 있다면 kubectlImage 로 그 경로를 직접 지정한다.
+  kubectlUpstream: "docker.io"
+  kubectlRepository: bitnamilegacy/kubectl
   kubectlTag: "1.28"
   kubectlImage: ""
 
@@ -562,3 +605,23 @@ resources:
   requests:
     cpu: 100m
     memory: 128Mi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# uninstall: helm uninstall 한 번으로 설치물을 남김없이 지우기 위한 hook 설정.
+# gate.enabled 가 참이면 pre-delete Job 이 먼저 돌아, 가속기를 사용 중인 Pod 가
+# 하나라도 있으면 삭제를 보류한다(그 시점에는 아무것도 지워지지 않는다).
+# 사용 중인 Pod 가 없으면 같은 Job 이 npu.ai CR 과 operator 가 만든 DaemonSet 을
+# 지운다. 자세한 절차는 deploy/helm/README.md 의 "삭제" 절에 있다.
+# ─────────────────────────────────────────────────────────────────────────────
+uninstall:
+  gate:
+    enabled: true
+    # 사용 중 검사를 건너뛴다. 클러스터 자체를 삭제하는 경로에서만 참으로 둔다 —
+    # 그때는 워크로드가 함께 사라지므로 보류할 이유가 없다.
+    skipUsageCheck: false
+    # CR 하나가 operator finalizer 처리로 사라질 때까지 기다리는 상한. 넘기면
+    # finalizer 를 벗겨 지우고 경고를 남긴다.
+    timeout: 5m
+  # helm 은 crds/ 를 삭제하지 않는다. 참이면 post-delete Job 이 npu.ai CRD 를 지운다.
+  # 같은 클러스터에 다시 설치할 예정이면 거짓으로 두어 CRD 를 남길 수 있다.
+  purgeCRDs: true

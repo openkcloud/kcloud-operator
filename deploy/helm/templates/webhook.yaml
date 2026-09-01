@@ -4,7 +4,7 @@
 # 상세: cert 는 lookup 으로 최초 1회 발급·재사용(멱등), failurePolicy=Ignore, opt-in 라벨 mutating
 # 생성일: 2026-07-20 | 수정일: 2026-08-24
 # ============================================================
-{{- $fullname := include "npu-operator.fullname" . -}}
+{{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $svcName := printf "%s-webhook" $fullname -}}
 {{- $secretName := printf "%s-webhook-cert" $fullname -}}
 {{- $altNames := list (printf "%s.%s.svc" $svcName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svcName .Release.Namespace) -}}
@@ -34,7 +34,7 @@ metadata:
   name: {{ $secretName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 type: kubernetes.io/tls
 data:
@@ -48,11 +48,11 @@ metadata:
   name: {{ $svcName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   selector:
-    {{- include "npu-operator.selectorLabels" . | nindent 4 }}
+    {{- include "kcloud-operator.selectorLabels" . | nindent 4 }}
   ports:
   - name: webhook
     port: 443
@@ -64,7 +64,7 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: {{ $fullname }}-validating
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 webhooks:
 # DIP/NCP 는 cluster-scoped(DIP)·namespaced(NCP) CR — namespaceSelector 무효, rules 로만 스코프.
@@ -157,7 +157,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: {{ $fullname }}-mutating
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 webhooks:
 # Pod mutating: kube-system 제외 + opt-in 라벨(injectLabel=true) 대상만.

@@ -14,7 +14,7 @@
 #       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
 # 생성일: 2026-09-03
 # ============================================================
-{{- $fullname := include "npu-operator.fullname" . -}}
+{{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $sa := printf "%s-console" $fullname }}
 apiVersion: v1
 kind: ServiceAccount
@@ -22,7 +22,7 @@ metadata:
   name: {{ $sa }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

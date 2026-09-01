@@ -61,7 +61,7 @@ func migModeTarget(ctx context.Context) partition.Target {
 // migModeFixture 는 노드(cordon 여부 지정) + ACPP 로 구성한 mode-enable 테스트 환경이다.
 func migModeFixture(t *testing.T, acpp *npuv1alpha1.AcceleratorPartitionPolicy, cordoned bool, objs ...client.Object) (*AcceleratorPartitionPolicyReconciler, client.Client) {
 	t.Helper()
-	t.Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1") // 재부팅/enable Job 이 쓰는 nsenter 이미지
+	t.Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1") // 재부팅/enable Job 이 쓰는 nsenter 이미지
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "worker1",
@@ -837,7 +837,7 @@ var _ = Describe("syncMigActiveLabel", func() {
 
 var _ = Describe("review-i1 M-1/M-3: reboot branch cordons before requesting a reboot", func() {
 	It("cordons the node and journals ownership before setting MigPhaseRebootRequested", func() {
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1") // 재부팅 Job 이 쓰는 nsenter 이미지
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1") // 재부팅 Job 이 쓰는 nsenter 이미지
 		sel := map[string]string{"kcloud.ai/reboot-cordon-test": "true"}
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "reboot-cordon-node", Labels: sel}}
 		Expect(k8sClient.Create(ctx, node)).To(Succeed())

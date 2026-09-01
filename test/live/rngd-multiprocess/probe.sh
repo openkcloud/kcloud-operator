@@ -10,7 +10,7 @@
 # ============================================================
 set -euo pipefail
 
-NODE_HOST="${NODE_HOST:-<user>@192.0.2.113}"
+NODE_HOST="${NODE_HOST:?RNGD 노드 SSH 대상을 지정하세요 (예: user@host)}"
 PE_DEV="${PE_DEV:-/dev/rngd/npu0pe0}"
 CONTROL_PE_DEV="${CONTROL_PE_DEV:-/dev/rngd/npu0pe1}"
 HOLD_SECONDS="${HOLD_SECONDS:-20}"

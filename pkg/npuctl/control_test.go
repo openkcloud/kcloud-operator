@@ -24,7 +24,7 @@ func TestUpgradeVendor_PatchesVersionAndUpgradePolicy(t *testing.T) {
 		},
 	}
 	ncp := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "npu-operator"},
+		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "kcloud"},
 	}
 	c := newTestClient(t, dip, ncp)
 
@@ -116,7 +116,7 @@ func TestUpgradeVendor_AmbiguousVendorRequiresModel(t *testing.T) {
 
 func TestSetVendorEnabled_TogglesAndReportsNoChange(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "npu-operator"},
+		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "kcloud"},
 		Spec: npuv1alpha1.NPUClusterPolicySpec{
 			Furiosa: npuv1alpha1.FuriosaSpec{Enabled: true, Rngd: npuv1alpha1.RngdSpec{Enabled: false}},
 		},
@@ -156,7 +156,7 @@ func TestSetVendorEnabled_TogglesAndReportsNoChange(t *testing.T) {
 
 func TestSetVendorEnabled_UnknownVendor(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "npu-operator"},
+		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "kcloud"},
 	}
 	c := newTestClient(t, ncp)
 

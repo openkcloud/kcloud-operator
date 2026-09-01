@@ -71,7 +71,7 @@ spec:
                     type: array
                   extraHostMounts:
                     description: (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc,
-                      /var/lib/npu-operator 외)
+                      /var/lib/kcloud-operator 외)
                     items:
                       description: HostPathMount는 호스트 디렉터리를 파드에 마운트하기 위한 간단한 스펙입니다.
                       properties:

@@ -14,7 +14,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -227,7 +226,7 @@ func mergeEnv(base, extra []corev1.EnvVar) []corev1.EnvVar {
 // 테이블을 다시 선언하는 drop-in 이 있으면 그쪽이 이긴다. 그래서 base 가 conf.d 를
 // import 하면 거기에 쓰고, 마지막에 실제로 켜졌는지 다시 확인한 뒤 끝낸다.
 //
-// 이미지는 mig-tool 을 재사용한다(ACPP_MIG_JOB_IMAGE). 그 이미지에 python3 은
+// 이미지는 kcloud-host-exec 을 재사용한다(HOST_EXEC_IMAGE). 그 이미지에 python3 은
 // 없고 awk·grep·nsenter 는 있다(2026-08-07 실측). systemctl 도 이미지에는 없으나
 // nsenter 로 호스트 것을 부르므로 무관하다.
 func renderCDIInitContainer(_ *npuv1alpha1.NPUClusterPolicy) corev1.Container {
@@ -299,7 +298,7 @@ echo "CDI enabled; containerd restarted"
 	priv := true
 	return corev1.Container{
 		Name:            "enable-cdi",
-		Image:           os.Getenv("ACPP_MIG_JOB_IMAGE"),
+		Image:           HostExecImage(),
 		Command:         []string{"sh", "-c", script},
 		SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 		VolumeMounts: []corev1.VolumeMount{

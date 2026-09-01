@@ -1,6 +1,6 @@
 // ============================================================
 // observe.go: operator-driven MIG 관측 — privileged nsenter Job + fail-closed parse (spec §16)
-// 상세: detector 가 host nvidia-smi 실행 불가라, operator 가 mig-tool Job(nsenter)으로 MIG
+// 상세: detector 가 host nvidia-smi 실행 불가라, operator 가 kcloud-host-exec Job(nsenter)으로 MIG
 //
 //	mode/geometry/lgip 를 per-PCI 관측한다. 관측 결과는 Backend.WithObservations 로 in-memory
 //	주입(NDR 미patch). parse 규칙은 detector 와 동일 fail-closed(§15.3).
@@ -137,7 +137,7 @@ const (
 type MigObserver struct {
 	c         client.Client
 	namespace string
-	image     string // mig-tool 이미지(ACPP_MIG_JOB_IMAGE) — nsenter 포함
+	image     string // kcloud-host-exec 이미지(HOST_EXEC_IMAGE) — nsenter 포함
 	stream    string // 관측 스트림 식별자 — Job 이름을 호출자별로 가른다(observeJobName 참조)
 }
 

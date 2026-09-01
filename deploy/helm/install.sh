@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
 # install.sh: NPU Operator Helm 설치/업그레이드 래퍼
-# 상세: deploy.env 를 로드하여 global.registry 를 주입한 뒤
+# 상세: deploy.env 를 로드하여 global.registry / global.vendorRegistry 를 주입한 뒤
 #       helm upgrade --install 을 실행합니다.
 #       --dry-run 등 CLI 인수는 helm 에 그대로 전달됩니다.
 # 사용법:
 #   bash install.sh            # 실제 설치
 #   bash install.sh --dry-run  # helm dry-run (명령 미리보기 후 helm 이 렌더링만 수행)
-# 생성일: 2026-06-02
+# 생성일: 2026-06-02 | 수정일: 2026-09-09 (VENDOR_REGISTRY 주입 추가)
 # ============================================================
 set -euo pipefail
 
@@ -31,6 +31,10 @@ if [[ -z "${REGISTRY:-}" ]]; then
 fi
 
 # ── 변수 기본값 ───────────────────────────────────────────────
+# VENDOR_REGISTRY: 벤더(3rd-party) 이미지를 당길 미러. 미지정이면 REGISTRY 와 같은
+# 곳으로 본다 — 사설 미러 하나에 전부 올려 두는 것이 기존 배포 방식이기 때문이다.
+# 벤더 이미지만 인터넷에서 직접 받으려면 deploy.env 에 VENDOR_REGISTRY="" 를 명시한다.
+VENDOR_REGISTRY="${VENDOR_REGISTRY-${REGISTRY}}"
 NAMESPACE="${NAMESPACE:-kcloud}"
 RELEASE="${RELEASE:-kcloud-operator}"
 CHART="${CHART:-${SCRIPT_DIR}}"
@@ -45,6 +49,7 @@ HELM_CMD=(
   helm upgrade --install "${RELEASE}" "${CHART}"
   -n "${NAMESPACE}" --create-namespace
   --set "global.registry=${REGISTRY}"
+  --set "global.vendorRegistry=${VENDOR_REGISTRY}"
 )
 
 # .91 dev 오버라이드 자동 적용: 커밋된 values-dev.yaml 이 있으면 -f 로 병합한다.

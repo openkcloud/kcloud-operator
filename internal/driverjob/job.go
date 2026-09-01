@@ -6,7 +6,7 @@
 //       (완료 시 방금 설치한 모듈 언로드 참사 방지) (3) RUN_MODE=job env 주입
 //       (entrypoint 가 설치 후 exit 0) 로 변형한다. node-agent(S5-4) 가 그대로
 //       흡수할 수 있도록 controller 에 의존하지 않는 독립 패키지로 둔다.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-09-09
 // ============================================================
 
 // Package driverjob renders the one-shot driver install Job used by
@@ -124,14 +124,14 @@ func renderJob(
 		{Name: "host-modules", MountPath: "/lib/modules"},
 		{Name: "host-src", MountPath: "/usr/src"},
 		{Name: "host-etc", MountPath: "/etc"},
-		{Name: "host-var", MountPath: "/var/lib/npu-operator"},
+		{Name: "host-var", MountPath: "/var/lib/kcloud-operator"},
 		{Name: "device-plugins", MountPath: "/var/lib/kubelet/device-plugins"},
 	}
 	volumes := []corev1.Volume{
 		hostPathVolume("host-modules", "/lib/modules"),
 		hostPathVolume("host-src", "/usr/src"),
 		hostPathVolume("host-etc", "/etc"),
-		hostPathVolume("host-var", "/var/lib/npu-operator"),
+		hostPathVolume("host-var", "/var/lib/kcloud-operator"),
 		hostPathVolume("device-plugins", "/var/lib/kubelet/device-plugins"),
 	}
 

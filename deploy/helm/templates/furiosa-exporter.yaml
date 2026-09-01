@@ -4,7 +4,7 @@
 # 상세: :9410 에서 코어 사용률·DRAM·전력·온도를 Prometheus 포맷으로 낸다.
 #       비특권 — /sys·/dev 읽기만으로 furiosa-smi 가 동작한다(기존 통합
 #       device-plugin 과 동일 조건). 대상은 RNGD 노드뿐이다.
-# 생성일: 2026-08-07
+# 생성일: 2026-08-07 | 수정일: 2026-09-09 (이미지 조립을 kcloud-operator.image 헬퍼로 통일)
 # ============================================================
 apiVersion: apps/v1
 kind: DaemonSet
@@ -33,7 +33,7 @@ spec:
         - operator: Exists
       containers:
         - name: furiosa-exporter
-          image: "{{ .Values.global.registry }}/{{ .Values.furiosa.exporter.repository }}:{{ .Values.furiosa.exporter.tag }}"
+          image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.exporter.repository "tag" .Values.furiosa.exporter.tag) }}"
           args: ["--interval={{ .Values.furiosa.exporter.interval }}"]
           env:
             - name: NODE_NAME
@@ -56,6 +56,12 @@ spec:
             - name: dev
               mountPath: /dev
               readOnly: true
+            # 벤더 libfuriosa_smi.so 는 이미지에 없다(재배포 회피). 드라이버 설치기가 furiosa-smi 와
+            # 함께 호스트에 설치한 것을 읽기 전용으로 쓴다. 파일이 아직 없으면(설치 Job 이전)
+            # kubelet 이 파드를 ContainerCreating 으로 잡아 두었다가 생기면 기동한다.
+            - name: libsmi
+              mountPath: /usr/lib/x86_64-linux-gnu/libfuriosa_smi.so
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /healthz
@@ -68,4 +74,8 @@ spec:
         - name: dev
           hostPath:
             path: /dev
+        - name: libsmi
+          hostPath:
+            path: /usr/lib/x86_64-linux-gnu/libfuriosa_smi.so
+            type: File
 {{- end }}

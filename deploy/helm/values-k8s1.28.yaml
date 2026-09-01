@@ -3,13 +3,46 @@
 # 상세: DRA 를 제외한 라인. 1.34 용 이미지를 1.28 에 올리면 resource.k8s.io 부재로
 #       acceleratorworkload 컨트롤러가 조용히 기동하지 않는다(실측 2026-08-06).
 #       operator 만 -k8s1.28 접미 이미지를 쓰고 나머지는 1.34 프리셋과 동일하다.
-# 생성일: 2026-08-06 | 수정일: 2026-08-07
+#       기능 토글도 1.34 와 같은 집합을 켠다.
+# 생성일: 2026-08-06 | 수정일: 2026-09-10 (v0.6.2-k8s1.28 재빌드 — main 9/9 변경을 1.28 라인에 병합)
 # ============================================================
-# global.registry 는 여기서 정하지 않는다 — 기본값이 플레이스홀더인 것은 사설 IP 를
-# 저장소에 남기지 않으려는 의도된 설계다(values.yaml:6). 설치 시 반드시 함께 준다:
-#   helm install ... -f values-k8sX.YY.yaml --set global.registry=<레지스트리>
-# 빠뜨리면 "<your-registry>/..." 가 그대로 나가 InvalidImageName 으로 죽는다(실측 2026-08-06).
+# 레지스트리는 여기서 정하지 않는다. 기본값(values.yaml)이 공개 배포 경로이므로
+# 인터넷이 되는 클러스터는 그대로 설치하면 된다. 사설 미러를 쓰면 두 줄을 함께 준다:
+#   helm install ... -f values-k8sX.YY.yaml \
+#     --set global.registry=<미러>/<프로젝트> --set global.vendorRegistry=<미러>/<프로젝트>
+# global.registry 는 kcloud 가 빌드하는 이미지, global.vendorRegistry 는 벤더 이미지를 가리킨다.
 image:
-  tag: v0.6.1-k8s1.28
+  tag: v0.6.2-k8s1.28
+
+# 기능 토글. 1.34 프로파일과 같은 집합을 켠다 — 두 라인이 같은 기능 구성을 내는 것이
+# 릴리스 세트의 정의다. 2026-09-08 이전에는 이 파일이 image.tag 하나만 담고 있어
+# 차트만으로 설치하면 관리 API·webhook·exporter 가 빠진 물건이 떴다.
+# 2026-09-10: 관리 API·웹 콘솔은 이번 공개 배포 범위 밖(Magnum 연동 확정 조건).
+api:
+  enabled: false
+
+webhook:
+  enabled: true
+
+# 2026-09-10: Rebellions 은 이번 공개 릴리스 범위 밖. 장치가 없어도 빈 DaemonSet·정책이 생기지 않게 끈다.
+rebellions:
+  enabled: false
+
+nvidia:
+  dcgmExporter:
+    enabled: true
+
+furiosa:
+  # 2026-09-09: 통합 DS(내부 빌드 이미지)는 끄고 벤더 공개 device-plugin 을 쓴다.
+  unified:
+    enabled: false
+  exporter:
+    enabled: true
+
+driverInstallPolicies:
+  nvidia:
+    toolkit:
+      enabled: true
+      method: apt
 
 # DRA 는 이 라인에 없다. allocationAPI=dra 요청은 번역에서 거절된다.

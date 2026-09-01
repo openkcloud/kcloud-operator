@@ -1,12 +1,12 @@
 # deployment.yaml: NPU Operator Controller Manager Deployment
-# 생성일: 2026-03-25
+# 생성일: 2026-03-25 | 수정일: 2026-09-09 (벤더 이미지를 global.vendorRegistry 로 분리)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "npu-operator.fullname" . }}
+  name: {{ include "kcloud-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: controller
 spec:
@@ -18,16 +18,16 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+      app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+        app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: controller
     spec:
-      serviceAccountName: {{ include "npu-operator.serviceAccountName" . }}
+      serviceAccountName: {{ include "kcloud-operator.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -70,17 +70,19 @@ spec:
         - name: ACPP_PROBE_IMAGE
           value: {{ .Values.acpp.probeImage | quote }}
         {{- end }}
-        {{- if .Values.acpp.migJobImage }}
+        {{- if and .Values.hostExec .Values.hostExec.repository }}
+        # HOST_EXEC_IMAGE: 호스트 명령 실행 Job(MIG 관측·apply, 재부팅, DRA CDI init) 이미지.
+        - name: HOST_EXEC_IMAGE
+          value: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.hostExec.repository "tag" .Values.hostExec.tag) | quote }}
+        # ACPP_MIG_JOB_IMAGE: 구 이름. v0.7.26 이하 operator 이미지가 읽는다. v0.8.0 에서 제거.
         - name: ACPP_MIG_JOB_IMAGE
-          value: {{ .Values.acpp.migJobImage | quote }}
+          value: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.hostExec.repository "tag" .Values.hostExec.tag) | quote }}
         {{- end }}
-        {{- if .Values.acpp.mpsControlDaemon }}
-        {{- if .Values.acpp.mpsControlDaemon.image }}
-        # ACPP_MPS_CONTROL_IMAGE: MPS 공유 모드에서 뜨는 control daemon 이미지. air-gap(Harbor
-        # mirror) 클러스터는 미러 도달 가능 이미지로 지정(미설정 시 코드 기본값 사용).
+        {{- if and .Values.acpp.mpsControlDaemon .Values.acpp.mpsControlDaemon.repository }}
+        # ACPP_MPS_CONTROL_IMAGE: MPS 공유 모드에서 뜨는 control daemon 이미지. 레지스트리는
+        # global.registry 가 정한다. repository 를 비우면 코드 기본값(공개 nvcr.io)이 쓰인다.
         - name: ACPP_MPS_CONTROL_IMAGE
-          value: {{ .Values.acpp.mpsControlDaemon.image | quote }}
-        {{- end }}
+          value: {{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.acpp.mpsControlDaemon.upstream "repo" .Values.acpp.mpsControlDaemon.repository "tag" .Values.acpp.mpsControlDaemon.tag) | quote }}
         {{- end }}
         {{- with .Values.acpp.measuredSharing }}
         {{- if .multiProcess }}
@@ -156,12 +158,12 @@ spec:
       {{- if .Values.webhook.enabled }}
       - name: webhook-cert
         secret:
-          secretName: {{ include "npu-operator.fullname" . }}-webhook-cert
+          secretName: {{ include "kcloud-operator.fullname" . }}-webhook-cert
       {{- end }}
       {{- if .Values.api.enabled }}
       - name: api-cert
         secret:
-          secretName: {{ include "npu-operator.fullname" . }}-api-cert
+          secretName: {{ include "kcloud-operator.fullname" . }}-api-cert
       {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

@@ -56,7 +56,7 @@ func rebootJobFor(node string) (*batchv1.Job, error) {
 
 var _ = Describe("node rebooter", func() {
 	newRebooter := func() *nodeRebooter {
-		return &nodeRebooter{Client: k8sClient, Image: "registry.example.com:5000/kcloud/mig-tool:v0.1.0"}
+		return &nodeRebooter{Client: k8sClient, Image: "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0"}
 	}
 
 	// 증명: 재부팅 요청이 실제로 Job 을 만든다(대상 경로 도달 확인).
@@ -168,7 +168,7 @@ var _ = Describe("node reboot participant", func() {
 		})
 		op.Status.Snapshot = &npuv1alpha1.OperationSnapshot{BootID: "boot-1"}
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		out, err := p.Apply(ctx, op)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Event).To(Equal(operation.EventRebootRequired))
@@ -190,7 +190,7 @@ var _ = Describe("node reboot participant", func() {
 		})
 		setNodeBoot(node, true)
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		out, err := p.Apply(ctx, op)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Event).To(Equal(operation.EventBootObserved))
@@ -214,7 +214,7 @@ var _ = Describe("node reboot participant", func() {
 			_ = k8sClient.Delete(ctx, op, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		})
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		out, err := p.Apply(ctx, op)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Event).To(Equal(operation.EventApplyFailed))
@@ -252,7 +252,7 @@ var _ = Describe("node reboot participant", func() {
 			_ = k8sClient.Delete(ctx, op, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		})
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		// 재진입 안전은 두 번째 호출만이 아니라 반복 호출에서도 유지돼야 한다.
 		for i := 0; i < 3; i++ {
 			out, err := p.Apply(ctx, op)
@@ -275,12 +275,12 @@ var _ = Describe("node reboot participant", func() {
 		DeferCleanup(func() {
 			_ = k8sClient.Delete(ctx, op, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		})
-		rb := &nodeRebooter{Client: k8sClient, Image: "registry.example.com:5000/kcloud/mig-tool:v0.1.0"}
+		rb := &nodeRebooter{Client: k8sClient, Image: "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0"}
 		Expect(rb.RequestReboot(ctx, node, "boot-1")).To(Succeed())
 		_, jerr := rebootJobFor(node)
 		Expect(jerr).NotTo(HaveOccurred(), "픽스처 준비 실패: Job 이 없다")
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		out, err := p.Rollback(ctx, op)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Event).To(Equal(operation.EventCompensated))
@@ -299,7 +299,7 @@ var _ = Describe("node reboot participant", func() {
 			_ = k8sClient.Delete(ctx, op, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		})
 
-		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/mig-tool:v0.1.0")
+		p := NewNodeRebootParticipant(k8sClient, "registry.example.com:5000/kcloud/kcloud-host-exec:v0.1.0")
 		out, err := p.Rollback(ctx, op)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Event).To(Equal(operation.EventCompensated))

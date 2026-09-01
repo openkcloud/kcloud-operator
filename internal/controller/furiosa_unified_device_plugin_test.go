@@ -3,7 +3,7 @@
 // 상세: ensureFuriosaUnifiedDevicePlugin() 의 단일 DS 렌더(공통 PCI nodeSelector·기본 이미지·
 //       RNGD_PARTITION_POLICY env·config 마운트)와 Unified 토글 전환/롤백 시 반대편 DS 정리를
 //       fake client 로 검증 (envtest 불필요)
-// 생성일: 2026-07-20
+// 생성일: 2026-07-20 | 수정일: 2026-09-09
 // ============================================================
 
 package controller
@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
@@ -258,22 +259,22 @@ func TestFuriosaUnified_LegacyObjectRemoved(t *testing.T) {
 // TestDeleteDaemonSetIfExists는 존재/부재 DS 삭제가 멱등적으로 동작하는지 검증한다.
 func TestDeleteDaemonSetIfExists(t *testing.T) {
 	existing := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: furiosaLegacyWarboyDSName, Namespace: "kube-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: furiosaWarboyLegacyDSName, Namespace: "kube-system"},
 	}
 	r := newNPUReconciler(existing)
 	ctx := context.Background()
 
 	// 존재하는 DS 삭제 성공
-	if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyWarboyDSName); err != nil {
+	if err := r.deleteDaemonSetIfExists(ctx, furiosaWarboyLegacyDSName); err != nil {
 		t.Fatalf("존재 DS 삭제 오류: %v", err)
 	}
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaLegacyWarboyDSName, Namespace: "kube-system"}, &ds); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaWarboyLegacyDSName, Namespace: "kube-system"}, &ds); err == nil {
 		t.Errorf("DS 가 삭제되지 않음")
 	}
 
 	// 부재 DS 삭제는 NotFound 무시(멱등)
-	if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyRngdDSName); err != nil {
+	if err := r.deleteDaemonSetIfExists(ctx, "no-such-ds"); err != nil {
 		t.Errorf("부재 DS 삭제는 nil 이어야 함: %v", err)
 	}
 }
@@ -350,8 +351,9 @@ func TestFuriosaUnified_ConfigMapFollowsDSNamespace(t *testing.T) {
 }
 
 // TestFuriosaUnified_RollbackDeletesConfigMap 는 Unified=false 로 되돌릴 때(전체 Reconcile 의
-// 롤백 분기) 통합 경로가 만든 ConfigMap(furiosaUnifiedDSNamespace()=kcloud)이 함께 회수되는지,
-// kube-system 의 동명 ConfigMap(레거시 2-DS 경로가 마운트)은 절대 지워지지 않는지 검증한다.
+// 롤백 분기) 통합 경로가 남긴 ConfigMap 이 고아로 남지 않는지 검증한다.
+// 모델별 Warboy 경로의 동명 ConfigMap 은 kube-system 에 있어 이 경로가 지우는 대상이 아니므로
+// 그대로 남아야 한다.
 func TestFuriosaUnified_RollbackDeletesConfigMap(t *testing.T) {
 	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
 
@@ -366,7 +368,7 @@ func TestFuriosaUnified_RollbackDeletesConfigMap(t *testing.T) {
 		Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/npu-op-detector:test"},
 		Furiosa: npuv1alpha1.FuriosaSpec{
 			Enabled:       true,
-			Unified:       false, // 롤백 상태 — 옛 2-DS 경로 유지
+			Unified:       false, // 롤백 상태
 			ConfigMapName: cmName,
 		},
 	})
@@ -389,5 +391,92 @@ func TestFuriosaUnified_RollbackDeletesConfigMap(t *testing.T) {
 	var kept corev1.ConfigMap
 	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: "kube-system"}, &kept); err != nil {
 		t.Fatalf("kube-system 의 레거시 ConfigMap 이 잘못 지워졌다: err=%v", err)
+	}
+}
+
+// 모델별 Furiosa device-plugin DS 는 벤더 공개 이미지를 그대로 실행하므로 kube-system 에
+// 벤더식 이름으로 만들어진다. 옛 두 세대의 이름(v0.7.26 의 kube-system 이름, v0.7.27 한 회차의
+// operator 네임스페이스 kcloud- 이름)은 새 DS 를 만들기 전에 지워져야 한다.
+// 둘이 함께 살아 있으면 두 파드가 같은 자원을 kubelet 에 중복 등록한다.
+func TestFuriosaPerModelDS_VendorNamespaceAndLegacyRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		legacy []types.NamespacedName
+		want   string
+		ensure func(r *NPUClusterPolicyReconciler, ctx context.Context, p *npuv1alpha1.NPUClusterPolicy) error
+		spec   npuv1alpha1.NPUClusterPolicySpec
+	}{
+		{
+			name: "warboy",
+			legacy: []types.NamespacedName{
+				{Namespace: "kube-system", Name: furiosaWarboyLegacyDSName},
+				{Namespace: "kcloud", Name: furiosaWarboyV0727DSName},
+			},
+			want: furiosaWarboyDSName,
+			ensure: func(r *NPUClusterPolicyReconciler, ctx context.Context, p *npuv1alpha1.NPUClusterPolicy) error {
+				return r.ensureFuriosaDevicePlugin(ctx, p)
+			},
+			spec: npuv1alpha1.NPUClusterPolicySpec{
+				Furiosa: npuv1alpha1.FuriosaSpec{Enabled: true, DevicePluginImage: "img:1", ConfigMapName: "npu-device-plugin"},
+			},
+		},
+		{
+			name:   "rngd",
+			legacy: []types.NamespacedName{{Namespace: "kcloud", Name: furiosaRngdV0727DSName}},
+			want:   furiosaRngdDSName,
+			ensure: func(r *NPUClusterPolicyReconciler, ctx context.Context, p *npuv1alpha1.NPUClusterPolicy) error {
+				return r.ensureFuriosaRngdDevicePlugin(ctx, p, "")
+			},
+			spec: npuv1alpha1.NPUClusterPolicySpec{
+				Furiosa: npuv1alpha1.FuriosaSpec{
+					Rngd: npuv1alpha1.RngdSpec{Enabled: true, DevicePluginImage: "img:1"},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// operator 네임스페이스를 kube-system 과 다르게 세워야 자리가 실제로 검사된다.
+			t.Setenv("OPERATOR_NAMESPACE", "kcloud")
+			var objs []client.Object
+			for _, ref := range tc.legacy {
+				objs = append(objs, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: ref.Namespace}})
+			}
+			r := newNPUReconciler(objs...)
+			ctx := context.Background()
+			policy := makePolicy("test-policy", tc.spec)
+
+			if err := tc.ensure(r, ctx, policy); err != nil {
+				t.Fatalf("ensure 실패: %v", err)
+			}
+
+			var ds appsv1.DaemonSet
+			key := types.NamespacedName{Name: tc.want, Namespace: "kube-system"}
+			if err := r.Get(ctx, key, &ds); err != nil {
+				t.Fatalf("kube-system 에 벤더식 이름 DS %q 가 없다: %v", tc.want, err)
+			}
+			if got := ds.Spec.Selector.MatchLabels["app.kubernetes.io/name"]; got != tc.want {
+				t.Errorf("selector 라벨 %q, want %q", got, tc.want)
+			}
+			// device-plugin 컨테이너 이름은 옛 이름 그대로여야 한다 — ACPP 가 이름으로 집는다.
+			if got := ds.Spec.Template.Spec.Containers[0].Name; got != furiosaPluginContainerName {
+				t.Errorf("컨테이너 이름 %q, want %q", got, furiosaPluginContainerName)
+			}
+			var operatorNS appsv1.DaemonSet
+			if err := r.Get(ctx, types.NamespacedName{Name: tc.want, Namespace: "kcloud"}, &operatorNS); err == nil {
+				t.Errorf("벤더 DS %q 가 operator 네임스페이스에 만들어졌다", tc.want)
+			}
+			for _, ref := range tc.legacy {
+				var gone appsv1.DaemonSet
+				if err := r.Get(ctx, ref, &gone); err == nil {
+					t.Errorf("옛 DS %s/%s 가 남아 있다", ref.Namespace, ref.Name)
+				}
+			}
+			if tc.name == "warboy" {
+				var cm corev1.ConfigMap
+				if err := r.Get(ctx, types.NamespacedName{Name: "npu-device-plugin", Namespace: "kube-system"}, &cm); err != nil {
+					t.Errorf("Warboy ConfigMap 이 kube-system 에 없다: %v", err)
+				}
+			}
+		})
 	}
 }

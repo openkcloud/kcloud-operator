@@ -3,21 +3,21 @@
 # 상세: DRA(resource.k8s.io/v1)를 쓰는 라인. operator 만 라인별 이미지이고
 #       나머지 이미지는 1.28 프리셋과 동일한 것을 가리킨다.
 #       DRA 드라이버·DeviceClass 는 이 프로파일에 없다 — 그것을 얹은 것이 v0.8.0 이다.
-# 생성일: 2026-08-06 | 수정일: 2026-08-12
+# 생성일: 2026-08-06 | 수정일: 2026-09-09 (레지스트리 주석을 vendorRegistry 분리에 맞춰 갱신)
 # ============================================================
-# global.registry 는 여기서 정하지 않는다 — 기본값이 플레이스홀더인 것은 사설 IP 를
-# 저장소에 남기지 않으려는 의도된 설계다(values.yaml:6). 설치 시 반드시 함께 준다:
-#   helm install ... -f values-k8sX.YY.yaml --set global.registry=<레지스트리>
-# 빠뜨리면 "<your-registry>/..." 가 그대로 나가 InvalidImageName 으로 죽는다(실측 2026-08-06).
+# 레지스트리는 여기서 정하지 않는다. 기본값(values.yaml)이 공개 배포 경로이므로
+# 인터넷이 되는 클러스터는 그대로 설치하면 된다. 사설 미러를 쓰면 두 줄을 함께 준다:
+#   helm install ... -f values-k8sX.YY.yaml \
+#     --set global.registry=<미러>/<프로젝트> --set global.vendorRegistry=<미러>/<프로젝트>
+# global.registry 는 kcloud 가 빌드하는 이미지, global.vendorRegistry 는 벤더 이미지를 가리킨다.
 #
-# 같은 이유로 아래에 없는 것이 하나 더 있다: NVIDIA·Furiosa device-plugin, dcgm-exporter,
-# container-toolkit 같은 공개 이미지의 **사설 미러 경로**다. 그 필드들은 global.registry 로
-# 조립되지 않고 완성 경로를 그대로 받으므로 사설 IP 없이는 여기 적을 수 없다.
+# 여기에 없는 것이 하나 더 있다: NVIDIA·Furiosa device-plugin, dcgm-exporter,
+# container-toolkit 처럼 전체 경로를 그대로 받는 필드의 **사설 미러 경로**다. 그 필드들은
+# 두 레지스트리 어느 쪽으로도 조립되지 않으므로 사설 주소 없이는 여기 적을 수 없다.
 # air-gap 클러스터는 그 경로만 담은 사이트 값 파일을 두 번째 -f 로 함께 준다:
 #   helm install ... -f values-k8s1.34.yaml -f <사이트 값 파일> --set global.registry=...
-# (조립 대상이 아닌 이미지 필드를 global.registry 로 끌어오는 것은 별도 후속 과제다.)
 image:
-  tag: v0.7.25
+  tag: v0.7.30
 
 # ── 이 릴리스 세트가 켜는 기능 ────────────────────────────────────────────
 # 아래 토글이 프로파일에 없으면 차트만으로 설치했을 때 라이브와 다른 물건이 뜬다.
@@ -25,12 +25,17 @@ image:
 
 # 관리 API 서버(REST + 웹 콘솔). 노출 방식(NodePort·주소)은 사이트마다 달라 여기서
 # 정하지 않는다 — 기본 ClusterIP 로 뜬다.
+# 2026-09-10: 관리 API·웹 콘솔은 이번 공개 배포 범위 밖(Magnum 연동 확정 조건).
 api:
-  enabled: true
+  enabled: false
 
 # 검증 웹훅. CR 이 받아들여지기 전에 거절되는 경로가 이 세트의 안전 검증 범위다.
 webhook:
   enabled: true
+
+# 2026-09-10: Rebellions 은 이번 공개 릴리스 범위 밖. 장치가 없어도 빈 DaemonSet·정책이 생기지 않게 끈다.
+rebellions:
+  enabled: false
 
 nvidia:
   # GPU 텔레메트리. NVIDIA 드라이버는 hwmon 을 등록하지 않아 NVML 경로가 필요하다.
@@ -40,7 +45,7 @@ nvidia:
 furiosa:
   # Warboy/RNGD 를 개별 DS 두 개 대신 통합 DS 하나로 배포.
   unified:
-    enabled: true
+    enabled: false
   # RNGD 텔레메트리 exporter(:9410). dcgm-exporter 의 Furiosa 대응물이다.
   exporter:
     enabled: true

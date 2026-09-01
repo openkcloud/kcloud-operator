@@ -1,0 +1,22 @@
+# ============================================================
+# values-service-k8s.yaml: Magnum 이 Service K8s(1.34 라인)에 넘기는 사이트 값 예시
+# 상세: 차트 프리셋(values-k8s1.34.yaml) 뒤에 -f 로 붙인다. 벤더 선택은 없다 — operator 가
+#       노드 장치를 감지해 있는 벤더만 배치한다. 공개 인터넷이면 아래 두 값도 기본값이라 생략 가능.
+# 생성일: 2026-09-10
+# ============================================================
+global:
+  registry: ghcr.io/openkcloud        # 사내 미러: <harbor>/<프로젝트>
+  vendorRegistry: ""                  # 사내 미러: <harbor>/<프로젝트>
+# 사내 미러를 쓸 때만 아래 완성 경로 필드도 함께 지정한다(global 값으로 조립되지 않음).
+# nvidia:
+#   devicePluginImage: <harbor>/<프로젝트>/nvidia/k8s-device-plugin:v0.17.1
+#   dcgmExporter:
+#     image: <harbor>/<프로젝트>/nvidia/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+# furiosa:
+#   devicePluginImage: <harbor>/<프로젝트>/furiosa-ai/k8s-device-plugin:0.10.1
+# driverInstallPolicies:
+#   nvidia:
+#     toolkit:
+#       image: <harbor>/<프로젝트>/nvidia/container-toolkit:v1.17.8-ubuntu20.04
+# crdUpgrade:
+#   kubectlImage: <harbor>/<프로젝트>/bitnamilegacy/kubectl:1.28

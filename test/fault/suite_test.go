@@ -80,7 +80,11 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	Expect(report.write("../../docs/verification/stage5-metrics.md")).To(Succeed())
+	// 판정표는 사내 docs/ 트리에 쓴다. 공개 저장소에는 docs/ 가 없으므로 디렉터리가 없으면
+	// 건너뛴다 — 시험 결과 자체는 위의 단언이 이미 판정했다.
+	if _, err := os.Stat("../../docs/verification"); err == nil {
+		Expect(report.write("../../docs/verification/stage5-metrics.md")).To(Succeed())
+	}
 	cancel()
 	Expect(testEnv.Stop()).To(Succeed())
 })

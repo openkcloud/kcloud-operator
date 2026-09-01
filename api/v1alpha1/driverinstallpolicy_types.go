@@ -172,7 +172,7 @@ type DriverSpec struct {
 	// 기본 MountPath는 "/secrets"로 두고 필요시 개별 지정
 	Secrets []SecretMount `json:"secrets,omitempty"`
 
-	// (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc, /var/lib/npu-operator 외)
+	// (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc, /var/lib/kcloud-operator 외)
 	ExtraHostMounts []HostPathMount `json:"extraHostMounts,omitempty"`
 
 	// AllowDowngrade (b) 는 호스트에 이미 설치된 드라이버가 desired 보다 상위 버전일 때

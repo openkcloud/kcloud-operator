@@ -2,9 +2,9 @@
 
 ## 왜
 RNGD 공유(time-slicing 유사 UX)의 가능 여부는 **런타임이 한 장치/파티션에 다중 프로세스 context 를
-허용하는가**로 갈린다. furiosa device-plugin 에는 replica 옵션이 없으므로(2026-07-29 소스 확인:
+허용하는가**로 나뉜다. furiosa device-plugin 에는 replica 옵션이 없으므로(2026-07-29 소스 확인:
 `reference/furiosa-device-plugin`, `reference/libfuriosa-kubernetes`), 공유를 제공하려면
-(a) 다중 프로세스가 되면 우리가 replica 광고를 얹거나, (b) 안 되면 Broker 를 만들어야 한다.
+(a) 다중 프로세스가 되면 operator 가 replica 광고를 추가하거나, (b) 안 되면 Broker 가 필요하다.
 
 ## 방법(2026-07-29, 호스트 레벨로 재작성)
 최초 설계는 컨테이너 이미지(`furiosa-smi`) 를 파드로 띄워 관찰하는 것이었으나, Harbor 에
@@ -23,13 +23,13 @@ world-rw)를 두 프로세스가 동시에 `open()` 할 수 있는지로 판정�
 "2단계 측정" 절에 남겨둔다.
 
 ## 전제
-- 노드 `rngd-1`(192.0.2.113), SSH 접근(`NODE_HOST`, 기본 `<user>@192.0.2.113`)
+- 노드 `rngd-1`(<rngd-node>), SSH 접근(`NODE_HOST`, 기본 `<user>@<rngd-node>`)
 - PE 디바이스 노드가 world-rw 로 노출돼 있어야 함(2026-07-29 확인: 그러함, `crw-rw-rw-`)
 - 다른 테넌트가 해당 PE 를 쓰고 있지 않아야 함(2026-07-29 확인: `pe_occupancy` 전부 0, idle)
 
 ## 실행
 ```bash
-NODE_HOST=<user>@192.0.2.113 HOLD_SECONDS=20 bash test/live/rngd-multiprocess/probe.sh 2>&1 | tee /tmp/rngd-probe.log
+NODE_HOST=<user>@<rngd-node> HOLD_SECONDS=20 bash test/live/rngd-multiprocess/probe.sh 2>&1 | tee /tmp/rngd-probe.log
 ```
 
 ## 판정 기준

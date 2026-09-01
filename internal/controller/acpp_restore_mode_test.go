@@ -54,7 +54,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 		// Job 이 안 생기고, 그러면 아래 rebootJobFor 부재 확인이 정책 분기 때문이 아니라 그
 		// 우연 때문에 통과해 버린다(실측 확인: 브리핑 원본은 이 설정이 없었고, steps 변수도
 		// 선언만 되고 검증되지 않았다 — 뮤테이션으로 실제 확인함, task-6-report.md 참고).
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		// 총 실행 step 수가 아니라 -mig 0 명령 수만 센다 — 기존 삭제 경로도 GI 회수용 명령을
 		// 같은 executor 로 실행하므로(hardwareChanged 분기의 b.Rollback), 총합으로 재면 그
 		// 정상적인 기존 명령까지 "복원 분기가 실행됐다" 로 오판한다(실측으로 확인함: 처음에
@@ -81,7 +81,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 		// "이미지 미설정" 오류로 먼저 실패해, 이 스펙의 두 단언(err 있음 + disables>0)이 실제
 		// 재부팅 예약과 무관하게 통과해 버린다(실측 확인: rebootJobFor 가 항상 NotFound). 이미지를
 		// 설정해야 "재부팅이 실제로 예약됐다" 를 검증하는 스펙이 된다.
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-on-node"
 		labels := map[string]string{"kcloud.ai/restore-on": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -112,7 +112,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 		// 이미지를 설정해야 한다 — 미설정이면 이미 Disabled 판정을 건너뛰는 뮤테이션이 들어와도
 		// RequestReboot 이 "이미지 없음" 으로 먼저 실패해 아래 rebootJobFor 부재 확인이 우연히
 		// 통과해 버린다(실측 확인).
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-done-node"
 		labels := map[string]string{"kcloud.ai/restore-done": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Disabled", "Disabled", ""))
@@ -178,7 +178,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 	It("does not re-issue a mode disable while a reboot is already pending", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-pending-node"
 		labels := map[string]string{"kcloud.ai/restore-pending": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -225,7 +225,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 	It("stops retrying and surfaces a blocked error once the reboot budget is exhausted", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-exhausted-node"
 		labels := map[string]string{"kcloud.ai/restore-exhausted": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -271,7 +271,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 	It("completes cleanup on the pass after mode disable succeeds and reboot completes", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-followthrough-node"
 		labels := map[string]string{"kcloud.ai/restore-followthrough": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -314,7 +314,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 	It("still disables MIG mode when the enable path already exhausted its own reboot budget", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-enable-exhausted-node"
 		labels := map[string]string{"kcloud.ai/restore-enable-exhausted": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -371,7 +371,7 @@ var _ = Describe("deletion restores MIG mode before checking the advertisement b
 	It("issues the mode disable while the advertisement is still below baseline", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-below-baseline-node"
 		labels := map[string]string{"kcloud.ai/restore-below-baseline": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
@@ -412,7 +412,7 @@ var _ = Describe("deletion releases the node lease it took", func() {
 		labels := map[string]string{"kcloud.ai/lease-release": "true"}
 		seedNvidiaNode(node, labels, true, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia(node); cleanupRebootFixture(node) })
-		GinkgoT().Setenv("ACPP_MIG_JOB_IMAGE", "harbor.local/kcloud/mig-tool:v1")
+		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		GinkgoT().Setenv("KCLOUD_OPERATION_COORDINATOR", "delegate")
 
 		acpp := mkNvidiaACPP("lease-release-acpp", labels)

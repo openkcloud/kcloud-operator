@@ -73,7 +73,7 @@ func deployedOperatorRules(t *testing.T) map[string][]string {
 	if err != nil {
 		t.Fatalf("helm rbac 파일을 못 읽었다: %v", err)
 	}
-	re := regexp.MustCompile(`(?s)name: \{\{ include "npu-operator\.fullname" \. \}\}-role\nrules:\n(.*?)\n---`)
+	re := regexp.MustCompile(`(?s)name: \{\{ include "kcloud-operator\.fullname" \. \}\}-role\nrules:\n(.*?)\n---`)
 	m := re.FindSubmatch(data)
 	if m == nil {
 		t.Fatalf("helm rbac 파일에서 operator ClusterRole 의 rules 블록을 못 찾았다 — " +

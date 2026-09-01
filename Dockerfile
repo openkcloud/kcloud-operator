@@ -28,6 +28,10 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
+# GHCR 이 발행된 패키지를 저장소에 자동으로 연결하는 데 쓰는 라벨이다.
+# GHCR 가 패키지를 저장소에 연결할 때 보는 라벨. 개인 fork 리허설은 SOURCE_URL 로 덮는다.
+ARG SOURCE_URL="https://github.com/openkcloud/kcloud-operator"
+LABEL org.opencontainers.image.source="${SOURCE_URL}"
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

@@ -67,7 +67,7 @@ func TestRelateSortsOnlyLists(t *testing.T) {
 }
 
 // rngdDevNodes 는 2026-08-11 라이브에서 두 backend 가 똑같이 주입한 36개다.
-// 2026-08-10 에 rngd-1(192.0.2.113)의 `ls -1 /dev/rngd` 로 실측해 고정한 목록이며
+// 2026-08-10 에 rngd-1 의 `ls -1 /dev/rngd` 로 실측해 고정한 목록이며
 // 손으로 지어낸 이름은 하나도 없다. 개수가 36 인 것과, 벤더가 빼는 12개가 이 안에
 // 전부 들어 있는 것이 §4·§5 와 맞물린다.
 func rngdDevNodes() []string {

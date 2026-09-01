@@ -6,7 +6,7 @@
 // 상세: _helpers.tpl 의 kcloud-operator.image 는 "<global.registry>/<repo>:<tag>" 로
 //
 //	조립한다. global.registry 가 프로젝트 경로(.../kcloud)까지 포함하므로 repo 는
-//	레지스트리 상대경로여야 하는데, Furiosa 두 이미지만 repo 에 kcloud/ 를 또 달고
+//	레지스트리 상대경로여야 하는데, Furiosa 통합 이미지만 repo 에 kcloud/ 를 또 달고
 //	있어 최종 경로가 .../kcloud/kcloud/... 로 두 겹이 된다. 이게 오타처럼 보이지만
 //	Harbor 에 실제로 올라가 있는 경로는 두 겹 쪽이고 한 겹 경로는 없다. 겹을 지우면
 //	그 순간 ImagePullBackOff 다.
@@ -46,7 +46,7 @@ func valuesScalar(t *testing.T, key string) string {
 }
 
 // TestNestedFuriosaRepoPathsArePreserved 는 Harbor 에 두 겹 경로로만 올라가 있는
-// Furiosa 이미지 두 개의 kcloud/ 접두가 지워지지 않았는지 본다. 접두를 빼는 것은
+// Furiosa 통합 이미지의 kcloud/ 접두가 지워지지 않았는지 본다(RNGD -mi 이미지는 2026-09-09 공개 벤더 이미지로 대체돼 목록에서 뺐다). 접두를 빼는 것은
 // 정리가 아니라 회귀다 — 한 겹 경로에 이미지를 먼저 올린 뒤에만 뺄 수 있고, 그때는
 // 이 시험도 같이 고쳐야 한다.
 func TestNestedFuriosaRepoPathsArePreserved(t *testing.T) {
@@ -55,7 +55,6 @@ func TestNestedFuriosaRepoPathsArePreserved(t *testing.T) {
 		t.Fatalf("values.yaml 읽기 실패: %v", err)
 	}
 	for _, want := range []string{
-		`devicePluginRepository: "kcloud/furiosa-device-plugin-mi"`,
 		`devicePluginRepository: "kcloud/furiosa-unified-device-plugin"`,
 	} {
 		if !strings.Contains(string(raw), want) {

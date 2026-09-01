@@ -78,15 +78,29 @@ const vendorFuriosa = "furiosa"
 const (
 	ttDaemonSetName   = "kcloud-tt-device-plugin"
 	ttResourceDefault = "tenstorrent.com/blackhole"
-	ttImageDefault    = "tenstorrent/k8s-device-plugin:v0.1.0"
+	ttImageDefault    = "kcloud-tt-device-plugin:v0.1.0"
 )
 
 // Furiosa 통합 device-plugin(A' 방안) 상수.
 // 단일 DS 가 Warboy/RNGD 양 노드에 스케줄되며(공통 PCI vendor 라벨), entrypoint 가
 // PCI device ID 로 모델을 감지해 해당 벤더 바이너리를 exec 한다.
 const (
-	furiosaLegacyWarboyDSName = "furiosa-device-plugin"
-	furiosaLegacyRngdDSName   = "furiosa-rngd-device-plugin"
+	// 모델별 device-plugin DS 이름. 벤더 공개 이미지를 그대로 실행하는 3rd-party 워크로드라
+	// kube-system 에 kcloud- 접두 없이 둔다(nvidia-device-plugin·rbln-device-plugin 과 같은 규칙).
+	// kcloud 네임스페이스는 kcloud 가 개발한 리소스만 담는다(2026-09-09 원칙).
+	furiosaWarboyDSName = "furiosa-warboy-device-plugin"
+	furiosaRngdDSName   = "furiosa-rngd-device-plugin"
+	// 개명 전 이름. 조정 때 있으면 지우는 정리 전용이다 — DS selector 가 immutable 이라
+	// 이름을 바꾼 자리는 새로 만들고 옛 것을 지우는 수밖에 없다.
+	//   - furiosa-device-plugin(kube-system): v0.7.26 이하의 Warboy DS
+	//   - kcloud-furiosa-{warboy,rngd}-device-plugin(operator ns): v0.7.27 한 회차의 이름
+	furiosaWarboyLegacyDSName = "furiosa-device-plugin"
+	furiosaWarboyV0727DSName  = "kcloud-furiosa-warboy-device-plugin"
+	furiosaRngdV0727DSName    = "kcloud-furiosa-rngd-device-plugin"
+	// 통합 DS 와 모델별 DS 가 공유하는 device-plugin 컨테이너 이름. DS 이름과 달리 옛
+	// 이름을 유지한다 — ACPP 가 살아 있는 DS 에서 이 컨테이너를 이름으로 집어 partition
+	// env 를 읽고 쓴다(internal/partition/rngd).
+	furiosaPluginContainerName = "furiosa-device-plugin"
 	// 자체 구현이므로 operator 네임스페이스에 kcloud- 접두사로 둔다(TT plugin 과 같은 규칙).
 	// 옛 이름·자리는 furiosaUnifiedLegacy* 로 남겨 한 번 정리한다.
 	furiosaUnifiedDSName       = "kcloud-furiosa-device-plugin"
@@ -97,8 +111,25 @@ const (
 	furiosaFamilyNodeLabel = "kcloud.ai/furiosa-family.present"
 )
 
-// furiosaUnifiedDSNamespace 는 통합 device-plugin 이 사는 네임스페이스다.
-// 자체 구현이라 operator 네임스페이스를 따른다 — 벤더 device-plugin(kube-system)과 다르다.
+// furiosaPerModelDSRefs 는 모델별 Furiosa device-plugin DS 가 있을 수 있는 자리 전부다.
+// 현재 자리는 kube-system 의 벤더식 이름, 옛 자리는 v0.7.26 의 kube-system 이름과
+// v0.7.27 한 회차의 operator 네임스페이스 kcloud- 이름이다.
+func furiosaPerModelDSRefs() []types.NamespacedName {
+	return []types.NamespacedName{
+		{Namespace: furiosaVendorDSNamespace(), Name: furiosaWarboyDSName},
+		{Namespace: furiosaVendorDSNamespace(), Name: furiosaRngdDSName},
+		{Namespace: naming.KubeSystemNamespace, Name: furiosaWarboyLegacyDSName},
+		{Namespace: naming.OperatorNamespace(), Name: furiosaWarboyV0727DSName},
+		{Namespace: naming.OperatorNamespace(), Name: furiosaRngdV0727DSName},
+	}
+}
+
+// furiosaVendorDSNamespace 는 벤더 공개 이미지를 그대로 실행하는 모델별 Furiosa DS(Warboy·RNGD)와
+// Warboy ConfigMap 이 사는 네임스페이스다. 3rd-party 워크로드 규칙대로 kube-system 이다.
+func furiosaVendorDSNamespace() string { return naming.KubeSystemNamespace }
+
+// furiosaUnifiedDSNamespace 는 우리가 빌드한 통합 Furiosa device-plugin DS 가 사는
+// 네임스페이스다. 자체 이미지라 operator 네임스페이스를 따른다 — 모델별 벤더 DS(kube-system)와 다르다.
 func furiosaUnifiedDSNamespace() string { return naming.OperatorNamespace() }
 
 // NPUClusterPolicyReconciler reconciles a NPUClusterPolicy object
@@ -270,13 +301,14 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 		// 전환: 기존 2-DS 제거(존재 시). 통합 DS 스케줄 후 정리해 순단 최소화.
-		if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyWarboyDSName); err != nil {
-			logger.Error(err, "failed to delete legacy Warboy DS during unified transition")
-		}
-		if err := r.deleteDaemonSetIfExists(ctx, furiosaLegacyRngdDSName); err != nil {
-			logger.Error(err, "failed to delete legacy RNGD DS during unified transition")
+		// 새 이름과 개명 전 이름을 모두 지운다 — 두 회차가 섞인 클러스터가 있다.
+		for _, ref := range furiosaPerModelDSRefs() {
+			if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
+				logger.Error(err, "failed to delete per-model Furiosa DS during unified transition", "daemonset", ref.String())
+			}
 		}
 	} else {
+		r.cleanupDisabledFuriosaLegacyDS(ctx, &policy)
 		if policy.Spec.Furiosa.Enabled {
 			logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
 			if err := r.ensureFuriosaDevicePlugin(ctx, &policy); err != nil {
@@ -648,7 +680,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaDevicePlugin(ctx context.Conte
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      policy.Spec.Furiosa.ConfigMapName,
-				Namespace: "kube-system",
+				Namespace: furiosaVendorDSNamespace(),
 			},
 		}
 		setOwnerAnnotation(&cm.ObjectMeta, policy)
@@ -663,11 +695,24 @@ interval: 10`,
 		}
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "furiosa-device-plugin"}
+	// 개명 정리: 같은 DS 의 옛 이름을 먼저 지운다. DS selector 가 immutable 이라 이름을
+	// 바꾼 자리는 새로 만들 수밖에 없고, 옛 DS 가 남은 채 새 DS 가 뜨면 두 파드가 같은
+	// 자원을 kubelet 에 중복 등록한다. 그래서 실패하면 새 DS 를 만들지 않고 물러난다.
+	for _, ref := range []types.NamespacedName{
+		{Namespace: naming.KubeSystemNamespace, Name: furiosaWarboyLegacyDSName},
+		{Namespace: naming.OperatorNamespace(), Name: furiosaWarboyV0727DSName},
+	} {
+		if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
+			log.Error(err, "failed to delete pre-rename Warboy DS before creating new one", "name", ref.Name)
+			return err
+		}
+	}
+
+	labels := map[string]string{"app.kubernetes.io/name": furiosaWarboyDSName}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "furiosa-device-plugin",
-			Namespace: "kube-system",
+			Name:      furiosaWarboyDSName,
+			Namespace: furiosaVendorDSNamespace(),
 			Labels:    labels,
 		},
 	}
@@ -680,7 +725,7 @@ interval: 10`,
 				NodeSelector: sel,
 				Tolerations:  []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 				Containers: []corev1.Container{{
-					Name:            "furiosa-device-plugin",
+					Name:            furiosaPluginContainerName,
 					Image:           policy.Spec.Furiosa.DevicePluginImage,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{"/usr/bin/k8s-device-plugin"},
@@ -747,10 +792,20 @@ interval: 10`,
 // rngdDevicePluginArgs returns the binary args for the Furiosa RNGD device plugin DaemonSet.
 // 빈 문자열 또는 "none" 이면 --policy flag 미추가 (회귀 0). 그 외 (single-core/dual-core/quad-core)
 // 면 `--policy=<value>` 를 append 한다 (libfuriosa-kubernetes PartitioningPolicy enum 과 1:1).
-// upstream v2026.1.0 image 는 --policy flag 를 노출하지 않으므로, 비-none 정책은
-// partition-aware custom image (helm values.furiosa.rngd.devicePluginImage 로 override) 필요.
-func rngdDevicePluginArgs(partitionPolicy string) []string {
-	args := []string{"--debugMode"}
+//
+// 벤더 이미지 세대마다 받는 flag 가 다르다(2026-09-09 실측):
+//   - 사내 파티션 지원 빌드: --debugMode 와 --policy 를 모두 받는다
+//   - 공개 ghcr.io/furiosa-ai/furiosa-device-plugin: 둘 다 unknown flag 로 거부하고 죽는다
+//
+// 그래서 둘 다 껐을 때는 args 를 아예 비운다. 그 상태라야 공개 이미지가 뜬다.
+// 비-none 정책은 여전히 파티션 지원 이미지가 필요하다
+// (helm values.furiosa.rngd.devicePluginImage 로 override).
+func rngdDevicePluginArgs(partitionPolicy string, debugMode *bool) []string {
+	var args []string
+	// debugMode 미지정(nil)은 켠 것으로 읽는다 — 기존 배포의 동작을 그대로 둔다.
+	if debugMode == nil || *debugMode {
+		args = append(args, "--debugMode")
+	}
 	if partitionPolicy != "" && partitionPolicy != "none" {
 		args = append(args, "--policy="+partitionPolicy)
 	}
@@ -797,11 +852,19 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 		sel = rngdSpec.NodeSelector
 	}
 
-	labels := map[string]string{"app.kubernetes.io/name": "furiosa-rngd-device-plugin"}
+	// 개명 정리: 같은 DS 의 옛 이름을 먼저 지운다. DS selector 가 immutable 이라 이름을
+	// 바꾼 자리는 새로 만들 수밖에 없고, 옛 DS 가 남은 채 새 DS 가 뜨면 두 파드가 같은
+	// 자원을 kubelet 에 중복 등록한다. 그래서 실패하면 새 DS 를 만들지 않고 물러난다.
+	if err := r.deleteDaemonSetIn(ctx, naming.OperatorNamespace(), furiosaRngdV0727DSName); err != nil {
+		log.Error(err, "failed to delete pre-rename RNGD DS before creating new one")
+		return err
+	}
+
+	labels := map[string]string{"app.kubernetes.io/name": furiosaRngdDSName}
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "furiosa-rngd-device-plugin",
-			Namespace: "kube-system",
+			Name:      furiosaRngdDSName,
+			Namespace: furiosaVendorDSNamespace(),
 			Labels:    labels,
 		},
 	}
@@ -815,7 +878,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 				Tolerations:       []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 				PriorityClassName: "system-node-critical",
 				Containers: []corev1.Container{{
-					Name:            "furiosa-device-plugin",
+					Name:            furiosaPluginContainerName,
 					Image:           image,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{"./main"},
@@ -826,7 +889,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 					// 그 외 (single-core/dual-core/quad-core) 면 partition-aware image 가
 					// libfuriosa-kubernetes 의 PartitioningPolicy 와 1:1 매핑되는 flag 로 받는다.
 					// (upstream v2026.1.0 image 는 미지원 — partition-aware custom image 필요)
-					Args: rngdDevicePluginArgs(partitionPolicy),
+					Args: rngdDevicePluginArgs(partitionPolicy, policy.Spec.Furiosa.Rngd.DebugMode),
 					Env: []corev1.EnvVar{
 						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
 							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -883,10 +946,8 @@ func (r *NPUClusterPolicyReconciler) rollbackFuriosaUnified(ctx context.Context,
 	if err := r.deleteDaemonSetIn(ctx, naming.KubeSystemNamespace, furiosaUnifiedLegacyDSName); err != nil {
 		logger.Error(err, "failed to delete legacy unified Furiosa DS during rollback")
 	}
-	// 통합 경로가 만든 ConfigMap(furiosaUnifiedDSNamespace())도 같이 회수 — 안 그러면 고아로 남는다.
-	// ConfigMapName 이 비어 있으면 통합 경로가 애초에 안 만들었으니 건너뛴다. kube-system 의
-	// 같은 이름 ConfigMap 은 절대 건드리지 않는다 — 레거시 2-DS 경로(ensureFuriosaDevicePlugin)가
-	// 그것을 마운트한다.
+	// 통합 경로가 만든 ConfigMap 도 같이 회수 — 안 그러면 고아로 남는다. 모델별 Warboy 경로의
+	// 동명 ConfigMap 은 kube-system 에 있어 여기서 지우는 대상이 아니다.
 	cmName := policy.Spec.Furiosa.ConfigMapName
 	if cmName == "" {
 		return
@@ -894,6 +955,26 @@ func (r *NPUClusterPolicyReconciler) rollbackFuriosaUnified(ctx context.Context,
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: furiosaUnifiedDSNamespace()}}
 	if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "failed to delete unified Furiosa configmap during rollback")
+	}
+}
+
+// cleanupDisabledFuriosaLegacyDS 는 Warboy·RNGD 가 꺼진 상태에서 개명 전 이름의 DS 를 지운다.
+// ensure 경로는 켜진 쪽만 돌기 때문에 꺼진 쪽의 옛 DS 는 여기서만 정리된다. 실패는 기록만 한다.
+func (r *NPUClusterPolicyReconciler) cleanupDisabledFuriosaLegacyDS(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) {
+	logger := logf.FromContext(ctx)
+	var refs []types.NamespacedName
+	if !policy.Spec.Furiosa.Enabled {
+		refs = append(refs,
+			types.NamespacedName{Namespace: naming.KubeSystemNamespace, Name: furiosaWarboyLegacyDSName},
+			types.NamespacedName{Namespace: naming.OperatorNamespace(), Name: furiosaWarboyV0727DSName})
+	}
+	if !policy.Spec.Furiosa.Rngd.Enabled {
+		refs = append(refs, types.NamespacedName{Namespace: naming.OperatorNamespace(), Name: furiosaRngdV0727DSName})
+	}
+	for _, ref := range refs {
+		if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
+			logger.Error(err, "failed to delete pre-rename Furiosa DS while disabled", "daemonset", ref.String())
+		}
 	}
 }
 
@@ -908,7 +989,7 @@ func (r *NPUClusterPolicyReconciler) deleteDaemonSetIn(ctx context.Context, ns, 
 
 // deleteDaemonSetIfExists 는 kube-system 의 DS 를 이름으로 지운다(deleteDaemonSetIn 의 얇은 감싸개).
 // 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다. 이 함수가 지우는 이름
-// (furiosaLegacyWarboyDSName/furiosaLegacyRngdDSName/furiosaUnifiedDSName)은 전부 이 operator 만
+// (furiosaWarboyDSName/furiosaRngdDSName/그 개명 전 이름/furiosaUnifiedDSName)은 전부 이 operator 만
 // 만드는 이름이라 소유권 검사가 필요 없다. 이름을 흡수 대상(nvidia device-plugin)에 재사용하려면
 // deleteOwnedDaemonSetIfExists 를 쓸 것 — 그쪽은 이름만으로 지우면 흡수 대상 3rd-party 리소스까지
 // 지울 위험이 있다.
@@ -994,7 +1075,7 @@ interval: 10`,
 				Tolerations:       []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 				PriorityClassName: "system-node-critical",
 				Containers: []corev1.Container{{
-					Name:            "furiosa-device-plugin",
+					Name:            furiosaPluginContainerName,
 					Image:           image,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					// Command 미지정 — 통합 이미지 ENTRYPOINT(entrypoint.sh)가 PCI 감지 후 exec.
@@ -1078,7 +1159,7 @@ interval: 10`,
 // unifiedEnvValue 는 furiosa-device-plugin 컨테이너에서 name env 값을 읽는다(없으면 "").
 func unifiedEnvValue(ds *appsv1.DaemonSet, name string) string {
 	for _, ctr := range ds.Spec.Template.Spec.Containers {
-		if ctr.Name != furiosaLegacyWarboyDSName {
+		if ctr.Name != furiosaPluginContainerName {
 			continue
 		}
 		for _, e := range ctr.Env {
@@ -1094,7 +1175,7 @@ func unifiedEnvValue(ds *appsv1.DaemonSet, name string) string {
 func setUnifiedEnvValue(ds *appsv1.DaemonSet, name, value string) {
 	for ci := range ds.Spec.Template.Spec.Containers {
 		ctr := &ds.Spec.Template.Spec.Containers[ci]
-		if ctr.Name != furiosaLegacyWarboyDSName {
+		if ctr.Name != furiosaPluginContainerName {
 			continue
 		}
 		for ei := range ctr.Env {

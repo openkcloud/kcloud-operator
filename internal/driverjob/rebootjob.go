@@ -28,7 +28,7 @@ func RenderRebootJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image strin
 
 // RenderRebootJobFor 는 대상 노드를 재부팅하는 privileged one-shot Job 을 소유자 중립으로 만든다
 // (ACPP MIG mode enable 도 이 경로를 쓴다 — Ampere pending MIG 는 재부팅으로만 확정되므로).
-// image 는 nsenter 를 포함한 이미지(driver-installer / mig-tool). Namespace 는 install Job 과 동일.
+// image 는 nsenter 를 포함한 이미지(driver-installer / kcloud-host-exec). Namespace 는 install Job 과 동일.
 func RenderRebootJobFor(owner metav1.OwnerReference, pullSecrets []corev1.LocalObjectReference, nodeName, image string) *batchv1.Job {
 	labels := map[string]string{
 		"app.kubernetes.io/name":      "kcloud-node-reboot",

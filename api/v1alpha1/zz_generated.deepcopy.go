@@ -2321,6 +2321,11 @@ func (in *RngdSpec) DeepCopyInto(out *RngdSpec) {
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.DebugMode != nil {
+		in, out := &in.DebugMode, &out.DebugMode
+		*out = new(bool)
+		**out = **in
+	}
 	if in.DRA != nil {
 		in, out := &in.DRA, &out.DRA
 		*out = new(DRASpec)

@@ -113,7 +113,7 @@ func TestObserveJobNameSeparatesStreams(t *testing.T) {
 }
 
 func TestObserveJobRender(t *testing.T) {
-	job := renderObserveJob("acpp-mig-observe-abc", "worker1", []string{obsTestPCI}, "harbor/mig-tool:latest", "kcloud-operator")
+	job := renderObserveJob("acpp-mig-observe-abc", "worker1", []string{obsTestPCI}, "harbor/kcloud-host-exec:latest", "kcloud-operator")
 
 	pod := job.Spec.Template.Spec
 	if !pod.HostPID {
@@ -132,7 +132,7 @@ func TestObserveJobRender(t *testing.T) {
 		t.Errorf("TTLSecondsAfterFinished must be set")
 	}
 	ctr := pod.Containers[0]
-	if ctr.Image != "harbor/mig-tool:latest" {
+	if ctr.Image != "harbor/kcloud-host-exec:latest" {
 		t.Errorf("Image = %q", ctr.Image)
 	}
 	if ctr.SecurityContext == nil || ctr.SecurityContext.Privileged == nil || !*ctr.SecurityContext.Privileged {

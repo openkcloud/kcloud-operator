@@ -35,8 +35,11 @@ import (
 )
 
 const (
-	// mpsControlDaemonDSName 은 배포되는 DaemonSet 이름이다(kube-system, 3rd-party 이미지 규약).
-	mpsControlDaemonDSName = "kcloud-mps-control-daemon"
+	// mpsControlDaemonDSName 은 배포되는 DaemonSet 이름이다. 벤더 이미지를 그대로 쓰므로
+	// kcloud- 접두사를 붙이지 않는다(kube-system, 3rd-party 이미지 규약. dcgm-exporter 와 같다).
+	mpsControlDaemonDSName = "nvidia-mps-control-daemon"
+	// mpsControlDaemonLegacyDSName 은 접두사를 떼기 전 이름이다(v0.7.28 이하). 한 번 정리하면 없는 이름이다.
+	mpsControlDaemonLegacyDSName = "kcloud-mps-control-daemon"
 	// mpsPipeDir 는 MPS 파이프/shm 디렉터리다. device-plugin 쪽 배선(WireSharing)과 같은 경로를
 	// 봐야 하므로 nvidia.MPSPipeDir 를 단일 출처로 alias 한다.
 	mpsPipeDir = nvidia.MPSPipeDir
@@ -80,6 +83,14 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureMpsControlDaemon(ctx contex
 			return err
 		}
 		return nil
+	}
+
+	// 개명 전 DS 가 남아 있으면 먼저 지운다 — DS selector 가 immutable 이라 이름을 바꾼 자리는
+	// 새로 만들 수밖에 없고, 둘이 같이 살면 control daemon 이 노드당 둘이 된다.
+	legacy := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: mpsControlDaemonLegacyDSName, Namespace: "kube-system"}}
+	if err := r.Delete(ctx, legacy); err != nil && !apierrors.IsNotFound(err) {
+		log.Error(err, "failed to delete pre-rename mps-control-daemon daemonset")
+		return err
 	}
 
 	desired := renderMpsControlDaemonDS()

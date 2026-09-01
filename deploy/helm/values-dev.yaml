@@ -5,7 +5,7 @@
 #       설정을 여기서 영속시킨다. --set 은 helm upgrade 한 번에 증발하므로(2026-07-16 사건:
 #       rev19 upgrade 에서 nvidia toolkit --set 소멸→toolkit DS 소멸→worker1 containerd
 #       nvidia runtime 유실→gpu allocatable 0) 반드시 커밋된 values 로 영속한다.
-# 생성일: 2026-07-16
+# 생성일: 2026-07-16 | 수정일: 2026-09-09 (toolkit 이미지 기본값을 upstream 경로로)
 # ============================================================
 driverInstallPolicies:
   nvidia:
@@ -21,7 +21,10 @@ driverInstallPolicies:
       # nvidia-ctk 로 runtime 을 idempotent 재등록한다(device-plugin runtimeClass=nvidia 보장).
       enabled: true
       method: apt
-      image: "registry.example.com:5000/kcloud/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
+      # 벤더 이미지지만 전체 경로 필드라 vendorRegistry 조립 대상이 아니다. 이 dev
+      # 클러스터는 Harbor 미러 경로를 사이트 값 파일에서 덮어쓴다. 여기 기본값은
+      # 미러가 없어도 뜨도록 upstream 경로를 둔다(nvcr.io 는 k8s/ 가 경로에 들어간다).
+      image: "nvcr.io/nvidia/k8s/container-toolkit:v1.17.8-ubuntu20.04"
 
 # ── 아래 3값은 트랙F(2026-07-20) 영속화 대상 ──────────────────────────────
 # 근본원인: 이 3키는 values.yaml 기본값이 모두 false 이며 values-dev.yaml 에 없었다.

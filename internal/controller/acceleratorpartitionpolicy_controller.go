@@ -115,7 +115,7 @@ func (r *AcceleratorPartitionPolicyReconciler) nvidiaExecutor() nvidia.Executor 
 	if r.NvidiaExecFactory != nil {
 		return r.NvidiaExecFactory(r.Client)
 	}
-	return nvidia.NewJobExecutor(r.Client, os.Getenv("ACPP_MIG_JOB_IMAGE"))
+	return nvidia.NewJobExecutor(r.Client, HostExecImage())
 }
 
 // nvidiaObserver 는 operator-driven MIG 관측기를 만든다(seam 우선, 없으면 실 MigObserver Job, spec §16.3).
@@ -123,7 +123,7 @@ func (r *AcceleratorPartitionPolicyReconciler) nvidiaObserver() nvidia.Observer 
 	if r.NvidiaObserverFactory != nil {
 		return r.NvidiaObserverFactory(r.Client)
 	}
-	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, os.Getenv("ACPP_MIG_JOB_IMAGE"), nvidia.StreamApply)
+	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, HostExecImage(), nvidia.StreamApply)
 }
 
 // Reconcile 은 discover→validate→diff→(apply)→verify→Ready 상태머신을 target 별로 실행하고 phase 를 집계한다.
@@ -1825,7 +1825,7 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx contex
 	if err := r.patchApplyRecord(ctx, acpp, next); err != nil {
 		return false, err
 	}
-	rb := &nodeRebooter{Client: r.Client, Image: r.migToolImage()}
+	rb := &nodeRebooter{Client: r.Client, Image: HostExecImage()}
 	if err := rb.RequestReboot(ctx, rec.NodeName, ""); err != nil {
 		return false, err
 	}

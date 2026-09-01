@@ -1,0 +1,72 @@
+# ============================================================
+# image-manifest.yaml: 릴리스 세트 0.7.30 이 사용하는 컨테이너 이미지 전체 목록
+# 상세: 미러(air-gap)와 감사용. condition 은 어떤 상황에서 실제로 pull 되는지다.
+#       digest 는 GHCR 발행 뒤 채운다(release.yml). 벤더 이미지는 upstream 그대로이며
+#       global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
+# 생성일: 2026-09-10
+# ============================================================
+release: "0.7.30"
+kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
+  - image: kcloud-operator
+    tag: v0.7.30
+    condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (나머지 이미지는 동일)
+  - image: kcloud-node-manager
+    tag: "0.6.17"
+    condition: 항상(전 노드 DaemonSet)
+  - image: kcloud-host-exec
+    tag: v0.1.0
+    condition: NVIDIA 노드 MIG 관측 Job, 재부팅 Job
+  - image: nvidia-driver-ds
+    tag: v1
+    condition: NVIDIA 노드 드라이버 설치 Job
+  - image: furiosa-driver-ds
+    tag: v3
+    condition: Furiosa Warboy·RNGD 노드 드라이버 설치 Job
+  - image: tenstorrent-driver-ds
+    tag: 2.8.0-v1
+    condition: Tenstorrent 노드 드라이버 설치 Job
+  - image: kcloud-tt-device-plugin
+    tag: v0.1.0
+    condition: Tenstorrent 노드
+  - image: furiosa-exporter
+    tag: "0.1.3"
+    condition: RNGD 노드(furiosa.exporter.enabled)
+vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
+  - image: nvcr.io/nvidia/k8s-device-plugin
+    tag: v0.17.1
+    condition: NVIDIA 노드
+  - image: nvcr.io/nvidia/k8s/dcgm-exporter
+    tag: 4.5.2-4.8.1-ubuntu22.04
+    condition: NVIDIA 노드(nvidia.dcgmExporter.enabled)
+  - image: nvcr.io/nvidia/k8s/container-toolkit
+    tag: v1.17.8-ubuntu20.04
+    condition: NVIDIA 노드(driverInstallPolicies.nvidia.toolkit.enabled)
+  - image: ghcr.io/furiosa-ai/k8s-device-plugin
+    tag: "0.10.1"
+    condition: Furiosa Warboy 노드
+  - image: docker.io/furiosaai/furiosa-device-plugin
+    tag: "2026.1.1"
+    condition: Furiosa RNGD 노드
+  - image: docker.io/bitnamilegacy/kubectl
+    tag: "1.28"
+    condition: helm hook Job(CRD 갱신·옛 DS 정리·post-delete CRD 삭제)
+fullPathValues:  # global 값으로 조립되지 않아 미러 시 직접 지정하는 값
+  - nvidia.devicePluginImage
+  - nvidia.dcgmExporter.image
+  - furiosa.devicePluginImage
+  - driverInstallPolicies.nvidia.toolkit.image
+  - crdUpgrade.kubectlImage
+aptRepositories:  # 드라이버는 이미지가 아니라 노드가 apt 로 받는다
+  - vendor: nvidia
+    source: ppa:graphics-drivers/ppa
+    auth: none
+  - vendor: furiosa-rngd
+    source: http://asia-northeast3-apt.pkg.dev/projects/furiosa-ai
+    auth: none
+    note: furiosa-driver-rngd, furiosa-smi, furiosa-libsmi(exporter 가 호스트에서 읽음)
+  - vendor: furiosa-warboy
+    source: https://archive.furiosa.ai/ubuntu
+    auth: Secret furiosa-apt-auth (namespace kcloud, key furiosa.conf)
+  - vendor: tenstorrent
+    source: none (tt-kmd 소스가 이미지에 있고 DKMS 로 빌드)
+    auth: none

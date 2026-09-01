@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "npu-operator.name" -}}
+{{- define "kcloud-operator.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "npu-operator.fullname" -}}
+{{- define "kcloud-operator.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -19,19 +19,19 @@ Create a default fully qualified app name.
 {{/*
 ServiceAccount name.
 */}}
-{{- define "npu-operator.serviceAccountName" -}}
+{{- define "kcloud-operator.serviceAccountName" -}}
 {{- if .Values.serviceAccount.name -}}
 {{ .Values.serviceAccount.name }}
 {{- else -}}
-{{ include "npu-operator.fullname" . }}
+{{ include "kcloud-operator.fullname" . }}
 {{- end -}}
 {{- end -}}
 
 {{/*
 Common selector labels
 */}}
-{{- define "npu-operator.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+{{- define "kcloud-operator.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
@@ -45,4 +45,18 @@ Input dict keys: registry (may be empty), repo, tag.
 {{- define "kcloud-operator.image" -}}
 {{- $reg := .registry | default "" -}}
 {{- if $reg -}}{{ $reg }}/{{ .repo }}:{{ .tag }}{{- else -}}{{ .repo }}:{{ .tag }}{{- end -}}
+{{- end -}}
+
+{{/*
+Assemble a 3rd-party(vendor) image string.
+Input dict keys: registry (global.vendorRegistry, may be empty), upstream (vendor host,
+e.g. "docker.io"), repo ("<org>/<image>"), tag.
+- registry 가 비어 있으면 "<upstream>/<repo>:<tag>" — 벤더 공개 레지스트리에서 직접 당긴다.
+- registry 가 채워져 있으면 "<registry>/<repo>:<tag>" — air-gap 사설 미러 경로다.
+미러 경로 규약은 upstream 의 org 경로를 그대로 유지하는 것이다(<registry>/<org>/<image>).
+kcloud 가 빌드하는 이미지는 이 헬퍼가 아니라 kcloud-operator.image + global.registry 를 쓴다.
+*/}}
+{{- define "kcloud-operator.vendorImage" -}}
+{{- $reg := .registry | default .upstream | default "" -}}
+{{- include "kcloud-operator.image" (dict "registry" $reg "repo" .repo "tag" .tag) -}}
 {{- end -}}

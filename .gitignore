@@ -42,3 +42,9 @@ docs/superpowers/
 # 진행 대시보드(작업 산출물, 추적 제외)
 docs/progress/
 .superpowers/
+
+# 사이트 배포 환경 변수(사설 레지스트리 주소 포함) — 추적 금지
+deploy/helm/deploy.env
+
+# 구현 기록·설계 문서. 공개 저장소에서 관리하지 않는다(2026-09-09 결정).
+docs/

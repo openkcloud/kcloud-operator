@@ -5,7 +5,7 @@
 #       + kcloud-operator-api Service. 기본 api.enabled=false(opt-in).
 # 생성일: 2026-07-20
 # ============================================================
-{{- $fullname := include "npu-operator.fullname" . -}}
+{{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $svcName := printf "%s-api" $fullname -}}
 {{- $secretName := printf "%s-api-cert" $fullname -}}
 {{/*
@@ -38,7 +38,7 @@ metadata:
   name: {{ $secretName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 type: kubernetes.io/tls
 data:
@@ -51,14 +51,14 @@ metadata:
   name: {{ $svcName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: {{ include "npu-operator.name" . }}
+    app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: management-api
 spec:
   # 기본은 ClusterIP — 콘솔을 클러스터 밖 브라우저로 열려면 NodePort 로 바꾼다.
   type: {{ .Values.api.service.type | default "ClusterIP" }}
   selector:
-    {{- include "npu-operator.selectorLabels" . | nindent 4 }}
+    {{- include "kcloud-operator.selectorLabels" . | nindent 4 }}
   ports:
   - name: https
     port: 443

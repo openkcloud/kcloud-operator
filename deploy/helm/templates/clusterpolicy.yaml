@@ -1,6 +1,6 @@
 {{- if .Values.deployClusterPolicy }}
 # clusterpolicy.yaml: NPUClusterPolicy 샘플 CR
-# 생성일: 2026-03-25
+# 생성일: 2026-03-25 | 수정일: 2026-09-09 (벤더 이미지를 global.vendorRegistry 로 분리)
 apiVersion: npu.ai/v1alpha1
 kind: NPUClusterPolicy
 metadata:
@@ -34,7 +34,7 @@ spec:
     {{- if .Values.nvidia.dra }}
     dra:
       enabled: {{ .Values.nvidia.dra.enabled }}
-      image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.nvidia.dra.repository "tag" .Values.nvidia.dra.tag) }}"
+      image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.nvidia.dra.upstream "repo" .Values.nvidia.dra.repository "tag" .Values.nvidia.dra.tag) }}"
     {{- end }}
   furiosa:
     enabled: {{ .Values.furiosa.enabled }}
@@ -57,13 +57,16 @@ spec:
       {{- with .Values.furiosa.rngd.advertiseBy }}
       advertiseBy: {{ . | quote }}
       {{- end }}
-      devicePluginImage: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.rngd.devicePluginRepository "tag" .Values.furiosa.rngd.devicePluginTag) }}"
+      devicePluginImage: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.furiosa.rngd.devicePluginUpstream "repo" .Values.furiosa.rngd.devicePluginRepository "tag" .Values.furiosa.rngd.devicePluginTag) }}"
       resourceName: "{{ .Values.furiosa.rngd.resourceName }}"
       partitionPolicy: {{ .Values.furiosa.rngd.partitionPolicy | default "none" | quote }}
+      {{- if hasKey .Values.furiosa.rngd "debugMode" }}
+      debugMode: {{ .Values.furiosa.rngd.debugMode }}
+      {{- end }}
       {{- if .Values.furiosa.rngd.dra }}
       dra:
         enabled: {{ .Values.furiosa.rngd.dra.enabled }}
-        image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.rngd.dra.repository "tag" .Values.furiosa.rngd.dra.tag) }}"
+        image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.furiosa.rngd.dra.upstream "repo" .Values.furiosa.rngd.dra.repository "tag" .Values.furiosa.rngd.dra.tag) }}"
       {{- end }}
       {{- if .Values.furiosa.rngd.nodeSelector }}
       nodeSelector:
@@ -73,7 +76,7 @@ spec:
   {{- if .Values.rebellions }}
   rebellions:
     enabled: {{ .Values.rebellions.enabled }}
-    devicePluginImage: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.rebellions.devicePluginRepository "tag" .Values.rebellions.devicePluginTag) | quote }}
+    devicePluginImage: {{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.rebellions.devicePluginUpstream "repo" .Values.rebellions.devicePluginRepository "tag" .Values.rebellions.devicePluginTag) | quote }}
     resourceName: {{ .Values.rebellions.resourceName | quote }}
     resourcePrefix: {{ .Values.rebellions.resourcePrefix | quote }}
     namespace: {{ .Values.rebellions.namespace | quote }}

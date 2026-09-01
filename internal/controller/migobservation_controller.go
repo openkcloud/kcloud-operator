@@ -13,7 +13,6 @@ package controller
 
 import (
 	"context"
-	"os"
 	"strings"
 	"time"
 
@@ -76,7 +75,7 @@ func (r *MigObservationReconciler) observer() nvidia.Observer {
 	if r.ObserverFactory != nil {
 		return r.ObserverFactory()
 	}
-	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, os.Getenv("ACPP_MIG_JOB_IMAGE"), nvidia.StreamStanding)
+	return nvidia.NewMigObserver(r.Client, nvidia.Namespace, HostExecImage(), nvidia.StreamStanding)
 }
 
 func (r *MigObservationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

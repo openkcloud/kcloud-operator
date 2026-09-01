@@ -46,7 +46,7 @@ func newTestClient(t *testing.T, objs ...client.Object) *Client {
 
 func TestCollectStatus_Aggregation(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "npu-operator"},
+		ObjectMeta: metav1.ObjectMeta{Name: "npuclusterpolicy-sample", Namespace: "kcloud"},
 		Spec: npuv1alpha1.NPUClusterPolicySpec{
 			Nvidia: npuv1alpha1.NvidiaSpec{Enabled: true, DevicePluginImage: "nvidia/k8s-device-plugin:v1"},
 			Furiosa: npuv1alpha1.FuriosaSpec{

@@ -1,7 +1,7 @@
 // driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
 // 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
 //       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-06-15
+// 생성일: 2026-04-13 | 수정일: 2026-09-09
 
 package controller
 
@@ -166,7 +166,9 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 									PodAffinityTerm: corev1.PodAffinityTerm{
 										LabelSelector: &metav1.LabelSelector{
 											MatchLabels: map[string]string{
-												"app.kubernetes.io/name":      "npu-operator",
+												// 차트 이름이 라벨 값이다(kcloud-operator.name). 개명 전 값 "npu-operator" 를
+												// 그대로 두면 이 셀렉터가 아무 pod 도 못 집어 anti-affinity 가 무동작이었다.
+												"app.kubernetes.io/name":      "kcloud-operator",
 												"app.kubernetes.io/component": "controller",
 											},
 										},
@@ -195,7 +197,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-modules", MountPath: "/lib/modules"},
-								{Name: "host-var", MountPath: "/var/lib/npu-operator"},
+								{Name: "host-var", MountPath: "/var/lib/kcloud-operator"},
 							},
 						},
 						{
@@ -232,7 +234,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 							StartupProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									Exec: &corev1.ExecAction{
-										Command: []string{"cat", "/var/lib/npu-operator/driver.ready"},
+										Command: []string{"cat", "/var/lib/kcloud-operator/driver.ready"},
 									},
 								},
 								InitialDelaySeconds: 60,
@@ -255,7 +257,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 								PreStop: &corev1.LifecycleHandler{
 									Exec: &corev1.ExecAction{
 										Command: []string{"/bin/sh", "-c",
-											"timeout 30 sh -c 'rm -f /var/lib/npu-operator/driver.ready /tmp/driver-ready; " + rmmodCmd + "' || true"},
+											"timeout 30 sh -c 'rm -f /var/lib/kcloud-operator/driver.ready /tmp/driver-ready; " + rmmodCmd + "' || true"},
 									},
 								},
 							},
@@ -263,7 +265,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 								{Name: "host-modules", MountPath: "/lib/modules"},
 								{Name: "host-src", MountPath: "/usr/src"},
 								{Name: "host-etc", MountPath: "/etc"},
-								{Name: "host-var", MountPath: "/var/lib/npu-operator"},
+								{Name: "host-var", MountPath: "/var/lib/kcloud-operator"},
 								{Name: "device-plugins", MountPath: "/var/lib/kubelet/device-plugins"},
 							},
 						},
@@ -290,7 +292,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 						{
 							Name: "host-var",
 							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/npu-operator"},
+								HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/kcloud-operator"},
 							},
 						},
 						{

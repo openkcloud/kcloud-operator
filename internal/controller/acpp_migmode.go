@@ -12,7 +12,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -379,10 +378,10 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureAcppRebootJob(t partition.T
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
-	image := r.migToolImage()
+	image := HostExecImage()
 	if image == "" {
 		// 빈 이미지로 Job 을 만들면 API 서버 validation 에러로 뒤늦게 깨진다 — 의도를 담아 먼저 막는다.
-		return fmt.Errorf("reboot job for node %s: ACPP_MIG_JOB_IMAGE not configured", t.NodeName)
+		return fmt.Errorf("reboot job for node %s: HOST_EXEC_IMAGE not configured", t.NodeName)
 	}
 	rec := getApplyRecord(acpp, t.NodeName)
 	rec.NodeName = t.NodeName
@@ -411,9 +410,4 @@ func (r *AcceleratorPartitionPolicyReconciler) deleteAcppRebootJob(ctx context.C
 		return err
 	}
 	return nil
-}
-
-// migToolImage 는 nsenter 를 포함한 실행 이미지다 — MIG apply/observe Job 과 같은 소스를 쓴다.
-func (r *AcceleratorPartitionPolicyReconciler) migToolImage() string {
-	return os.Getenv("ACPP_MIG_JOB_IMAGE")
 }

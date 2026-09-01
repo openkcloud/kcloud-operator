@@ -2,7 +2,7 @@
 // driver_daemonset_controller_test.go: renderDriverDaemonSet 단위 테스트
 // 상세: Phase C/D — operator pod anti-affinity, PreStop timeout 30s,
 //        TerminationGracePeriodSeconds=60s 가 DS spec 에 박혀 있는지 검증
-// 생성일: 2026-04-27
+// 생성일: 2026-04-27 | 수정일: 2026-09-09
 // ============================================================
 
 package controller
@@ -89,7 +89,7 @@ func TestRenderDriverDaemonSet_AntiAffinityWithOperator(t *testing.T) {
 		t.Errorf("TopologyKey=%q, expected kubernetes.io/hostname", term.TopologyKey)
 	}
 	if term.LabelSelector == nil ||
-		term.LabelSelector.MatchLabels["app.kubernetes.io/name"] != "npu-operator" {
+		term.LabelSelector.MatchLabels["app.kubernetes.io/name"] != "kcloud-operator" {
 		t.Errorf("operator label selector 미일치: %+v", term.LabelSelector)
 	}
 	if term.LabelSelector.MatchLabels["app.kubernetes.io/component"] != "controller" {

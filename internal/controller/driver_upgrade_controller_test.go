@@ -1213,7 +1213,7 @@ func makeQuiesceLabeledDeploy(name, nodeName string, replicas int32) *appsv1.Dep
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "npu-operator",
+			Namespace: "kcloud",
 			Labels: map[string]string{
 				upgrade.QuiesceOnDriverUpgradeLabelKey: "true",
 				"app":                                  name,
@@ -1277,7 +1277,7 @@ func TestQuiesce_LabelMatched_Scaled0(t *testing.T) {
 		nodeName  = "worker-quiesce-1"
 		vendor    = "nvidia"
 		dusName   = "worker-quiesce-1-nvidia"
-		deployNS  = "npu-operator"
+		deployNS  = "kcloud"
 		deployNM  = "gpu-stress-single"
 		origScale = int32(2)
 	)
@@ -1361,7 +1361,7 @@ func TestRestore_OriginalReplicas(t *testing.T) {
 		nodeName  = "worker-restore-1"
 		vendor    = "nvidia"
 		dusName   = "worker-restore-1-nvidia"
-		deployNS  = "npu-operator"
+		deployNS  = "kcloud"
 		deployNM  = "gpu-stress-single"
 		origScale = int32(2)
 	)
@@ -1420,7 +1420,7 @@ func TestRestore_DeploymentMissing_Graceful(t *testing.T) {
 		nodeName  = "worker-restore-missing"
 		vendor    = "nvidia"
 		dusName   = "worker-restore-missing-nvidia"
-		deployNS  = "npu-operator"
+		deployNS  = "kcloud"
 		deployNM  = "gpu-stress-deleted"
 		origScale = int32(1)
 	)
@@ -1466,7 +1466,7 @@ func TestQuiesce_AnnotationBackup_Persisted(t *testing.T) {
 		nodeName  = "worker-anno-backup"
 		vendor    = "nvidia"
 		dusName   = "worker-anno-backup-nvidia"
-		deployNS  = "npu-operator"
+		deployNS  = "kcloud"
 		deployNM  = "gpu-stress-anno"
 		origScale = int32(3)
 	)
@@ -1524,7 +1524,7 @@ func TestRestore_FromAnnotation_Fallback(t *testing.T) {
 		nodeName  = "worker-anno-fallback"
 		vendor    = "nvidia"
 		dusName   = "worker-anno-fallback-nvidia"
-		deployNS  = "npu-operator"
+		deployNS  = "kcloud"
 		deployNM  = "gpu-stress-fallback"
 		origScale = int32(2)
 	)

@@ -57,7 +57,7 @@ func nodeWithBootID(id string) *corev1.Node {
 // inFlightJob 은 라이브에서 실제로 남았던 Job 을 재현한다: 파드는 만들어졌지만 실행된 적이 없어
 // Succeeded 도 Failed 도 0 이고, Job 은 영원히 그 상태에 머문다.
 func inFlightJob(name, cmdHash, stampedBootID, restarts string) *batchv1.Job {
-	job := renderMigJob(name, cmdHash, rebootTestNode, rebootTestSteps(), "mig-tool:v0.1.0")
+	job := renderMigJob(name, cmdHash, rebootTestNode, rebootTestSteps(), "kcloud-host-exec:v0.1.0")
 	job.Annotations[NodeBootIDAnnotation] = stampedBootID
 	if restarts != "" {
 		job.Annotations[RebootRestartsAnnotation] = restarts
@@ -89,7 +89,7 @@ func TestRunRecreatesJobStrandedByReboot(t *testing.T) {
 		WithObjects(nodeWithBootID(bootAfter), stale). // 노드는 이미 다른 부팅 세대다
 		WithInterceptorFuncs(succeedOnCreate()).Build()
 
-	e := &JobExecutor{Client: c, Image: "mig-tool:v0.1.0", PollInterval: time.Millisecond, Timeout: 2 * time.Second}
+	e := &JobExecutor{Client: c, Image: "kcloud-host-exec:v0.1.0", PollInterval: time.Millisecond, Timeout: 2 * time.Second}
 	if err := e.Run(context.Background(), opID, cmdHash, rebootTestNode, steps); err != nil {
 		t.Fatalf("재부팅에 치인 Job 은 재생성으로 복구돼야 한다: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRunLeavesHealthyInFlightJobAlone(t *testing.T) {
 		}).Build()
 
 	// 이 Job 은 fake 클러스터에서 영원히 끝나지 않는다 — timeout 을 짧게 두고 "기다렸다" 만 확인한다.
-	e := &JobExecutor{Client: c, Image: "mig-tool:v0.1.0", PollInterval: 5 * time.Millisecond, Timeout: 60 * time.Millisecond}
+	e := &JobExecutor{Client: c, Image: "kcloud-host-exec:v0.1.0", PollInterval: 5 * time.Millisecond, Timeout: 60 * time.Millisecond}
 	err := e.Run(context.Background(), opID, cmdHash, rebootTestNode, steps)
 	if err == nil || !strings.Contains(err.Error(), "timed out after") {
 		t.Fatalf("건강한 in-flight Job 은 완료를 기다려야 한다(timeout 까지): %v", err)
@@ -166,7 +166,7 @@ func TestRunBoundsRebootRecreates(t *testing.T) {
 			},
 		}).Build()
 
-	e := &JobExecutor{Client: c, Image: "mig-tool:v0.1.0", PollInterval: time.Millisecond, Timeout: 2 * time.Second}
+	e := &JobExecutor{Client: c, Image: "kcloud-host-exec:v0.1.0", PollInterval: time.Millisecond, Timeout: 2 * time.Second}
 	err := e.Run(context.Background(), opID, cmdHash, rebootTestNode, steps)
 	if err == nil || !strings.Contains(err.Error(), "manual intervention required") {
 		t.Fatalf("상한 초과는 terminal 에러여야 한다: %v", err)
@@ -185,7 +185,7 @@ func TestWaitBailsWhenNodeRebootsMidWait(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(rebootTestScheme(t)).
 		WithObjects(nodeWithBootID(bootBefore)).Build()
 
-	e := &JobExecutor{Client: c, Image: "mig-tool:v0.1.0", PollInterval: 5 * time.Millisecond, Timeout: 10 * time.Second}
+	e := &JobExecutor{Client: c, Image: "kcloud-host-exec:v0.1.0", PollInterval: 5 * time.Millisecond, Timeout: 10 * time.Second}
 
 	// Job 을 새로 만든 직후(부팅 세대 bootBefore 스탬프) 노드를 재부팅시킨다.
 	rebooted := make(chan error, 1)

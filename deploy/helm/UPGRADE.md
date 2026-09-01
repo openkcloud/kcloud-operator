@@ -12,7 +12,7 @@
 - Helm v3.2.0+
 - kubectl v1.21+
 - 클러스터 관리자 권한
-- 기존 v0.2.0 설치 확인: `helm list -n npu-operator`
+- 기존 v0.2.0 설치 확인: `helm list -n kcloud`
 
 ---
 
@@ -40,8 +40,8 @@ kubectl get crd | grep npu.ai
 ### 2단계: Helm Upgrade
 
 ```bash
-helm upgrade npu-operator ./npu-operator \
-  --namespace npu-operator \
+helm upgrade kcloud-operator ./deploy/helm \
+  --namespace kcloud \
   --values my-values.yaml
 ```
 
@@ -49,7 +49,7 @@ helm upgrade npu-operator ./npu-operator \
 
 ```bash
 # Pod 상태 확인
-kubectl get pods -n npu-operator
+kubectl get pods -n kcloud
 
 # NPUClusterPolicy 확인
 kubectl get npuclusterpolicy -A
@@ -69,7 +69,7 @@ kubectl get ndr -A
 
 ```bash
 # Helm rollback
-helm rollback npu-operator 1 --namespace npu-operator
+helm rollback kcloud-operator 1 --namespace kcloud
 
 # CRD rollback (주의: 데이터 손실 가능)
 # CRD 삭제는 해당 CR 데이터도 함께 삭제됩니다.
@@ -99,8 +99,8 @@ kubectl delete crd driverinstallpolicies.npu.ai
 ```bash
 cd kcloud-operator
 REGISTRY=<your-registry>  # 예: <your-registry>/kcloud  (Harbor 프로젝트 포함)
-sudo docker build -t $REGISTRY/npu-operator:v0.3.1-rename .
-sudo docker push $REGISTRY/npu-operator:v0.3.1-rename
+sudo docker build -t $REGISTRY/kcloud-operator:v0.3.1-rename .
+sudo docker push $REGISTRY/kcloud-operator:v0.3.1-rename
 ```
 
 #### 2단계: CRD 적용 (안전을 위해)
@@ -112,8 +112,8 @@ kubectl apply -f ./crds/
 #### 3단계: Helm Upgrade
 
 ```bash
-helm upgrade npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
+helm upgrade kcloud-operator ./helm/kcloud-operator \
+  -n kcloud \
   --set image.tag=v0.3.1-rename \
   --wait --timeout 3m
 ```
@@ -122,15 +122,15 @@ helm upgrade npu-operator ./helm/kcloud-operator \
 
 ```bash
 # Pod 상태 확인
-kubectl -n npu-operator get pods
+kubectl -n kcloud get pods
 
 # 이미지 태그 확인
-kubectl -n npu-operator get pod -l app.kubernetes.io/name=npu-operator \
+kubectl -n kcloud get pod -l app.kubernetes.io/name=kcloud-operator \
   -o jsonpath='{.items[*].spec.containers[*].image}'
-# 예상: <your-registry>/npu-operator:v0.3.1-rename
+# 예상: <your-registry>/kcloud-operator:v0.3.1-rename
 
 # 로그 확인
-kubectl -n npu-operator logs deploy/npu-operator-controller-manager --tail=50
+kubectl -n kcloud logs deploy/kcloud-operator --tail=50
 
 # CR 정상 확인
 kubectl get npuclusterpolicy,dip -A
@@ -166,8 +166,8 @@ kubectl get npuclusterpolicy -A -o yaml > /tmp/npuclusterpolicy-backup.yaml
 ### CR 복구 절차 (업그레이드 후 CR이 사라진 경우)
 
 ```bash
-helm template npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
+helm template kcloud-operator ./deploy/helm \
+  -n kcloud \
   -f <values.yaml> \
   --show-only templates/clusterpolicy.yaml \
   | kubectl apply -f -
@@ -254,9 +254,9 @@ kubectl apply -f ./crds/
 #### 3단계: Helm Upgrade (pre-upgrade hook 자동 실행)
 
 ```bash
-helm upgrade npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
-  --reuse-values \
+helm upgrade kcloud-operator ./helm/kcloud-operator \
+  -n kcloud \
+  --reset-then-reuse-values \
   --set image.tag=v0.5.7 \
   --wait --timeout 5m
 ```
@@ -265,20 +265,20 @@ helm upgrade npu-operator ./helm/kcloud-operator \
 
 ```bash
 # Operator 배포 완료 확인
-kubectl rollout status deploy/npu-operator-controller-manager -n npu-operator --timeout=3m
+kubectl rollout status deploy/kcloud-operator -n kcloud --timeout=3m
 
 # 구 DS 삭제 확인 (0 expected)
 kubectl -n kube-system get ds | grep "npu-op-" | wc -l
 
 # 신 이름 DS 생성 확인 (4 expected if all vendors enabled)
-kubectl -n kube-system get ds -l app.kubernetes.io/name=npu-operator -o custom-columns=NAME:.metadata.name | grep "npu-op-device-plugin-"
+kubectl -n kube-system get ds -l app.kubernetes.io/name=kcloud-operator -o custom-columns=NAME:.metadata.name | grep "npu-op-device-plugin-"
 ```
 
 #### 5단계: Device Plugin Pod 준비 확인
 
 ```bash
 # 각 노드에서 device plugin pod이 ready인지 확인
-kubectl -n kube-system get pod -l app.kubernetes.io/part-of=npu-operator -w
+kubectl -n kube-system get pod -l app.kubernetes.io/part-of=kcloud-operator -w
 
 # 예상 출력 (모든 pod이 1/1 Running):
 # NAME                                      READY   STATUS    RESTARTS   AGE
@@ -322,7 +322,7 @@ kubectl wait pod/<pod-name> --for=condition=ready --timeout=120s -n default
 
 ```bash
 # 마지막 성공한 버전으로 롤백
-helm rollback npu-operator -n npu-operator
+helm rollback kcloud-operator -n kcloud
 
 # 상태 확인
 kubectl -n kube-system get ds | grep npu-op
@@ -348,9 +348,9 @@ kubectl delete ds -n kube-system \
 sleep 30
 
 # Helm upgrade 재시도
-helm upgrade npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
-  --reuse-values \
+helm upgrade kcloud-operator ./helm/kcloud-operator \
+  -n kcloud \
+  --reset-then-reuse-values \
   --set image.tag=v0.5.7 \
   --wait --timeout 5m
 ```
@@ -359,7 +359,7 @@ helm upgrade npu-operator ./helm/kcloud-operator \
 
 ```bash
 # 기존 설치 완전 제거 (finalizer 관리 필요)
-helm uninstall npu-operator -n npu-operator
+helm uninstall kcloud-operator -n kcloud
 
 # CRD 백업
 kubectl get npuclusterpolicy -A -o yaml > /tmp/npucp-backup.yaml
@@ -368,8 +368,8 @@ kubectl get npuclusterpolicy -A -o yaml > /tmp/npucp-backup.yaml
 kubectl delete crd npuclusterpolicies.npu.ai nodedevicereports.npu.ai driverinstallpolicies.npu.ai
 
 # 재설치
-helm install npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
+helm install kcloud-operator ./helm/kcloud-operator \
+  -n kcloud \
   -f <values.yaml>
 
 # CR 복구
@@ -397,7 +397,7 @@ kubectl apply -f /tmp/npucp-backup.yaml
   유지보수 윈도우 내에 업그레이드를 진행하세요.
 - **kernelAllowlist**: 커널 버전이 allowlist에 없는 노드는 드라이버 설치가 스킵됩니다.
   `kubectl get dip -o yaml`로 status를 확인하세요.
-- **Chart.yaml name 변경 금지**: `Chart.yaml`의 `name: npu-operator`를 변경하면
+- **Chart.yaml name 변경 금지**: `Chart.yaml`의 `name: kcloud-operator`를 변경하면
   `_helpers.tpl`이 생성하는 `app.kubernetes.io/name` 라벨이 바뀌고,
   Deployment `spec.selector.matchLabels`가 변경됩니다. K8s는 `spec.selector`를
   immutable로 취급하므로 `helm upgrade`가 실패합니다.
@@ -426,9 +426,9 @@ kubectl apply -f /tmp/npucp-backup.yaml
 kubectl apply -f ./crds/
 
 # Helm Upgrade
-helm upgrade npu-operator ./helm/kcloud-operator \
-  -n npu-operator \
-  --reuse-values
+helm upgrade kcloud-operator ./helm/kcloud-operator \
+  -n kcloud \
+  --reset-then-reuse-values
 ```
 
 ---
@@ -463,7 +463,7 @@ operator 가 생성·관리하는 DaemonSet / SA / ClusterRole / ConfigMap 이�
     registry: "<your-registry>"  # 또는 "" (비어있으면 registry-relative path 사용)
   
   image:
-    repository: npu-operator      # → 최종: <global.registry>/npu-operator:<tag>
+    repository: kcloud-operator      # → 최종: <global.registry>/kcloud-operator:<tag>
     tag: v0.5.23
   
   detector:
@@ -471,7 +471,7 @@ operator 가 생성·관리하는 DaemonSet / SA / ClusterRole / ConfigMap 이�
   ```
 - **업그레이드 시**: 레지스트리 변경 후 다시 배포하려면 한 줄로 충분
   ```bash
-  helm upgrade npu-operator deploy/helm -n npu-operator --reuse-values \
+  helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values \
     --set global.registry=new-registry.internal:5000
   ```
 - **airgap 배포**: `values-airgap.example.yaml` 참조 (모든 public 이미지도 full 경로로 override)
@@ -501,7 +501,7 @@ kubectl delete npuclusterpolicy --all -A
 kubectl delete driverinstallpolicy --all -A
 
 # 2. Helm uninstall
-helm uninstall npu-operator -n npu-operator
+helm uninstall kcloud-operator -n kcloud
 
 # 3. 잔존 구 이름 DS 완전 삭제
 kubectl -n kube-system delete ds --ignore-not-found \
@@ -519,7 +519,7 @@ kubectl delete sa,clusterrole,clusterrolebinding,configmap \
 kubectl apply -f ./crds/
 
 # 6. Fresh install (신 이름으로 모든 리소스 자동 생성)
-helm install npu-operator deploy/helm -n npu-operator --create-namespace \
+helm install kcloud-operator deploy/helm -n kcloud --create-namespace \
   -f <values.yaml>
 ```
 
@@ -530,9 +530,9 @@ helm install npu-operator deploy/helm -n npu-operator --create-namespace \
 kubectl apply -f ./crds/
 
 # 2. Helm upgrade (pre-upgrade hook 이 구 DS 자동 삭제)
-helm upgrade npu-operator deploy/helm \
-  -n npu-operator \
-  --reuse-values \
+helm upgrade kcloud-operator deploy/helm \
+  -n kcloud \
+  --reset-then-reuse-values \
   --set image.tag=v0.5.23 \
   --wait --timeout 10m
 ```
@@ -566,6 +566,6 @@ kubectl get driverupgradestate -A
 ### Rollback
 
 ```bash
-helm rollback npu-operator -n npu-operator
+helm rollback kcloud-operator -n kcloud
 # 이후 구 DS 수동 정리 + helm upgrade 재시도
 ```
