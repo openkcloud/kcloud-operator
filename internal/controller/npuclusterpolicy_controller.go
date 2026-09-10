@@ -185,12 +185,6 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desir
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses,verbs=get;list;watch;create;update;patch;delete
-// DRA 드라이버에 줄 권한은 operator 자신이 먼저 갖고 있어야 한다 — 쿠버네티스가
-// 자기가 없는 권한을 담은 ClusterRole 생성을 막는다(권한 상승 방지).
-// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims;resourceslices;resourceclaimtemplates,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/status;resourceslices/status;resourceclaimtemplates/status,verbs=update;patch
-// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/driver,verbs={"associated-node:update","associated-node:patch"}
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -497,7 +491,6 @@ func (r *NPUClusterPolicyReconciler) ensureSideOperands(
 		ensure func(context.Context, *npuv1alpha1.NPUClusterPolicy) error
 	}{
 		{"DcgmExporter", r.ensureDcgmExporter},
-		{"DRADriver", r.ensureDRADriver},
 	} {
 		if err := op.ensure(ctx, policy); err != nil {
 			return op.name, err

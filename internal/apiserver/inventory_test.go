@@ -5,7 +5,7 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-07-30
 // ============================================================
 
 package apiserver
@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kcloud-operator/api/v1alpha1"
-	"kcloud-operator/internal/intent"
 )
 
 func node(name string, cordoned bool, alloc map[string]string) corev1.Node {
@@ -70,7 +69,7 @@ func TestBuildInventory_TimeSlicedReplicaIsNotADeviceRow(t *testing.T) {
 	acpps := []v1alpha1.AcceleratorPartitionPolicy{acppReady(devs, v1alpha1.SharingModeTimeSliced, 4)}
 	ndrs := []v1alpha1.NodeDeviceReport{ndr("worker1", v1alpha1.DeviceEntry{Vendor: "nvidia", Model: "A30", Count: 1})}
 
-	got := BuildInventory(nodes, acpps, ndrs, intent.DRACapability{})
+	got := BuildInventory(nodes, acpps, ndrs)
 	if len(got) != 1 {
 		t.Fatalf("물리 장치 1개 = 1행이어야 함(replica 는 행이 아니다): got %d rows", len(got))
 	}
@@ -95,7 +94,7 @@ func TestBuildInventory_UnverifiedSharingIsNotVerified(t *testing.T) {
 	nodes := []corev1.Node{node("worker1", false, map[string]string{"nvidia.com/gpu": "1"})}
 	acpps := []v1alpha1.AcceleratorPartitionPolicy{acppReady(devs, v1alpha1.SharingModeExclusive, 0)}
 
-	got := BuildInventory(nodes, acpps, nil, intent.DRACapability{})
+	got := BuildInventory(nodes, acpps, nil)
 	if len(got) != 1 {
 		t.Fatalf("행 1개여야 함: got %d", len(got))
 	}
@@ -116,7 +115,7 @@ func TestBuildInventory_UnmanagedNodeUsesSyntheticID(t *testing.T) {
 	ndrs := []v1alpha1.NodeDeviceReport{ndr("rngd-1",
 		v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "rngd", Count: 2, MemoryMiB: 49152})}
 
-	got := BuildInventory(nodes, nil, ndrs, intent.DRACapability{})
+	got := BuildInventory(nodes, nil, ndrs)
 	if len(got) != 2 {
 		t.Fatalf("NDR count=2 는 2행이어야 함: got %d", len(got))
 	}
@@ -139,7 +138,7 @@ func TestBuildInventory_CordonedNodeStillListed(t *testing.T) {
 	nodes := []corev1.Node{node("worker1", true, map[string]string{"nvidia.com/gpu": "1"})}
 	acpps := []v1alpha1.AcceleratorPartitionPolicy{acppReady(devs, v1alpha1.SharingModeExclusive, 0)}
 
-	got := BuildInventory(nodes, acpps, nil, intent.DRACapability{})
+	got := BuildInventory(nodes, acpps, nil)
 	if len(got) != 1 {
 		t.Fatalf("cordon 된 노드의 장치도 목록에 있어야 함: got %d", len(got))
 	}
@@ -162,7 +161,7 @@ func TestBuildInventory_StaleACPPRowIsVisiblyStale(t *testing.T) {
 	acpp.Generation = 2 // observedGeneration 은 acppReady 가 1로 고정 — 재조정 전.
 	acpps := []v1alpha1.AcceleratorPartitionPolicy{acpp}
 
-	got := BuildInventory(nodes, acpps, nil, intent.DRACapability{})
+	got := BuildInventory(nodes, acpps, nil)
 	if len(got) != 1 {
 		t.Fatalf("stale 노드도 1행은 보여야 함: got %d", len(got))
 	}
@@ -191,7 +190,7 @@ func TestBuildInventory_PendingACPPNodeNotLabeledUnmanaged(t *testing.T) {
 		},
 	}
 
-	got := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{acpp}, nil, intent.DRACapability{})
+	got := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{acpp}, nil)
 	if len(got) != 1 {
 		t.Fatalf("진행 중인 관리 노드도 1행은 보여야 함: got %d", len(got))
 	}
@@ -228,7 +227,7 @@ func TestBuildInventory_MultiVendorNodeDeviceVendorMatchesModel(t *testing.T) {
 		v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "rngd", Count: 1},
 	)}
 
-	got := BuildInventory(nodes, acpps, ndrs, intent.DRACapability{})
+	got := BuildInventory(nodes, acpps, ndrs)
 	if len(got) != 2 {
 		t.Fatalf("ACPP 장치 2개 = 2행: got %d", len(got))
 	}
@@ -249,7 +248,7 @@ func TestBuildInventory_SortedDeterministically(t *testing.T) {
 		ndr("worker1", v1alpha1.DeviceEntry{Vendor: "nvidia", Model: "A30", Count: 1}),
 		ndr("worker2", v1alpha1.DeviceEntry{Vendor: "nvidia", Model: "A2", Count: 1}),
 	}
-	got := BuildInventory(nodes, nil, ndrs, intent.DRACapability{})
+	got := BuildInventory(nodes, nil, ndrs)
 	if len(got) != 2 || got[0].NodeName != "worker1" || got[1].NodeName != "worker2" {
 		t.Fatalf("노드 이름 사전순이어야 함: %#v", got)
 	}
@@ -274,7 +273,7 @@ func TestBuildInventory_CarriesPartitionInstanceCounts(t *testing.T) {
 		}
 	}
 
-	rows := BuildInventory(nodes, acpps, ndrs, intent.DRACapability{})
+	rows := BuildInventory(nodes, acpps, ndrs)
 	var found bool
 	for _, r := range rows {
 		for _, pi := range r.PartitionInstances {
@@ -326,7 +325,7 @@ func TestBuildInventory_PendingRowCarriesNoInstanceCounts(t *testing.T) {
 			}},
 		},
 	}
-	rows := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{acpp}, nil, intent.DRACapability{})
+	rows := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{acpp}, nil)
 	var sawPending bool
 	for _, r := range rows {
 		if !r.Pending {
@@ -359,7 +358,7 @@ func TestBuildInventory_FailedSiblingDoesNotHideReadyRows(t *testing.T) {
 	ready.Status.Targets[0].ResolvedLayout = []v1alpha1.ResolvedLayoutEntry{{Profile: "1g.6gb", ExpectedCountPerDevice: 4}}
 
 	nodes := []corev1.Node{node("worker1", false, map[string]string{"nvidia.com/gpu": "1", "nvidia.com/mig-1g.6gb": "4"})}
-	got := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{failed, ready}, nil, intent.DRACapability{})
+	got := BuildInventory(nodes, []v1alpha1.AcceleratorPartitionPolicy{failed, ready}, nil)
 	if len(got) != 1 {
 		t.Fatalf("Ready 정책 장치 1개 = 1행이어야 함: got %d rows: %#v", len(got), got)
 	}
@@ -384,7 +383,7 @@ func TestBuildInventory_SameModelEntriesGetDistinctIDs(t *testing.T) {
 		v1alpha1.DeviceEntry{Vendor: "nvidia", Model: "generic", Count: 1, PCIeAddress: "0000:18:00.0"},
 		v1alpha1.DeviceEntry{Vendor: "nvidia", Model: "generic", Count: 1, PCIeAddress: "0000:af:00.0"})}
 
-	got := BuildInventory(nodes, nil, ndrs, intent.DRACapability{})
+	got := BuildInventory(nodes, nil, ndrs)
 	if len(got) != 2 {
 		t.Fatalf("집계 행 2개 = 2행이어야 함: got %d", len(got))
 	}
@@ -409,7 +408,7 @@ func TestBuildInventory_SyntheticIDIsStableAcrossReportOrder(t *testing.T) {
 	nodes := []corev1.Node{node("worker2", false, map[string]string{"nvidia.com/gpu": "5"})}
 
 	uidOf := func(entries ...v1alpha1.DeviceEntry) map[string]string {
-		got := BuildInventory(nodes, nil, []v1alpha1.NodeDeviceReport{ndr("worker2", entries...)}, intent.DRACapability{})
+		got := BuildInventory(nodes, nil, []v1alpha1.NodeDeviceReport{ndr("worker2", entries...)})
 		m := map[string]string{}
 		for i := range got {
 			m[got[i].PCIAddress] = got[i].UID

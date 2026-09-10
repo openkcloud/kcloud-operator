@@ -84,16 +84,6 @@ func ResourceFor(m v1alpha1.AcceleratorMapping, mode string) (string, error) {
 	}
 }
 
-// ValidateDRAMapping 은 DRA 축 두 필드가 함께 채워졌는지 본다.
-// 한쪽만 있으면 관리자가 절반만 설정한 것이고, 그 상태로 통과시키면 노드 후보가
-// 조용히 0이 되어 "왜 후보가 없나" 를 되짚을 수 없게 된다.
-func ValidateDRAMapping(m v1alpha1.AcceleratorMapping) error {
-	if (m.DeviceClassName == "") != (m.DRADriver == "") {
-		return fmt.Errorf("AcceleratorClass mapping for vendor %q sets only one of deviceClassName/draDriver; set both or neither", m.Vendor)
-	}
-	return nil
-}
-
 // VendorForResource 는 리소스명에서 벤더를 되짚는다. 가속기 리소스가 아니면 "".
 func VendorForResource(name string) string {
 	if strings.HasPrefix(name, migResourcePrefix) {

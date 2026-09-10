@@ -63,11 +63,11 @@ func validateAcceleratorWorkload(ctx context.Context, c client.Client, obj runti
 	if err := c.Get(ctx, types.NamespacedName{Name: aw.Spec.Accelerator.Class}, &class); err != nil {
 		return nil, fmt.Errorf("spec.accelerator.class %q: %w", aw.Spec.Accelerator.Class, err)
 	}
-	snap, dra, err := intent.Load(ctx, c)
+	snap, err := intent.Load(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("reading cluster capability: %w", err)
 	}
-	res, err := intent.TranslateWithDRA(intent.BuildRequest(aw, &class), snap, dra)
+	res, err := intent.Translate(intent.BuildRequest(aw, &class), snap)
 	if err != nil {
 		return nil, err
 	}

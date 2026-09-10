@@ -100,9 +100,8 @@ spec:
                     properties:
                       allocationAPI:
                         default: auto
-                        description: |-
-                          AllocationAPI 는 노출 계층이다. dra 가용 여부는 하드코딩이 아니라
-                          DeviceClass·ResourceSlice 실측으로 판정한다(internal/intent/dra.go).
+                        description: AllocationAPI 는 노출 계층이다. 현재 클러스터는 K8s 1.28 이라
+                          dra 를 요청하면 거절된다.
                         enum:
                         - auto
                         - devicePlugin
@@ -162,9 +161,8 @@ spec:
                         in a Container.
                       properties:
                         name:
-                          description: |-
-                            Name of the environment variable.
-                            May consist of any printable ASCII characters except '='.
+                          description: Name of the environment variable. Must be a
+                            C_IDENTIFIER.
                           type: string
                         value:
                           description: |-
@@ -220,43 +218,6 @@ spec:
                                   type: string
                               required:
                               - fieldPath
-                              type: object
-                              x-kubernetes-map-type: atomic
-                            fileKeyRef:
-                              description: |-
-                                FileKeyRef selects a key of the env file.
-                                Requires the EnvFiles feature gate to be enabled.
-                              properties:
-                                key:
-                                  description: |-
-                                    The key within the env file. An invalid key will prevent the pod from starting.
-                                    The keys defined within a source may consist of any printable ASCII characters except '='.
-                                    During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
-                                  type: string
-                                optional:
-                                  default: false
-                                  description: |-
-                                    Specify whether the file or its key must be defined. If the file or key
-                                    does not exist, then the env var is not published.
-                                    If optional is set to true and the specified key does not exist,
-                                    the environment variable will not be set in the Pod's containers.
-
-                                    If optional is set to false and the specified key does not exist,
-                                    an error will be returned during Pod creation.
-                                  type: boolean
-                                path:
-                                  description: |-
-                                    The path within the volume from which to select the file.
-                                    Must be relative and may not contain the '..' path or start with '..'.
-                                  type: string
-                                volumeName:
-                                  description: The name of the volume mount containing
-                                    the env file.
-                                  type: string
-                              required:
-                              - key
-                              - path
-                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -413,6 +374,8 @@ spec:
                     description: |-
                       DeviceClassName 은 DRA 경로에서 ResourceClaimTemplate 이 참조할 DeviceClass 다.
                       allocationAPI=devicePlugin 이면 비어 있고, dra 면 ResourceName 이 비고 이쪽이 찬다.
+                      이 릴리스 라인(k8s 1.28)에는 DRA 소비 경로가 없어 채워지지 않는다 — CRD 스키마를
+                      다른 릴리스 라인과 맞추기 위해 필드만 유지한다.
                     type: string
                   explanation:
                     description: Explanation 은 사람이 읽는 근거다. 공유 모드면 replica 사이에 격리가

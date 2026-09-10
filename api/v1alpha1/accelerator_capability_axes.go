@@ -22,10 +22,10 @@ const (
 	VerificationNotApplicable = "notApplicable"
 )
 
-// 할당 API(노출 계층). devicePlugin 과 dra 둘 다 구현돼 있다.
+// 할당 API(노출 계층). MVP 는 devicePlugin 만 — dra 는 K8s 업그레이드 후 후속 계획 ⑥.
 const (
-	// AllocationAPIAuto 는 "operator 가 고르라" 는 뜻이며 현재는 항상 devicePlugin 으로
-	// 해석된다 — 자동 선택은 미구현이다.
+	// AllocationAPIAuto 는 "operator 가 고르라" 는 뜻이며 현재 클러스터(K8s 1.28)에서는
+	// 항상 devicePlugin 으로 해석된다.
 	AllocationAPIAuto         = "auto"
 	AllocationAPIDevicePlugin = "devicePlugin"
 	AllocationAPIDRA          = "dra"

@@ -1,11 +1,10 @@
 // ============================================================
 // snapshot.go: 노드별 capability 스냅샷
-// 상세: 번역의 유일한 입력. 새로 관측하지 않고 이미 있는 네 소스를 접는다 —
+// 상세: 번역의 유일한 입력. 새로 관측하지 않고 이미 있는 세 소스를 접는다 —
 // Node.status.allocatable(무엇이 실제로 광고되는가), ACPP status(무엇이 적용됐고 장치가
-// 무엇을 할 수 있는가), NDR(장치 메모리), DRA(DeviceClass·ResourceSlice 로 무엇을 줄 수
-// 있는가). ACPP 가 수렴하지 않았으면 그 노드는 stale 로 표시해 모든 모드에서 탈락시킨다
-// (fail closed).
-// 생성일: 2026-07-29 | 수정일: 2026-08-05
+// 무엇을 할 수 있는가), NDR(장치 메모리). ACPP 가 수렴하지 않았으면 그 노드는 stale 로
+// 표시해 모든 모드에서 탈락시킨다(fail closed).
+// 생성일: 2026-07-29 | 수정일: 2026-07-30
 // ============================================================
 package intent
 
@@ -16,7 +15,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	resourcev1 "k8s.io/api/resource/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"kcloud-operator/api/v1alpha1"
@@ -48,19 +46,11 @@ type NodeCapability struct {
 	// Stale 이면 이 노드는 어떤 모드에서도 후보가 아니다.
 	Stale       bool
 	StaleReason string
-	// DRAOwnedVendors 는 이 노드에서 광고 주체가 DRA 로 넘어간 벤더들이다. 그 벤더의
-	// device-plugin 은 이 노드에서 물러났으므로, allocatable 에 키가 남아 있어도(0 으로
-	// 굳은 잔재) 이중 광고로 보지 않는다.
-	DRAOwnedVendors map[string]bool
-	// DRADevices 는 이 노드가 DRA 로 내놓는 드라이버별 장치 수다(빈 map = DRA 광고 없음).
-	DRADevices map[string]int32
 }
 
-// BuildSnapshot 은 노드·ACPP·NDR·DRA 목록을 노드별 capability 로 접는다(순수 함수).
-// 가속기를 하나도 광고하지 않는 노드는 후보가 될 수 없으므로 제외한다 — 단, DRA 로만
-// 광고하는 노드는 Advertised 가 비어도 DRADevices 가 있으면 살려 둔다(DRA-only 노드가
-// 여기서 탈락하면 뒤따르는 모든 DRA 경로가 영원히 후보 0을 본다).
-func BuildSnapshot(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport, dra DRACapability) []NodeCapability {
+// BuildSnapshot 은 노드·ACPP·NDR 목록을 노드별 capability 로 접는다(순수 함수).
+// 가속기를 하나도 광고하지 않는 노드는 후보가 될 수 없으므로 제외한다.
+func BuildSnapshot(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport) []NodeCapability {
 	out := make([]NodeCapability, 0, len(nodes))
 	for i := range nodes {
 		// cordon 된 노드는 여전히 allocatable 을 광고하지만 스케줄러가 Pod 을 올리지 않는다.
@@ -69,8 +59,7 @@ func BuildSnapshot(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPol
 		if nodes[i].Spec.Unschedulable {
 			continue
 		}
-		nc := NodeCapability{NodeName: nodes[i].Name, Advertised: map[string]int32{},
-			SharingMode: v1alpha1.SharingModeExclusive, DRAOwnedVendors: draOwnedVendors(nodes[i].Labels)}
+		nc := NodeCapability{NodeName: nodes[i].Name, Advertised: map[string]int32{}, SharingMode: v1alpha1.SharingModeExclusive}
 		// map 순회 순서는 무작위다 — 리소스명을 정렬해 멀티벤더 노드에서도 Vendor 선택이
 		// 실행마다 안정되게 한다.
 		names := make([]string, 0, len(nodes[i].Status.Allocatable))
@@ -89,8 +78,7 @@ func BuildSnapshot(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPol
 				nc.Vendor = vendor
 			}
 		}
-		nc.DRADevices = dra.SlicesByNodeDriver[nc.NodeName]
-		if len(nc.Advertised) == 0 && len(nc.DRADevices) == 0 {
+		if len(nc.Advertised) == 0 {
 			continue
 		}
 		nc.MemoryMiB = smallestDeviceMemoryMiB(ndrs, nc.NodeName)
@@ -314,59 +302,24 @@ func ApplyHealth(snap []NodeCapability, healths []v1alpha1.AcceleratorHealth) []
 	return snap
 }
 
-// Load 는 스냅샷과 함께 그것을 만드는 데 쓴 DRACapability 도 돌려준다 — 호출부가 DRA 번역에도
-// 같은 가용성 판정을 그대로 넘겨야(TranslateWithDRA) webhook·컨트롤러·미리보기가 일치한다.
-func Load(ctx context.Context, c client.Reader) ([]NodeCapability, DRACapability, error) {
+func Load(ctx context.Context, c client.Reader) ([]NodeCapability, error) {
 	var nodes corev1.NodeList
 	if err := c.List(ctx, &nodes); err != nil {
-		return nil, DRACapability{}, fmt.Errorf("list nodes: %w", err)
+		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 	var acpps v1alpha1.AcceleratorPartitionPolicyList
 	if err := c.List(ctx, &acpps); err != nil {
-		return nil, DRACapability{}, fmt.Errorf("list acceleratorpartitionpolicies: %w", err)
+		return nil, fmt.Errorf("list acceleratorpartitionpolicies: %w", err)
 	}
 	var ndrs v1alpha1.NodeDeviceReportList
 	if err := c.List(ctx, &ndrs); err != nil {
-		return nil, DRACapability{}, fmt.Errorf("list nodedevicereports: %w", err)
+		return nil, fmt.Errorf("list nodedevicereports: %w", err)
 	}
 	// health 는 없을 수도 있다(구버전 배포·CRD 미적용). 그 경우 조용히 건너뛴다 —
 	// 감시가 없다는 이유로 배치를 막으면 기능 도입이 곧 장애가 된다.
 	var healths v1alpha1.AcceleratorHealthList
-	// resource.k8s.io 가 없는 클러스터에서도 device-plugin 경로는 계속 동작해야 한다.
-	// List 실패를 오류로 올리면 DRA 미지원 클러스터에서 번역 전체가 죽는다.
-	dra, _ := LoadDRACapability(ctx, c)
 	if err := c.List(ctx, &healths); err != nil {
-		return BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items, dra), dra, nil
+		return BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items), nil
 	}
-	return ApplyHealth(BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items, dra), healths.Items), dra, nil
-}
-
-// LoadDRACapability 는 DeviceClass·ResourceSlice 를 읽어 DRA 발행 현황으로 접는다.
-// resource.k8s.io 가 없는 클러스터에서도 device-plugin 경로는 계속 동작해야 하므로,
-// 조회 실패는 오류가 아니라 "DRA 없음" 이다(APIServed=false).
-func LoadDRACapability(ctx context.Context, c client.Reader) (DRACapability, error) {
-	empty := DRACapability{DeviceClasses: map[string]bool{}, SlicesByNodeDriver: map[string]map[string]int32{}}
-	var classes resourcev1.DeviceClassList
-	if err := c.List(ctx, &classes); err != nil {
-		return empty, nil
-	}
-	var slices resourcev1.ResourceSliceList
-	if err := c.List(ctx, &slices); err != nil {
-		return empty, nil
-	}
-	return BuildDRACapability(true, classes.Items, slices.Items), nil
-}
-
-// draOwnedVendors 는 이 노드에서 광고를 DRA 에 넘긴 벤더들이다. NPUClusterPolicy 의
-// advertiseBy 에서 파생된 노드 라벨(kcloud.ai/<vendor>.dra-owned)을 되짚는다.
-func draOwnedVendors(nodeLabels map[string]string) map[string]bool {
-	const prefix, suffix = "kcloud.ai/", ".dra-owned"
-	out := map[string]bool{}
-	for k, v := range nodeLabels {
-		if v != "true" || !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, suffix) {
-			continue
-		}
-		out[strings.TrimSuffix(strings.TrimPrefix(k, prefix), suffix)] = true
-	}
-	return out
+	return ApplyHealth(BuildSnapshot(nodes.Items, acpps.Items, ndrs.Items), healths.Items), nil
 }

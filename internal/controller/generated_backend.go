@@ -3,7 +3,7 @@
 // 상세: 벤더 지식이 0인 일반 device-plugin 런타임에 줄 ConfigMap 과 DaemonSet 을
 //       descriptor 하나로 조립한다. 벤더 하드코딩은 여기 없다 - vendor·product 는
 //       전부 desc.Spec 에서 읽는다.
-// 생성일: 2026-08-11
+// 생성일: 2026-08-11 | 수정일: 2026-09-10 (1.28 라인: DeviceClass 를 타입 없이 렌더)
 // ============================================================
 
 package controller
@@ -14,13 +14,17 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/descriptor"
 )
+
+// draCDIRoot 는 생성된 DRA 드라이버가 CDI 스펙을 쓰는 경로다. containerd 가 같은
+// 경로를 읽어야 장치 주입이 성립한다.
+const draCDIRoot = "/var/run/cdi"
 
 // generatedDevicePluginNameFor 는 descriptor 하나가 만드는 device-plugin 배포물 이름이다.
 // descriptor 이름을 넣어 여러 descriptor 의 배포물이 공존하게 한다.
@@ -110,7 +114,7 @@ func generatedDRADriverNameFor(desc *npuv1alpha1.AcceleratorDescriptor) string {
 // 등록하고 ResourceSlice 를 발행하려면 registrar·plugins·cdi·dev 가 다 붙어야 한다.
 func renderGeneratedDRADriver(
 	desc *npuv1alpha1.AcceleratorDescriptor, cfgJSON []byte, image, ns string,
-) (*corev1.ConfigMap, *appsv1.DaemonSet, *resourcev1.DeviceClass) {
+) (*corev1.ConfigMap, *appsv1.DaemonSet, *unstructured.Unstructured) {
 	name := generatedDRADriverNameFor(desc)
 	labels := map[string]string{
 		"app.kubernetes.io/name":      name,
@@ -185,17 +189,23 @@ func renderGeneratedDRADriver(
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 
 	driverName := descriptor.DriverNameFor(desc.Spec)
-	dc := &resourcev1.DeviceClass{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "resource.k8s.io/v1", Kind: "DeviceClass"},
-		ObjectMeta: metav1.ObjectMeta{Name: driverName, Labels: labels},
-		Spec: resourcev1.DeviceClassSpec{
-			Selectors: []resourcev1.DeviceSelector{{
-				CEL: &resourcev1.CELDeviceSelector{
-					Expression: "device.driver == '" + driverName + "'",
+	// 이 라인(K8s 1.28)은 resource.k8s.io 를 링크하지 않으므로 DeviceClass 를 타입 없이
+	// 조립한다. 필드 구성은 1.34 라인의 resourcev1.DeviceClass 와 같고, 직렬화 결과도 같다.
+	dc := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "resource.k8s.io/v1",
+		"kind":       "DeviceClass",
+		"metadata": map[string]any{
+			"name":   driverName,
+			"labels": toStringMap(labels),
+		},
+		"spec": map[string]any{
+			"selectors": []any{map[string]any{
+				"cel": map[string]any{
+					"expression": "device.driver == '" + driverName + "'",
 				},
 			}},
 		},
-	}
+	}}
 
 	return cm, ds, dc
 }
@@ -291,4 +301,13 @@ func RenderGeneratedBackends(
 		return nil, fmt.Errorf("생성 가능한 backend 가 없다")
 	}
 	return out, nil
+}
+
+// toStringMap 은 라벨 맵을 unstructured 가 받는 any 맵으로 옮긴다.
+func toStringMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }

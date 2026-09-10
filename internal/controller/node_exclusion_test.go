@@ -3,7 +3,7 @@
 // 상세: nodeExclusion 판정(control-plane/master → 배제, 벤더 excludeNodeSelector →
 //       policy 배제, control-plane 이 policy 보다 강함)과 reconcileNodeExclusionLabels
 //       의 부여·회수(배제가 풀리면 라벨을 지운다)를 확인한다.
-// 생성일: 2026-08-12 | 수정일: 2026-08-12
+// 생성일: 2026-08-12 | 수정일: 2026-09-10 (네임스페이스 상수 지역화)
 // ============================================================
 
 package controller
@@ -22,6 +22,9 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
+
+// deployNamespace 는 operator 가 배포되는 네임스페이스다(테스트 픽스처용).
+const deployNamespace = "kcloud"
 
 // TestNodeExclusion_ControlPlane 는 control-plane·master 라벨 노드가 배제로,
 // 일반 워커는 비배제로 판정되는 것을 단정한다.
@@ -270,7 +273,7 @@ func TestCleanupOwnedResources_ReclaimsExclusionLabels(t *testing.T) {
 		},
 	}}
 	policy := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-policy", Namespace: draNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-policy", Namespace: deployNamespace},
 	}
 	r := nodeExclusionReconciler(master, policy)
 
@@ -318,12 +321,12 @@ func TestNodeEventFilter_SkipsHeartbeatUpdates(t *testing.T) {
 // TestMapNodeToClusterPolicies 는 노드 이벤트가 NCP 요청으로 옮겨지는지 본다.
 func TestMapNodeToClusterPolicies(t *testing.T) {
 	policy := &npuv1alpha1.NPUClusterPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-policy", Namespace: draNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-policy", Namespace: deployNamespace},
 	}
 	r := nodeExclusionReconciler(policy)
 	reqs := r.mapNodeToClusterPolicies(context.Background(),
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker1"}})
-	if len(reqs) != 1 || reqs[0].Name != "cluster-policy" || reqs[0].Namespace != draNamespace {
+	if len(reqs) != 1 || reqs[0].Name != "cluster-policy" || reqs[0].Namespace != deployNamespace {
 		t.Errorf("노드 이벤트 매핑 = %v, want kcloud/cluster-policy 1건", reqs)
 	}
 }

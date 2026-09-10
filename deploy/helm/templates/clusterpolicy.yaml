@@ -1,6 +1,6 @@
 {{- if .Values.deployClusterPolicy }}
 # clusterpolicy.yaml: NPUClusterPolicy 샘플 CR
-# 생성일: 2026-03-25 | 수정일: 2026-09-09 (벤더 이미지를 global.vendorRegistry 로 분리)
+# 생성일: 2026-03-25 | 수정일: 2026-09-10 (1.28 라인: DRA 드라이버 블록 제외)
 apiVersion: npu.ai/v1alpha1
 kind: NPUClusterPolicy
 metadata:
@@ -31,11 +31,6 @@ spec:
       image: "{{ .Values.nvidia.dcgmExporter.image }}"
       {{- end }}
     {{- end }}
-    {{- if .Values.nvidia.dra }}
-    dra:
-      enabled: {{ .Values.nvidia.dra.enabled }}
-      image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.nvidia.dra.upstream "repo" .Values.nvidia.dra.repository "tag" .Values.nvidia.dra.tag) }}"
-    {{- end }}
   furiosa:
     enabled: {{ .Values.furiosa.enabled }}
     {{- with .Values.furiosa.advertiseBy }}
@@ -62,11 +57,6 @@ spec:
       partitionPolicy: {{ .Values.furiosa.rngd.partitionPolicy | default "none" | quote }}
       {{- if hasKey .Values.furiosa.rngd "debugMode" }}
       debugMode: {{ .Values.furiosa.rngd.debugMode }}
-      {{- end }}
-      {{- if .Values.furiosa.rngd.dra }}
-      dra:
-        enabled: {{ .Values.furiosa.rngd.dra.enabled }}
-        image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.furiosa.rngd.dra.upstream "repo" .Values.furiosa.rngd.dra.repository "tag" .Values.furiosa.rngd.dra.tag) }}"
       {{- end }}
       {{- if .Values.furiosa.rngd.nodeSelector }}
       nodeSelector:

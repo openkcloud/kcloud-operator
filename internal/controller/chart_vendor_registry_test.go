@@ -12,7 +12,7 @@
 //
 //	몫이다(여기서 네트워크를 타지 않는다).
 //
-// 생성일: 2026-09-09
+// 생성일: 2026-09-09 | 수정일: 2026-09-10 (1.28 라인: DRA 드라이버 이미지 제외)
 // ============================================================
 package controller
 
@@ -46,9 +46,7 @@ var vendorImageCases = []struct {
 }{
 	{"MPS control daemon", "nvcr.io/nvidia/k8s-device-plugin:v0.19.3", "MIRROR/nvidia/k8s-device-plugin:v0.19.3"},
 	{"pre-upgrade kubectl", "docker.io/bitnamilegacy/kubectl:1.28", "MIRROR/bitnamilegacy/kubectl:1.28"},
-	{"NVIDIA DRA 드라이버", "registry.k8s.io/dra-driver-nvidia/dra-driver-nvidia-gpu:v0.4.0", "MIRROR/dra-driver-nvidia/dra-driver-nvidia-gpu:v0.4.0"},
 	{"RNGD device-plugin", "docker.io/furiosaai/furiosa-device-plugin:2026.1.1", "MIRROR/furiosaai/furiosa-device-plugin:2026.1.1"},
-	{"RNGD DRA 드라이버", "docker.io/furiosaai/furiosa-dra-driver:2026.1.1", "MIRROR/furiosaai/furiosa-dra-driver:2026.1.1"},
 	{"Rebellions device-plugin", "docker.io/rebellions/k8s-device-plugin:v0.3.6", "MIRROR/rebellions/k8s-device-plugin:v0.3.6"},
 }
 
@@ -70,7 +68,6 @@ func TestVendorImagesUseUpstreamWhenVendorRegistryEmpty(t *testing.T) {
 		"ghcr.io/openkcloud/furiosaai/",
 		"ghcr.io/openkcloud/rebellions/k8s-device-plugin",
 		"ghcr.io/openkcloud/bitnami",
-		"ghcr.io/openkcloud/dra-driver-nvidia/",
 	} {
 		if strings.Contains(got, bad) {
 			t.Errorf("벤더 이미지가 우리 레지스트리로 조립됐다: %q", bad)

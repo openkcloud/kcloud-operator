@@ -2,18 +2,16 @@
 // acceleratorworkload_controller_test.go: AcceleratorWorkload 컨트롤러 테스트
 // 상세: 번역 성공 시 Deployment 렌더(리소스 limit + nodeAffinity), 거절 시 status Condition,
 // 재조정 멱등성(API server 기본값 주입 후에도 재기록 없음), 남의 Deployment 미탈취.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-07-30
 // ============================================================
 package controller
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -23,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -37,7 +34,7 @@ import (
 func awScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, resourcev1.AddToScheme, npuv1alpha1.AddToScheme} {
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, npuv1alpha1.AddToScheme} {
 		if err := add(s); err != nil {
 			t.Fatalf("scheme: %v", err)
 		}
@@ -355,204 +352,6 @@ func TestAcceleratorWorkloadBackfillsRuntimeClass(t *testing.T) {
 	awReconcile(t, r)
 	if rc := awGetDeployment(t, c).Spec.Template.Spec.RuntimeClassName; rc == nil || *rc != vendorNvidia {
 		t.Fatalf("runtimeClass not backfilled: %v", rc)
-	}
-}
-
-// DRA 경로는 extended resource limit 대신 pod.spec.resourceClaims + 컨테이너 claims 참조로 렌더된다.
-func TestRenderDeploymentDRAUsesResourceClaim(t *testing.T) {
-	aw := &npuv1alpha1.AcceleratorWorkload{ObjectMeta: metav1.ObjectMeta{Name: "w", Namespace: "ns"}}
-	res := &intent.Result{AllocationAPI: "dra", DeviceClassName: "gpu.nvidia.com", Quantity: 1, Vendor: "nvidia"}
-	dep := renderDeployment(aw, res)
-	c := dep.Spec.Template.Spec.Containers[0]
-	if len(c.Resources.Limits) != 0 {
-		t.Fatalf("DRA path must not set extended resource limits, got %v", c.Resources.Limits)
-	}
-	if len(dep.Spec.Template.Spec.ResourceClaims) != 1 {
-		t.Fatalf("pod must declare one resource claim, got %+v", dep.Spec.Template.Spec.ResourceClaims)
-	}
-	if len(c.Resources.Claims) != 1 {
-		t.Fatalf("container must reference the claim, got %+v", c.Resources.Claims)
-	}
-}
-
-// Reconcile 전체가 DRA 경로에서 ResourceClaimTemplate 을 소유·생성하고, 재조정에도 다시
-// 만들지 않는지(멱등) 본다 — renderDeployment 단위 시험만으로는 owner 배선과 apply 분기가
-// 실제로 이어지는지 확인할 수 없다.
-func TestAcceleratorWorkloadCreatesResourceClaimTemplateForDRA(t *testing.T) {
-	aw := awFixture()
-	aw.Spec.Accelerator.Preferences = &npuv1alpha1.AcceleratorPreferences{AllocationAPI: npuv1alpha1.AllocationAPIDRA}
-	class := awClass()
-	class.Spec.Mappings = []npuv1alpha1.AcceleratorMapping{
-		{Vendor: "nvidia", DeviceClassName: "gpu.nvidia.com", DRADriver: "gpu.nvidia.com"},
-	}
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker1"}}
-	devClass := &resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: "gpu.nvidia.com"}}
-	slice := &resourcev1.ResourceSlice{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker1-gpu"},
-		Spec: resourcev1.ResourceSliceSpec{
-			Driver:   "gpu.nvidia.com",
-			NodeName: ptr.To("worker1"),
-			Devices:  []resourcev1.Device{{Name: "gpu-0"}},
-		},
-	}
-	r, c := newAWReconciler(t, aw, class, node, devClass, slice)
-	awReconcile(t, r)
-
-	dep := awGetDeployment(t, c)
-	if len(dep.Spec.Template.Spec.Containers[0].Resources.Limits) != 0 {
-		t.Fatalf("DRA workload got extended resource limits: %+v", dep.Spec.Template.Spec.Containers[0].Resources.Limits)
-	}
-	if len(dep.Spec.Template.Spec.ResourceClaims) != 1 {
-		t.Fatalf("deployment missing pod.spec.resourceClaims: %+v", dep.Spec.Template.Spec)
-	}
-
-	var rct resourcev1.ResourceClaimTemplate
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "img-accel", Namespace: "default"}, &rct); err != nil {
-		t.Fatalf("resourceclaimtemplate not created: %v", err)
-	}
-	if len(rct.OwnerReferences) != 1 || rct.OwnerReferences[0].Kind != "AcceleratorWorkload" {
-		t.Fatalf("resourceclaimtemplate not owned: %+v", rct.OwnerReferences)
-	}
-	if got := rct.Spec.Spec.Devices.Requests[0].Exactly.DeviceClassName; got != "gpu.nvidia.com" {
-		t.Fatalf("deviceClassName=%q", got)
-	}
-
-	before := rct.ResourceVersion
-	awReconcile(t, r)
-	var again resourcev1.ResourceClaimTemplate
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "img-accel", Namespace: "default"}, &again); err != nil {
-		t.Fatalf("resourceclaimtemplate lost after second reconcile: %v", err)
-	}
-	if again.ResourceVersion != before {
-		t.Fatalf("resourceclaimtemplate rewritten on unchanged reconcile: rv %s -> %s", before, again.ResourceVersion)
-	}
-}
-
-// draClassB 는 관리자가 갈아탈 두 번째 DeviceClass 다(드라이버 이름도 같이 쓴다).
-const draClassB = "gpu-b.nvidia.com"
-
-// AcceleratorClass 가 다른 DeviceClass 를 가리키게 바뀌면 status.resolved 는 새 값을 싣지만
-// ResourceClaimTemplate.spec 은 불변이라 Pod 은 계속 옛 클래스를 청구한다. 그 어긋남이 아무
-// 데도 남지 않으면 사용자는 자기 수정이 반영되지 않았다는 사실 자체를 알 수 없다.
-func TestAcceleratorWorkloadSurfacesResourceClaimTemplateDrift(t *testing.T) {
-	aw := awFixture()
-	aw.Spec.Accelerator.Preferences = &npuv1alpha1.AcceleratorPreferences{AllocationAPI: npuv1alpha1.AllocationAPIDRA}
-	class := awClass()
-	class.Spec.Mappings = []npuv1alpha1.AcceleratorMapping{
-		{Vendor: "nvidia", DeviceClassName: "gpu.nvidia.com", DRADriver: "gpu.nvidia.com"},
-	}
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker1"}}
-	// 두 DeviceClass 와 두 드라이버 슬라이스를 미리 둔다 — 관리자가 클래스를 갈아탈 때 새 쪽도
-	// 실재해야 번역이 성공하고, 그래야 "번역은 새 클래스, 템플릿은 옛 클래스" 상태에 도달한다.
-	classes := []client.Object{
-		&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: "gpu.nvidia.com"}},
-		&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: draClassB}},
-		&resourcev1.ResourceSlice{
-			ObjectMeta: metav1.ObjectMeta{Name: "worker1-gpu-a"},
-			Spec: resourcev1.ResourceSliceSpec{
-				Driver: "gpu.nvidia.com", NodeName: ptr.To("worker1"), Devices: []resourcev1.Device{{Name: "gpu-0"}},
-			},
-		},
-		&resourcev1.ResourceSlice{
-			ObjectMeta: metav1.ObjectMeta{Name: "worker1-gpu-b"},
-			Spec: resourcev1.ResourceSliceSpec{
-				Driver: draClassB, NodeName: ptr.To("worker1"), Devices: []resourcev1.Device{{Name: "gpu-0"}},
-			},
-		},
-	}
-	r, c := newAWReconciler(t, append([]client.Object{aw, class, node}, classes...)...)
-	awReconcile(t, r)
-
-	tmpl := types.NamespacedName{Name: "img-accel", Namespace: "default"}
-	var rct resourcev1.ResourceClaimTemplate
-	if err := c.Get(context.Background(), tmpl, &rct); err != nil {
-		t.Fatalf("precondition: DRA path must create the template: %v", err)
-	}
-
-	liveClass := &npuv1alpha1.AcceleratorClass{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "inference-medium"}, liveClass); err != nil {
-		t.Fatalf("get class: %v", err)
-	}
-	liveClass.Spec.Mappings[0].DeviceClassName = draClassB
-	liveClass.Spec.Mappings[0].DRADriver = draClassB
-	if err := c.Update(context.Background(), liveClass); err != nil {
-		t.Fatalf("repoint class: %v", err)
-	}
-	awReconcile(t, r)
-
-	live := awGet(t, c)
-	if live.Status.Resolved == nil || live.Status.Resolved.DeviceClassName != draClassB {
-		t.Fatalf("precondition: resolved should carry the new class: %+v", live.Status.Resolved)
-	}
-	cond := apimeta.FindStatusCondition(live.Status.Conditions, npuv1alpha1.AWCondWorkloadReady)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != npuv1alpha1.AWReasonResourceClaimTemplateDrift {
-		t.Fatalf("드리프트가 condition 에 드러나지 않는다: %+v", cond)
-	}
-	if !strings.Contains(cond.Message, "gpu.nvidia.com") || !strings.Contains(cond.Message, draClassB) {
-		t.Fatalf("사유에 옛/새 DeviceClass 가 모두 있어야 고칠 수 있다: %q", cond.Message)
-	}
-	// 조용히 지웠다 다시 만들면 이 템플릿으로 뜬 Pod 의 claim 이 끊긴다 — 옛 템플릿은 그대로 있어야 한다.
-	var after resourcev1.ResourceClaimTemplate
-	if err := c.Get(context.Background(), tmpl, &after); err != nil {
-		t.Fatalf("템플릿을 임의로 지웠다: %v", err)
-	}
-	if got := claimDeviceClassName(&after); got != "gpu.nvidia.com" {
-		t.Fatalf("템플릿을 임의로 다시 만들었다: deviceClassName=%q", got)
-	}
-	rec, ok := r.Recorder.(*record.FakeRecorder)
-	if !ok {
-		t.Fatalf("recorder type %T", r.Recorder)
-	}
-	select {
-	case ev := <-rec.Events:
-		if !strings.Contains(ev, npuv1alpha1.AWReasonResourceClaimTemplateDrift) {
-			t.Fatalf("이벤트 사유가 다르다: %q", ev)
-		}
-	default:
-		t.Fatalf("kubectl describe 로 볼 수 있는 이벤트가 없다")
-	}
-}
-
-// DRA 에서 devicePlugin 으로 되돌리면 우리가 만든 템플릿도 회수해야 한다. 안 지우면 ownerRef GC 가
-// CR 삭제 때까지 미루므로, devicePlugin 으로 도는 워크로드가 쓰지도 않는 claim 템플릿을 계속 갖고 있다.
-func TestAcceleratorWorkloadDeletesResourceClaimTemplateWhenLeavingDRA(t *testing.T) {
-	aw := awFixture()
-	aw.Spec.Accelerator.Preferences = &npuv1alpha1.AcceleratorPreferences{AllocationAPI: npuv1alpha1.AllocationAPIDRA}
-	class := awClass()
-	class.Spec.Mappings = []npuv1alpha1.AcceleratorMapping{
-		{Vendor: "nvidia", DeviceClassName: "gpu.nvidia.com", DRADriver: "gpu.nvidia.com"},
-	}
-	devClass := &resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: "gpu.nvidia.com"}}
-	// DRA 노드와 device-plugin 노드는 서로 다른 노드다 — 한 노드가 두 축을 다 광고하면 이중 광고로
-	// DRA 후보에서 빠지므로(translateDRA), 축을 갈아타는 상황은 노드가 갈리는 상황이기도 하다.
-	draNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "dra-worker"}}
-	slice := &resourcev1.ResourceSlice{
-		ObjectMeta: metav1.ObjectMeta{Name: "dra-worker-gpu"},
-		Spec: resourcev1.ResourceSliceSpec{
-			Driver: "gpu.nvidia.com", NodeName: ptr.To("dra-worker"), Devices: []resourcev1.Device{{Name: "gpu-0"}},
-		},
-	}
-	r, c := newAWReconciler(t, aw, class, draNode, awNode(), devClass, slice)
-	awReconcile(t, r)
-
-	tmpl := types.NamespacedName{Name: "img-accel", Namespace: "default"}
-	if err := c.Get(context.Background(), tmpl, &resourcev1.ResourceClaimTemplate{}); err != nil {
-		t.Fatalf("precondition: DRA path must create the template: %v", err)
-	}
-
-	live := awGet(t, c)
-	live.Spec.Accelerator.Preferences.AllocationAPI = npuv1alpha1.AllocationAPIDevicePlugin
-	if err := c.Update(context.Background(), live); err != nil {
-		t.Fatalf("switch to devicePlugin: %v", err)
-	}
-	awReconcile(t, r)
-
-	if got := awGetDeployment(t, c).Spec.Template.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]; got.Value() != 1 {
-		t.Fatalf("precondition: workload should be back on the device-plugin path, gpu limit=%s", got.String())
-	}
-	err := c.Get(context.Background(), tmpl, &resourcev1.ResourceClaimTemplate{})
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("resourceclaimtemplate leaked after leaving the DRA path: err=%v", err)
 	}
 }
 

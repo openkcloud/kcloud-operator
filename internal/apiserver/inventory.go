@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-07-30
 // ============================================================
 
 package apiserver
@@ -203,8 +203,8 @@ func uncordonedCopy(nodes []corev1.Node) []corev1.Node {
 // BuildInventory 는 노드·ACPP·NDR 을 물리 장치 목록으로 접는다(순수 함수).
 // 노드 단위 값(광고량·공유 상태·파티션 프로파일)은 intent.BuildSnapshot 을 그대로 재사용한다 —
 // 특히 "광고 수 > 물리 장치 수이면 timeSliced" 정직성 override 를 여기서 다시 구현하지 않는다.
-func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport, dra intent.DRACapability) []AcceleratorView {
-	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs, dra)
+func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPolicy, ndrs []v1alpha1.NodeDeviceReport) []AcceleratorView {
+	snap := intent.BuildSnapshot(uncordonedCopy(nodes), acpps, ndrs)
 	byNode := make(map[string]intent.NodeCapability, len(snap))
 	for i := range snap {
 		byNode[snap[i].NodeName] = snap[i]

@@ -2,7 +2,7 @@
 // accelerators.go: 가속기 인벤토리 조회 엔드포인트(/accelerators, /nodes/{node}/accelerators)
 // 상세: 읽기 전용. Reader 로 노드·ACPP·NDR 을 직접 읽어 BuildInventory 로 접은 뒤 페이지네이션
 //       봉투로 낸다. UID 경로는 "/" 를 포함하는 합성 ID 를 받기 위해 {uid...} 와일드카드를 쓴다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-07-30
 // ============================================================
 
 package apiserver
@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"kcloud-operator/api/v1alpha1"
-	"kcloud-operator/internal/intent"
 )
 
 // loadInventory 는 인벤토리 입력 3종을 읽어 집약한다.
@@ -35,14 +34,7 @@ func (s *Server) loadInventory(ctx context.Context) ([]AcceleratorView, error) {
 	if err := s.Reader.List(ctx, &ndrs); err != nil {
 		return nil, fmt.Errorf("list nodedevicereports: %w", err)
 	}
-	// DRA 가용성은 intent.Load 가 판정한 것을 그대로 받는다(preview 와 같은 경로) — 빈
-	// DRACapability 를 넘기면 DRA 로만 광고하는 노드가 스냅샷에서 통째로 빠져 그 노드의
-	// stale/공유 상태가 이 목록에서 조용히 사라진다.
-	_, dra, err := intent.Load(ctx, s.Reader)
-	if err != nil {
-		return nil, err
-	}
-	return BuildInventory(nodes.Items, acpps.Items, ndrs.Items, dra), nil
+	return BuildInventory(nodes.Items, acpps.Items, ndrs.Items), nil
 }
 
 // handleAccelerators 는 전체 물리 장치 목록이다. ?vendor= ?node= 로 거르고 ?limit= ?offset= 로 자른다.

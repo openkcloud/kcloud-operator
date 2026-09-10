@@ -5,7 +5,7 @@
 //	control-plane 배제가 붙는지 고정한다. 배제를 빠뜨려 장치 없는 노드에서 벤더
 //	prestart 가 고착된 적이 있다(2026-08-07).
 //
-// 생성일: 2026-08-11
+// 생성일: 2026-08-11 | 수정일: 2026-09-10 (DeviceClass 를 unstructured 로 확인)
 // ============================================================
 package controller
 
@@ -15,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
@@ -116,7 +117,8 @@ func TestRenderGeneratedDRADriver(t *testing.T) {
 	if ds.Spec.Template.Spec.Containers[0].Image != "reg/generic-dra-driver:0.1.0" {
 		t.Errorf("이미지가 다르다: %s", ds.Spec.Template.Spec.Containers[0].Image)
 	}
-	if dc.Spec.Selectors == nil && dc.Name == "" {
+	sel, found, _ := unstructured.NestedSlice(dc.Object, "spec", "selectors")
+	if (!found || len(sel) == 0) && dc.GetName() == "" {
 		t.Error("DeviceClass 가 비었다")
 	}
 	// kubelet plugin 등록 경로와 CDI 디렉터리가 붙어야 주입이 된다.

@@ -11,7 +11,7 @@
 //	acceleratorpartitionpolicies 의 create/delete 는 2026-08-11 부터 관리 API 정책 라우트가
 //	실제로 쓰므로 더는 노이즈가 아니고, 아래 세 번째 시험이 그것을 본다.)
 //
-// 생성일: 2026-08-04 | 수정일: 2026-08-11
+// 생성일: 2026-08-04 | 수정일: 2026-09-10 (1.28 라인: DRA RBAC 시험 제외)
 // ============================================================
 package controller
 
@@ -97,33 +97,6 @@ func TestHelmRBACGrantsWhatMigObservationNeeds(t *testing.T) {
 	deployed := deployedOperatorRules(t)
 
 	for _, res := range []string{"nodedevicereports", "nodedevicereports/status"} {
-		want, ok := generated[res]
-		if !ok {
-			t.Fatalf("%s: config/rbac/role.yaml 에 없다 — 이 시험의 전제(kubebuilder 마커)가 깨졌다", res)
-		}
-		got, ok := deployed[res]
-		if !ok {
-			t.Errorf("%s: 생성본에는 있는데 deploy/helm/templates/rbac.yaml 의 operator role 에 없다", res)
-			continue
-		}
-		for _, v := range want {
-			if !contains(got, v) {
-				t.Errorf("%s: 생성본 verb %q 가 helm 배포본에 없다 — 생성본 %v, 배포본 %v", res, v, want, got)
-			}
-		}
-	}
-}
-
-// TestHelmRBACGrantsWhatDRACapabilityNeeds 는 acceleratorworkload_controller.go 의
-// resource.k8s.io kubebuilder 마커(internal/intent/dra.go 가 실제로 쓰는 4개 리소스)가
-// 배포 helm 차트에도 그대로 있는지 본다 — 위 MigObservation 시험과 같은 사고(2026-08-04)를
-// 이 축에서 미리 막는다.
-// 깨는 뮤테이션: helm rbac.yaml 에서 resourceslices 의 get 이나 watch 를 지우면 실패한다.
-func TestHelmRBACGrantsWhatDRACapabilityNeeds(t *testing.T) {
-	generated := generatedOperatorRules(t)
-	deployed := deployedOperatorRules(t)
-
-	for _, res := range []string{"deviceclasses", "resourceslices", "resourceclaims", "resourceclaimtemplates"} {
 		want, ok := generated[res]
 		if !ok {
 			t.Fatalf("%s: config/rbac/role.yaml 에 없다 — 이 시험의 전제(kubebuilder 마커)가 깨졌다", res)

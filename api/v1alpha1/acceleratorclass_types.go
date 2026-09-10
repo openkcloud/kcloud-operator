@@ -44,10 +44,13 @@ type AcceleratorMapping struct {
 	NativeProfile string `json:"nativeProfile,omitempty"`
 	// DeviceClassName 은 이 벤더를 DRA 로 요청할 때 쓸 DeviceClass 이름이다.
 	// DRADriver 와 함께 있어야 하며, 없으면 이 벤더는 DRA 경로를 지원하지 않는다.
+	// 이 릴리스 라인(k8s 1.28)에는 DRA 소비 경로가 없어 값이 있어도 사용되지 않는다.
+	// CRD 스키마를 다른 릴리스 라인과 맞추기 위해 필드만 유지한다 — 죽은 필드 아님.
 	// +optional
 	DeviceClassName string `json:"deviceClassName,omitempty"`
 	// DRADriver 는 그 DeviceClass 가 고르는 ResourceSlice.spec.driver 다.
 	// 노드 후보 판정에 쓴다 — DeviceClass 의 CEL 을 해석하지 않기 위해 명시받는다.
+	// 이 릴리스 라인에는 DRA 소비 경로가 없어 값이 있어도 사용되지 않는다.
 	// +optional
 	DRADriver string `json:"draDriver,omitempty"`
 }

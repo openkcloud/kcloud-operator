@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25
+# 생성일: 2026-03-25 | 수정일: 2026-09-10 (1.28 라인: resource.k8s.io 권한 제외)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -141,23 +141,8 @@ rules:
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]
-  # DRA 드라이버에 줄 권한은 operator 자신이 먼저 갖고 있어야 한다 — 쿠버네티스가
-  # 자기가 없는 권한을 담은 ClusterRole 생성을 막는다(권한 상승 방지). 그래서
-  # 가용성 실측용 읽기에 더해 드라이버가 요구하는 쓰기까지 여기 있다.
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceslices", "resourceclaims", "resourceclaimtemplates"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceslices/status", "resourceclaims/status", "resourceclaimtemplates/status"]
-    verbs: ["update", "patch"]
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceclaims/driver"]
-    verbs: ["associated-node:update", "associated-node:patch"]
-  # DeviceClass 는 읽기에 더해 쓰기가 필요하다 — DRA 드라이버를 배포할 때 그 벤더의
-  # DeviceClass 를 operator 가 만들고, 끄면 회수한다.
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["deviceclasses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # resource.k8s.io 권한은 이 라인에 없다 — K8s 1.28 이 그 그룹을 서빙하지 않고
+  # operator 도 DRA 드라이버를 배포하지 않는다.
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-09-09 (공개 배포 기본값: global.registry/vendorRegistry 분리)
+# 생성일: 2026-03-25 | 수정일: 2026-09-10 (1.28 라인 v0.6.2-k8s1.28: DRA 드라이버 값 제외)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -18,8 +18,7 @@
 #   올린 뒤 한 줄로 바꾼다:
 #     --set global.vendorRegistry=<host:port>/<project>
 #   대상: nvidia/k8s-device-plugin(MPS control daemon), bitnamilegacy/kubectl,
-#   dra-driver-nvidia/dra-driver-nvidia-gpu, furiosaai/furiosa-device-plugin,
-#   furiosaai/furiosa-dra-driver, rebellions/k8s-device-plugin.
+#   furiosaai/furiosa-device-plugin, rebellions/k8s-device-plugin.
 #
 #   전체 경로를 그대로 적는 값(nvidia.devicePluginImage, furiosa.devicePluginImage,
 #   nvidia.dcgmExporter.image, acpp.probeImage, crdUpgrade.kubectlImage,
@@ -40,7 +39,7 @@ metrics:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.30
+  tag: v0.6.2-k8s1.28
   pullPolicy: IfNotPresent
 
 # hostExec: operator 가 호스트에서 명령을 대신 실행할 때 띄우는 특권 hostPID Job 이미지
@@ -164,16 +163,8 @@ nvidia:
   dcgmExporter:
     enabled: false
     image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
-  # dra: NVIDIA DRA 드라이버 배포. Furiosa 와 달리 광고 주체와 묶여 있다 —
-  # advertiseBy 가 dra 가 아니면 operator 가 거절한다(벤더 chart 가 device-plugin 과의
-  # 공존을 막고, 광고를 끈 채로 깔면 발행물 없는 껍데기만 남는다).
-  # 노드 일부만 넘기는 구성도 거절한다. 벤더 발행 스위치가 DaemonSet 단위다.
-  # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(registry.k8s.io)에서 직접 당긴다.
-  dra:
-    enabled: false
-    upstream: "registry.k8s.io"
-    repository: "dra-driver-nvidia/dra-driver-nvidia-gpu"
-    tag: "v0.4.0"
+  # DRA 드라이버 배포 값은 이 라인에 없다 — K8s 1.28 에는 resource.k8s.io 가 없어
+  # operator 가 DRA 드라이버를 배포하지 않는다(1.34 라인에만 있는 축).
 
 furiosa:
   enabled: true
@@ -211,14 +202,6 @@ furiosa:
     devicePluginUpstream: "docker.io"
     devicePluginRepository: "furiosaai/furiosa-device-plugin"
     devicePluginTag: "2026.1.1"
-    # dra: 이 벤더의 DRA 드라이버를 operator 가 배포할 것인가. 광고 주체(advertiseBy)와
-    # 독립이다 — 켜도 광고는 device-plugin 이 계속 맡는다.
-    # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당긴다.
-    dra:
-      enabled: false
-      upstream: "docker.io"
-      repository: "furiosaai/furiosa-dra-driver"
-      tag: "2026.1.1"
     resourceName: "furiosa.ai/rngd"
     # 파티션 정책: "none"(1) / "quad-core"(2) / "dual-core"(4) / "single-core"(8) instance/card.
     # "none" 이면 --policy 를 전달하지 않는다. 그 외 값은 위 공개 이미지에서 CrashLoopBackOff.

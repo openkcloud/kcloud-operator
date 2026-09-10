@@ -22,8 +22,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
-	"kcloud-operator/internal/intent"
-	"kcloud-operator/internal/partition"
 )
 
 // 광고 주체 축을 갖는 벤더 중 이 패키지에 아직 상수가 없던 둘. Rebellions ATOM 은 대상이 아니다.
@@ -58,13 +56,6 @@ func (r *NPUClusterPolicyReconciler) reconcileDRAOwnedLabels(
 		return fmt.Errorf("노드 목록 조회 실패: %w", err)
 	}
 
-	// DRA 발행 실측. resource.k8s.io 가 없는 클러스터에서는 빈 값이 되고, 그러면 dra 전환은
-	// 전부 거절된다 — device-plugin 을 끄기 전에 넘겨받을 쪽이 실재하는지부터 본다.
-	dra, err := intent.LoadDRACapability(ctx, r.Client)
-	if err != nil {
-		return fmt.Errorf("DRA 발행 상태 조회 실패: %w", err)
-	}
-
 	var switches []npuv1alpha1.AdvertiseSwitchStatus
 
 	for vendor, adv := range advertiseVendors(policy) {
@@ -94,11 +85,7 @@ func (r *NPUClusterPolicyReconciler) reconcileDRAOwnedLabels(
 			// 새로 넘기려는 노드는 두 가지를 먼저 통과해야 한다. 이미 넘어간 노드는 다시 묻지
 			// 않는다 — 되돌리는 길(want=false)은 어떤 경우에도 막지 않는다.
 			if want && !has {
-				refusal, perr := r.refuseAdvertiseSwitch(ctx, vendor, node.Name, dra)
-				if perr != nil {
-					return perr
-				}
-				if refusal != nil {
+				if refusal := r.refuseAdvertiseSwitch(); refusal != nil {
 					refusal.Vendor, refusal.Node = vendor, node.Name
 					switches = append(switches, *refusal)
 					r.Recorder.Eventf(policy, corev1.EventTypeWarning, "AdvertiseSwitchRefused",
@@ -134,43 +121,15 @@ func (r *NPUClusterPolicyReconciler) reconcileDRAOwnedLabels(
 	return r.recordAdvertiseSwitch(ctx, policy, switches)
 }
 
-// refuseAdvertiseSwitch 는 이 노드를 지금 DRA 소유로 넘겨도 되는지 본다. 넘기면 안 되는
-// 이유가 있으면 그 사유를, 없으면 nil 을 돌려준다.
-func (r *NPUClusterPolicyReconciler) refuseAdvertiseSwitch(
-	ctx context.Context, vendor, node string, dra intent.DRACapability,
-) (*npuv1alpha1.AdvertiseSwitchStatus, error) {
-	// ① 넘겨받을 쪽이 실재하는가. 없으면 device-plugin 을 끈 순간 그 노드의 광고가 양쪽 다 0 이 된다.
-	if len(dra.SlicesByNodeDriver[node]) == 0 {
-		return &npuv1alpha1.AdvertiseSwitchStatus{
-			Reason: "이 노드에 ResourceSlice 를 발행하는 DRA 드라이버가 없다 — 드라이버를 먼저 설치하라",
-		}, nil
-	}
-
-	// ② 지금 장치를 쥐고 있는 워크로드가 있는가. 판정은 Quiescer 를 그대로 쓴다 —
-	// 점유 규칙을 여기에 다시 쓰면 두 규칙이 갈라진다.
-	pods, err := advertiseQuiescer(r.Client, vendor).DeviceHoldingPods(ctx, node)
-	if err != nil {
-		return nil, fmt.Errorf("노드 %s 점유 조회 실패: %w", node, err)
-	}
-	if len(pods) > 0 {
-		return &npuv1alpha1.AdvertiseSwitchStatus{
-			Reason:       "장치를 쥔 워크로드가 있다 — 노드를 비우고 다시 시도하라",
-			BlockingPods: pods,
-		}, nil
-	}
-	return nil, nil
-}
-
-// advertiseQuiescer 는 벤더별 점유 판정기다. 매핑에 없는 벤더는 DRA claim 축만 보는
-// 기본 판정기를 쓴다(holdsDevice 는 resourceClaims 를 벤더 무관으로 잡는다).
-func advertiseQuiescer(c client.Client, vendor string) *partition.Quiescer {
-	switch vendor {
-	case vendorNvidia:
-		return partition.NvidiaQuiescer(c)
-	case vendorRngd:
-		return partition.RngdQuiescer(c)
-	default:
-		return &partition.Quiescer{Client: c}
+// refuseAdvertiseSwitch 는 이 노드를 지금 DRA 소유로 넘겨도 되는지 본다.
+//
+// 이 릴리스 라인(K8s 1.28)에는 resource.k8s.io 자체가 없다. 넘겨받을 쪽이 없는데
+// device-plugin 을 끄면 그 노드의 광고가 양쪽 다 0 이 되므로 전환은 언제나 거절된다.
+// 축(advertiseBy)·라벨 회수·DaemonSet 제외 렌더링은 1.34 라인과 같게 두고, 적용만 막는다.
+// 점유 워크로드 검사는 여기서 필요 없다 — 적용 자체에 도달하지 않는다(1.34 라인에는 있다).
+func (r *NPUClusterPolicyReconciler) refuseAdvertiseSwitch() *npuv1alpha1.AdvertiseSwitchStatus {
+	return &npuv1alpha1.AdvertiseSwitchStatus{
+		Reason: "이 클러스터에는 resource.k8s.io(DRA)가 없다 — 광고를 넘겨받을 쪽이 없으므로 전환하지 않는다",
 	}
 }
 
