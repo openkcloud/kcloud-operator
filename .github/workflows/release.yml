@@ -2,7 +2,7 @@
 # release.yml: v* 태그 push 시 operator 이미지와 Helm 차트를 GHCR 로 발행한다.
 # 상세: 태그와 Chart.yaml appVersion 이 어긋나면 발행 전에 실패시킨다.
 #       Go 시험은 test.yml·lint.yml 이 같은 push 에서 따로 돌므로 여기서는 다루지 않는다.
-# 생성일: 2026-09-09
+# 생성일: 2026-09-09 | 수정일: 2026-09-10 (릴리스 라인 태그 접미사 -k8s<minor> 허용)
 # ============================================================
 name: Release
 
@@ -47,8 +47,10 @@ jobs:
             echo "!! 태그 ${TAG} 와 Chart.yaml appVersion ${APP_VERSION} 이 다르다." >&2
             exit 1
           fi
-          if [ "${CHART_VERSION}" != "${TAG#v}" ]; then
-            echo "!! Chart.yaml version ${CHART_VERSION} 이 ${TAG#v} 가 아니다." >&2
+          # 릴리스 라인 태그(vX.Y.Z-k8s1.28)는 차트 버전 X.Y.Z 에 K8s 라인 접미사만 더한 것이다.
+          EXPECTED="${TAG#v}"; EXPECTED="${EXPECTED%-k8s*}"
+          if [ "${CHART_VERSION}" != "${EXPECTED}" ]; then
+            echo "!! Chart.yaml version ${CHART_VERSION} 이 ${EXPECTED} 가 아니다." >&2
             exit 1
           fi
           echo "CHART_VERSION=${CHART_VERSION}" >> "$GITHUB_ENV"
