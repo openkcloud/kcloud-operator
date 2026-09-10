@@ -16,7 +16,7 @@
 helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
   --version 0.7.30 -n kcloud --create-namespace \
   --reset-values \
-  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/v0.7.30/deploy/helm/values-k8s1.34.yaml \
+  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/main/deploy/helm/values-k8s1.34.yaml \
   -f examples/values-service-k8s.yaml \
   --wait --wait-for-jobs --timeout 15m
 ```

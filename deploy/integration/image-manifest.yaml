@@ -1,35 +1,43 @@
 # ============================================================
 # image-manifest.yaml: 릴리스 세트 0.7.30 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)와 감사용. condition 은 어떤 상황에서 실제로 pull 되는지다.
-#       digest 는 GHCR 발행 뒤 채운다(release.yml). 벤더 이미지는 upstream 그대로이며
+#       digest 는 ghcr.io/openkcloud 발행본(2026-09-10)의 매니페스트 digest 다. 벤더 이미지는 upstream 그대로이며
 #       global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10
+# 생성일: 2026-09-10 | 수정일: 2026-09-10 (GHCR digest 기입)
 # ============================================================
 release: "0.7.30"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
   - image: kcloud-operator
     tag: v0.7.30
-    condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (나머지 이미지는 동일)
+    digest: sha256:2d88fd1df11232c22bd30f0bfd0741e6c995ef59d9e051d9a3ce244793ed2471
+    condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (digest sha256:2797159760b85c49ab391bc8edf9f891033e43c8a36081f01962f5c6250e9148, 나머지 이미지는 동일)
   - image: kcloud-node-manager
     tag: "0.6.17"
+    digest: sha256:96238fd7d8bc487dd46b39f56d307077e3e31914bc5ffd71a0343d904b09140f
     condition: 항상(전 노드 DaemonSet)
   - image: kcloud-host-exec
     tag: v0.1.0
+    digest: sha256:683f5ad08fe608b4d49e03ac43324e2f30c0e2844613777d01ccf926778202e5
     condition: NVIDIA 노드 MIG 관측 Job, 재부팅 Job
   - image: nvidia-driver-ds
     tag: v1
+    digest: sha256:60909d56380ca64a29a2e687a9172d597525f8eb56061767e3d30a9b4ad58923
     condition: NVIDIA 노드 드라이버 설치 Job
   - image: furiosa-driver-ds
     tag: v3
+    digest: sha256:4b696054db4bf222d54e0b80bcde7f82456200bf7f7aa98bf1d66e3b875868af
     condition: Furiosa Warboy·RNGD 노드 드라이버 설치 Job
   - image: tenstorrent-driver-ds
     tag: 2.8.0-v1
+    digest: sha256:419c97b0380e88b21ee43204c1f9052301e826c9ef5b60d36e9eed7d2f989678
     condition: Tenstorrent 노드 드라이버 설치 Job
   - image: kcloud-tt-device-plugin
     tag: v0.1.0
+    digest: sha256:f9024eccf7e74f4d93859202251159b46b9965d2f5e53b84280d91c65fdf047a
     condition: Tenstorrent 노드
   - image: furiosa-exporter
     tag: "0.1.3"
+    digest: sha256:5caa47e01cb76f86a77e9357789b03cd4cf32e95f06ff117f361cafa3540b76e
     condition: RNGD 노드(furiosa.exporter.enabled)
 vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
   - image: nvcr.io/nvidia/k8s-device-plugin
