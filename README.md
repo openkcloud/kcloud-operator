@@ -1,18 +1,45 @@
-<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-09-08 -->
+<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-09-11 -->
+<!-- cdocs-profile: blog -->
 
 # kcloud operator
 
-`kcloud operator` 는 Kubernetes 클러스터의 NPU·GPU 가속기를 관리하는 Kubernetes Operator 다.
-클러스터 관리자가 CR 을 등록하면 operator 가 노드마다 드라이버를 설치하고, 벤더 device-plugin 을
-배치하고, 장치 분할·공유·health 상태를 유지한다.
+`kcloud operator` 는 Kubernetes 클러스터의 NPU·GPU 가속기를 관리하는 Kubernetes Operator 입니다.  
+클러스터 관리자가 CR 을 등록하면 operator 가 노드마다 드라이버를 설치하고, 벤더 device-plugin 을  
+배치하고, 장치 분할·공유·health 상태를 유지합니다.
 
-관리 대상은 다섯 벤더다. 노드의 장치 감지는 각 노드에 상주하는 `kcloud-node-manager` 가 맡고,
-operator 는 그 결과인 `NodeDeviceReport` 와 `kcloud.ai/*` 노드 라벨을 읽어 DaemonSet 과 Job 을
-만든다. 설치 산출물은 `deploy/helm` 의 Helm 차트 하나다.
+관리 대상은 다섯 벤더입니다. 노드의 장치 감지는 각 노드에 상주하는 `kcloud-node-manager` 가 맡고,  
+operator 는 그 결과인 `NodeDeviceReport` 와 `kcloud.ai/*` 노드 라벨을 읽어 DaemonSet 과 Job 을  
+만듭니다. 설치 산출물은 `deploy/helm` 의 Helm 차트입니다.
+
+## 🚀 빠른 설치
+
+차트와 이미지는 `ghcr.io/openkcloud` 에 공개돼 있어 helm 명령 하나로 설치합니다. 클러스터의  
+Kubernetes 버전에 맞는 명령 하나를 고릅니다.
+
+```bash
+# Kubernetes 1.31~1.34
+helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
+  --version 0.7.30 -n kcloud --create-namespace \
+  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/main/deploy/helm/values-k8s1.34.yaml
+
+# Kubernetes 1.26~1.30
+helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
+  --version 0.6.2 -n kcloud --create-namespace \
+  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/release/k8s-1.28/deploy/helm/values-k8s1.28.yaml
+```
+
+```bash
+kubectl -n kcloud get pods                       # operator 와 kcloud-node-manager 가 Running
+kubectl get nodes -L kcloud.ai/nvidia.present    # 장치가 있는 노드에 벤더 라벨이 붙는다
+helm uninstall kcloud-operator -n kcloud         # 가속기를 쓰는 Pod 가 없을 때만 삭제된다
+```
+
+노드의 장치를 `kcloud-node-manager` 가 감지해 그 벤더의 드라이버와 device-plugin 만 배치합니다.  
+사설 미러에서 받으려면 [Deploy](#-deploy) 절의 레지스트리 값을 더합니다.
 
 ---
 
-## 지원 가속기
+## 🧩 지원 가속기
 
 | 가속기 | allocatable 리소스명 | node-manager 자동 라벨 | Helm 값 블록 |
 |--------|----------------------|------------------------|--------------|
@@ -22,27 +49,24 @@ operator 는 그 결과인 `NodeDeviceReport` 와 `kcloud.ai/*` 노드 라벨을
 | Rebellions ATOM | `rebellions.ai/ATOM` | `kcloud.ai/rebellions.present` | `rebellions` |
 | Tenstorrent Blackhole | `tenstorrent.com/blackhole` | `kcloud.ai/tenstorrent.present` | `tenstorrent` |
 
-라벨은 `kcloud-node-manager` 가 PCI 조회 결과로 직접 붙이므로 관리자가 손으로 부여하지 않는다.
-NFD 설치 여부와도 무관하다.
+라벨은 `kcloud-node-manager` 가 PCI 조회 결과로 직접 붙이므로 관리자가 직접 부여하지 않습니다.  
+NFD 설치 여부와도 무관합니다.
 
 ---
 
-## Prerequisites
+## 📋 Prerequisites
 
-- **Kubernetes**: `main` 브랜치 릴리스는 1.31~1.35, `release/k8s-1.28` 브랜치 릴리스는 1.26~1.30.
+- **Kubernetes**: `main` 브랜치 릴리스는 1.31~1.34, `release/k8s-1.28` 브랜치 릴리스는 1.26~1.30.
 - **Helm**: 3.8+
 - **Container runtime**: containerd. 사설 HTTP 레지스트리를 쓰면 노드에 insecure-registry 설정 필요
 - **Go**: 1.24.5+ (소스 빌드 시, `go.mod`)
 - **Container tool**: docker 또는 podman (이미지 빌드 시)
 
-차트가 참조하는 이미지를 클러스터 노드가 pull 할 수 있어야 한다. 가장 흔한 설치 실패가
-ImagePullBackOff 다.
-
 ---
 
-## Build
+## 🔨 Build
 
-operator 매니저 이미지를 소스에서 빌드한다.
+operator 매니저 이미지를 소스에서 빌드합니다.
 
 ```bash
 make docker-build docker-push IMG=<registry>/kcloud/kcloud-operator:<tag> CONTAINER_TOOL="sudo docker"
@@ -51,15 +75,15 @@ make docker-build docker-push IMG=<registry>/kcloud/kcloud-operator:<tag> CONTAI
 - `IMG`: 완전한 레지스트리 경로
 - `CONTAINER_TOOL`: 기본값 `docker`
 
-`docker-build` 는 생성된 CRD 를 `internal/crdapply/crd/` 로 복사하는 `embed-crds` 를 먼저 돌린다.
-Helm 은 `crds/` 를 install 에서만 처리하므로, upgrade 때는 차트의 pre-upgrade Job 이 같은
-operator 이미지의 `apply-crds` 서브명령으로 이 embed 본을 반영한다(`crdUpgrade.enabled`, 기본 켜짐).
-CRD 를 고친 뒤에는 이미지를 다시 빌드해야 upgrade 경로가 새 스키마를 반영한다.
+`docker-build` 는 생성된 CRD 를 `internal/crdapply/crd/` 로 복사하는 `embed-crds` 를 먼저 실행합니다.  
+Helm 은 `crds/` 를 install 에서만 처리하므로, upgrade 때는 차트의 pre-upgrade Job 이 같은  
+operator 이미지의 `apply-crds` 서브명령으로 이 embed 된 CRD 를 반영합니다(`crdUpgrade.enabled`, 기본 켜짐).  
+CRD 를 고친 뒤에는 이미지를 다시 빌드해야 upgrade 경로가 새 스키마를 반영합니다.
 
-operator 가 배포하는 드라이버 설치 이미지와 device-plugin 이미지는 이 저장소가 아니라 별도
-저장소(`images/kcloud-operator-images`)에서 빌드하며, Helm 값의 태그로 결합된다.
+operator 가 배포하는 드라이버 설치 이미지와 device-plugin 이미지는 이 저장소가 아니라 별도  
+저장소(`images/kcloud-operator-images`)에서 빌드하며, Helm 값의 태그로 결합됩니다.
 
-CLI 플러그인은 `cmd/kubectl-npu` 의 독립 모듈이다.
+CLI 플러그인은 `cmd/kubectl-npu` 의 독립 모듈입니다.
 
 ```bash
 cd cmd/kubectl-npu && go build -o kubectl-npu .
@@ -67,22 +91,25 @@ cd cmd/kubectl-npu && go build -o kubectl-npu .
 
 ---
 
-## Deploy
+## 📦 Deploy
 
 ### 옵션 A: 공개 GHCR 에서 helm 직접 실행
 
 ```bash
 helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
-  --version <x.y.z> -n kcloud --create-namespace \
+  --version 0.7.30 -n kcloud --create-namespace \
   -f deploy/helm/values-k8s1.34.yaml
 ```
 
-기본값으로 kcloud 가 빌드한 이미지는 `ghcr.io/openkcloud/<이름>:<태그>` 에서, 벤더 이미지는 각
-벤더의 공개 레지스트리(`nvcr.io`, `docker.io/furiosaai` 등)에서 받는다. 소스 체크아웃에서 설치할
-때는 차트 경로 `deploy/helm` 을 대신 준다.
+차트 버전과 프리셋의 대응은 [빠른 설치](#-빠른-설치) 와 같습니다. 프리셋은 저장소 브랜치의 raw URL 로도  
+받을 수 있으므로 소스 체크아웃 없이 `-f <URL>` 로 지정할 수 있습니다.
 
-K8s 1.26~1.30 클러스터에는 `values-k8s1.28.yaml` 프리셋을 준다. 프리셋은 그 릴리스 라인의
-operator 이미지 태그와 기능 토글을 담으므로, 프리셋 없이 설치하면 라이브와 다른 구성이 배포된다.
+기본값으로 kcloud 가 빌드한 이미지는 `ghcr.io/openkcloud/<이름>:<태그>` 에서, 벤더 이미지는 각  
+벤더의 공개 레지스트리(`nvcr.io`, `docker.io/furiosaai` 등)에서 받습니다. 소스 체크아웃에서 설치할  
+때는 차트 경로 `deploy/helm` 을 대신 지정합니다.
+
+K8s 1.26~1.30 클러스터에는 `values-k8s1.28.yaml` 프리셋을 지정합니다. 프리셋은 그 릴리스 라인의  
+operator 이미지 태그와 기능 토글을 담으므로, 프리셋 없이 설치하면 라이브와 다른 구성이 배포됩니다.
 
 ### 옵션 B: 래퍼 스크립트
 
@@ -92,14 +119,14 @@ vi deploy/helm/deploy.env    # REGISTRY(kcloud 이미지 미러)·VENDOR_REGISTR
 bash deploy/helm/install.sh
 ```
 
-`install.sh` 는 `deploy.env` 의 `REGISTRY` 를 `global.registry` 로, `VENDOR_REGISTRY` 를
-`global.vendorRegistry` 로 주입한다(`VENDOR_REGISTRY` 가 비면 `REGISTRY` 를 같이 쓴다). 릴리스명과
-네임스페이스는 `deploy.env` 의 `RELEASE`, `NAMESPACE` 가 정하고, 두 값이 없을 때만 스크립트가
-`kcloud-operator`·`kcloud` 를 쓴다. `deploy.env.example` 도 같은 두 값을 담으므로 예시를
-그대로 복사해도 스크립트 기본값과 일치한다.
-커밋된 `deploy/helm/values-dev.yaml` 이 있으면 `-f` 로 함께 병합한다.
+`install.sh` 는 `deploy.env` 의 `REGISTRY` 를 `global.registry` 로, `VENDOR_REGISTRY` 를  
+`global.vendorRegistry` 로 주입합니다(`VENDOR_REGISTRY` 가 비면 `REGISTRY` 를 같이 씁니다). 릴리스명과  
+네임스페이스는 `deploy.env` 의 `RELEASE`, `NAMESPACE` 가 정하고, 두 값이 없을 때만 스크립트가  
+`kcloud-operator`·`kcloud` 를 씁니다. `deploy.env.example` 도 같은 두 값을 담으므로 예시를  
+그대로 복사해도 스크립트 기본값과 일치합니다.  
+커밋된 `deploy/helm/values-dev.yaml` 이 있으면 `-f` 로 함께 병합합니다.
 
-### 옵션 C: airgap 사설 미러
+### 옵션 C: 폐쇄망(airgap) 사설 미러
 
 ```bash
 cp deploy/helm/values-airgap.example.yaml values-airgap.yaml
@@ -109,18 +136,18 @@ helm upgrade --install kcloud-operator deploy/helm -n kcloud --create-namespace 
   -f values-airgap.yaml
 ```
 
-### 레지스트리 조립 규칙
+### 레지스트리 설정 규칙
 
-레지스트리 값은 둘이다.
+레지스트리 값은 둘입니다.
 
 | 값 | 대상 | 기본값 | 조립 결과 |
 |---|---|---|---|
 | `global.registry` | kcloud 가 빌드한 이미지(operator, node-manager, kcloud-host-exec, 드라이버 설치기, Tenstorrent device-plugin, Furiosa exporter) | `ghcr.io/openkcloud` | `<global.registry>/<repository>:<tag>` |
 | `global.vendorRegistry` | 벤더 이미지(RNGD device-plugin, MPS control daemon, DRA 드라이버, CRD 갱신용 kubectl 등) | 빈 값 | 비면 각 값의 `upstream` 호스트 그대로, 채우면 `<global.vendorRegistry>/<org>/<image>:<tag>` |
 
-air-gap 클러스터는 두 값을 모두 사내 미러로 준다. `nvidia.devicePluginImage` 처럼 완성 경로를 받는
-필드는 조립하지 않으므로 미러 경로를 사이트 값 파일에 직접 적는다. 어떤 이미지를 어느 경로로 미러해야
-하는지는 `deploy/helm/README.md` 의 레지스트리 절에 표로 있다.
+air-gap 클러스터는 두 값을 모두 사내 미러로 지정합니다. `nvidia.devicePluginImage` 처럼 완성 경로를 받는  
+필드는 조립하지 않으므로 미러 경로를 사이트 값 파일에 직접 적습니다. 어떤 이미지를 어느 경로로 미러해야  
+하는지는 `deploy/helm/README.md` 의 레지스트리 절에 표로 있습니다.
 
 ### 설치 후 확인
 
@@ -143,47 +170,40 @@ kubectl get driverupgradestate
 
 ---
 
-## Uninstall
+## 🗑️ Uninstall
 
-`NPUClusterPolicy` 에는 finalizer `npu.ai/cleanup` 이 붙는다. operator 가 실행 중인 동안 CR 을
-먼저 지워야 device-plugin 과 node-manager DaemonSet 이 정리된다.
+`helm uninstall` 하나로 끝납니다. 차트의 pre-delete hook 이 가속기 자원을 쓰는 Pod 가 있는지 확인하고,  
+있으면 uninstall 이 실패하며 hook 로그에 Pod 목록을 남깁니다(보류). 없으면 `npu.ai` CR 을 지워 operator 의  
+finalizer 처리를 기다린 뒤 차트 리소스를 삭제하고, post-delete hook 이 `npu.ai` CRD 13종을 지웁니다.
 
 ```bash
-# 1. CR 삭제 (operator 의 finalizer 처리 대기)
-kubectl delete npuclusterpolicy --all -n kcloud
-kubectl delete driverinstallpolicy --all
-
-# 2. 남은 driver DaemonSet 정리
-kubectl delete ds -n kube-system -l app.kubernetes.io/component=driver
-
-# 3. helm uninstall
 helm uninstall kcloud-operator -n kcloud
-
-# 4. (선택) CRD 삭제
-kubectl get crd -o name | grep '\.npu\.ai$' | xargs -r kubectl delete
 ```
 
-래퍼 스크립트는 위 순서에 더해 Terminating 으로 고착된 CR 의 finalizer 를 제거한다.
+같은 클러스터에 다시 설치할 예정이면 CRD 를 남깁니다. 클러스터 자체를 지우는 경로에서는 사용 중 검사를  
+건너뜁니다. 두 값 모두 삭제 전에 `helm upgrade` 로 바꿔 둡니다.
+
+```bash
+helm upgrade kcloud-operator ... --set uninstall.purgeCRDs=false
+helm upgrade kcloud-operator ... --set uninstall.gate.skipUsageCheck=true
+```
+
+hook 없이 지워야 할 때(`--no-hooks`)는 CR → DaemonSet → helm uninstall 순서로 직접 지웁니다. 래퍼 스크립트  
+`deploy/helm/uninstall.sh` 가 이 순서를 대신하며, `--purge-crds` 를 주면 정책·상태 CRD 4종  
+(`npuclusterpolicies`·`driverinstallpolicies`·`driverupgradestates`·`nodedevicereports`)까지 지웁니다.  
+`uninstall.sh` 는 `install.sh` 와 같은 `deploy.env` 를 읽고, 값이 없으면 같은 기본값(`kcloud-operator`·`kcloud`)을 씁니다.
 
 ```bash
 bash deploy/helm/uninstall.sh              # CR + helm uninstall
-bash deploy/helm/uninstall.sh --purge-crds # + CRD 삭제
-```
-
-`uninstall.sh` 도 같은 `deploy.env` 를 읽고, 값이 없으면 `install.sh` 와 같은 기본값
-(`kcloud-operator`·`kcloud`)을 쓴다. 다른 곳에 설치했다면 환경 변수로 넘긴다.
-
-```bash
+bash deploy/helm/uninstall.sh --purge-crds # + CRD 4종 삭제
 RELEASE=kcloud-operator NAMESPACE=kcloud bash deploy/helm/uninstall.sh
 ```
 
-`--purge-crds` 는 초기 4종 CRD 만 지운다. 나머지 CRD 는 `kubectl delete crd` 로 직접 지운다.
-
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-전체 값은 `deploy/helm/values.yaml` 에 주석과 함께 있다. 자주 바꾸는 항목만 옮긴다.
+전체 값은 `deploy/helm/values.yaml` 에 주석과 함께 있습니다. 자주 바꾸는 항목만 옮깁니다.
 
 | 파라미터 | 기본값 | 설명 |
 |----------|--------|------|
@@ -203,9 +223,9 @@ RELEASE=kcloud-operator NAMESPACE=kcloud bash deploy/helm/uninstall.sh
 | `nvidia.dcgmExporter.enabled` | `false` | NVIDIA 텔레메트리 exporter(`:9400`) |
 | `furiosa.exporter.enabled` | `false` | RNGD 텔레메트리 exporter(`:9410`) |
 
-기본값이 `false` 인 항목은 켠 상태로 배포됐을 때 영향 범위가 커서 opt-in 으로 둔 것이다.
-`operationCoordinator.mode` 를 끄는 절차에는 선결 조건이 있다. `values.yaml` 의 해당 주석을
-읽고 진행한다.
+기본값이 `false` 인 항목은 켠 상태로 배포됐을 때 영향 범위가 커서 opt-in 으로 두었습니다.  
+`operationCoordinator.mode` 를 끄는 절차에는 선결 조건이 있습니다. `values.yaml` 의 해당 주석을  
+읽고 진행합니다.
 
 값 변경 예:
 
@@ -221,10 +241,10 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values \
 
 ---
 
-## Custom Resources
+## 📐 Custom Resources
 
-CRD 는 `npu.ai/v1alpha1` 그룹의 13종이다. 정의는 `api/v1alpha1/`, 생성된 매니페스트는
-`config/crd/bases/` 와 `deploy/helm/crds/` 에 있다.
+CRD 는 `npu.ai/v1alpha1` 그룹의 13종입니다. 정의는 `api/v1alpha1/`, 생성된 매니페스트는  
+`config/crd/bases/` 와 `deploy/helm/crds/` 에 있습니다.
 
 | Kind | 축약 | scope | 역할 |
 |------|------|-------|------|
@@ -240,11 +260,11 @@ CRD 는 `npu.ai/v1alpha1` 그룹의 13종이다. 정의는 `api/v1alpha1/`, 생�
 | `AcceleratorWorkload` | `aw` | Namespaced | 벤더를 지정하지 않는 가속기 워크로드 요청 |
 | `AcceleratorDescriptor` | `adesc` | Cluster | 장치 하나를 backend 중립으로 기술. 할당 단위와 식별자 고정 |
 | `AcceleratorEvidence` | `aev` | Cluster | 노드별 검증 근거. 관측 등급, 환경 지문, 유효 기간 |
-| `AcceleratorVerificationPolicy` | `avp` | Cluster | 돌릴 체크 목록, 근거 신뢰 기간, 무효화 조건 |
+| `AcceleratorVerificationPolicy` | `avp` | Cluster | 실행할 체크 목록, 근거 신뢰 기간, 무효화 조건 |
 
 ### NPUClusterPolicy
 
-device-plugin 과 `kcloud-node-manager` 를 관리한다.
+device-plugin 과 `kcloud-node-manager` 를 관리합니다.
 
 ```yaml
 apiVersion: npu.ai/v1alpha1
@@ -271,12 +291,12 @@ spec:
     devicePluginImage: "ghcr.io/openkcloud/kcloud-tt-device-plugin:v0.1.0"
 ```
 
-`partitionPolicy` 가 `none` 이 아니면 operator 가 device-plugin 에 `--policy` 를 넘긴다.
-그 플래그를 지원하는 `furiosa-device-plugin-mi` 이미지가 필요하다.
+`partitionPolicy` 가 `none` 이 아니면 operator 가 device-plugin 에 `--policy` 를 넘깁니다.  
+그 플래그를 지원하는 `furiosa-device-plugin-mi` 이미지가 필요합니다.
 
 ### DriverInstallPolicy
 
-드라이버 설치와 자동 업그레이드를 관리한다.
+드라이버 설치와 자동 업그레이드를 관리합니다.
 
 ```yaml
 apiVersion: npu.ai/v1alpha1
@@ -296,16 +316,16 @@ spec:
     - "1.9.9-3"
 ```
 
-`mode: job` 은 설치를 일회성 Job 으로 돌려 특권 DaemonSet 을 상주시키지 않는다.
-`mode: daemonset` 경로는 회귀 대비로 남아 있다. `verifiedVersions` 가 비어 있으면 버전 검증을
-건너뛰고, 값이 있으면 목록 밖 버전에 대해 `DriverUpgradeState` 를 `UnverifiedVersion` 으로
-전이시킨다.
+`mode: job` 은 설치를 일회성 Job 으로 실행해 특권 DaemonSet 을 상주시키지 않습니다.  
+`mode: daemonset` 경로는 회귀 대비로 남아 있습니다. `verifiedVersions` 가 비어 있으면 버전 검증을  
+건너뛰고, 값이 있으면 목록 밖 버전에 대해 `DriverUpgradeState` 를 `UnverifiedVersion` 으로  
+전이시킵니다.
 
 ---
 
-## CLI
+## 💻 CLI
 
-`kubectl-npu` 는 노드별 상태 조회와 정책 patch 를 묶은 kubectl 플러그인이다.
+`kubectl-npu` 는 노드별 상태 조회와 정책 patch 를 묶은 kubectl 플러그인입니다.
 
 ```bash
 kubectl npu status                                # 노드×벤더 상태 요약
@@ -318,9 +338,9 @@ kubectl npu toggle rngd --enabled true
 
 ---
 
-## Development
+## 🛠️ Development
 
-컨트롤러는 `internal/controller/` 에 있고 `cmd/main.go` 가 등록한다.
+컨트롤러는 `internal/controller/` 에 있고 `cmd/main.go` 가 등록합니다.
 
 | Reconciler | 대상 |
 |------------|------|
@@ -334,7 +354,7 @@ kubectl npu toggle rngd --enabled true
 | `AcceleratorWorkloadReconciler` | 추상 워크로드 요청 번역 |
 | `MigObservationReconciler` | 정책과 무관한 MIG 모드 관측 |
 
-DaemonSet·Job 이름은 `internal/naming/` 이 한 곳에서 정한다. 자주 쓰는 make 타깃은 다음과 같다.
+DaemonSet·Job 이름은 `internal/naming/` 이 한 곳에서 정합니다. 자주 쓰는 make 타깃은 다음과 같습니다.
 
 ```bash
 make help          # 전체 타깃 목록
@@ -344,25 +364,25 @@ make lint test            # 커밋 전 검사
 make test-e2e             # Kind 클러스터 e2e
 ```
 
-RBAC 은 DaemonSet, Job, ConfigMap, Pod, Node 라벨 patch 권한을 포함한다. 상세는
-`config/rbac/` 와 `deploy/helm/templates/` 를 본다.
+RBAC 은 DaemonSet, Job, ConfigMap, Pod, Node 라벨 patch 권한을 포함합니다. 상세는  
+`config/rbac/` 와 `deploy/helm/templates/` 를 참조합니다.
 
 ---
 
-## 관련 문서
+## 📚 관련 문서
 
 - [deploy/helm/README.md](deploy/helm/README.md): 차트 파라미터 상세
 - [deploy/helm/UPGRADE.md](deploy/helm/UPGRADE.md): operator 버전 업그레이드 절차
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
-작업 브랜치에서 `make lint test` 를 통과시킨 뒤 PR 을 연다. 리뷰어와 승인자는 `OWNERS` 에 있다.
+작업 브랜치에서 `make lint test` 를 통과시킨 뒤 PR 을 엽니다. 리뷰어와 승인자는 `OWNERS` 에 있습니다.
 
 ---
 
-## References
+## 🔗 References
 
 - [Kubebuilder Documentation](https://book.kubebuilder.io)
 - [Operator SDK](https://sdk.operatorframework.io)
@@ -372,6 +392,6 @@ RBAC 은 DaemonSet, Job, ConfigMap, Pod, Node 라벨 patch 권한을 포함한�
 
 ---
 
-## License
+## 📄 License
 
-Apache License 2.0. 소스 파일 상단의 라이선스 헤더가 이를 명시한다.
+Apache License 2.0 입니다. 소스 파일 상단의 라이선스 헤더가 이를 명시합니다.
