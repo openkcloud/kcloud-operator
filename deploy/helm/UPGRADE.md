@@ -1,7 +1,11 @@
 # UPGRADE.md: NPU Operator Helm Chart 업그레이드 가이드
-# 생성일: 2026-04-10 | 수정일: 2026-04-22
+# 생성일: 2026-04-10 | 수정일: 2026-09-14 (다루는 범위 명시)
 
 # NPU Operator Upgrade Guide
+
+> 이 문서는 차트 0.5.14 까지의 과거 업그레이드 절차와 그때의 Breaking Change 를 남긴 기록이다.
+> 현재 릴리스 라인의 버전과 지원 범위는 `Chart.yaml` 과 `deploy/integration/release.yaml` 이 정본이고,
+> 일반적인 업그레이드 절차는 `README.md` 의 Upgrade 절을 따른다.
 
 ## v0.2.0 → v0.3.0
 
