@@ -37,6 +37,9 @@ helm uninstall kcloud-operator -n kcloud         # 가속기를 쓰는 Pod 가 �
 노드의 장치를 `kcloud-node-manager` 가 감지해 그 벤더의 드라이버와 device-plugin 만 배치합니다.  
 사설 미러에서 받으려면 [Deploy](#-deploy) 절의 레지스트리 값을 더합니다.
 
+위 브랜치 주소는 최신 프리셋을 확인하는 용도입니다. Magnum 같은 운영 자동화는 내용이 바뀌지 않도록
+`deploy/integration/release.yaml` 의 커밋 SHA 로 고정된 `valuesURL` 을 씁니다.
+
 ---
 
 ## 🧩 지원 가속기

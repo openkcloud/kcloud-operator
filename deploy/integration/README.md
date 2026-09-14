@@ -6,7 +6,7 @@
 
 | 파일 | 내용 |
 |---|---|
-| `release.yaml` | 차트 주소·버전·Release 이름·namespace·K8s 버전별 프리셋·입력·사이트 값·helm 호출 예 |
+| `release.yaml` | 차트 주소·Release 이름·namespace·K8s 버전별 차트 버전과 고정 values URL·입력·사이트 값·helm 호출 예 |
 | `image-manifest.yaml` | 이 릴리스가 쓰는 이미지 전체(조건 포함), 완성 경로 필드, 드라이버 apt 저장소 |
 | `examples/values-service-k8s.yaml` | 프리셋 뒤에 붙일 사이트 값 예시 |
 
@@ -16,12 +16,12 @@
 helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
   --version 0.7.30 -n kcloud --create-namespace \
   --reset-values \
-  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/main/deploy/helm/values-k8s1.34.yaml \
+  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml \
   -f examples/values-service-k8s.yaml \
   --wait --wait-for-jobs --timeout 15m
 ```
 
-`values-k8s1.34.yaml` 은 차트 안의 프리셋이다. helm 의 `-f` 는 URL 을 받으므로 차트를 풀지 않고 저장소 태그의 raw URL 을 그대로 준다(`release.yaml` 의 `valuesURL`). Add-on CR 에 값을 인라인으로 넣는 방식이면 그 파일 내용을 옮긴다. Service K8s 가 1.26~1.30 이면 차트 `0.6.2` 와 `values-k8s1.28.yaml`(태그 `v0.6.2-k8s1.28`)을 쓴다. 업그레이드도 같은 명령으로 값을 전부 다시 넘긴다. hook 을 생략하면 CRD 가 갱신되지 않으므로 `--no-hooks` 는 쓰지 않는다.
+`values-k8s1.34.yaml` 은 차트 안의 프리셋이다. helm 의 `-f` 는 URL 을 받으므로 차트를 풀지 않고 raw URL 을 그대로 준다. 이때 쓰는 주소는 `release.yaml` 의 `valuesURL` 이며 커밋 SHA 로 고정돼 있어 같은 주소가 늘 같은 내용을 돌려준다. 같은 파일의 `valuesBrowseURL` 은 브랜치 주소로, 최신 내용을 사람이 확인할 때만 쓴다. Add-on CR 에 값을 인라인으로 넣는 방식이면 그 파일 내용을 옮긴다. Service K8s 가 1.26~1.30 이면 차트 `0.6.2` 와 `values-k8s1.28.yaml`(태그 `v0.6.2-k8s1.28`)을 쓴다. 업그레이드도 같은 명령으로 값을 전부 다시 넘긴다. hook 을 생략하면 CRD 가 갱신되지 않으므로 `--no-hooks` 는 쓰지 않는다.
 
 ## 입력
 
