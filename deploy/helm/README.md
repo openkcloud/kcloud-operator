@@ -6,6 +6,9 @@ NVIDIA GPU + Furiosa(Warboy/RNGD) + Tenstorrent Blackhole + Rebellions ATOM+ 를
 두 릴리스 라인이 있다. 차트 0.7.x 는 Kubernetes 1.31~1.34(프리셋 `values-k8s1.34.yaml`),
 차트 0.6.x 는 Kubernetes 1.26~1.30(프리셋 `values-k8s1.28.yaml`, 브랜치 `release/k8s-1.28`).
 
+프리셋을 raw URL 로 줄 때 브랜치 주소는 최신 내용을 확인하는 용도다. Magnum 같은 운영
+자동화는 `deploy/integration/release.yaml` 의 커밋 SHA 로 고정된 `valuesURL` 을 쓴다.
+
 차트가 배포하는 것:
 - **Operator**(controller-manager) Deployment + RBAC + (옵션) Leader election
 - **NPUClusterPolicy** CR → operator 가 벤더별 **device-plugin DaemonSet** + **kcloud-node-manager** 를 reconcile
