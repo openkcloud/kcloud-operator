@@ -8,7 +8,7 @@
 |---|---|
 | `release.yaml` | 차트 주소·Release 이름·namespace·K8s 버전별 차트 버전과 고정 values URL·입력·사이트 값·helm 호출 예 |
 | `image-manifest.yaml` | 이 릴리스가 쓰는 이미지 전체(조건 포함), 완성 경로 필드, 드라이버 apt 저장소 |
-| `examples/values-service-k8s.yaml` | 프리셋 뒤에 붙일 사이트 값 예시 |
+| `examples/site-values.example.yaml` | Add-on 이 만들 `site-values.yaml` 의 본보기 |
 
 ## 설치 형태
 
@@ -17,11 +17,13 @@ helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-op
   --version 0.7.30 -n kcloud --create-namespace \
   --reset-values \
   -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml \
-  -f examples/values-service-k8s.yaml \
+  -f site-values.yaml \
   --wait --wait-for-jobs --timeout 15m
 ```
 
 `values-k8s1.34.yaml` 은 차트 안의 프리셋이다. helm 의 `-f` 는 URL 을 받으므로 차트를 풀지 않고 raw URL 을 그대로 준다. 이때 쓰는 주소는 `release.yaml` 의 `valuesURL` 이며 커밋 SHA 로 고정돼 있어 같은 주소가 늘 같은 내용을 돌려준다. 같은 파일의 `valuesBrowseURL` 은 브랜치 주소로, 최신 내용을 사람이 확인할 때만 쓴다. Add-on CR 에 값을 인라인으로 넣는 방식이면 그 파일 내용을 옮긴다. Service K8s 가 1.26~1.30 이면 차트 `0.6.2` 와 `values-k8s1.28.yaml`(태그 `v0.6.2-k8s1.28`)을 쓴다. 업그레이드도 같은 명령으로 값을 전부 다시 넘긴다. hook 을 생략하면 CRD 가 갱신되지 않으므로 `--no-hooks` 는 쓰지 않는다.
+
+`site-values.yaml` 은 저장소에 있는 파일이 아니다. Add-on 이 설치 직전에 대상 환경에 맞게 만드는 로컬 파일이며, 본보기가 `examples/site-values.example.yaml` 이다. 공개망이라 덮어쓸 값이 없어도 helm 이 `-f` 대상 파일을 찾지 못하면 실패하므로 반드시 만든다. 파일 이름은 `release.yaml` 의 `helm.siteValuesFile` 이 정한다.
 
 ## 입력
 
