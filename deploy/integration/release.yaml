@@ -48,6 +48,7 @@ siteValues:
   #   global:
   #     registry: ghcr.io/openkcloud
   #     vendorRegistry: ""
+  # 본보기는 examples/site-values.example.yaml 이다. 그 파일을 그대로 넘기지 않고 복사해 쓴다.
   - key: global.registry
     default: ghcr.io/openkcloud
     note: kcloud 가 빌드한 이미지의 레지스트리
@@ -55,8 +56,10 @@ siteValues:
     default: ""
     note: 비면 벤더 upstream 직접, 채우면 <미러>/<org>/<image> 규약의 air-gap 미러
 helm:
-  # <chartVersion>·<valuesURL> 은 위 프로파일에서 고른다.
-  install: helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator --version <chartVersion> -n kcloud --create-namespace --reset-values -f <valuesURL> -f site-values.yaml --wait --wait-for-jobs --timeout 15m
+  # 꺾쇠로 적은 값은 Add-on 이 채운다. <chartVersion>·<valuesURL> 은 위 프로파일에서 고르고,
+  # <siteValuesFile> 은 Add-on 이 설치 직전에 대상 환경에 맞게 만드는 로컬 파일이다.
+  siteValuesFile: site-values.yaml
+  install: helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator --version <chartVersion> -n kcloud --create-namespace --reset-values -f <valuesURL> -f <siteValuesFile> --wait --wait-for-jobs --timeout 15m
   uninstall: helm uninstall kcloud-operator -n kcloud --wait
   # uninstall 은 pre-delete hook 이 가속기 사용 Pod 를 확인한다. 있으면 실패(보류)하고
   # `kubectl -n kcloud logs job/kcloud-operator-uninstall-gate` 에 Pod 목록이 남는다.
