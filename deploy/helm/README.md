@@ -51,19 +51,22 @@ kcloud 가 공개 발행하는 차트는 GHCR 에 있다. `v*` 태그를 push �
 
 ```bash
 helm install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
-  --version 0.7.29 -n kcloud --create-namespace
+  --version 0.7.30 -n kcloud --create-namespace
 ```
 
 GHCR 은 HTTPS 이므로 `--plain-http` 를 붙이지 않는다. 공개 패키지는 인증 없이 받을 수 있고,
 비공개 상태라면 `helm registry login ghcr.io` 로 먼저 로그인해야 한다.
 
+단계별 절차와 확인 항목은 [INSTALL.md](INSTALL.md) 에 있다.
+
 설치 직후 확인:
 ```bash
 helm list -n kcloud
 kubectl get pod -n kcloud                       # controller-manager 1/1 Running
-kubectl get npuclusterpolicy -A                       # Ready=True
-# kcloud-node-manager / {nvidia,furiosa-warboy,furiosa-rngd,rbln}-device-plugin / kcloud-*-driver
-kubectl get ds -n kube-system | grep -E "kcloud-|device-plugin"
+# NPUClusterPolicy 는 get 출력에 READY 열이 없다. 조건 값을 직접 읽는다
+kubectl -n kcloud get npuclusterpolicy npuclusterpolicy-sample -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+# node-manager·exporter 는 kcloud, 벤더 device-plugin 은 kube-system 에 있다
+kubectl get ds -A | grep -E "kcloud-|device-plugin"
 kubectl get nodes -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu,RNGD:.status.allocatable.furiosa\.ai/rngd'
 kubectl get driverupgradestate                        # 각 노드 Idle 이어야 정상
 ```
