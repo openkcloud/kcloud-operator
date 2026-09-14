@@ -40,6 +40,8 @@ helm uninstall kcloud-operator -n kcloud         # 가속기를 쓰는 Pod 가 �
 위 브랜치 주소는 최신 프리셋을 확인하는 용도입니다. Magnum 같은 운영 자동화는 내용이 바뀌지 않도록
 `deploy/integration/release.yaml` 의 커밋 SHA 로 고정된 `valuesURL` 을 씁니다.
 
+사전 확인부터 자원 광고 확인까지의 단계별 절차는 [deploy/helm/INSTALL.md](deploy/helm/INSTALL.md) 에 있습니다.
+
 ---
 
 ## 🧩 지원 가속기
@@ -158,11 +160,11 @@ air-gap 클러스터는 두 값을 모두 사내 미러로 지정합니다. `nvi
 # operator pod (1/1 Running)
 kubectl get pod -n kcloud
 
-# NPUClusterPolicy (Ready=True)
-kubectl get npuclusterpolicy -A
+# NPUClusterPolicy Ready 조건 (get 출력에는 READY 열이 없습니다)
+kubectl -n kcloud get npuclusterpolicy npuclusterpolicy-sample -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 
-# device-plugin·드라이버·node-manager DaemonSet
-kubectl get ds -n kube-system | grep -E "kcloud-|device-plugin"
+# node-manager·exporter 는 kcloud, 벤더 device-plugin 은 kube-system 에 있습니다
+kubectl get ds -A | grep -E "kcloud-|device-plugin"
 
 # 노드 allocatable
 kubectl get nodes -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu,RNGD:.status.allocatable.furiosa\.ai/rngd'
