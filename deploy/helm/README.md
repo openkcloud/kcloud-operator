@@ -1,13 +1,17 @@
 # kcloud-operator (Helm Chart)
 
-NVIDIA GPU + Furiosa(Warboy/RNGD) + Rebellions ATOM+ 를 단일 Operator 로
-관리하는 Kubernetes NPU/GPU Operator 의 Helm 차트.
+NVIDIA GPU + Furiosa(Warboy/RNGD) + Tenstorrent Blackhole + Rebellions ATOM+ 를
+단일 Operator 로 관리하는 Kubernetes NPU/GPU Operator 의 Helm 차트.
+
+두 릴리스 라인이 있다. 차트 0.7.x 는 Kubernetes 1.31~1.34(프리셋 `values-k8s1.34.yaml`),
+차트 0.6.x 는 Kubernetes 1.26~1.30(프리셋 `values-k8s1.28.yaml`, 브랜치 `release/k8s-1.28`).
 
 차트가 배포하는 것:
 - **Operator**(controller-manager) Deployment + RBAC + (옵션) Leader election
-- **NPUClusterPolicy** CR → operator 가 벤더별 **device-plugin DaemonSet** + **detector** 를 reconcile
-- **DriverInstallPolicy** CR(벤더별) → operator 가 **driver 설치 DaemonSet** 을 reconcile (mode=daemonset)
-- CRD(`npu.ai/*`) 4종, NVIDIA RuntimeClass, pre-upgrade hook(CRD apply / 구 DS cleanup)
+- **NPUClusterPolicy** CR → operator 가 벤더별 **device-plugin DaemonSet** + **kcloud-node-manager** 를 reconcile
+- **DriverInstallPolicy** CR(벤더별) → operator 가 **드라이버 설치 Job** 을 reconcile (기본 `mode: job`, 상시 DaemonSet 은 `mode: daemonset`)
+- CRD(`npu.ai/*`) 13종, NVIDIA RuntimeClass, pre-upgrade hook(CRD apply / 구 DS cleanup),
+  pre-delete 삭제 게이트와 post-delete CRD 정리 hook
 
 > 드라이버는 호스트에 설치되며, 이미 일치하는 버전이 깔려 있으면 **idempotent skip(무재부팅)**.
 
@@ -16,14 +20,16 @@ NVIDIA GPU + Furiosa(Warboy/RNGD) + Rebellions ATOM+ 를 단일 Operator 로
 - Kubernetes ≥ 1.24, Helm ≥ 3.8 (OCI 사용 시)
 - 컨테이너 런타임: containerd. 사설/HTTP 레지스트리 사용 시 노드에 insecure-registry 설정
 - 차트가 참조하는 **이미지들을 클러스터 노드가 pull 가능**해야 함 (가장 흔한 실패: ImagePullBackOff)
-- **노드 라벨** (보유 가속기에 맞게 부여):
+- **노드 라벨**은 부여하지 않아도 된다. `kcloud-node-manager` 가 PCI 조회 결과로 직접 붙이며
+  NFD 설치 여부와 무관하다. device-plugin·드라이버 설치 Job·exporter 가 이 라벨을 nodeSelector 로 쓴다.
 
   | 가속기 | 라벨 |
   |--------|------|
-  | NVIDIA GPU | `nvidia.com/gpu.present=true` |
-  | Furiosa Warboy | `furiosa=true` |
-  | Furiosa RNGD | `furiosa-rngd=true` |
-  | Rebellions ATOM+ | `rebellions-atom=true` |
+  | NVIDIA GPU | `kcloud.ai/nvidia.present=true` |
+  | Furiosa Warboy | `kcloud.ai/furiosa.present=true` |
+  | Furiosa RNGD | `kcloud.ai/rngd.present=true` |
+  | Tenstorrent Blackhole | `kcloud.ai/tenstorrent.present=true` |
+  | Rebellions ATOM+ | `kcloud.ai/rebellions.present=true` |
 
 ## Installing
 
@@ -53,7 +59,7 @@ GHCR 은 HTTPS 이므로 `--plain-http` 를 붙이지 않는다. 공개 패키�
 helm list -n kcloud
 kubectl get pod -n kcloud                       # controller-manager 1/1 Running
 kubectl get npuclusterpolicy -A                       # Ready=True
-# v0.5.23+: 신 이름 — kcloud-detector / {nvidia,furiosa,furiosa-rngd,rbln}-device-plugin / kcloud-*-driver
+# kcloud-node-manager / {nvidia,furiosa-warboy,furiosa-rngd,rbln}-device-plugin / kcloud-*-driver
 kubectl get ds -n kube-system | grep -E "kcloud-|device-plugin"
 kubectl get nodes -o custom-columns='NODE:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu,RNGD:.status.allocatable.furiosa\.ai/rngd'
 kubectl get driverupgradestate                        # 각 노드 Idle 이어야 정상
