@@ -57,6 +57,16 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["acceleratorhealthpolicies"]
     verbs: ["get", "list", "watch"]
+  # 장치 기술자: 사용자/관리자가 만드는 CR — 컨트롤러는 읽고 판정 결과만 status 에 쓴다.
+  # 이 규칙이 빠지면 기능 하나가 죽는 것이 아니라 operator 파드가 CrashLoopBackOff 로 간다 —
+  # AcceleratorDescriptorReconciler 는 조건 없이 등록되고, 그 informer 가 list/watch 를
+  # 거절당하면 그 실패가 mgr.Start 의 반환값으로 올라와 cmd/main.go 가 프로세스를 종료한다.
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratordescriptors"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratordescriptors/status"]
+    verbs: ["get", "update", "patch"]
   # P6 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러(migobservation_controller.go)
   # 가 특권 Job 의 관측 결과를 이 보고서에 직접 기록한다(detector 는 비특권이라 MIG 를 못 봐서
   # 대신 쓴다) — status 에 update/patch 가 없으면 그 기록이 조용히 거절되고, 보고서가 영영
@@ -93,21 +103,20 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "create", "delete"]
-  # P1: PDB-aware drain via Eviction API (pods/eviction create + PDB read)
+  # 벤더 기능 probe 파드의 실패 로그를 근거(AcceleratorEvidence)에 남기기 위해 읽는다.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # P1: PDB-aware drain via Eviction API. pods/eviction create 만 있으면 되고, PDB 는 API
+  # server 가 eviction 요청에서 대신 검사하므로 operator 가 직접 읽지 않는다.
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list", "watch"]
   # events: 컨트롤러가 발행(create/patch)하고, 관리 API 의 /api/v1/events 가 읽는다(get/list/watch).
   # 읽기 권한이 없으면 UI 의 History 탭이 조용히 500 을 낸다 — 마커만 고치고 여기를 빠뜨리면
   # 코드는 맞고 배포는 틀린 상태가 된다(이 저장소에서 이미 두 번 발생).
@@ -130,9 +139,13 @@ rules:
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # clusterroles/clusterrolebindings 에 bind;escalate 추가 — descriptor auto-apply(D4b/c)가
+  # 생성 DRA 드라이버용 ClusterRole(operator 가 전부는 안 가진 resourceslices 권한 부여)을
+  # 만들려면 escalate 가 필요하다. namespaced roles/rolebindings 는 코드가 만들지도 읽지도
+  # 않아 제거했다(최소권한).
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"]
   # P4 관리 REST API(S5-3-②): 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
   # api.enabled=false 여도 무해하며, 누락 시 모든 API 요청이 500(리뷰 생성 실패)이 되므로 항상 부여.
   - apiGroups: ["authentication.k8s.io"]
@@ -158,6 +171,13 @@ rules:
   - apiGroups: ["resource.k8s.io"]
     resources: ["deviceclasses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # 타 벤더 operator 감지 재확인(vendoroperator_detect.go 의 vendorOperatorCRDConfirmed)이
+  # CustomResourceDefinition 자체를 캐시 없는 APIReader 로 get 한다. 이 규칙이 빠지면
+  # Forbidden 이 no-flap 오류 처리로 삼켜져 재확인이 계속 실패하면서도 조건은 안 바뀌어(겉보기엔
+  # 정상) True-reconcile 마다 ERROR 로그만 쌓인다.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

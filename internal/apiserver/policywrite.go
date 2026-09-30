@@ -30,12 +30,12 @@ type CreatePolicyResponse struct {
 
 // handleCreatePolicy 는 정책을 만든다.
 //
-// dryRun=true 가 실제로 태우는 것: API 서버의 admission 이다. 그런데
-// AcceleratorPartitionPolicy 에는 **validating webhook 이 등록돼 있지 않다**
-// (deploy/helm/templates/webhook.yaml 은 driverinstallpolicies·npuclusterpolicies·
-// acceleratorclasses·acceleratorworkloads 넷만 건다). 따라서 dry-run 이 보는 것은
-// CRD OpenAPI 스키마와 CEL 규칙 하나뿐이다 — vendor·sharing.mode enum,
-// timeSlicing.replicas 2~16, layout 과 sharing 이 동시에 비지 않을 것.
+// dryRun=true 가 실제로 태우는 것: API 서버의 admission 이다.
+// AcceleratorPartitionPolicy 에는 validating webhook 이 등록돼 있다
+// (`internal/webhook/webhook.go` 의 ACPPValidator, `deploy/helm/templates/webhook.yaml`
+// 이 acceleratorpartitionpolicies 를 포함해 다섯을 건다). 따라서 dry-run 이 보는 것은
+// CRD OpenAPI 스키마와 CEL 규칙, 그리고 그 webhook 의 판정이다 —
+// vendor·sharing.mode enum, timeSlicing.replicas 2~16, layout 과 sharing 이 동시에 비지 않을 것.
 //
 // 보지 않는 것: 그 노드·장치가 요청한 방식을 실제로 할 수 있는가, profile 이 그 하드웨어에
 // 실재하는가, 같은 노드를 다른 정책이 이미 잡고 있는가. 그 판정은 reconciler 가 하며

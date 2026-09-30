@@ -48,3 +48,11 @@ deploy/helm/deploy.env
 
 # 구현 기록·설계 문서. 공개 저장소에서 관리하지 않는다(2026-09-09 결정).
 docs/
+
+# 저장소 루트에 놓인 임시 png (붙여넣기 이미지 등) 제외
+/*.png
+
+# make footprint(-check) 산출물 — baseline.json 대조용 1회성 측정 결과
+/footprint.json
+# measure.sh 기본 OUT — test/footprint/footprint-<날짜>.json 이 저장소 안에 떨어진다
+test/footprint/footprint-*.json

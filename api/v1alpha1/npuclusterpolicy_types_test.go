@@ -1,6 +1,6 @@
 // ============================================================
 // npuclusterpolicy_types_test.go: NPUClusterPolicy 타입의 기본값 해석 시험
-// 생성일: 2026-08-07
+// 생성일: 2026-08-07 | 수정일: 2026-09-28
 // ============================================================
 package v1alpha1
 
@@ -43,6 +43,33 @@ func TestDRASpecInlinedInVendorBlocks(t *testing.T) {
 	} {
 		if !s.IsEnabled() {
 			t.Errorf("%s 블록의 DRA 축이 동작하지 않는다", name)
+		}
+	}
+}
+
+// 세 모드가 서로 배타적인지 본다. 두 도우미가 동시에 참이면 배포 판정이 갈린다.
+func TestManagementModeThreeValues(t *testing.T) {
+	cases := []struct {
+		mode      string
+		owned     bool
+		delegated bool
+		external  bool
+	}{
+		{"", true, false, false}, // 미지정 = managed
+		{"managed", true, false, false},
+		{"delegated", false, true, false},
+		{"external", false, false, true},
+	}
+	for _, c := range cases {
+		m := ManagementSpec{ManagementMode: c.mode}
+		if got := m.IsOperatorOwned(); got != c.owned {
+			t.Errorf("mode %q IsOperatorOwned = %v, want %v", c.mode, got, c.owned)
+		}
+		if got := m.IsDelegated(); got != c.delegated {
+			t.Errorf("mode %q IsDelegated = %v, want %v", c.mode, got, c.delegated)
+		}
+		if got := m.IsExternal(); got != c.external {
+			t.Errorf("mode %q IsExternal = %v, want %v", c.mode, got, c.external)
 		}
 	}
 }

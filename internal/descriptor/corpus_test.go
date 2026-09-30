@@ -51,20 +51,24 @@ func TestArchetypesAreValid(t *testing.T) {
 			if len(ok) != len(spec.Backends) {
 				t.Fatalf("선언한 backend 가 전부 실현 가능해야 한다: ok=%v 거절=%v", ok, refusals)
 			}
-			// 장치 하나만 넘긴다 - nvidia archetype 은 {{id}} 치환자가 없어 장치
-			// 여럿을 넘기면 노드가 겹친다. 치환자 없이 장치 여럿을 넘기는 경로는
-			// 뒤 태스크의 변형 규칙이 따로 다룬다.
-			if _, err := CompileDevicePlugin(spec, []string{"dev0"}); err != nil {
+			// 장치 발견은 이제 런타임이 한다 - 컴파일은 spec.DeviceNodes 템플릿을
+			// 치환 없이 그대로 실어 보내는지만 본다.
+			if _, err := CompileDevicePlugin(spec); err != nil {
 				t.Fatalf("컴파일 실패: %v", err)
 			}
 		})
 	}
 }
 
-// 규칙이 조용히 사라지는 것을 막는다. 규칙을 더하면 이 수를 함께 올린다.
-// 25 에서 26 으로: "정규화됐지만 /dev 밖"(/etc/shadow) 을 추가해 /dev 하위
+// 규칙이 조용히 사라지는 것을 막는다. 규칙을 더하거나 지우면 이 수를 함께 바꾼다.
+// 25 에서 26 으로(1차): "정규화됐지만 /dev 밖"(/etc/shadow) 을 추가해 /dev 하위
 // 검사(case !strings.HasPrefix(n, "/dev/"))를 직접 두들기는 표본을 만들었다
 // - 그전엔 이 분기를 지워도 표본이 하나도 안 실패했다(task-4-report.md 참고).
+// 26 에서 25 로: "치환자 없이 장치 여럿"(StageCompile 기대) 규칙을 제거했다 -
+// 런타임 발견이 도입되며 이 조합은 단일 고정 장치로 처리돼 더는 컴파일 단계
+// 결함이 아니다.
+// 25 에서 26 으로(2차): "sharing replicas 범위 밖" 을 추가해 spec.sharing.replicas
+// 하한(2) 검사를 두들기는 표본을 만들었다(Round 2 Task 1).
 func TestMutationRuleCount(t *testing.T) {
 	rules := MutationRules()
 	if len(rules) != 26 {
@@ -99,12 +103,15 @@ func judge(m map[string]any) (Stage, string) {
 		}
 		return StageFeasible, reason
 	}
-	// 컴파일은 장치가 둘 이상일 때만 드러나는 것이 있다. 둘로 태운다.
-	if _, err := CompileDevicePlugin(spec, []string{"dev0", "dev1"}); err != nil {
+	// deviceIDs 없이 컴파일한다 - 발견은 이제 런타임 몫이다. Validate·
+	// FeasibleBackends 를 통과한 표본은 더는 여기서 걸러지지 않는다(치환자
+	// 유무 판정이 사라졌다). 그래도 컴파일 단계를 남겨 두는 이유는 이 함수들이
+	// 계약(Validate 재확인·FeasibleBackends 판정)을 여전히 지키는지 보기 위해서다.
+	if _, err := CompileDevicePlugin(spec); err != nil {
 		return StageCompile, err.Error()
 	}
 	if contains(spec.Backends, "dra") {
-		if _, err := CompileDRA(spec, []string{"dev0", "dev1"}); err != nil {
+		if _, err := CompileDRA(spec); err != nil {
 			return StageCompile, err.Error()
 		}
 	}

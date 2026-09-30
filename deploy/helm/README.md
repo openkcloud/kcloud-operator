@@ -3,7 +3,7 @@
 NVIDIA GPU + Furiosa(Warboy/RNGD) + Tenstorrent Blackhole + Rebellions ATOM+ 를
 단일 Operator 로 관리하는 Kubernetes NPU/GPU Operator 의 Helm 차트.
 
-두 릴리스 라인이 있다. 차트 0.7.x 는 Kubernetes 1.31~1.34(프리셋 `values-k8s1.34.yaml`),
+두 릴리스 라인이 있다. 차트 0.8.x 는 Kubernetes 1.31~1.34(프리셋 `values-k8s1.34.yaml`),
 차트 0.6.x 는 Kubernetes 1.26~1.30(프리셋 `values-k8s1.28.yaml`, 브랜치 `release/k8s-1.28`).
 
 프리셋을 raw URL 로 줄 때 브랜치 주소는 최신 내용을 확인하는 용도다. Magnum 같은 운영
@@ -51,7 +51,7 @@ kcloud 가 공개 발행하는 차트는 GHCR 에 있다. `v*` 태그를 push �
 
 ```bash
 helm install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
-  --version 0.7.30 -n kcloud --create-namespace
+  --version 0.8.0 -n kcloud --create-namespace
 ```
 
 GHCR 은 HTTPS 이므로 `--plain-http` 를 붙이지 않는다. 공개 패키지는 인증 없이 받을 수 있고,
@@ -78,6 +78,13 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values --s
 ```
 - `crdUpgrade.enabled=true`(기본): helm upgrade 시 operator 의 `apply-crds` 서브명령 Job 이 CRD 를
   자동 적용(Helm 은 crds/ 를 install 전용으로 다루므로). 비활성화 시 수동 `kubectl apply -f crds/` 필요.
+- **`--reuse-values` 금지**: Helm v4.0.1 에서 이 옵션은 직전 릴리스가 계산해 둔 값을 통째로
+  재사용하므로, 사용자 값이 우선하지 않는 차트 기본값 변경이 반영되지 않는다. 2026-09-24 에 NVIDIA
+  검증 목록 변경이 이 때문에 리비전 세 개 동안 조용히 빠졌다. 값을 바꿔 반영할 때는 위 명령처럼
+  `--reset-then-reuse-values` 를 쓴다 — 차트 기본값을 다시 계산한 뒤 사용자 값을 다시 적용하므로
+  둘 다 반영된다. `make helm-option-check` 가 저장소 안 `--reuse-values` 단독 사용을 검사한다.
+- **반영 후 확인**: 리비전이 올라간 것만으로는 값이 반영됐다는 증거가 아니다. 바꾼 필드가 실제로
+  라이브에 들어갔는지 `helm get values` 등으로 직접 확인한다.
 
 ## Uninstalling
 
@@ -239,6 +246,9 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `furiosa.rngd.devicePlugin*` | `docker.io` | `furiosaai/furiosa-device-plugin` | RNGD device-plugin 배포 시(기본 켜짐) |
 | `furiosa.rngd.dra` | `docker.io` | `furiosaai/furiosa-dra-driver` | Furiosa DRA 를 켤 때 |
 | `rebellions.devicePlugin*` | `docker.io` | `rebellions/k8s-device-plugin` | ATOM+ device-plugin 배포 시(기본 켜짐) |
+| `rebellions.dra` | `docker.io` | `rebellions/k8s-dra-driver-npu` | Rebellions DRA 를 켤 때 |
+| `tenstorrent.dra` | `ghcr.io` | `tenstorrent/tt-dra-driver` | Tenstorrent DRA 를 켤 때 |
+| `tenstorrent.dra.fabricManager` | `ghcr.io` | `tenstorrent/tt-fabric-manager` | Tenstorrent DRA 를 켤 때(드라이버가 이 데몬 없이 기동하지 못함) |
 
 `bitnamilegacy` 는 오타가 아닙니다. Bitnami 가 2025-08 에 공개 카탈로그를 정리하면서
 `docker.io/bitnami/kubectl` 의 태그를 모두 내리고 `bitnamilegacy` 로 옮겼습니다.
@@ -254,6 +264,10 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `nvidia.dcgmExporter.image` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` |
 | `furiosa.devicePluginImage` | `ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1` |
 | `acpp.probeImage` | `docker.io/library/nginx:1.25.2-alpine` |
+| `acpp.probeImages.nvidia` | `""` (비면 레거시 pause; 예 `<미러>/kcloud/nvidia/cuda:12.9.1-base-ubuntu22.04`) |
+| `acpp.probeImages.tenstorrent` | `""` (비면 레거시 pause; 예 `<미러>/kcloud/probe-tenstorrent:v1`) |
+| `acpp.probeImages.furiosa` | `""` (공식 이미지에 CLI 없음 — NEEDS VENDOR RESEARCH, 비워 둠) |
+| `acpp.probeImages.rebellions` | `""` (privileged+hostPID — 비면 레거시 pause; 예 `<미러>/kcloud/probe-rebellions:v1`) |
 | `driverInstallPolicies.nvidia.toolkit.image` | 미지정 시 코드 기본값 `nvcr.io/nvidia/k8s/container-toolkit:v1.17.8-ubuntu20.04` |
 | `crdUpgrade.kubectlImage` | `""` (지정 시 `crdUpgrade.kubectl*` 조립을 무시) |
 
@@ -264,7 +278,7 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
    벤더 이미지는 `<미러>/<upstream 의 org>/<image>` 입니다. 예를 들어
    `nvcr.io/nvidia/k8s-device-plugin:v0.19.3` 은 `<미러>/nvidia/k8s-device-plugin:v0.19.3`
    으로 올립니다. upstream 호스트 이름은 경로에 넣지 않습니다.
-3. 전체 경로 값 여섯 개는 values 에서 미러 경로로 직접 덮어씁니다.
+3. 전체 경로 값 열 개는 values 에서 미러 경로로 직접 덮어씁니다.
    `values-airgap.example.yaml` 에 그 형태가 그대로 들어 있습니다.
 4. 설치 시 `--set global.registry=<미러>/<프로젝트> --set global.vendorRegistry=<미러>/<프로젝트>`
    를 함께 줍니다.
@@ -359,13 +373,19 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
 ## Notes / Gotchas
 
 - **기존 릴리스에서 올릴 때**: `global.vendorRegistry` 는 새로 생긴 값이라 기존 사용자 값에 없다.
-  사설 미러를 쓰는 클러스터는 upgrade 시 이 값을 함께 주지 않으면 벤더 이미지 여섯 개가
+  사설 미러를 쓰는 클러스터는 upgrade 시 이 값을 함께 주지 않으면 벤더 이미지 아홉 개가
   upstream 을 직접 당기려 하고, air-gap 이면 `ImagePullBackOff` 로 멈춘다.
 - **RNGD partition**: 기본값은 공개 벤더 이미지 + `partitionPolicy: none` + `debugMode: false` 다(2026-09-09).
   `partitionPolicy != none` 은 operator 가 device-plugin 에 `--policy` 를 전달하므로 파티션 지원 내부 이미지
   (`kcloud/furiosa-device-plugin-mi`)로 함께 바꿔야 한다. 공개 이미지는 `--policy` 를 거부해 CrashLoop.
 - **driver DS 수명주기**(v0.5.22+): driver DaemonSet 은 DriverInstallPolicy 에 ownerReference 가 걸려
   DIP 삭제 시 K8s GC 가 cascade 삭제.
+- **설치 정책은 릴리스 자원**(2026-09-24): 벤더별 `DriverInstallPolicy` 네 개는 helm hook 이
+  아니라 릴리스 자원으로 관리된다. hook 으로 두면 업그레이드마다 삭제·재생성되어 uid 가 바뀌고,
+  정책을 소유자로 참조하는 toolkit DaemonSet 이 연쇄로 다시 만들어졌다. 정책에 직접 넣은 값도
+  다음 업그레이드에서 사라졌다. 이 변경 이전에 설치한 클러스터는 정책에 helm 소유 표시가 없으므로
+  `helm upgrade` 전에 `hack/adopt-helm-resources.sh --apply` 를 한 번 실행한다. 릴리스 자원이 되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제 삭제 동작은 달라지지 않는다. `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가 `npu.ai` 사용자 정의 자원을 먼저 순서대로 지우기 때문이다. 실행하지 않고
+  업그레이드하면 helm 이 "already exists" 로 거절한다.
 - **레지스트리 도달성**: 다른 클러스터 배포 시 노드가 이미지 레지스트리에 도달 가능해야 함. 상세 절차는
   운영 노트(`operator/tester.md` §5) 참조.
 - **CRD**: helm 자체는 `crds/` 의 CRD 를 삭제하지 않는다. 차트의 `post-delete` Job 이

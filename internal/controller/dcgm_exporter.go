@@ -7,7 +7,6 @@
 //	hwmon 을 등록하지 않고, node-manager(distroless/nonroot)가 host nvidia-smi 를
 //	exec 할 수 없어 NVML 경로가 별도로 필요하다. NVML 을 재구현하는 대신 NVIDIA GPU
 //	Operator 와 동일하게 upstream 이미지를 operand 로 배포한다.
-//	설계: docs/superpowers/specs/2026-07-29-device-telemetry-design.md §2 D2
 //
 // 생성일: 2026-07-29 | 수정일: 2026-07-29
 // ============================================================
@@ -46,16 +45,23 @@ const (
 func (r *NPUClusterPolicyReconciler) ensureDcgmExporter(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
+	// delegated·external 이면 이 벤더의 operand 를 배포도 회수도 하지 않는다 — kcloud 가
+	// 소유하지 않으므로 관측만 한다(배포 여부는 IsOperatorOwned() 하나로 묻는다).
+	if !policy.Spec.Nvidia.IsOperatorOwned() {
+		return nil
+	}
+
 	spec := policy.Spec.Nvidia.DcgmExporter
 	if !policy.Spec.Nvidia.Enabled || spec == nil || !spec.Enabled {
-		// 새 이름 삭제가 실패해도 옛 이름(dcgmExporterLegacyDSName) 삭제를 계속 시도한다 —
-		// 하나가 막혔다고 나머지 정리를 포기하지 않는다. 두 오류 다 잃지 않고 합쳐 돌려준다.
-		errNew := r.deleteDaemonSetIfExists(ctx, dcgmExporterDSName)
-		errLegacy := r.deleteDaemonSetIfExists(ctx, dcgmExporterLegacyDSName)
+		// dcgm-exporter 는 벤더 일반 이름이라 운영자가 upstream 차트로 같은 이름을 kube-system 에
+		// 설치할 수 있다. 소유 표시(npu.ai/owner)가 이 policy 와 맞는 DS 만 지운다 — 3rd-party 동명
+		// DS 는 보존한다. 새 이름 삭제가 막혀도 옛 이름 삭제를 계속 시도하고 두 오류를 합쳐 돌려준다.
+		errNew := r.deleteOwnedDaemonSetIfExists(ctx, dcgmExporterDSName, policy)
+		errLegacy := r.deleteOwnedDaemonSetIfExists(ctx, dcgmExporterLegacyDSName, policy)
 		return errors.Join(errNew, errLegacy)
 	}
 
-	if err := r.deleteDaemonSetIfExists(ctx, dcgmExporterLegacyDSName); err != nil {
+	if err := r.deleteOwnedDaemonSetIfExists(ctx, dcgmExporterLegacyDSName, policy); err != nil {
 		return err
 	}
 
@@ -82,7 +88,7 @@ func renderDcgmExporterDS(policy *npuv1alpha1.NPUClusterPolicy) *appsv1.DaemonSe
 	}
 
 	// device-plugin 과 동일한 자립 라벨 셀렉터(NFD 비의존). spec 의 nodeSelector 를 주면 그것을 쓴다.
-	sel := map[string]string{"kcloud.ai/nvidia.present": "true"}
+	sel := map[string]string{vendorPresentLabel(vendorNvidia): labelValueTrue}
 	if len(policy.Spec.Nvidia.NodeSelector) > 0 {
 		sel = policy.Spec.Nvidia.NodeSelector
 	}

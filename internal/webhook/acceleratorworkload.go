@@ -28,7 +28,8 @@ type AWValidator struct {
 }
 
 func (v *AWValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return validateAcceleratorWorkload(ctx, v.Client, obj)
+	w, err := validateAcceleratorWorkload(ctx, v.Client, obj)
+	return w, recordRejection("AcceleratorWorkload", err)
 }
 
 // ValidateUpdate 는 spec 이 바뀐 업데이트만 검증한다. 매번 다시 번역하면, 클래스가 지워졌거나
@@ -41,7 +42,8 @@ func (v *AWValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime
 	if okOld && okNew && apiequality.Semantic.DeepEqual(oldAW.Spec, newAW.Spec) {
 		return nil, nil
 	}
-	return validateAcceleratorWorkload(ctx, v.Client, newObj)
+	w, err := validateAcceleratorWorkload(ctx, v.Client, newObj)
+	return w, recordRejection("AcceleratorWorkload", err)
 }
 
 func (v *AWValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {

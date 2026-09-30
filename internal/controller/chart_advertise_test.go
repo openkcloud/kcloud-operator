@@ -31,6 +31,7 @@ var chartAdvertiseVendors = []string{
 	"furiosa",
 	"furiosa.rngd",
 	"tenstorrent",
+	"rebellions",
 }
 
 // TestAdvertiseVendorCountMatchesChart 는 컨트롤러가 실제로 읽는 벤더 수와 차트

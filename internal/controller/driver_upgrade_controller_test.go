@@ -1749,3 +1749,190 @@ func TestEnsureUpgradeStates_MismatchSyncIsIdempotent(t *testing.T) {
 		t.Errorf("currentVersion 동기화 실패: %q", second.Status.CurrentVersion)
 	}
 }
+
+// ─────────────────────────────────────────────
+// 버전 드리프트 감지 시나리오 (Task 2 — 감지 전용, 자동 조치 없음)
+// ─────────────────────────────────────────────
+
+// TestSyncUpgradeStateDriftConfirmed 는 Idle 에서 정책 선언 버전과 NDR 실측이 유예를 넘겨
+// 어긋난 채 유지되면 DriverVersionDrift Warning 이벤트가 발행됨을 고정한다.
+func TestSyncUpgradeStateDriftConfirmed(t *testing.T) {
+	const (
+		nodeName        = "worker-drift"
+		dusName         = "worker-drift-furiosa"
+		declaredVersion = "580.178.04"
+		observedVersion = "595.91.07"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, declaredVersion, declaredVersion)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
+	r.syncUpgradeState(context.Background(), nodeName, device, dip, "warboy", nil)
+
+	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("DriverVersionDrift Warning 이벤트를 기대했으나 발행되지 않음")
+	}
+}
+
+// TestSyncUpgradeStateDriftWithinGrace 는 어긋남이 아직 유예 시간 안이면 이벤트를 발행하지 않고
+// DriftFirstSeen 을 그대로 유지함을 고정한다(디바운스, 조기 경보 방지).
+func TestSyncUpgradeStateDriftWithinGrace(t *testing.T) {
+	const (
+		nodeName        = "worker-drift-grace"
+		dusName         = "worker-drift-grace-furiosa"
+		declaredVersion = "580.178.04"
+		observedVersion = "595.91.07"
+	)
+	firstSeen := metav1.NewTime(time.Now())
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, declaredVersion, declaredVersion)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("유예 시간 안인데 DriverVersionDrift 이벤트가 발행됨")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DriftFirstSeen == nil {
+		t.Errorf("DriftFirstSeen 이 유예 중에 해제됨 — 유지되어야 함")
+	}
+}
+
+// TestSyncUpgradeStateDriftNoneResets 는 선언 버전과 실측이 일치하면 이벤트 없이
+// DriftFirstSeen 이 해제(nil)됨을 고정한다.
+func TestSyncUpgradeStateDriftNoneResets(t *testing.T) {
+	const (
+		nodeName = "worker-drift-none"
+		dusName  = "worker-drift-none-furiosa"
+		version  = "580.178.04"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, version, version)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", version)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: version}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("버전이 일치하는데 DriverVersionDrift 이벤트가 발행됨")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DriftFirstSeen != nil {
+		t.Errorf("버전 일치 후 DriftFirstSeen 이 해제되지 않음: %v", got.Status.DriftFirstSeen)
+	}
+}
+
+// ─────────────────────────────────────────────
+// Bug#7 되돌림 vs 롤백 (A2 — 되돌림은 Idle 에서만)
+// ─────────────────────────────────────────────
+
+// TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget 는 롤백 중(mid-cycle) DUS 에서
+// DesiredVersion(==PreviousVersion)이 DIP 선언 버전과 달라도 Bug#7 분기가 되돌리지 않음을 고정한다.
+// 상태 무관 되돌림은 롤백을 깨고 매 iteration 마다 재부팅 예산을 리셋해 MaxReboots 상한을
+// 무력화했다(라이브 발견, A2).
+func TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget(t *testing.T) {
+	const (
+		nodeName    = "worker-rollback"
+		dusName     = "worker-rollback-furiosa"
+		prevVersion = "1.8.0"   // 롤백 목표: DesiredVersion == PreviousVersion
+		dipVersion  = "1.9.8-3" // DIP 는 여전히 상위 버전을 선언(DesiredVersion·PreviousVersion 과 둘 다 다름)
+	)
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateValidating, prevVersion, prevVersion)
+	dus.Status.PreviousVersion = prevVersion
+	dus.Status.RebootAttempts = 1
+
+	r := newReconciler(dus)
+	dip := makeDIP("furiosa-warboy", "warboy", dipVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: prevVersion}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.RebootAttempts != 1 {
+		t.Errorf("RebootAttempts: got %d, want 1 — 롤백 중인데 재부팅 예산이 리셋됨(MaxReboots 상한 무력화)",
+			got.Status.RebootAttempts)
+	}
+	if got.Status.DesiredVersion != prevVersion {
+		t.Errorf("DesiredVersion: got %q, want %q(PreviousVersion) — Bug#7 분기가 롤백을 DIP 로 되돌림",
+			got.Status.DesiredVersion, prevVersion)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Errorf("state: got %q, want %q — 유지되어야 함", got.Status.State, v1alpha1.UpgradeStateValidating)
+	}
+}
+
+// TestVendorObservedModels 는 벤더별 관측 모델 목록이 정렬·중복 제거되고, 모델이 빈
+// 장치(예: rebellions)는 목록에 들어가지 않는지 본다.
+func TestVendorObservedModels(t *testing.T) {
+	got := vendorObservedModels([]v1alpha1.DeviceEntry{
+		{Vendor: "nvidia", Model: "a30"}, {Vendor: "nvidia", Model: "a2"},
+		{Vendor: "nvidia", Model: "a30"}, {Vendor: "furiosa", Model: "warboy"}, {Vendor: "rebellions"},
+	})
+	if strings.Join(got["nvidia"], ",") != "a2,a30" || strings.Join(got["furiosa"], ",") != "warboy" {
+		t.Fatalf("got %v", got)
+	}
+	if _, has := got["rebellions"]; has {
+		t.Fatal("모델이 빈 장치는 목록에 넣지 않는다")
+	}
+}
+
+// TestEnsureUpgradeStates_MixedModelsRecordsObservedModels 는 혼재 노드에서 spec.model 이
+// generic 으로 뭉개져도 status.observedModels 에 실제 관측된 제품 목록이 정렬·중복 제거된
+// 상태로 남는지 본다.
+func TestEnsureUpgradeStates_MixedModelsRecordsObservedModels(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "mixed-node"}}
+	ndr := &v1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "mixed-node"},
+		Spec:       v1alpha1.NodeDeviceReportSpec{NodeName: "mixed-node"},
+		Status: v1alpha1.NodeDeviceReportStatus{Devices: []v1alpha1.DeviceEntry{
+			{Vendor: "nvidia", Model: "a30", DriverVersion: "580.173.02"},
+			{Vendor: "nvidia", Model: "a2", DriverVersion: "580.173.02"},
+		}},
+	}
+	dip := makeNvidiaDIP("nvidia-generic", modelUnknown)
+	r := newReconciler(node, ndr, dip)
+	ctx := context.Background()
+
+	if err := r.ensureUpgradeStates(ctx); err != nil {
+		t.Fatalf("ensureUpgradeStates: %v", err)
+	}
+
+	var dus v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: driverUpgradeStateName("mixed-node", "nvidia")}, &dus); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if dus.Spec.Model != v1alpha1.DriverModelUnknown {
+		t.Fatalf("spec.model = %q, want generic", dus.Spec.Model)
+	}
+	if strings.Join(dus.Status.ObservedModels, ",") != "a2,a30" {
+		t.Fatalf("status.observedModels = %v, want [a2 a30]", dus.Status.ObservedModels)
+	}
+}

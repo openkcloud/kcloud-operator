@@ -4,7 +4,7 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-08-07
+// 생성일: 2026-07-16 | 수정일: 2026-09-22
 // ============================================================
 
 package upgrade
@@ -544,25 +544,34 @@ func TestJobStatusHelpers(t *testing.T) {
 
 func TestReconstructPrevImage(t *testing.T) {
 	cases := []struct {
-		dipImage, installer, prevVersion, want string
+		dipImage, installer, prevVersion string
+		baked                            bool
+		want                             string
 	}{
 		// ngc: 이미지가 드라이버를 담으므로 버전별 태그를 재구성한다.
-		{imgNew, v1alpha1.DriverInstallerNGC, verOld, imgOld},
-		{"reg/nv:1.7.8-v3", v1alpha1.DriverInstallerNGC, "1.7.7", "reg/nv:1.7.7-v3"},
-		{"reg/nv:590.48.01", v1alpha1.DriverInstallerNGC, verOld, ""}, // variant 없음 → 재구성 불가
-		{"", v1alpha1.DriverInstallerNGC, verOld, ""},                 // 이미지 없음
-		{imgNew, v1alpha1.DriverInstallerNGC, "", ""},                 // prevVersion 없음
+		{imgNew, v1alpha1.DriverInstallerNGC, verOld, false, imgOld},
+		{"reg/nv:1.7.8-v3", v1alpha1.DriverInstallerNGC, "1.7.7", false, "reg/nv:1.7.7-v3"},
+		{"reg/nv:590.48.01", v1alpha1.DriverInstallerNGC, verOld, false, ""}, // variant 없음 → 재구성 불가
+		{"", v1alpha1.DriverInstallerNGC, verOld, false, ""},                 // 이미지 없음
+		{imgNew, v1alpha1.DriverInstallerNGC, "", false, ""},                 // prevVersion 없음
 		// apt/script: 이미지는 버전과 무관하다. 태그를 갈아 끼우면 없는 이미지가 만들어져
 		// rollback Job 이 ImagePullBackOff 로 앉는다 — 같은 이미지를 그대로 쓴다.
-		{imgNew, v1alpha1.DriverInstallerAPT, verOld, imgNew},
-		{"reg/nv:580.159.03-v179", v1alpha1.DriverInstallerAPT, "580.173.02", "reg/nv:580.159.03-v179"},
-		{imgNew, v1alpha1.DriverInstallerScript, verOld, imgNew},
-		{imgNew, v1alpha1.DriverInstallerAPT, "", ""}, // prevVersion 없음은 여전히 재구성 불가
+		{imgNew, v1alpha1.DriverInstallerAPT, verOld, false, imgNew},
+		{"reg/nv:580.159.03-v179", v1alpha1.DriverInstallerAPT, "580.173.02", false, "reg/nv:580.159.03-v179"},
+		{imgNew, v1alpha1.DriverInstallerScript, verOld, false, imgNew},
+		{imgNew, v1alpha1.DriverInstallerAPT, "", false, ""}, // prevVersion 없음은 여전히 재구성 불가
+		// script + imageVersionBaked: 이미지에 버전이 구워져 있어(tenstorrent-driver-ds:2.8.0-v1,
+		// entrypoint 가 baked 버전을 권위로 삼는다) 같은 이미지로는 이전 버전을 설치할 수 없다 —
+		// ngc 처럼 이전 버전 태그를 재구성한다.
+		{"reg/tt:2.11.0-v1", v1alpha1.DriverInstallerScript, "2.8.0", true, "reg/tt:2.8.0-v1"},
+		{"reg/tt:2.11.0-v1", v1alpha1.DriverInstallerScript, "2.8.0", false, "reg/tt:2.11.0-v1"},
+		{"reg/tt:2.11.0", v1alpha1.DriverInstallerScript, "2.8.0", true, ""}, // variant 없음 → 재구성 불가(Failed 안전)
+		{"reg/nv:580.159.03-v179", v1alpha1.DriverInstallerAPT, "580.173.02", true, "reg/nv:580.173.02-v179"},
 	}
 	for _, c := range cases {
-		if got := reconstructPrevImage(c.dipImage, c.installer, c.prevVersion); got != c.want {
-			t.Errorf("reconstructPrevImage(%q,%q,%q)=%q, want %q",
-				c.dipImage, c.installer, c.prevVersion, got, c.want)
+		if got := reconstructPrevImage(c.dipImage, c.installer, c.prevVersion, c.baked); got != c.want {
+			t.Errorf("reconstructPrevImage(%q,%q,%q,%v)=%q, want %q",
+				c.dipImage, c.installer, c.prevVersion, c.baked, got, c.want)
 		}
 	}
 }
@@ -703,5 +712,310 @@ func TestDeviceModelMatchesTreatsGenericAsWildcard(t *testing.T) {
 			t.Errorf("%s: DeviceModelMatches(%q, %q) = %v, want %v",
 				tc.name, tc.deviceModel, tc.specModel, got, tc.want)
 		}
+	}
+}
+
+// ── kernelImages: 커널별 사전 컴파일 이미지 선택 ──────────
+
+// TestExtractKernelImageVersion 은 커널 이미지 태그 앞머리의 드라이버 버전 토큰만 뽑는지 본다.
+// variant·커널·빌드 접미사는 버려야 하고, 버전 토큰이 없으면 빈 문자열이어야 한다.
+func TestExtractKernelImageVersion(t *testing.T) {
+	cases := []struct{ name, image, want string }{
+		{"커널 태그", "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1", "2.11.0"},
+		{"variant 태그", "reg/r/rebellions-driver-ds:2026.3.1-rngd-k6.8.0-138-generic-v1", "2026.3.1"},
+		{"NVIDIA 태그", "reg/nv:580.126.09-k5.15.0-171-generic-v1", "580.126.09"},
+		{"하위 번호 포함", "reg/x:1.9.8-3-k5.15.0-190-generic-v1", "1.9.8-3"},
+		{"버전 토큰 없음", "reg/x:not-a-verified-tag", ""},
+		{"태그 없음", "reg/x/no-colon-here", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractKernelImageVersion(tc.image); got != tc.want {
+				t.Fatalf("extractKernelImageVersion(%q) = %q, want %q", tc.image, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveDriverImage 는 노드 커널에 맞는 검증 태그 이미지가 있으면 그것을, 없거나
+// 검증 태그가 아니면 기본 설치 이미지를 돌려주는지 본다. spec.driver.version 이 비어 있으므로
+// 버전 토큰 가드는 적용되지 않는다(하위호환 경로).
+func TestResolveDriverImage(t *testing.T) {
+	pol := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Image: "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1",
+		KernelImages: map[string]v1alpha1.KernelImageRef{
+			"5.15.0-190-generic": "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1",
+			"6.8.0-138-generic":  "reg/kcloud/tenstorrent-driver-ds:not-a-verified-tag",
+		},
+	}}}
+	cases := []struct{ name, kernel, want string }{
+		{"커널 일치", "5.15.0-190-generic", "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1"},
+		{"커널 불일치는 기본 이미지", "5.15.0-171-generic", "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1"},
+		{"검증 태그 아님은 기본 이미지", "6.8.0-138-generic", "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1"},
+		{"빈 커널은 기본 이미지", "", "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, _ := resolveDriverImage(pol, tc.kernel); got != tc.want {
+				t.Fatalf("resolveDriverImage(%q) = %q, want %q", tc.kernel, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveDriverImage_VersionGuard 는 spec.driver.version 이 설정됐을 때 커널 이미지 태그의
+// 버전 토큰이 그와 다르면 커널 이미지를 쓰지 않고 기본 이미지로 되돌아가며 이유를 남기는지 본다.
+func TestResolveDriverImage_VersionGuard(t *testing.T) {
+	// tt: Tenstorrent, spec.driver.version 2.11.0.
+	tt := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Version: "2.11.0",
+		Image:   "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1",
+		KernelImages: map[string]v1alpha1.KernelImageRef{
+			"5.15.0-190-generic": "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1",
+			"5.15.0-171-generic": "reg/kcloud/tenstorrent-driver-ds:2.11.1-k5.15.0-171-generic-v1",
+			"6.8.0-138-generic":  "reg/kcloud/tenstorrent-driver-ds:justverified-v1",
+		},
+	}}}
+	// rb: Rebellions, variant 태그. 계획 버전 2026.3.0 대 태그 2026.3.1 이 어긋나는 실제 사례.
+	rb := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Version: "2026.3.0",
+		Image:   "reg/r/rebellions-driver-ds:2026.3.0-v1",
+		KernelImages: map[string]v1alpha1.KernelImageRef{
+			"6.8.0-139-generic": "reg/r/rebellions-driver-ds:2026.3.0-rngd-k6.8.0-139-generic-v1",
+			"6.8.0-138-generic": "reg/r/rebellions-driver-ds:2026.3.1-rngd-k6.8.0-138-generic-v1",
+		},
+	}}}
+	// empty: KernelImages 가 비어 있는 정책.
+	empty := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Version: "2.11.0",
+		Image:   "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1",
+	}}}
+
+	cases := []struct {
+		name     string
+		pol      *v1alpha1.DriverInstallPolicy
+		kernel   string
+		want     string
+		wantSkip bool
+	}{
+		{"버전 일치는 커널 이미지 선택", tt, "5.15.0-190-generic",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1", false},
+		{"버전 불일치는 기본 이미지", tt, "5.15.0-171-generic",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true},
+		{"검증 태그이나 버전 토큰 없음은 기본 이미지", tt, "6.8.0-138-generic",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true},
+		{"variant 버전 일치는 커널 이미지 선택", rb, "6.8.0-139-generic",
+			"reg/r/rebellions-driver-ds:2026.3.0-rngd-k6.8.0-139-generic-v1", false},
+		{"variant 버전 불일치는 기본 이미지", rb, "6.8.0-138-generic",
+			"reg/r/rebellions-driver-ds:2026.3.0-v1", true},
+		{"KernelImages 비면 기본 이미지", empty, "5.15.0-190-generic",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false},
+		{"빈 커널은 기본 이미지", tt, "",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, skip := resolveDriverImage(tc.pol, tc.kernel)
+			if got != tc.want {
+				t.Fatalf("resolveDriverImage(%q) 이미지 = %q, want %q", tc.kernel, got, tc.want)
+			}
+			if (skip != "") != tc.wantSkip {
+				t.Fatalf("resolveDriverImage(%q) skipReason = %q, wantSkip = %v", tc.kernel, skip, tc.wantSkip)
+			}
+		})
+	}
+}
+
+// TestHandleUpgradingJob_UsesResolvedImage 는 preflight 이 상태에 남긴 ResolvedImage 를
+// install Job 이 그대로 싣는지, 그리고 previousImage 는 커널 토큰 없이 이전 버전 이미지로
+// 캡처되는지 본다(reconstructPrevImage 는 variant 접미사와 prevVersion 만 쓴다).
+func TestHandleUpgradingJob_UsesResolvedImage(t *testing.T) {
+	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16"
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verNew)
+	// handleIdle 이 Upgrading 진입 전에 PreviousVersion 을 세팅한다(캡처의 소스).
+	dus.Status.PreviousVersion = verOld
+	// preflight 이 노드 커널로 고른 이미지를 상태에 남겼다고 가정한다.
+	dus.Status.ResolvedImage = kernelImg
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	req, _, err := sm.handleUpgradingJob(context.Background(), dus, dip)
+	if err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	if !req {
+		t.Error("requeue 기대")
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Errorf("state=%q, want Validating", dus.Status.State)
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err != nil {
+		t.Fatalf("install Job 미생성: %v", err)
+	}
+	// install Job 은 policy.image 가 아니라 preflight 이 고른 resolvedImage 를 실어야 한다.
+	if got := jobContainerImage(&job); got != kernelImg {
+		t.Errorf("job image=%q, want resolvedImage %q", got, kernelImg)
+	}
+	// previousImage 는 커널 토큰 없이 이전 버전 이미지로 캡처된다(variant -v16 + prevVersion).
+	if dus.Status.PreviousImage != imgOld {
+		t.Errorf("PreviousImage=%q, want %q", dus.Status.PreviousImage, imgOld)
+	}
+}
+
+// TestHandleRollbackJob_KernelImagesWithoutPreviousImageReconstructs 는 kernelImages 정책에서
+// 캡처된 previousImage 가 없어도 롤백이 거부되지 않고 이전 버전 DKMS 태그로 재구성해 진행하는지
+// 본다. 재구성은 policy.Spec.Driver.Image(DKMS 이미지)에서 하므로 커널 토큰이 입력에 없고, 결과는
+// 이전 버전 DKMS 태그(reg/nv:580.126.09-v16)로 존재한다.
+func TestHandleRollbackJob_KernelImagesWithoutPreviousImageReconstructs(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verNew, verNew)
+	dus.Status.PreviousVersion = verOld // 이전 버전은 있다
+	dus.Status.PreviousImage = ""       // 캡처값 없음 — 재구성 경로로 간다
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	// 커널별 이미지 정책 — 재구성은 policy.Spec.Driver.Image(imgNew)에서 하므로 무관하다.
+	dip.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+		"5.15.0-190-generic": "reg/nv:590.48.01-k5.15.0-190-generic-v16",
+	}
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleRollbackJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollbackJob 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Errorf("state=%q, want Validating (kernelImages 정책도 DKMS 이전 이미지로 롤백)", dus.Status.State)
+	}
+	if dus.Status.DesiredVersion != verOld {
+		t.Errorf("desiredVersion=%q, want %q (이전 버전)", dus.Status.DesiredVersion, verOld)
+	}
+	if dus.Status.RollbackAttempts != 1 {
+		t.Errorf("rollbackAttempts=%d, want 1", dus.Status.RollbackAttempts)
+	}
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err != nil {
+		t.Fatalf("rollback Job 미생성: %v", err)
+	}
+	// 재구성된 롤백 대상 = 이전 버전 DKMS 태그(커널 토큰 없음).
+	if got := jobContainerImage(&job); got != imgOld {
+		t.Errorf("rollback job image=%q, want %q (이전 버전 DKMS 태그)", got, imgOld)
+	}
+}
+
+// 정책에서 kernelImages 항목이 빠지면 Idle 에서도 status.ResolvedImage 가 기본 이미지로
+// 돌아와야 한다. PreFlight 에서만 계산하면 사라진 태그가 status 에 계속 남는다.
+func TestHandleIdleRefreshesResolvedImage(t *testing.T) {
+	const (
+		defaultImage  = "reg/kcloud/furiosa-driver-ds:v3"
+		prebuiltImage = "reg/kcloud/furiosa-driver-ds:2026.3.1-rngd-k6.8.0-138-generic-v1"
+		kernel        = "6.8.0-138-generic"
+	)
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "rngd-1"},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: kernel}},
+	}
+
+	t.Run("맵이 비면 기본 이미지로 돌아온다", func(t *testing.T) {
+		dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "2026.3.1", "2026.3.1")
+		dus.Spec.NodeName = "rngd-1"
+		dus.Status.ResolvedImage = prebuiltImage
+		dip := makeJobDIP("2026.3.1", defaultImage, false, true)
+		dip.Spec.Driver.TrackOnly = true // 설치 경로를 타지 않고 갱신만 보게 한다
+		sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+		if _, _, err := sm.handleIdle(context.Background(), dus, dip); err != nil {
+			t.Fatalf("handleIdle 실패: %v", err)
+		}
+		if dus.Status.ResolvedImage != defaultImage {
+			t.Errorf("ResolvedImage=%q, want %q", dus.Status.ResolvedImage, defaultImage)
+		}
+	})
+
+	t.Run("맵에 커널이 있으면 그 이미지로 갱신된다", func(t *testing.T) {
+		dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "2026.3.1", "2026.3.1")
+		dus.Spec.NodeName = "rngd-1"
+		dus.Status.ResolvedImage = ""
+		dip := makeJobDIP("2026.3.1", defaultImage, false, true)
+		dip.Spec.Driver.TrackOnly = true
+		dip.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+			kernel: v1alpha1.KernelImageRef(prebuiltImage),
+		}
+		sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+		if _, _, err := sm.handleIdle(context.Background(), dus, dip); err != nil {
+			t.Fatalf("handleIdle 실패: %v", err)
+		}
+		if dus.Status.ResolvedImage != prebuiltImage {
+			t.Errorf("ResolvedImage=%q, want %q", dus.Status.ResolvedImage, prebuiltImage)
+		}
+	})
+
+	t.Run("노드가 없으면 값을 그대로 둔다", func(t *testing.T) {
+		dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "2026.3.1", "2026.3.1")
+		dus.Spec.NodeName = "사라진-노드"
+		dus.Status.ResolvedImage = prebuiltImage
+		dip := makeJobDIP("2026.3.1", defaultImage, false, true)
+		dip.Spec.Driver.TrackOnly = true
+		sm := newUpgradeSMWithRecorder(dus, dip)
+
+		if _, _, err := sm.handleIdle(context.Background(), dus, dip); err != nil {
+			t.Fatalf("handleIdle 실패: %v", err)
+		}
+		if dus.Status.ResolvedImage != prebuiltImage {
+			t.Errorf("노드가 없으면 유지해야 한다: ResolvedImage=%q", dus.Status.ResolvedImage)
+		}
+	})
+}
+
+// TestReconstructPrevImage_AptKernelImageVersionLock 는 apt 인스톨러에서 사전 컴파일 커널
+// 이미지가 버전에 종속됨을 고정한다. 커널 이미지(태그 <version>-k<kernel>-vN)는 태그에 박힌
+// 버전 모듈만 담아 DRIVER_VERSION 으로 다른 버전을 설치하지 못한다. 되돌릴 버전이 다르면
+// 재구성 불가("")로 돌려 호출부가 기본 이미지로 되돌아가게 하고, 같으면 그대로 쓴다.
+// 라이브 회귀: 580.126.09-k5.15.0-171-generic-v1 이미지 + DRIVER_VERSION 580.178.04 로
+// 설치기 정합성 가드(동봉 모듈≠DRIVER_VERSION)가 거부하고 노드가 CrashLoopBackOff 로 굳었다.
+func TestReconstructPrevImage_AptKernelImageVersionLock(t *testing.T) {
+	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16" // 박힌 버전 = 590.48.01
+
+	// 박힌 버전(590.48.01) != 되돌릴 버전(580.126.09) → 이 이미지로는 되돌릴 수 없다.
+	if got := reconstructPrevImage(kernelImg, v1alpha1.DriverInstallerAPT, verOld, false); got != "" {
+		t.Errorf("mismatch: reconstructPrevImage(%q, apt, %q)=%q, want \"\" (커널 이미지 재사용 금지)",
+			kernelImg, verOld, got)
+	}
+	// 박힌 버전(590.48.01) == 되돌릴 버전(590.48.01) → 그 커널 이미지를 그대로 쓴다.
+	if got := reconstructPrevImage(kernelImg, v1alpha1.DriverInstallerAPT, verNew, false); got != kernelImg {
+		t.Errorf("match: reconstructPrevImage(%q, apt, %q)=%q, want %q (박힌 버전 일치 시 그대로)",
+			kernelImg, verNew, got, kernelImg)
+	}
+}
+
+// TestHandleUpgradingJob_AptKernelImageNotCaptured 는 apt 인스톨러에서 preflight 이 고른 사전
+// 컴파일 커널 이미지가 이전 버전 이미지(PreviousImage)로 캡처되지 않음을 고정한다. 커널 이미지는
+// 새 버전 모듈만 담아 이전 버전 설치에 쓸 수 없다 — 캡처되면 되돌리기 Job 이 그 이미지에 이전
+// 버전 DRIVER_VERSION 을 실어 설치기가 거부하고 노드가 굳는다(라이브 회귀). 캡처는 비워 두고
+// 되돌리기는 기본 이미지 재구성 경로로 가야 한다. 설치(forward) Job 은 커널 이미지를 그대로 쓴다.
+func TestHandleUpgradingJob_AptKernelImageNotCaptured(t *testing.T) {
+	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16" // 박힌 버전 = verNew
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verNew)
+	dus.Status.PreviousVersion = verOld // 되돌릴 대상 = 이전 버전
+	dus.Status.ResolvedImage = kernelImg
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Spec.Driver.Installer = v1alpha1.DriverInstallerAPT
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	// 커널 이미지를 이전 버전 이미지로 캡처하면 안 된다(되돌리기가 깨진다).
+	if dus.Status.PreviousImage == kernelImg {
+		t.Errorf("PreviousImage=%q — 커널 이미지를 이전 버전 이미지로 캡처", dus.Status.PreviousImage)
+	}
+	// forward install Job 은 preflight 이 고른 커널 이미지를 그대로 싣는다(설치 경로 무변경).
+	var job batchv1.Job
+	jn := naming.InstallJobName(jVendor, jModel, jNode)
+	if err := sm.Get(context.Background(), types.NamespacedName{Name: jn, Namespace: driverjob.Namespace}, &job); err != nil {
+		t.Fatalf("install Job 미생성: %v", err)
+	}
+	if got := jobContainerImage(&job); got != kernelImg {
+		t.Errorf("forward job image=%q, want %q (설치 경로는 커널 이미지 그대로)", got, kernelImg)
 	}
 }

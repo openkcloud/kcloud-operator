@@ -1,0 +1,22 @@
+# ============================================================
+# acpp-timesliced.yaml: k8s-worker1 NVIDIA A30 시분할 표본 정책 — kcloud_acpp_apply_total 지표 확인용
+# 상세: layout 없는 순수 공유(sharing-only, runSharingOnly 경로) 정책이다. mode: timeSliced 로
+#       적용하면 sharingReady 가 result="ready" 를 찍고, run.sh 가 이 파일을 적용한 뒤
+#       spec.sharing.mode 를 exclusive 로 patch 해 같은 객체로 result="disabled" 도 찍는다.
+#       적용 범위는 device-plugin ConfigMap/DaemonSet 전체(클러스터 전역)이나 nodeSelector 가
+#       가리키는 k8s-worker1 만 재시작 대상이다(runSharing 이 노드별로 restartNvidiaDevicePlugin
+#       을 부른다).
+# 생성일: 2026-09-23
+# ============================================================
+apiVersion: npu.ai/v1alpha1
+kind: AcceleratorPartitionPolicy
+metadata:
+  name: nvidia-timesliced-metric-probe
+spec:
+  vendor: nvidia
+  nodeSelector:
+    kubernetes.io/hostname: k8s-worker1
+  sharing:
+    mode: timeSliced
+    timeSlicing:
+      replicas: 2

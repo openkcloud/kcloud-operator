@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/partition"
@@ -106,20 +107,68 @@ var _ = Describe("ACPP reconciler happy path", func() {
 		Expect(got.Status.Targets[0].ResolvedLayout[0].BackendPolicy).To(Equal(testDualCorePolicy))
 		Expect(got.Status.Targets[0].Advertisement.Mode).To(Equal("Flat"))
 	})
+
+	It("sets ec.Vendor and ec.Expectation.ProbeResource on the rngd Ready path", func() {
+		wipeACPPs()
+		sel := map[string]string{"kcloud.ai/probe-wiring-target": "true"}
+		seedRngdNode("probe-wiring-node-1", sel)
+		upsertUnifiedDS(sel)
+
+		acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "probe-wiring-acpp"},
+			Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
+				NodeSelector:   sel,
+				Vendor:         "furiosa",
+				Layout:         []npuv1alpha1.PartitionLayout{{Profile: "2core.12gb", CountPerDevice: 4}},
+				DeletionPolicy: "Retain",
+			},
+		}
+		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
+
+		r := &AcceleratorPartitionPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Verifier: fakeVerifier{}}
+		backend, err := r.backendFor(acpp.Spec.Vendor)
+		Expect(err).NotTo(HaveOccurred())
+		target := partition.Target{Ctx: ctx, NodeName: firstNodeName(ctx, r.Client, acpp.Spec.NodeSelector), Owner: acpp.Name,
+			Vendor: acpp.Spec.Vendor, DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS()}
+
+		ec := &evidenceCtx{}
+		ts, err := r.runTarget(acpp, backend, target, ec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ts.Phase).To(Equal(npuv1alpha1.ACPPPhaseReady))
+		Expect(ec.Vendor).To(Equal(vendorFuriosa))
+		Expect(ec.Expectation.ProbeResource).To(Equal(rngd.RngdResourceName))
+	})
 })
 
-// wipeACPPs 는 남은 ACPP 를 finalizer 제거 후 완전히 삭제한다(충돌 테스트 간 contender 목록 격리).
+// deleteACPPAndWait 은 ACPP 하나를 finalizer 까지 제거하며 지우고, 실제로 없어질 때까지
+// Eventually 로 기다린다. ACPP 를 만드는 스펙의 cleanup 은 이 helper 로 통일한다 — 맨
+// k8sClient.Delete 만 하면 finalizer 가 남아 DeletionTimestamp 만 찍힌 채 Terminating 으로
+// 남고, nodeHasOwningPolicy 는 그 상태를 가리지 않아 다른 스펙의 오판 재료가 된다(2026-09-20
+// 단독·직렬 실행에서 MigObservation 스펙이 이렇게 남은 ACPP 하나로 1회 FAIL 했다).
+func deleteACPPAndWait(name string) {
+	_ = k8sClient.Delete(ctx, &npuv1alpha1.AcceleratorPartitionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	Eventually(func() bool {
+		var got npuv1alpha1.AcceleratorPartitionPolicy
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, &got)
+		if apierrors.IsNotFound(err) {
+			return true
+		}
+		if err != nil {
+			return false
+		}
+		if controllerutil.RemoveFinalizer(&got, acppFinalizer) {
+			_ = k8sClient.Update(ctx, &got)
+		}
+		return false
+	}, "5s", "200ms").Should(BeTrue(), fmt.Sprintf("ACPP %s 가 finalizer 정리 후에도 삭제되지 않았다", name))
+}
+
+// wipeACPPs 는 남은 ACPP 를 모두 finalizer 제거 후 완전히 삭제한다(충돌 테스트 간 contender 목록 격리).
 func wipeACPPs() {
 	var list npuv1alpha1.AcceleratorPartitionPolicyList
 	Expect(k8sClient.List(ctx, &list)).To(Succeed())
 	for i := range list.Items {
-		name := list.Items[i].Name
-		_ = k8sClient.Delete(ctx, &list.Items[i])
-		var fresh npuv1alpha1.AcceleratorPartitionPolicy
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, &fresh); err == nil {
-			fresh.Finalizers = nil
-			_ = k8sClient.Update(ctx, &fresh)
-		}
+		deleteACPPAndWait(list.Items[i].Name)
 	}
 }
 
@@ -667,8 +716,10 @@ var _ = Describe("ACPP NVIDIA bypasses RNGD conflict guard", func() {
 		}
 		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
 		// 자기 정리 — 실패해도 seeded 노드/NDR/ACPP 가 타 spec(랜덤 순서)으로 새지 않게 한다.
+		// 아래 Eventually 가 Reconcile 을 돌려 finalizer 를 붙이므로, ACPP 는 맨 Delete 만으로는
+		// Terminating 으로 남는다 — deleteACPPAndWait 로 finalizer 까지 걷어야 실제로 사라진다.
 		DeferCleanup(func() {
-			_ = k8sClient.Delete(ctx, acpp)
+			deleteACPPAndWait(acpp.Name)
 			_ = k8sClient.Delete(ctx, ndr)
 			_ = k8sClient.Delete(ctx, nvNode)
 			_ = k8sClient.Delete(ctx, fuNode)

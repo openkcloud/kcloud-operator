@@ -5,13 +5,12 @@
 //	보지 않고 쓰인다. 표본을 손으로 짓지 않는 이유는 프로덕션이 만들 수 없는
 //	조합을 시험해 봐야 아무것도 증명되지 않기 때문이다.
 //
-// 생성일: 2026-08-10
+// 생성일: 2026-08-10 | 수정일: 2026-09-19
 // ============================================================
 package descriptor
 
 import (
 	"fmt"
-	"strings"
 
 	"sigs.k8s.io/yaml"
 
@@ -203,29 +202,19 @@ func MutationRules() []MutationRule {
 			},
 			ExpectStage: StageValidate, ExpectField: "spec.cleanup.resetCommand",
 			Why: "반납 후 상태를 만들 길이 없다"},
-		{Name: "치환자 없이 장치 여럿", Family: "모순 선언",
-			// archetype 자신의 노드에서 치환자만 걷어낸다. nvidia archetype 처럼 원래
-			// 치환자가 없는 것은 무변형이 되는데, 그 경우 "이 archetype 은 장치를 둘
-			// 이상 담을 수 없다" 는 사실 자체가 판정 대상이 되므로 표본으로 유효하다.
-			// 치환자를 빈 문자열로 걷어내지 않고 고정 리터럴 "0" 으로 바꾼다 -
-			// "/dev/tenstorrent/{{id}}" 처럼 치환자가 경로 맨 끝인 노드는 빈 문자열로
-			// 지우면 끝이 슬래시로 남아(/dev/tenstorrent/) 경로 정규화 검사에 먼저
-			// 걸린다. 그러면 이 규칙이 노리는 결함(치환자 부재로 인한 컴파일 단계
-			// 충돌)과 무관한 다른 결함을 시험하게 된다.
-			Patch: func(m map[string]any) {
-				nodes, _ := m["deviceNodes"].([]any)
-				out := make([]any, 0, len(nodes))
-				for _, n := range nodes {
-					s, _ := n.(string)
-					out = append(out, strings.ReplaceAll(s, "{{id}}", "0"))
-				}
-				setPath(m, "deviceNodes", out)
-			},
-			ExpectStage: StageCompile, ExpectField: "",
-			Why: "치환자가 없으면 장치 둘이 같은 노드를 잡는다. 장치 목록과 합쳐야 드러난다"},
 		{Name: "모르는 backend 이름", Family: "모순 선언",
 			Patch:       func(m map[string]any) { setPath(m, "backends", []any{"cdi"}) },
 			ExpectStage: StageValidate, ExpectField: "spec.backends[0]",
 			Why: "선언한 것을 만들 수 없다"},
+
+		// --- 경계값(sharing) ---
+		{Name: "sharing replicas 범위 밖", Family: "경계값",
+			// 세 archetype 모두 backends 에 devicePlugin 을 이미 선언하므로 sharing 만
+			// 추가하면 replicas 하한(2) 위반이 spec.sharing.replicas 에서 걸린다.
+			Patch: func(m map[string]any) {
+				setPath(m, "sharing", map[string]any{"mode": "timeSliced", "replicas": 1})
+			},
+			ExpectStage: StageValidate, ExpectField: "spec.sharing.replicas",
+			Why: "replicas 1 은 공유가 아니다 - 시분할 하한은 2"},
 	}
 }

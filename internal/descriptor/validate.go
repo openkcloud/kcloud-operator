@@ -4,18 +4,21 @@
 //
 //	순수 함수라 어느 호출부(webhook·컨트롤러·CLI)에서든 같은 판정을 낸다.
 //
-// 생성일: 2026-08-10
+// 생성일: 2026-08-10 | 수정일: 2026-09-19
 // ============================================================
 package descriptor
 
 import (
+	"fmt"
 	"path"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/partition"
 )
 
 var (
@@ -112,6 +115,23 @@ func Validate(spec npuv1alpha1.AcceleratorDescriptorSpec) field.ErrorList {
 	if spec.Cleanup.RequiresDeviceReset && len(spec.Cleanup.ResetCommand) == 0 {
 		errs = append(errs, field.Required(p.Child("cleanup").Child("resetCommand"),
 			"장치 리셋이 필요하다고 선언했으면 리셋 수단이 있어야 한다"))
+	}
+
+	// Sharing 은 SW 시분할 선언이다 - device-plugin 이 장치 1개를 replicas 개로
+	// 광고한다(격리 없음). devicePlugin backend 없이는 광고할 자리가 없다.
+	if spec.Sharing != nil {
+		if spec.Sharing.Mode != npuv1alpha1.SharingModeTimeSliced {
+			errs = append(errs, field.NotSupported(p.Child("sharing", "mode"), spec.Sharing.Mode,
+				[]string{npuv1alpha1.SharingModeTimeSliced}))
+		}
+		if spec.Sharing.Replicas < 2 || spec.Sharing.Replicas > partition.MaxSharingReplicas {
+			errs = append(errs, field.Invalid(p.Child("sharing", "replicas"), spec.Sharing.Replicas,
+				fmt.Sprintf("2..%d", partition.MaxSharingReplicas)))
+		}
+		if !slices.Contains(spec.Backends, npuv1alpha1.BackendDevicePlugin) {
+			errs = append(errs, field.Invalid(p.Child("sharing"), spec.Sharing.Mode,
+				"시분할은 devicePlugin backend 가 선언돼야 한다"))
+		}
 	}
 
 	return errs

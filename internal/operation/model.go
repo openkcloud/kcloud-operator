@@ -1,6 +1,6 @@
 // ============================================================
 // model.go: operation type · resource key · 충돌 판정 (R&D base v0.1 §7.2/§7.7)
-// 상세: Coordinator 가 따르는 계약의 코드 정본. docs/design/conflict-matrix.md 와 1:1.
+// 상세: Coordinator 가 따르는 충돌 판정 계약의 코드 정본.
 //
 //	이 패키지는 controller/partition 을 import 하지 않는다(최하위, 순환 금지).
 //
@@ -27,12 +27,16 @@ const (
 	Revalidate           Type = "Revalidate"
 	Quarantine           Type = "Quarantine"
 	RecoverDevice        Type = "RecoverDevice"
+	// DeviceReset 은 descriptor 의 resetCommand 를 노드에서 실행한다. 관리자만 만든다 —
+	// 되돌릴 수 없으므로 health 가 자동으로 발행하지 않는다.
+	DeviceReset Type = "DeviceReset"
 )
 
 // AllTypes 는 분류 누락을 테스트가 잡을 수 있도록 전체 목록을 준다.
 func AllTypes() []Type {
 	return []Type{DriverInstall, DriverUpgrade, DriverRollback, PartitionReconfigure,
-		SharingModeChange, DevicePluginRestart, NodeReboot, Revalidate, Quarantine, RecoverDevice}
+		SharingModeChange, DevicePluginRestart, NodeReboot, Revalidate, Quarantine, RecoverDevice,
+		DeviceReset}
 }
 
 // destructive 는 실제 장치·호스트 상태를 바꾸는 작업인지다. 읽기 전용 작업은 서로, 그리고
@@ -40,7 +44,7 @@ func AllTypes() []Type {
 var destructive = map[Type]bool{
 	DriverInstall: true, DriverUpgrade: true, DriverRollback: true,
 	PartitionReconfigure: true, SharingModeChange: true, DevicePluginRestart: true,
-	NodeReboot: true, RecoverDevice: true,
+	NodeReboot: true, RecoverDevice: true, DeviceReset: true,
 	Revalidate: false, Quarantine: false, // Quarantine 은 스케줄 차단(라벨/taint)이라 장치를 안 바꾼다.
 }
 

@@ -130,7 +130,14 @@ type DriverInstallPolicySpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
+// KernelImageRef 는 kernelImages 맵의 값이다. image 와 같은 image reference 형식이며, 길이
+// 상한은 kernelImages 값 CEL 검증의 비용을 API 서버 예산 안에 들이기 위한 것이다.
+// +kubebuilder:validation:MaxLength=512
+type KernelImageRef string
+
 // DriverSpec은 드라이버 버전/이미지 및 설치 방법을 정의합니다.
+// +kubebuilder:validation:XValidation:rule="!has(self.kernelImages) || size(self.kernelImages) == 0 || self.mode == 'job'",message="driver.kernelImages requires driver.mode=job"
+// +kubebuilder:validation:XValidation:rule="!has(self.kernelImages) || self.kernelImages.all(k, self.kernelImages[k].matches('^[a-zA-Z0-9._:/-]+:[a-zA-Z0-9._+-]+$'))",message="driver.kernelImages values must be image references"
 type DriverSpec struct {
 	// 예: "1.7.8" (Furiosa) 또는 "575.64.03"(NVIDIA)
 	// 비워두면 인스톨러 스크립트가 "권장 버전"으로 자동 선택하도록 구현 가능
@@ -150,12 +157,30 @@ type DriverSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._:/-]+:[a-zA-Z0-9._+-]+$`
 	Image string `json:"image"`
 
+	// KernelImages 는 노드 커널 버전(node.status.nodeInfo.kernelVersion, 예 "5.15.0-190-generic")마다
+	// 쓸 사전 컴파일 설치 이미지다. 상태기계가 preflight 에서 노드 커널로 이 맵을 찾고, 없으면
+	// image(DKMS 컴파일 이미지)를 쓴다. 값은 image 와 같은 형식이며 검증 빌드 태그(…-vN)여야 한다.
+	// mode=job 에서만 유효하다(DaemonSet 하나는 커널별 이미지를 가질 수 없다). 자동 롤백 대상은 전이
+	// 착수 시 캡처한 이전 버전의 DKMS 태그다(resolvedImage 에서 커널 토큰을 떼고 …-vN 만 남긴 재구성).
+	// 따라서 사전 컴파일 설치의 롤백은 노드 DKMS 빌드로 되돌아가며 헤더·컴파일러가 필요하다.
+	// 맵 크기와 값 길이 상한은 kernelImages CEL 검증의 비용을 API 서버 예산 안에 들이기 위한 것이다.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	KernelImages map[string]KernelImageRef `json:"kernelImages,omitempty"`
+
 	// 설치 방식
 	// apt  : APT 기반(내/외부 리포지터리 사용)
 	// ngc  : NVIDIA NGC 드라이버 컨테이너(커널 매칭 이미지) 사용
 	// script : 컨테이너 내 스크립트로 설치(자유도 높음)
 	// +kubebuilder:validation:Enum=apt;ngc;script
 	Installer string `json:"installer,omitempty"`
+
+	// ImageVersionBaked 는 이미지에 드라이버 버전이 구워져 있어 태그가 곧 설치 버전인 경우다
+	// (예: tenstorrent-driver-ds:2.8.0-v1 — entrypoint 가 baked 버전을 권위로 삼고 DRIVER_VERSION 을
+	// 무시한다). 참이면 apt/script installer 라도 롤백 대상 이미지를 이전 버전 태그로 재구성한다.
+	// 거짓(기본)이면 같은 이미지 + DRIVER_VERSION 으로 되돌린다.
+	// +optional
+	ImageVersionBaked bool `json:"imageVersionBaked,omitempty"`
 
 	// Mode는 드라이버 설치 방식을 결정합니다.
 	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버, 검증된 21초 롤링 자산 — 기본값).

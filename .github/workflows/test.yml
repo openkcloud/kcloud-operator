@@ -11,12 +11,18 @@ jobs:
     steps:
       - name: Clone the code
         uses: actions/checkout@v5
+        with:
+          # release.yaml 의 valuesURL 이 고정한 커밋 객체를 읽어야 하므로 전체 이력이 필요하다.
+          # shallow 면 TestReleaseManifestPinnedValuesMatchOperatorTag 가 내용 대조를 건너뛴다.
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
+      # envtest 패키지 바이너리를 make test 의 -p 1 로 직렬 실행한다(제어 평면 동시 기동 방지).
+      # ubuntu-latest 는 코어 수가 적어 병렬 실행 시 경합이 더 크다 — 병렬 실행으로 되돌리지 말 것.
       - name: Running Tests
         run: |
           go mod tidy

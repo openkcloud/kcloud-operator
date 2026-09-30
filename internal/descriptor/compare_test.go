@@ -1,6 +1,6 @@
 // ============================================================
 // compare_test.go: 두 backend 관측치 대조 시험
-// 상세: 2026-08-11 손 대조표(docs/impl/generated-backend-live-20260811.md §4·§5)를
+// 상세: 2026-08-11 손 대조표(§4·§5)를
 //
 //	픽스처로 쓴다. 대조기가 그 표를 재현하지 못하면 도구가 틀린 것이다.
 //
@@ -89,7 +89,7 @@ func generatedObservation(backend string) BackendObservation {
 	return BackendObservation{
 		Backend:         backend,
 		AllocationUnits: 1,
-		DeviceIDs:       []string{"npu0"},
+		DeviceNodes:     []string{"/dev/rngd/{{id}}*"},
 		DevNodes:        rngdDevNodes(),
 		ForeignTopLevel: nil,
 	}
@@ -138,7 +138,7 @@ func TestCompareReproducesVendorSubsetTable(t *testing.T) {
 	vendor := BackendObservation{
 		Backend:         "vendorDevicePlugin",
 		AllocationUnits: 4,
-		DeviceIDs:       []string{"npu0pe0-1", "npu0pe2-3", "npu0pe4-5", "npu0pe6-7"},
+		DeviceNodes:     []string{"/dev/rngd/npu0pe0-1", "/dev/rngd/npu0pe2-3", "/dev/rngd/npu0pe4-5", "/dev/rngd/npu0pe6-7"},
 		DevNodes:        vendorNodes,
 	}
 

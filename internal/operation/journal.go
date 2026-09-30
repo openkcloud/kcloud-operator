@@ -24,11 +24,14 @@ const (
 	StepApplyFinished   = "ApplyFinished"
 	StepRebootRequested = "RebootRequested"
 	// StepRebootObserved 는 노드가 재부팅에서 돌아온 것을 관측한 시점이다.
-	StepRebootObserved   = "RebootObserved"
-	StepVerifyStarted    = "VerifyStarted"
-	StepCommitted        = "Committed"
-	StepRollbackStarted  = "RollbackStarted"
-	StepRollbackFinished = "RollbackFinished"
+	StepRebootObserved = "RebootObserved"
+	// StepDeviceResetRequested 는 장치 리셋 명령 Job 을 만든 시점이다. 리셋은 되돌릴 수 없으므로
+	// 이 단계가 이미 있으면 같은 작업이 두 번째 Job 을 만들지 않는다(Job 이 TTL 로 사라진 뒤에도).
+	StepDeviceResetRequested = "DeviceResetRequested"
+	StepVerifyStarted        = "VerifyStarted"
+	StepCommitted            = "Committed"
+	StepRollbackStarted      = "RollbackStarted"
+	StepRollbackFinished     = "RollbackFinished"
 )
 
 // AppendJournal 은 단계를 이력 끝에 붙인다.

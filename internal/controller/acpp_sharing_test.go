@@ -17,6 +17,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
@@ -30,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/partition"
 	"kcloud-operator/internal/partition/nvidia"
 )
@@ -221,6 +223,68 @@ func TestRunSharingAppliesAndReportsReady(t *testing.T) {
 	}
 }
 
+// TestSharingReadyGradesAxesByMode 는 공유 모드마다 다른 등급을 적는지 고정한다.
+// MPS 는 제어 데몬이 프로세스별 상한을 실제로 강제한다(2026-08-11 실측) — 연산은
+// 솔로 클라이언트가 A30 전체 9370.7 GFLOPS 의 26.2% 만 냈고 데몬 질의
+// get_default_active_thread_percentage 가 replicas 4 와 일치하는 25.0 이며, 메모리는
+// 5888/23808 MiB 로 카드의 1/4 이다. 그것을 none 으로 적으면 실측된 강제를 없다고
+// 보고하는 것이다. 시분할은 두 축 모두 강제가 관측되지 않았으므로 none 이 맞다.
+func TestSharingReadyGradesAxesByMode(t *testing.T) {
+	cases := []struct {
+		name        string
+		mode        string
+		wantCompute string
+		wantMemory  string
+	}{
+		{"MPS 는 연산·메모리가 강제된다", npuv1alpha1.SharingModeMPS,
+			npuv1alpha1.IsolationProcess, npuv1alpha1.IsolationProcess},
+		{"시분할은 둘 다 강제되지 않는다", npuv1alpha1.SharingModeTimeSliced,
+			npuv1alpha1.IsolationNone, npuv1alpha1.IsolationNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := npuv1alpha1.TargetStatus{
+				Devices: []npuv1alpha1.DeviceStatus{{
+					PCIAddress: sharingPCI,
+					IsolationCapability: npuv1alpha1.IsolationCapability{
+						Compute: npuv1alpha1.IsolationHardware,
+						Memory:  npuv1alpha1.IsolationHardware,
+						Fault:   npuv1alpha1.IsolationDevice,
+					},
+				}},
+			}
+			got := sharingReady(ts, &npuv1alpha1.AcceleratorPartitionPolicy{},
+				map[string]int32{"nvidia.com/gpu": 4}, tc.mode, 4, true)
+			iso := got.Devices[0].IsolationCapability
+			if iso.Compute != tc.wantCompute {
+				t.Errorf("compute = %q, want %q", iso.Compute, tc.wantCompute)
+			}
+			if iso.Memory != tc.wantMemory {
+				t.Errorf("memory = %q, want %q", iso.Memory, tc.wantMemory)
+			}
+			// fault 축은 공유가 바꾸는 것이 아니다 — 두 모드 모두 원값이 남아야 한다.
+			if iso.Fault != npuv1alpha1.IsolationDevice {
+				t.Errorf("fault 가 바뀌었다: %q — 공유는 fault 축을 건드리지 않는다", iso.Fault)
+			}
+		})
+	}
+}
+
+// TestSharingReadyLeavesUnmeasuredAxesEmpty 는 원래 빈 축을 채우지 않는지 본다.
+// 기존 코드가 `if iso.Compute != ""` 로 빈 값을 건너뛰는 것은 "근거 없는 등급을
+// 적지 않는다" 는 규율이다. 모드별 분기를 넣으면서 그 규율이 깨지기 쉽다.
+func TestSharingReadyLeavesUnmeasuredAxesEmpty(t *testing.T) {
+	ts := npuv1alpha1.TargetStatus{
+		Devices: []npuv1alpha1.DeviceStatus{{PCIAddress: sharingPCI}},
+	}
+	got := sharingReady(ts, &npuv1alpha1.AcceleratorPartitionPolicy{},
+		map[string]int32{"nvidia.com/gpu": 4}, npuv1alpha1.SharingModeMPS, 4, true)
+	iso := got.Devices[0].IsolationCapability
+	if iso.Compute != "" || iso.Memory != "" || iso.Fault != "" {
+		t.Errorf("빈 축을 채웠다: %+v — 근거 없는 등급을 적으면 안 된다", iso)
+	}
+}
+
 // mpsACPP 는 4배수 mps 공유를 요청하는 nvidia ACPP 다(파티션은 이미 Ready 저널).
 func mpsACPP() *npuv1alpha1.AcceleratorPartitionPolicy {
 	return &npuv1alpha1.AcceleratorPartitionPolicy{
@@ -250,6 +314,8 @@ func TestRunSharingAppliesMPSAndReportsReady(t *testing.T) {
 	r, c := sharingFixture(t, acpp, map[string]int32{"nvidia.com/mig-1g.6gb": 16, nvidiaGPUResource: 0}, readyMpsDaemon()...)
 
 	in := npuv1alpha1.TargetStatus{NodeName: "worker1", Phase: npuv1alpha1.ACPPPhaseReady}
+	// 지표는 프로세스 전역 카운터라 델타로 본다 — 테스트 순서에 무관하게.
+	beforeReady := testutil.ToFloat64(metrics.ACPPApplyTotal.WithLabelValues("nvidia", npuv1alpha1.SharingModeMPS, "ready"))
 	ts, err := r.runSharing(acpp, nvidia.New(c), sharingTarget(ctx, "acpp-mps"), in,
 		map[string]int32{"nvidia.com/mig-1g.6gb": 4, nvidiaGPUResource: 0})
 	if err != nil {
@@ -257,6 +323,9 @@ func TestRunSharingAppliesMPSAndReportsReady(t *testing.T) {
 	}
 	if ts.Phase != npuv1alpha1.ACPPPhaseReady {
 		t.Fatalf("phase = %q, want Ready — mps 요청이 apply 단계에 도달하지 못했다(F1)", ts.Phase)
+	}
+	if got := testutil.ToFloat64(metrics.ACPPApplyTotal.WithLabelValues("nvidia", npuv1alpha1.SharingModeMPS, "ready")) - beforeReady; got != 1 {
+		t.Errorf("ready 지표 증가 = %v, want 1 — sharingReady 가 kcloud_acpp_apply_total 을 올리지 않는다", got)
 	}
 	if ts.Advertisement.AdvertisedResources["nvidia.com/mig-1g.6gb"] != 16 {
 		t.Fatalf("advertised resources = %v", ts.Advertisement.AdvertisedResources)
@@ -280,6 +349,85 @@ func TestRunSharingAppliesMPSAndReportsReady(t *testing.T) {
 	rec := getApplyRecord(&got, "worker1")
 	if rec.SharingMode != npuv1alpha1.SharingModeMPS || rec.SharingReplicas != 4 {
 		t.Fatalf("sharing journal not persisted: %+v", rec)
+	}
+}
+
+// testutilCounterValue 는 ACPPApplyTotal{vendor=nvidia,mode=timeSliced,result=ready} 값을
+// 읽는다. prometheus 의 testutil 로 레지스트리를 거치지 않고 벡터에서 직접 꺼낸다. 이 파일의
+// 계수 시험이 모두 이 계열만 쓰므로 라벨을 고정했다 — 다른 계열이 필요해지면 인자로 되돌린다.
+func testutilCounterValue(t *testing.T) float64 {
+	t.Helper()
+	return testutil.ToFloat64(metrics.ACPPApplyTotal.WithLabelValues("nvidia", "timeSliced", "ready"))
+}
+
+// sharingReady 자체는 transitioned 인자를 그대로 게이트로 쓴다 — caller 의 판정을 다시
+// 추정하지 않는다는 계약의 최소 회귀 고정.
+func TestSharingReadyCountsOnlyWhenTransitioned(t *testing.T) {
+	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
+		Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{Vendor: "nvidia"},
+	}
+	expected := map[string]int32{"nvidia.com/gpu": 4}
+
+	before := testutilCounterValue(t)
+
+	sharingReady(npuv1alpha1.TargetStatus{}, acpp, expected, "timeSliced", 4, true)
+	afterTrue := testutilCounterValue(t)
+	if afterTrue != before+1 {
+		t.Fatalf("transitioned=true 에서 계수가 %v→%v, want %v", before, afterTrue, before+1)
+	}
+
+	sharingReady(npuv1alpha1.TargetStatus{}, acpp, expected, "timeSliced", 4, false)
+	afterFalse := testutilCounterValue(t)
+	if afterFalse != afterTrue {
+		t.Errorf("transitioned=false 에서 계수가 %v→%v, 오르면 안 된다", afterTrue, afterFalse)
+	}
+}
+
+// TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount 는 리뷰가 지적한 실제 결함을 재현한다.
+// runSharingOnly(레이아웃 없는 순수 공유 정책)는 partition-Ready 지점을 거치지 않으므로 ts.Phase
+// 를 채우지 않은 채로 runSharing 을 부른다. 판정을 ts.Phase 로 추정했다면 이 재조정에서 "Phase 가
+// 비어 있으니 전이다" 로 오판해 매번 다시 센다 — 계획 J 라이브 표본에서 해제 단계에 준비 완료
+// 계수가 한 번 더 오른 것이 이 경로였다.
+func TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount(t *testing.T) {
+	ctx := context.Background()
+	acpp := sharedACPP()
+	acpp.Status.ApplyRecords[0].SharingMode = npuv1alpha1.SharingModeTimeSliced
+	acpp.Status.ApplyRecords[0].SharingReplicas = 4
+	r, c := sharingFixture(t, acpp, map[string]int32{"nvidia.com/mig-1g.6gb": 16, nvidiaGPUResource: 0})
+
+	before := testutilCounterValue(t)
+	ts, err := r.runSharing(acpp, nvidia.New(c), sharingTarget(ctx, "acpp-shared"),
+		npuv1alpha1.TargetStatus{NodeName: "worker1"}, // runSharingOnly 가 실제로 넘기는 형태: Phase 없음.
+		map[string]int32{"nvidia.com/mig-1g.6gb": 4, nvidiaGPUResource: 0})
+	if err != nil || ts.Phase != npuv1alpha1.ACPPPhaseReady {
+		t.Fatalf("phase=%q err=%v", ts.Phase, err)
+	}
+	if got := testutilCounterValue(t); got != before {
+		t.Errorf("ready 지표 = %v→%v, 재조정인데 올랐다(runSharingOnly 형태 재현)", before, got)
+	}
+}
+
+// TestRunSharingFirstApplyCountsEvenWhenTargetWasAlreadyReady 는 파티션이 이미 Ready 였고
+// (acpp.Status.Targets 가 이 노드를 Ready 로 기록해 둔 상태) 이번에 처음 spec.sharing 이 추가되는
+// 경우를 고정한다. 공유 저널(ApplyRecords.SharingMode)에는 아직 이 mode·replicas 가 없으므로
+// 이번 호출은 진짜 첫 적용이고 계수가 올라야 한다. "직전 Status.Targets 가 Ready 였는가" 로
+// 판정했다면 이 케이스를 재확인으로 오판해 계수를 누락한다 — Status.Targets 의 Ready 는 파티션이
+// 이미 끝났다는 뜻일 뿐 공유까지 이미 적용됐다는 뜻이 아니다.
+func TestRunSharingFirstApplyCountsEvenWhenTargetWasAlreadyReady(t *testing.T) {
+	ctx := context.Background()
+	acpp := sharedACPP() // ApplyRecords 는 MIG 저널만 있고 SharingMode 는 아직 비어 있다.
+	acpp.Status.Targets = []npuv1alpha1.TargetStatus{{NodeName: "worker1", Phase: npuv1alpha1.ACPPPhaseReady}}
+	r, c := sharingFixture(t, acpp, map[string]int32{"nvidia.com/mig-1g.6gb": 16, nvidiaGPUResource: 0})
+
+	before := testutilCounterValue(t)
+	ts, err := r.runSharing(acpp, nvidia.New(c), sharingTarget(ctx, "acpp-shared"),
+		npuv1alpha1.TargetStatus{NodeName: "worker1", Phase: npuv1alpha1.ACPPPhaseReady},
+		map[string]int32{"nvidia.com/mig-1g.6gb": 4, nvidiaGPUResource: 0})
+	if err != nil || ts.Phase != npuv1alpha1.ACPPPhaseReady {
+		t.Fatalf("phase=%q err=%v", ts.Phase, err)
+	}
+	if got := testutilCounterValue(t); got != before+1 {
+		t.Errorf("ready 지표 = %v→%v, want %v — 첫 공유 적용이 계수에서 빠졌다", before, got, before+1)
 	}
 }
 

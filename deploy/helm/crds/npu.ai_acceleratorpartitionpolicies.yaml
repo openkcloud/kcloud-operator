@@ -54,6 +54,9 @@ spec:
             properties:
               deletionPolicy:
                 default: Retain
+                description: |-
+                  DeletionPolicy 는 삭제 시 하드웨어 상태를 어디까지 되돌릴지 정한다. RestoreMode 는 vendor nvidia
+                  (MIG mode 복원)에서만 유효하고 다른 벤더는 webhook 이 거절한다 — 그 벤더의 삭제는 항상 Retain 이다.
                 enum:
                 - Retain
                 - RestoreMode
@@ -140,6 +143,8 @@ spec:
                 enum:
                 - furiosa
                 - nvidia
+                - rebellions
+                - tenstorrent
                 type: string
             required:
             - vendor

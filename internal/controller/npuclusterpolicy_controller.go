@@ -137,6 +137,14 @@ type NPUClusterPolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// mapper 는 시험이 주입하는 REST mapper 다. nil 이면 client 의 것(discovery 기반)을 쓴다.
+	// DynamicRESTMapper 는 캐시 적중 시 재발견하지 않아 CRD 제거→미감지 전이를 시험이
+	// 결정적으로 재현하기 어려워, 시험에서만 이 필드로 mapper 를 교체한다(실서비스는 nil).
+	mapper apimeta.RESTMapper
+	// APIReader 는 벤더 operator 감지 재확인(vendorOperatorCRDConfirmed)이 쓰는 캐시 없는 읽기
+	// 경로다. 매니저 캐시(Client)로 CRD 를 GET 하면 클러스터 전체 CRD informer 가 새로 뜨므로
+	// 쓰지 않는다. nil 이면 재확인을 건너뛰고 RESTMapper 캐시 판정만 쓴다(기존 동작 그대로).
+	APIReader client.Reader
 }
 
 func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desired *appsv1.DaemonSet) error {
@@ -146,6 +154,12 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateDS(ctx context.Context, desir
 		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
+	}
+	// 회수 삭제는 비동기라, 삭제가 끝나기 전 같은 이름으로 다시 켜면 Get 이 deletionTimestamp
+	// 가 찍힌(삭제 진행 중) DaemonSet 을 돌려준다. 그 객체를 Update 하면 GC 가 곧 지워 광고가
+	// 사라지므로, 오류를 돌려 다음 reconcile 로 backoff 재시도한다 — 그때는 GC 가 끝나 Create 로 재생성.
+	if !cur.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("DaemonSet %s/%s 삭제 진행 중 — 재생성 전 GC 완료 대기", cur.Namespace, cur.Name)
 	}
 	if !equality.Semantic.DeepEqual(cur.Spec, desired.Spec) ||
 		!equality.Semantic.DeepEqual(cur.Labels, desired.Labels) ||
@@ -179,18 +193,19 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desir
 // +kubebuilder:rbac:groups=npu.ai,resources=npuclusterpolicies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses,verbs=get;list;watch;create;update;patch;delete
 // DRA 드라이버에 줄 권한은 operator 자신이 먼저 갖고 있어야 한다 — 쿠버네티스가
 // 자기가 없는 권한을 담은 ClusterRole 생성을 막는다(권한 상승 방지).
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims;resourceslices;resourceclaimtemplates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/status;resourceslices/status;resourceclaimtemplates/status,verbs=update;patch
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/driver,verbs={"associated-node:update","associated-node:patch"}
+// 타 벤더 operator 감지 재확인(vendoroperator_detect.go 의 vendorOperatorCRDConfirmed)이
+// CustomResourceDefinition 자체를 캐시 없는 APIReader 로 get 한다.
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -248,7 +263,9 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// -- NVIDIA
-	if policy.Spec.Nvidia.Enabled {
+	// delegated·external 이면 device-plugin 을 배포하지도(ensure) 회수하지도(delete) 않는다 —
+	// kcloud 가 소유하지 않으므로 관측만 한다. 배포 여부는 IsOperatorOwned() 하나로 묻는다.
+	if policy.Spec.Nvidia.Enabled && policy.Spec.Nvidia.IsOperatorOwned() {
 		logger.Info("Ensuring NVIDIA Device Plugin DaemonSet")
 		if err := r.ensureNvidiaDevicePlugin(ctx, &policy); err != nil {
 			logger.Error(err, "failed to ensure NVIDIA Device Plugin")
@@ -256,12 +273,15 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "NvidiaDevicePluginFailed", err.Error())
 			return ctrl.Result{}, err
 		}
-	} else {
+	} else if policy.Spec.Nvidia.IsOperatorOwned() {
 		// 토글 off 는 광고를 멈춰야 한다 — 두 DaemonSet(mixed/flat)을 모두 회수한다. 하나만 지우면
-		// 남은 쪽이 계속 nvidia.com/* 를 광고해 "꺼졌다"는 사용자 기대와 어긋난다. Furiosa 에는
-		// 대응하는 else-분기가 없다(전면 비활성화 시 지우는 경로가 없다) — 이 토글만의 정책이다.
+		// 남은 쪽이 계속 nvidia.com/* 를 광고해 "꺼졌다"는 사용자 기대와 어긋난다.
+		// Furiosa(cleanupDisabledFuriosaLegacyDS)·Tenstorrent(TenstorrentDevicePluginRemoveFailed
+		// 분기)·Rebellions(RebellionsDevicePluginRemoveFailed 분기)도 대칭이다 — Enabled=false
+		// 이고 operator-owned(managed)이면 소유 DaemonSet 만 회수하며(owner annotation 확인),
+		// 3rd-party 동명 DS 는 보존한다.
 		//
-		// cleanupOwnedResources(CR 삭제, :353-355)는 device-plugin 을 소유 여부와 무관하게 항상
+		// cleanupOwnedResources(CR 삭제)는 device-plugin 을 소유 여부와 무관하게 항상
 		// 보존한다 — 지우면 전벤더 allocatable 순단이 나서다(#16 §5). 이 토글은 정반대 요청("이
 		// 벤더만 광고 중단")이라 지우는 게 맞지만, mixed 이름(nvidia.DevicePluginNameMixed =
 		// "nvidia-device-plugin")은 #19 무중단 이관을 위해 기존 3rd-party 리소스와 일부러 같은
@@ -271,10 +291,14 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// (createOrUpdateDS 의 update 분기가 annotation 까지 덮어쓴다), enabled=true 로 한 번이라도
 		// reconcile 된 DS 는 owned 상태가 되고 이 토글로 정상 회수된다 — 실제로 지워지지 않는 것은
 		// 이 operator 가 그 벤더를 켠 적이 전혀 없는 DS 뿐이다.
-		for _, name := range []string{nvidia.DevicePluginNameMixed, nvidia.DevicePluginNameFlat} {
-			if err := r.deleteOwnedDaemonSetIfExists(ctx, name, &policy); err != nil {
-				logger.Error(err, "failed to remove NVIDIA Device Plugin", "daemonset", name)
-				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to remove %s: %v", name, err)
+		for _, ds := range []struct{ name, reason string }{
+			{nvidia.DevicePluginNameMixed, "NvidiaDevicePluginMixedRemoveFailed"},
+			{nvidia.DevicePluginNameFlat, "NvidiaDevicePluginFlatRemoveFailed"},
+		} {
+			if err := r.deleteOwnedDaemonSetIfExists(ctx, ds.name, &policy); err != nil {
+				logger.Error(err, "failed to remove NVIDIA Device Plugin", "daemonset", ds.name)
+				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to remove %s: %v", ds.name, err)
+				r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, ds.reason, err.Error())
 				return ctrl.Result{}, err
 			}
 		}
@@ -289,51 +313,14 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// -- Furiosa
-	// Unified=true 면 Warboy/RNGD 를 단일 통합 DS 로(A' 방안), 기존 2-DS 는 제거(전환).
-	// Unified=false(기본) 면 기존 2-DS 경로 유지 + 통합 DS 제거(롤백).
-	if policy.Spec.Furiosa.Enabled && policy.Spec.Furiosa.Unified {
-		logger.Info("Ensuring Furiosa Unified Device Plugin DaemonSet")
-		if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, &policy); err != nil {
-			logger.Error(err, "failed to ensure Furiosa Unified Device Plugin")
-			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaUnifiedDevicePlugin", err)
-			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaUnifiedDevicePluginFailed", err.Error())
-			return ctrl.Result{}, err
-		}
-		// 전환: 기존 2-DS 제거(존재 시). 통합 DS 스케줄 후 정리해 순단 최소화.
-		// 새 이름과 개명 전 이름을 모두 지운다 — 두 회차가 섞인 클러스터가 있다.
-		for _, ref := range furiosaPerModelDSRefs() {
-			if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
-				logger.Error(err, "failed to delete per-model Furiosa DS during unified transition", "daemonset", ref.String())
-			}
-		}
-	} else {
-		r.cleanupDisabledFuriosaLegacyDS(ctx, &policy)
-		if policy.Spec.Furiosa.Enabled {
-			logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
-			if err := r.ensureFuriosaDevicePlugin(ctx, &policy); err != nil {
-				logger.Error(err, "failed to ensure Furiosa Device Plugin")
-				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaDevicePlugin", err)
-				r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaDevicePluginFailed", err.Error())
-				return ctrl.Result{}, err
-			}
-		}
-
-		// -- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
-		if policy.Spec.Furiosa.Rngd.Enabled {
-			logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
-			if err := r.ensureFuriosaRngdDevicePlugin(ctx, &policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
-				logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
-				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
-				r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
-				return ctrl.Result{}, err
-			}
-		}
-		r.rollbackFuriosaUnified(ctx, &policy)
+	// -- Furiosa (warboy/rngd/unified). 분기가 많아 gocyclo 를 낮추려 별도 메서드로 분리.
+	if err := r.reconcileFuriosaDevicePlugins(ctx, &policy); err != nil {
+		return ctrl.Result{}, err
 	}
 
-	// -- Rebellions ATOM+ (separate namespace rbln-system + PSA privileged + ClusterRole/Binding)
-	if policy.Spec.Rebellions.Enabled {
+	// -- Rebellions ATOM+ (기본 kube-system; spec.rebellions.namespace 로 전용 네임스페이스를 지정하면 생성 + PSA privileged; ClusterRole/Binding)
+	// delegated·external 이면 배포하지도 회수하지도 않는다 — 관측만 한다.
+	if policy.Spec.Rebellions.Enabled && policy.Spec.Rebellions.IsOperatorOwned() {
 		logger.Info("Ensuring Rebellions ATOM+ Device Plugin")
 		for _, step := range []struct {
 			name string
@@ -352,10 +339,20 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				return ctrl.Result{}, err
 			}
 		}
+	} else if policy.Spec.Rebellions.IsOperatorOwned() {
+		// 비활성(managed): 소유 device-plugin DaemonSet 을 회수한다(광고 중단). SA/RBAC/CM/ns
+		// 는 공유·저비용이라 남겨 둔다 — 광고를 멈추는 건 DaemonSet 회수로 충분하다.
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, rbllnsResolveNamespace(&policy), rbllnsDaemonSetName, &policy); err != nil {
+			logger.Error(err, "failed to remove Rebellions Device Plugin", "daemonset", rbllnsDaemonSetName)
+			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to remove %s: %v", rbllnsDaemonSetName, err)
+			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "RebellionsDevicePluginRemoveFailed", err.Error())
+			return ctrl.Result{}, err
+		}
 	}
 
 	// -- Tenstorrent Blackhole (single DaemonSet; nodeSelector=kcloud.ai/tenstorrent.present 자립 라벨, /sys hostPath 감지)
-	if policy.Spec.Tenstorrent.Enabled {
+	// delegated·external 이면 배포하지도 회수하지도 않는다 — 관측만 한다.
+	if policy.Spec.Tenstorrent.Enabled && policy.Spec.Tenstorrent.IsOperatorOwned() {
 		logger.Info("Ensuring Tenstorrent Blackhole Device Plugin DaemonSet")
 		if err := r.ensureTenstorrentDevicePlugin(ctx, &policy); err != nil {
 			logger.Error(err, "failed to ensure Tenstorrent Device Plugin")
@@ -363,16 +360,100 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "TenstorrentDevicePluginFailed", err.Error())
 			return ctrl.Result{}, err
 		}
+	} else if policy.Spec.Tenstorrent.IsOperatorOwned() {
+		// 비활성(managed): 소유 DaemonSet 을 회수한다 — 안 지우면 광고가 계속 산다. DS 는
+		// operator 네임스페이스에 살고, owner annotation 이 있는 것만 지운다(3rd-party 보존).
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, naming.OperatorNamespace(), ttDaemonSetName, &policy); err != nil {
+			logger.Error(err, "failed to remove Tenstorrent Device Plugin", "daemonset", ttDaemonSetName)
+			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to remove %s: %v", ttDaemonSetName, err)
+			r.setReadyCondition(ctx, &policy, metav1.ConditionFalse, "TenstorrentDevicePluginRemoveFailed", err.Error())
+			return ctrl.Result{}, err
+		}
 	}
 
-	// -- All ensureXxx succeeded: set Ready=True and record success event
-	r.setReadyCondition(ctx, &policy, metav1.ConditionTrue, "AllResourcesReady", "All resources reconciled successfully")
+	// -- All ensureXxx succeeded: set Ready=True and record success event.
+	// external·delegated 벤더가 하나라도 있으면 "배포물이 없어도 정상"임을 사유로 가른다 —
+	// 실패 경로는 모두 위에서 Ready=False 로 return 하므로, 여기 도달했다면 관리 대상은 전부 준비됐다.
+	readyReason, readyMessage := "AllResourcesReady", "All resources reconciled successfully"
+	if ext, del := nonOperandVendorNames(&policy); len(ext)+len(del) > 0 {
+		readyReason = "ExternalManaged"
+		readyMessage = nonOperandReadyMessage(ext, del)
+	}
+	// managed 인 nvidia/rebellions/tenstorrent 옆에 그 벤더의 공개 operator 가 깔려 있으면
+	// 조건·경고로 delegated 전환을 권고한다(자동 전환 없음, 노드만 관측하려면 external).
+	// furiosa 는 감지 가능한 고유 CRD/라벨 시그니처가 없어 미확인(Unknown)
+	// — vendoroperator_detect.go 상단 주석 참고.
+	// 조건만 세팅하고 flush 는 아래 setReadyCondition 이 한 번에 한다.
+	r.detectNvidiaGPUOperator(ctx, &policy)
+	r.detectRebellionsOperator(ctx, &policy)
+	r.detectTenstorrentOperator(ctx, &policy)
+	// 벤더 5종 전부(rebellions 전용이던 것의 일반화) device-plugin·DRA 동시 광고 창을
+	// top-level Condition 으로 남긴다 — advertiseBy·dra.enabled 값과 무관하게 실측만 본다.
+	r.detectDualAdvertisement(ctx, &policy)
+	// delegated 로 선언했는데 위임 대상(벤더 operator)이 감지되지 않으면(Absent) 경고한다 —
+	// 조용히 managed 로 내려가 중복 배포하지 않고 그 상태를 드러낸다. Unknown 은 경고하지 않는다.
+	r.warnDelegatedOperatorAbsent(ctx, &policy)
+	r.setReadyCondition(ctx, &policy, metav1.ConditionTrue, readyReason, readyMessage)
 	r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "Reconciled", "Successfully reconciled all resources")
 
 	// DRA 드라이버가 아직 발행 전이면 다시 본다. 발행물은 드라이버가 뜬 뒤 몇 초 지나
 	// 생기는데 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가 없으면 상태가
 	// Installing 에 굳는다(2026-08-07 실측).
 	return ctrl.Result{RequeueAfter: draRequeue(&policy)}, nil
+}
+
+// reconcileFuriosaDevicePlugins 는 Furiosa 의 device-plugin 을 spec 에 맞춘다.
+// Unified=true 면 Warboy/RNGD 를 단일 통합 DS 로(A' 방안), 기존 2-DS 는 제거(전환).
+// Unified=false(기본) 면 기존 2-DS 경로 유지 + 통합 DS 제거(롤백).
+// delegated·external 이면 warboy/rngd/unified 를 배포도 회수도 하지 않는다(RNGD 포함 —
+// RngdSpec 에는 별도 관리 모드가 없고 Furiosa 의 모드를 따른다). 통합 전환·롤백 정리도 건너뛴다.
+// 배포 여부는 IsOperatorOwned() 하나로 묻는다(managed 일 때만 참).
+func (r *NPUClusterPolicyReconciler) reconcileFuriosaDevicePlugins(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
+	logger := logf.FromContext(ctx)
+	furiosaManaged := policy.Spec.Furiosa.IsOperatorOwned()
+	if furiosaManaged && policy.Spec.Furiosa.Enabled && policy.Spec.Furiosa.Unified {
+		logger.Info("Ensuring Furiosa Unified Device Plugin DaemonSet")
+		if err := r.ensureFuriosaUnifiedDevicePlugin(ctx, policy); err != nil {
+			logger.Error(err, "failed to ensure Furiosa Unified Device Plugin")
+			r.Recorder.Eventf(policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaUnifiedDevicePlugin", err)
+			r.setReadyCondition(ctx, policy, metav1.ConditionFalse, "FuriosaUnifiedDevicePluginFailed", err.Error())
+			return err
+		}
+		// 전환: 기존 2-DS 제거(존재 시). 통합 DS 스케줄 후 정리해 순단 최소화.
+		// 새 이름과 개명 전 이름을 모두 지우되, 이 policy 소유(owner annotation 일치)인 것만 지운다 —
+		// 개명 전 이름(furiosa-device-plugin)은 벤더 일반 이름이라 3rd-party 가 같은 이름을 쓸 수 있다.
+		for _, ref := range furiosaPerModelDSRefs() {
+			if err := r.deleteOwnedDaemonSetInIfExists(ctx, ref.Namespace, ref.Name, policy); err != nil {
+				logger.Error(err, "failed to delete per-model Furiosa DS during unified transition", "daemonset", ref.String())
+			}
+		}
+		return nil
+	}
+	if !furiosaManaged {
+		return nil
+	}
+	r.cleanupDisabledFuriosaLegacyDS(ctx, policy)
+	if policy.Spec.Furiosa.Enabled {
+		logger.Info("Ensuring Furiosa Device Plugin DaemonSet")
+		if err := r.ensureFuriosaDevicePlugin(ctx, policy); err != nil {
+			logger.Error(err, "failed to ensure Furiosa Device Plugin")
+			r.Recorder.Eventf(policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaDevicePlugin", err)
+			r.setReadyCondition(ctx, policy, metav1.ConditionFalse, "FuriosaDevicePluginFailed", err.Error())
+			return err
+		}
+	}
+	// -- Furiosa RNGD (second-gen; separate DS, NFD-based node affinity)
+	if policy.Spec.Furiosa.Rngd.Enabled {
+		logger.Info("Ensuring Furiosa RNGD Device Plugin DaemonSet")
+		if err := r.ensureFuriosaRngdDevicePlugin(ctx, policy, policy.Spec.Furiosa.Rngd.PartitionPolicy); err != nil {
+			logger.Error(err, "failed to ensure Furiosa RNGD Device Plugin")
+			r.Recorder.Eventf(policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "FuriosaRngdDevicePlugin", err)
+			r.setReadyCondition(ctx, policy, metav1.ConditionFalse, "FuriosaRngdDevicePluginFailed", err.Error())
+			return err
+		}
+	}
+	r.rollbackFuriosaUnified(ctx, policy)
+	return nil
 }
 
 // syncNodeLabels 는 DaemonSet 렌더링 전에 노드 라벨을 정책과 맞추는 두 축을 순서대로
@@ -406,6 +487,43 @@ func draRequeue(policy *npuv1alpha1.NPUClusterPolicy) time.Duration {
 		}
 	}
 	return 0
+}
+
+// nonOperandVendorNames 는 Enabled 이면서 kcloud 가 데이터플레인을 배포하지 않는 모드
+// (delegated 또는 external)인 벤더 이름을 모드별로 모은다. 두 모드 모두 배포물이 없어도
+// 정상이라 Ready 사유를 ExternalManaged 로 가르는 근거다(사유 이름은 과거 릴리스 판정·
+// 운영 문서가 그대로 인용하므로 유지한다). RNGD 는 Furiosa 의 모드를 따르므로 furiosa 로만
+// 표기한다.
+func nonOperandVendorNames(policy *npuv1alpha1.NPUClusterPolicy) (external, delegated []string) {
+	s := policy.Spec
+	classify := func(enabled, isExternal, isDelegated bool, name string) {
+		switch {
+		case !enabled:
+		case isExternal:
+			external = append(external, name)
+		case isDelegated:
+			delegated = append(delegated, name)
+		}
+	}
+	classify(s.Nvidia.Enabled, s.Nvidia.IsExternal(), s.Nvidia.IsDelegated(), vendorNvidia)
+	classify(s.Furiosa.Enabled || s.Furiosa.Rngd.Enabled, s.Furiosa.IsExternal(), s.Furiosa.IsDelegated(), vendorFuriosa)
+	classify(s.Rebellions.Enabled, s.Rebellions.IsExternal(), s.Rebellions.IsDelegated(), vendorRebellions)
+	classify(s.Tenstorrent.Enabled, s.Tenstorrent.IsExternal(), s.Tenstorrent.IsDelegated(), vendorTenstorrent)
+	return external, delegated
+}
+
+// nonOperandReadyMessage 는 데이터플레인이 없는 벤더 명단을 external·delegated 로 갈라 한 줄로
+// 알린다. 두 모드는 배포하지 않는다는 결과는 같지만 이유가 달라(external=kcloud 밖 설치를 관측만,
+// delegated=벤더 operator 에 위임) 어느 벤더가 어느 쪽인지 이름으로 남긴다.
+func nonOperandReadyMessage(external, delegated []string) string {
+	var groups []string
+	if len(external) > 0 {
+		groups = append(groups, "external: "+strings.Join(external, ", "))
+	}
+	if len(delegated) > 0 {
+		groups = append(groups, "delegated: "+strings.Join(delegated, ", "))
+	}
+	return fmt.Sprintf("no data plane deployed for vendors observed only (%s)", strings.Join(groups, "; "))
 }
 
 // setReadyCondition updates the Ready condition on the policy status.
@@ -480,6 +598,10 @@ func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, 
 		}
 	}
 
+	// DRA 소유·후퇴 라벨 회수. 정책이 사라지면 광고 주체도 없다.
+	if err := r.reclaimDRANodeLabels(ctx, policy); err != nil {
+		return err
+	}
 	// 배제 라벨 회수. 부여 로직을 복제하지 않고 policy=nil 로 같은 함수를 돌린다 —
 	// nodeExclusion 이 nil 을 "배제 없음" 으로 판정하므로 control-plane 사유까지 지워진다.
 	// 배포가 없으면 배제도 없다: 정책이 사라진 클러스터에서 "제외됨(control-plane)" 이
@@ -534,7 +656,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 	log := logf.FromContext(ctx)
 
 	// 기본 selector (자립 라벨 — node-manager 부여, NFD/gpu-operator 비의존)
-	sel := map[string]string{"kcloud.ai/nvidia.present": "true"}
+	sel := map[string]string{vendorPresentLabel(vendorNvidia): labelValueTrue}
 	if len(policy.Spec.Nvidia.NodeSelector) > 0 {
 		sel = policy.Spec.Nvidia.NodeSelector
 	}
@@ -670,7 +792,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaDevicePlugin(ctx context.Conte
 	log := logf.FromContext(ctx)
 
 	// nodeSelector (자립 라벨 — node-manager 부여, NFD/수동 라벨 비의존)
-	sel := map[string]string{"kcloud.ai/furiosa.present": "true"}
+	sel := map[string]string{vendorPresentLabel(vendorFuriosa): labelValueTrue}
 	if len(policy.Spec.Furiosa.NodeSelector) > 0 {
 		sel = policy.Spec.Furiosa.NodeSelector
 	}
@@ -698,11 +820,13 @@ interval: 10`,
 	// 개명 정리: 같은 DS 의 옛 이름을 먼저 지운다. DS selector 가 immutable 이라 이름을
 	// 바꾼 자리는 새로 만들 수밖에 없고, 옛 DS 가 남은 채 새 DS 가 뜨면 두 파드가 같은
 	// 자원을 kubelet 에 중복 등록한다. 그래서 실패하면 새 DS 를 만들지 않고 물러난다.
+	// 이 policy 소유(owner annotation 일치)인 것만 지운다 — 개명 전 이름(furiosa-device-plugin)은
+	// 벤더 일반 이름이라 3rd-party 동명 DS 를 이름만으로 지우면 안 된다(그 경우 external 로 둔다).
 	for _, ref := range []types.NamespacedName{
 		{Namespace: naming.KubeSystemNamespace, Name: furiosaWarboyLegacyDSName},
 		{Namespace: naming.OperatorNamespace(), Name: furiosaWarboyV0727DSName},
 	} {
-		if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, ref.Namespace, ref.Name, policy); err != nil {
 			log.Error(err, "failed to delete pre-rename Warboy DS before creating new one", "name", ref.Name)
 			return err
 		}
@@ -847,7 +971,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	}
 
 	// nodeSelector: 자립 라벨(node-manager 부여, NFD 비의존); override via Spec.Furiosa.Rngd.NodeSelector
-	sel := map[string]string{"kcloud.ai/rngd.present": "true"}
+	sel := map[string]string{vendorPresentLabel(vendorRngd): labelValueTrue}
 	if len(rngdSpec.NodeSelector) > 0 {
 		sel = rngdSpec.NodeSelector
 	}
@@ -972,8 +1096,22 @@ func (r *NPUClusterPolicyReconciler) cleanupDisabledFuriosaLegacyDS(ctx context.
 		refs = append(refs, types.NamespacedName{Namespace: naming.OperatorNamespace(), Name: furiosaRngdV0727DSName})
 	}
 	for _, ref := range refs {
-		if err := r.deleteDaemonSetIn(ctx, ref.Namespace, ref.Name); err != nil {
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, ref.Namespace, ref.Name, policy); err != nil {
 			logger.Error(err, "failed to delete pre-rename Furiosa DS while disabled", "daemonset", ref.String())
+		}
+	}
+	// 현재 이름 DaemonSet 도 회수한다 — 비활성 벤더의 소유 DS 가 남으면 광고가 계속 산다.
+	// legacy·현재 이름 모두 owner annotation 이 이 policy 와 맞는 것만 지운다 — 개명 전 이름
+	// (furiosa-device-plugin)은 벤더 일반 이름이라 3rd-party 동명 DS 를 보존해야 한다.
+	// external 은 이 함수에 오지 않는다(reconcileFuriosaDevicePlugins 가 먼저 건너뛴다).
+	if !policy.Spec.Furiosa.Enabled {
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, furiosaVendorDSNamespace(), furiosaWarboyDSName, policy); err != nil {
+			logger.Error(err, "failed to remove disabled Furiosa warboy DS", "daemonset", furiosaWarboyDSName)
+		}
+	}
+	if !policy.Spec.Furiosa.Rngd.Enabled {
+		if err := r.deleteOwnedDaemonSetInIfExists(ctx, furiosaVendorDSNamespace(), furiosaRngdDSName, policy); err != nil {
+			logger.Error(err, "failed to remove disabled Furiosa rngd DS", "daemonset", furiosaRngdDSName)
 		}
 	}
 }
@@ -987,26 +1125,27 @@ func (r *NPUClusterPolicyReconciler) deleteDaemonSetIn(ctx context.Context, ns, 
 	return nil
 }
 
-// deleteDaemonSetIfExists 는 kube-system 의 DS 를 이름으로 지운다(deleteDaemonSetIn 의 얇은 감싸개).
-// 통합 전환/롤백 시 반대편 경로의 DS 를 정리하는 데 사용한다. 이 함수가 지우는 이름
-// (furiosaWarboyDSName/furiosaRngdDSName/그 개명 전 이름/furiosaUnifiedDSName)은 전부 이 operator 만
-// 만드는 이름이라 소유권 검사가 필요 없다. 이름을 흡수 대상(nvidia device-plugin)에 재사용하려면
-// deleteOwnedDaemonSetIfExists 를 쓸 것 — 그쪽은 이름만으로 지우면 흡수 대상 3rd-party 리소스까지
-// 지울 위험이 있다.
-func (r *NPUClusterPolicyReconciler) deleteDaemonSetIfExists(ctx context.Context, name string) error {
-	return r.deleteDaemonSetIn(ctx, naming.KubeSystemNamespace, name)
+// deleteOwnedDaemonSetIfExists 는 owner annotation 이 이 policy 와 일치할 때만 kube-system 의
+// DS 를 지운다. nvidia device-plugin·dcgm-exporter·furiosa-device-plugin 처럼 벤더 일반 이름을
+// 쓰는 DS 전용 — 이 operator 가 한 번도 reconcile 하지 않아 owner annotation 이 없는 3rd-party
+// DS 는 이름이 같아도 건드리지 않는다.
+func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetIfExists(ctx context.Context, name string, policy *npuv1alpha1.NPUClusterPolicy) error {
+	return r.deleteOwnedDaemonSetInIfExists(ctx, "kube-system", name, policy)
 }
 
-// deleteOwnedDaemonSetIfExists 는 owner annotation 이 이 policy 와 일치할 때만 지운다.
-// nvidia device-plugin 처럼 흡수(#19)한 3rd-party 이름을 재사용하는 DS 전용 — 이름만 보고
-// 지우는 deleteDaemonSetIfExists 와 달리, 이 operator 가 한 번도 reconcile 하지 않아 owner
-// annotation 이 없는 DS 는 건드리지 않는다.
-func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetIfExists(ctx context.Context, name string, policy *npuv1alpha1.NPUClusterPolicy) error {
+// deleteOwnedDaemonSetInIfExists 는 주어진 네임스페이스의 DaemonSet 이 이 policy 소유
+// (owner annotation 일치)일 때만 지운다. device-plugin 이 kube-system 밖(operator
+// 네임스페이스·벤더 네임스페이스)에 사는 벤더도 회수하려 네임스페이스를 인자로 받는다.
+// 소유 annotation 이 없는 3rd-party DS 는 이름이 같아도 보존한다.
+func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetInIfExists(ctx context.Context, namespace, name string, policy *npuv1alpha1.NPUClusterPolicy) error {
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: "kube-system"}, &ds); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &ds); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	if ds.Annotations[ownerAnnotation] != fmt.Sprintf("%s/%s", policy.Namespace, policy.Name) {
+	if got := ds.Annotations[ownerAnnotation]; got != fmt.Sprintf("%s/%s", policy.Namespace, policy.Name) {
+		// 소유 표시가 없거나 다른 DaemonSet 은 보존한다 — 안전 분기가 조용히 지나가지 않도록 기록한다.
+		logf.FromContext(ctx).V(1).Info("소유 표시가 다른 DaemonSet 은 보존한다",
+			"namespace", namespace, "name", name, "owner", got)
 		return nil
 	}
 	if err := r.Delete(ctx, &ds); err != nil && !apierrors.IsNotFound(err) {
@@ -1212,7 +1351,7 @@ func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.C
 	}
 
 	// nodeSelector: 자립 라벨 기본값(node-manager 부여, 수동 라벨 비의존); spec 지정 시 override
-	sel := map[string]string{"kcloud.ai/tenstorrent.present": "true"}
+	sel := map[string]string{vendorPresentLabel(vendorTenstorrent): labelValueTrue}
 	if len(tt.NodeSelector) > 0 {
 		sel = tt.NodeSelector
 	}
@@ -1523,8 +1662,10 @@ func (r *NPUClusterPolicyReconciler) ensureRbllnsConfigMap(ctx context.Context, 
 }
 
 // ensureRebellionsDevicePlugin creates the DaemonSet running the Rebellions device
-// plugin. Spec mirrors Rebellions 공식 daemonset.yaml (hostNetwork, privileged, 9 volumes).
-// Note: host-driver-usr-bin mounts /usr/local/bin (Phase 0-A 실측: rbln-stat/rbln-smi 는 /usr/local/bin 에 위치).
+// plugin. Spec mirrors Rebellions 공식 daemonset.yaml (hostNetwork, privileged).
+// 벤더 도구 경로는 고정하지 않는다. 플러그인이 Allocate 응답에서 /usr/bin/rbln-smi 와
+// /usr/bin/rbln-stat 를 직접 마운트하고(2026-09-15 node5 실측), SDK 판마다 설치 위치가
+// 다르다. 호스트 /usr/bin 과 /usr/local/bin 을 읽기 전용으로 붙이는 것까지가 우리 몫이다.
 func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
@@ -1537,8 +1678,8 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 
 	// 자립 라벨(node-manager 부여, 수동 라벨 비의존) + arch 게이트.
 	sel := map[string]string{
-		"kubernetes.io/arch":           "amd64",
-		"kcloud.ai/rebellions.present": "true",
+		"kubernetes.io/arch":                 "amd64",
+		vendorPresentLabel(vendorRebellions): labelValueTrue,
 	}
 	if len(policy.Spec.Rebellions.NodeSelector) > 0 {
 		sel = policy.Spec.Rebellions.NodeSelector
@@ -1592,11 +1733,6 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 						{Name: "device-info", MountPath: "/var/run/k8s.cni.cncf.io/devinfo/dp"},
 						{Name: "host-usr-bin", MountPath: "/host/usr/bin", ReadOnly: true},
 						{Name: "host-driver-usr-bin", MountPath: "/host/driver/usr/bin", ReadOnly: true},
-						// F-A2 (2026-04-22): Rebellions device plugin 이미지는 `rbln-smi`
-						// 를 /usr/bin/rbln-smi 에서 찾음. host 는 /usr/local/bin/rbln-smi
-						// 이므로 single-file hostPath 로 경로 bridge. 없어도 동작 자체는
-						// 되나 RSD group 생성 경로에서 "rbln-smi not found" 경고 제거.
-						{Name: "host-rbln-smi", MountPath: "/usr/bin/rbln-smi", ReadOnly: true},
 						{Name: "host-dev", MountPath: "/dev"},
 						{Name: "host-sys", MountPath: "/sys"},
 					},
@@ -1613,11 +1749,6 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 					{Name: "device-info", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/run/k8s.cni.cncf.io/devinfo/dp"}}},
 					{Name: "host-usr-bin", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr/bin"}}},
 					{Name: "host-driver-usr-bin", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin"}}},
-					// F-A2: single-file hostPath (HostPathFile) for /usr/bin/rbln-smi bridge
-					{Name: "host-rbln-smi", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-						Path: "/usr/local/bin/rbln-smi",
-						Type: hostPathFilePtr(),
-					}}},
 					{Name: "host-dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
 					{Name: "host-sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
 				},
@@ -1626,6 +1757,7 @@ func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Co
 	}
 
 	applyDriverUpgradeAntiAffinity(&ds.Spec.Template.Spec)
+	excludeDRAOwnedNodes(&ds.Spec.Template.Spec, vendorRebellions)
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 	applyExcludeNodeSelector(&ds.Spec.Template.Spec, policy.Spec.Rebellions.ExcludeNodeSelector)
 	applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
@@ -1825,12 +1957,6 @@ func boolPtr(b bool) *bool {
 
 func int64Ptr(i int64) *int64 {
 	return &i
-}
-
-// hostPathFilePtr returns a pointer to HostPathFile HostPathType for single-file hostPath volumes.
-func hostPathFilePtr() *corev1.HostPathType {
-	t := corev1.HostPathFile
-	return &t
 }
 
 // control-plane/master 노드를 식별하는 라벨. driver_upgrade_controller 의 노드 제외

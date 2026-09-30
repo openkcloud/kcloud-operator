@@ -2,17 +2,15 @@
 # driverinstallpolicy.yaml: DriverInstallPolicy CR 자동 생성
 # 상세: driverInstallPolicies.<vendor>.enabled=true 인 각 벤더에 대해 DIP CR 생성.
 #       Furiosa (warboy) / NVIDIA (generic) 두 벤더 모두 mode=daemonset 기본.
-# 생성일: 2026-04-10 | 수정일: 2026-04-21
+#       2026-09-24: helm hook 에서 릴리스 자원으로 전환. hook 은 업그레이드마다 삭제·재생성되어
+#       uid 가 바뀌고 소유 DaemonSet 이 연쇄로 다시 만들어졌다.
+# 생성일: 2026-04-10 | 수정일: 2026-09-24
 # ============================================================
 {{- if .Values.driverInstallPolicies.furiosa.enabled }}
 apiVersion: npu.ai/v1alpha1
 kind: DriverInstallPolicy
 metadata:
   name: {{ .Values.driverInstallPolicies.furiosa.name }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   vendor: {{ .Values.driverInstallPolicies.furiosa.vendor }}
   model: {{ .Values.driverInstallPolicies.furiosa.model }}
@@ -40,6 +38,9 @@ spec:
     env:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.driverInstallPolicies.furiosa.driver.kernelImages }}
+    kernelImages: {{ toYaml . | nindent 6 }}
+    {{- end }}
   {{- with .Values.driverInstallPolicies.furiosa.verifiedVersions }}
   verifiedVersions:
     {{- toYaml . | nindent 4 }}
@@ -63,10 +64,6 @@ apiVersion: npu.ai/v1alpha1
 kind: DriverInstallPolicy
 metadata:
   name: {{ .Values.driverInstallPolicies.nvidia.name }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   vendor: {{ .Values.driverInstallPolicies.nvidia.vendor }}
   model: {{ .Values.driverInstallPolicies.nvidia.model }}
@@ -93,6 +90,9 @@ spec:
     {{- with .Values.driverInstallPolicies.nvidia.driver.env }}
     env:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.driverInstallPolicies.nvidia.driver.kernelImages }}
+    kernelImages: {{ toYaml . | nindent 6 }}
     {{- end }}
   {{- with .Values.driverInstallPolicies.nvidia.toolkit }}
   toolkit:
@@ -121,10 +121,6 @@ apiVersion: npu.ai/v1alpha1
 kind: DriverInstallPolicy
 metadata:
   name: {{ .Values.driverInstallPolicies.rngd.name }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   vendor: {{ .Values.driverInstallPolicies.rngd.vendor }}
   model: {{ .Values.driverInstallPolicies.rngd.model }}
@@ -152,6 +148,9 @@ spec:
     env:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with .Values.driverInstallPolicies.rngd.driver.kernelImages }}
+    kernelImages: {{ toYaml . | nindent 6 }}
+    {{- end }}
   {{- with .Values.driverInstallPolicies.rngd.verifiedVersions }}
   verifiedVersions:
     {{- toYaml . | nindent 4 }}
@@ -175,10 +174,6 @@ apiVersion: npu.ai/v1alpha1
 kind: DriverInstallPolicy
 metadata:
   name: {{ .Values.driverInstallPolicies.tenstorrent.name }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   vendor: {{ .Values.driverInstallPolicies.tenstorrent.vendor }}
   model: {{ .Values.driverInstallPolicies.tenstorrent.model }}
@@ -200,12 +195,16 @@ spec:
     {{- with .Values.driverInstallPolicies.tenstorrent.driver.installer }}
     installer: {{ . }}
     {{- end }}
+    imageVersionBaked: {{ .Values.driverInstallPolicies.tenstorrent.driver.imageVersionBaked | default false }}
     allowDowngrade: {{ .Values.driverInstallPolicies.tenstorrent.driver.allowDowngrade }}
     versionSource: {{ .Values.driverInstallPolicies.tenstorrent.driver.versionSource | quote }}
     skipOnPassthrough: {{ .Values.driverInstallPolicies.tenstorrent.driver.skipOnPassthrough }}
     {{- with .Values.driverInstallPolicies.tenstorrent.driver.env }}
     env:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.driverInstallPolicies.tenstorrent.driver.kernelImages }}
+    kernelImages: {{ toYaml . | nindent 6 }}
     {{- end }}
   {{- with .Values.driverInstallPolicies.tenstorrent.verifiedVersions }}
   verifiedVersions:

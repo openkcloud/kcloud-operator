@@ -22,6 +22,10 @@ import (
 	"testing"
 )
 
+// 주의: 이 시험은 os/exec 로 helm 을 부른다. Go 테스트 캐시는 그 의존을 보지 못하므로
+// 차트만 고치고 손으로 `go test` 를 돌리면 직전 결과가 재사용돼 초록이 나온다 — 차트가
+// 깨져 있어도 그렇다. 손으로 돌릴 때는 `-count=1` 을 붙일 것. `make test` 는
+// `-coverprofile` 을 쓰고 그 플래그가 캐시를 끄므로 영향이 없다(2026-09-16 실측).
 // helmTemplate 는 deploy/helm 을 렌더한다. helm 이 없는 환경에서는 건너뛴다.
 func helmTemplate(t *testing.T, args ...string) string {
 	t.Helper()
@@ -50,6 +54,9 @@ var vendorImageCases = []struct {
 	{"RNGD device-plugin", "docker.io/furiosaai/furiosa-device-plugin:2026.1.1", "MIRROR/furiosaai/furiosa-device-plugin:2026.1.1"},
 	{"RNGD DRA 드라이버", "docker.io/furiosaai/furiosa-dra-driver:2026.1.1", "MIRROR/furiosaai/furiosa-dra-driver:2026.1.1"},
 	{"Rebellions device-plugin", "docker.io/rebellions/k8s-device-plugin:v0.3.6", "MIRROR/rebellions/k8s-device-plugin:v0.3.6"},
+	{"Rebellions DRA 드라이버", "docker.io/rebellions/k8s-dra-driver-npu:v0.2.0", "MIRROR/rebellions/k8s-dra-driver-npu:v0.2.0"},
+	{"Tenstorrent DRA 드라이버", "ghcr.io/tenstorrent/tt-dra-driver:0.0.48", "MIRROR/tenstorrent/tt-dra-driver:0.0.48"},
+	{"Tenstorrent Fabric Manager", "ghcr.io/tenstorrent/tt-fabric-manager:latest", "MIRROR/tenstorrent/tt-fabric-manager:latest"},
 }
 
 // TestVendorImagesUseUpstreamWhenVendorRegistryEmpty 는 vendorRegistry 가 비었을 때

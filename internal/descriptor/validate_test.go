@@ -95,3 +95,29 @@ func TestValidateRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSharingReplicasRange(t *testing.T) {
+	s := validSpec()
+	s.Backends = []string{npuv1alpha1.BackendDevicePlugin}
+	s.Sharing = &npuv1alpha1.DescriptorSharing{Mode: npuv1alpha1.SharingModeTimeSliced, Replicas: 1}
+	if errs := Validate(s); len(errs) == 0 {
+		t.Fatal("replicas 1 은 거절돼야 한다(2 이상)")
+	}
+	s.Sharing.Replicas = 4
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("replicas 4 는 통과해야 한다: %v", errs)
+	}
+	s.Sharing.Replicas = 17
+	if errs := Validate(s); len(errs) == 0 {
+		t.Fatal("replicas 17 은 MaxSharingReplicas 초과로 거절")
+	}
+}
+
+func TestValidateSharingRequiresDevicePluginBackend(t *testing.T) {
+	s := validSpec()
+	s.Backends = []string{npuv1alpha1.BackendDRA}
+	s.Sharing = &npuv1alpha1.DescriptorSharing{Mode: npuv1alpha1.SharingModeTimeSliced, Replicas: 2}
+	if errs := Validate(s); len(errs) == 0 {
+		t.Fatal("시분할은 devicePlugin backend 에서만 — DRA 만 선언하면 거절")
+	}
+}

@@ -3,10 +3,10 @@
 // 상세: 벤더 chart 를 그대로 설치하지 않고 우리 라벨·이미지·네임스페이스로 옮겨
 //       만든다. chart 의 affinity 가 NFD 와 벤더 탐지기 라벨 셋을 요구해 우리
 //       클러스터에서는 어느 노드에도 스케줄되지 않기 때문이다
-//       (docs/design/dra-driver-lifecycle.md §3.2).
+//       (chart 의 affinity 조건).
 //       사설 미러 경로는 여기서 조립하지 않는다 — 이 저장소는 레지스트리를 CR 이
 //       아니라 helm 에서 조립하고, 완성된 경로가 spec 으로 내려온다.
-// 생성일: 2026-08-07
+// 생성일: 2026-08-07 | 수정일: 2026-09-28
 // ============================================================
 
 package controller
@@ -14,6 +14,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -25,8 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/intent"
 )
 
 const (
@@ -47,7 +52,24 @@ const (
 	// draNamespace 는 드라이버 오브젝트를 두는 네임스페이스다. 벤더 chart 는
 	// kube-system 이지만 우리 operand 규약을 따른다.
 	draNamespace = "kcloud"
+
+	// draDSNameRebellions 는 배포되는 DaemonSet 이름이다.
+	draDSNameRebellions = "kcloud-rebellions-dra-driver"
+	// draDriverNameRebellions 는 이 드라이버가 발행물에 쓰는 spec.driver 값이다.
+	// 벤더 chart 의 DeviceClass 이름과 같다(reference/rbln-k8s-dra-driver).
+	draDriverNameRebellions = "npu.rebellions.ai"
+	// draDriverImageRebellionsDefault 는 spec 미지정 시 기본 이미지다.
+	// docker.io/rebellions/k8s-dra-driver-npu 태그 목록 실측(2026-09-15):
+	// 0.2.0, latest, v0.1.0~v0.1.4, v0.2.0. 벤더 chart 기본값(appVersion v0.2.1)은
+	// 404 로 존재하지 않고, latest 는 재현 불가라 v0.2.0 을 쓴다.
+	draDriverImageRebellionsDefault = "docker.io/rebellions/k8s-dra-driver-npu:v0.2.0"
+	// draHealthcheckPortRebellions 은 바이너리 헬스체크 포트다. 기본값 -1 은 꺼짐을
+	// 뜻한다. 벤더 chart 기본값 51515 를 그대로 쓴다(NVIDIA 렌더러의 51516 과 겹치지 않음).
+	draHealthcheckPortRebellions int32 = 51515
 )
+
+// vendorRebellions 는 DRA 축에서 이 벤더를 가리키는 이름이다.
+const vendorRebellions = "rebellions"
 
 // renderFuriosaDRADriver 는 Furiosa DRA 드라이버 오브젝트 다섯을 만든다.
 // ServiceAccount · ClusterRole · ClusterRoleBinding · DaemonSet · DeviceClass.
@@ -110,12 +132,12 @@ func renderFuriosaDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Objec
 		},
 	}
 
-	return []client.Object{sa, cr, crb, renderFuriosaDRADaemonSet(policy, spec, labels), dc}
+	return []client.Object{sa, cr, crb, renderFuriosaDRADaemonSet(spec, labels), dc}
 }
 
 // renderFuriosaDRADaemonSet 은 드라이버 DaemonSet 을 만든다. 벤더 chart 의
 // 컨테이너·볼륨은 그대로 쓰고 스케줄 조건만 우리 것으로 바꾼다.
-func renderFuriosaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1alpha1.DRASpec,
+func renderFuriosaDRADaemonSet(spec *npuv1alpha1.DRASpec,
 	labels map[string]string) *appsv1.DaemonSet {
 	image := draDriverImageFuriosaDefault
 	if spec != nil && spec.Image != "" {
@@ -143,7 +165,7 @@ func renderFuriosaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1
 		}}
 	}
 
-	return &appsv1.DaemonSet{
+	ds := &appsv1.DaemonSet{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: draDSNameFuriosa, Namespace: draNamespace, Labels: labels,
@@ -155,14 +177,14 @@ func renderFuriosaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1
 				Spec: corev1.PodSpec{
 					// 벤더 chart 의 affinity 는 NFD 와 벤더 탐지기 라벨 셋을 요구한다.
 					// 우리는 둘 다 안 쓰므로 자립 라벨로 갈아 끼운다.
-					NodeSelector:       map[string]string{"kcloud.ai/rngd.present": "true"},
+					NodeSelector:       map[string]string{vendorPresentLabel(vendorRngd): labelValueTrue},
 					Affinity:           nil,
 					ServiceAccountName: draDSNameFuriosa,
 					PriorityClassName:  "system-node-critical",
 					// nsenter -t 1 이 호스트 PID 네임스페이스를 요구한다.
 					HostPID:        true,
 					Tolerations:    []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
-					InitContainers: []corev1.Container{renderCDIInitContainer(policy)},
+					InitContainers: []corev1.Container{renderCDIInitContainer()},
 					Containers: []corev1.Container{{
 						Name:    "plugin",
 						Image:   image,
@@ -193,6 +215,13 @@ func renderFuriosaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1
 			},
 		},
 	}
+	// 이 DaemonSet 은 RNGD 전용이지만(nodeSelector 가 rngd.present 만 본다) furiosa(Warboy)
+	// 쪽에는 이를 대신할 DRA DaemonSet 이 따로 없다 — 되돌린 뒤 두 벤더 키 중 어느 쪽이
+	// retired 든 이 DaemonSet 이 그 노드를 피하게 둘 다 건다(device-plugin 쪽 통합 DS 가
+	// excludeDRAOwnedNodes 를 furiosa·rngd 둘 다에 거는 것과 같은 이유).
+	excludeDRARetiredNodes(&ds.Spec.Template.Spec, vendorFuriosa)
+	excludeDRARetiredNodes(&ds.Spec.Template.Spec, vendorRngd)
+	return ds
 }
 
 // mergeEnv 는 base 에 extra 를 더한다. 같은 이름이면 extra 가 이긴다.
@@ -229,7 +258,7 @@ func mergeEnv(base, extra []corev1.EnvVar) []corev1.EnvVar {
 // 이미지는 kcloud-host-exec 을 재사용한다(HOST_EXEC_IMAGE). 그 이미지에 python3 은
 // 없고 awk·grep·nsenter 는 있다(2026-08-07 실측). systemctl 도 이미지에는 없으나
 // nsenter 로 호스트 것을 부르므로 무관하다.
-func renderCDIInitContainer(_ *npuv1alpha1.NPUClusterPolicy) corev1.Container {
+func renderCDIInitContainer() corev1.Container {
 	const script = `set -eu
 DIR=/host/etc/containerd
 CFG=$DIR/config.toml
@@ -366,8 +395,19 @@ func draVendors(policy *npuv1alpha1.NPUClusterPolicy) []draVendor {
 			dsName: draDSNameNvidia,
 		})
 	}
+	if s := policy.Spec.Rebellions.DRA; s != nil {
+		out = append(out, draVendor{
+			name: vendorRebellions, spec: s,
+			render: renderRebellionsDRADriver, driverName: draDriverNameRebellions,
+			dsName: draDSNameRebellions,
+		})
+	}
 	if s := policy.Spec.Tenstorrent.DRA; s != nil {
-		out = append(out, draVendor{name: vendorTenstorrent, spec: s})
+		out = append(out, draVendor{
+			name: vendorTenstorrent, spec: s,
+			render: renderTenstorrentDRADriver, driverName: draDriverNameTenstorrent,
+			dsName: draDSNameTenstorrent,
+		})
 	}
 	return out
 }
@@ -391,12 +431,285 @@ func (r *NPUClusterPolicyReconciler) ensureDRADriver(
 	return nil
 }
 
+// ignoredDRAConfigNote 는 이 벤더가 반영하지 않는 설정이 들어왔을 때 그 사실을
+// 문장으로 돌려준다. 반영하지 않을 것이 없으면 빈 문자열이다.
+//
+// Tenstorrent 만 Args·Env 를 반영하지 않는다 — 이 벤더는 장치 발견을 FM agent 에
+// 맡기는 구조라 --fabric-manager-agent-address·--device-profile 이 선택 인자가 아니고,
+// args 를 통째로 갈아끼우면 드라이버가 기동하지 못한다. 무시 자체는 맞지만 조용히
+// 무시하면 사용자는 자기 설정이 반영됐다고 믿는다.
+func ignoredDRAConfigNote(vendor string, spec *npuv1alpha1.DRASpec) string {
+	if vendor != vendorTenstorrent || spec == nil {
+		return ""
+	}
+	var ignored []string
+	if len(spec.Args) > 0 {
+		ignored = append(ignored, "args")
+	}
+	if len(spec.Env) > 0 {
+		ignored = append(ignored, "env")
+	}
+	if len(ignored) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("spec.dra.%s 는 이 벤더에서 반영하지 않는다 — 드라이버가 FM agent "+
+		"주소와 device-profile 인자를 잃으면 기동하지 못한다. 설정은 저장되지만 "+
+		"컨테이너에 전달되지 않는다", strings.Join(ignored, "·"))
+}
+
+// priorDRAMessage 는 직전 조정이 이 벤더에 남긴 status.message 다. ensureDRADriver 가
+// 목록을 통째로 교체하기 전에 읽으므로 아직 이전 회차 값이다. 없으면 빈 문자열.
+func priorDRAMessage(policy *npuv1alpha1.NPUClusterPolicy, vendor string) string {
+	for _, d := range policy.Status.DRADrivers {
+		if d.Vendor == vendor {
+			return d.Message
+		}
+	}
+	return ""
+}
+
+// dualAdvertiseNode 는 한 노드에서 한 벤더가 device-plugin 과 DRA 양쪽으로 동시에
+// 광고 중인 물량이다. ResourceQty 는 device-plugin allocatable, Slices 는 그 벤더
+// 드라이버가 이 노드에 낸 ResourceSlice 의 장치 수다(intent.DRACapability.SlicesByNodeDriver
+// 와 같은 집계 방식 — device 개수를 "slice 수" 라 부르는 것은 그 타입의 기존 용례를 따른 것).
+type dualAdvertiseNode struct {
+	Node        string
+	ResourceQty int64
+	Slices      int32
+}
+
+// dualAdvertiseNodes 는 driverName 드라이버가 ResourceSlice 를 내는 노드 중, 같은
+// resourceName 을 device-plugin allocatable 로도 아직 내놓는 노드를 찾는다
+// (rebellionsDualAdvertiseNote 의 일반화 — 벤더마다 드라이버 이름·리소스명만 다르다).
+// 이중광고 노드가 없으면 빈 슬라이스.
+//
+// ponytail: 벤더마다 이 함수를 부르면 ResourceSliceList 를 벤더 수만큼 다시 List 한다.
+// reconcile 주기가 수십 초이고 슬라이스 수가 작아 지금은 문제 없다 — 늘어나면 호출부에서
+// intent.LoadDRACapability 한 번을 공유하도록 바꾼다.
+func (r *NPUClusterPolicyReconciler) dualAdvertiseNodes(
+	ctx context.Context, vendor, driverName, resourceName string,
+) ([]dualAdvertiseNode, error) {
+	var slices resourcev1.ResourceSliceList
+	if err := r.List(ctx, &slices); err != nil {
+		return nil, fmt.Errorf("%s ResourceSlice 조회 실패: %w", vendor, err)
+	}
+	counts := map[string]int32{}
+	for i := range slices.Items {
+		s := &slices.Items[i]
+		if s.Spec.Driver == driverName && s.Spec.NodeName != nil && *s.Spec.NodeName != "" {
+			counts[*s.Spec.NodeName] += int32(len(s.Spec.Devices))
+		}
+	}
+	if len(counts) == 0 {
+		return nil, nil
+	}
+
+	extRes := corev1.ResourceName(resourceName)
+	var dual []dualAdvertiseNode
+	for name, k := range counts {
+		var node corev1.Node
+		if err := r.Get(ctx, types.NamespacedName{Name: name}, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("%s 노드 %s 조회 실패: %w", vendor, name, err)
+		}
+		if qty, ok := node.Status.Allocatable[extRes]; ok && qty.Value() > 0 {
+			dual = append(dual, dualAdvertiseNode{Node: name, ResourceQty: qty.Value(), Slices: k})
+		}
+	}
+	sort.Slice(dual, func(i, j int) bool { return dual[i].Node < dual[j].Node })
+	return dual, nil
+}
+
+// rebellionsDualAdvertiseNote 는 Rebellions ResourceSlice(DRA)를 내는 노드 중 같은
+// extended resource 를 device-plugin allocatable 로도 광고하는 노드를 찾아 통지
+// 문장으로 돌려준다. 이중광고 노드가 없으면 빈 문자열.
+func (r *NPUClusterPolicyReconciler) rebellionsDualAdvertiseNote(
+	ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy,
+) (string, error) {
+	resName := policy.Spec.Rebellions.ResourceName
+	if resName == "" {
+		resName = rbllnsResourceNameDefault
+	}
+	resPrefix := policy.Spec.Rebellions.ResourcePrefix
+	if resPrefix == "" {
+		resPrefix = rbllnsResourcePrefixDfault
+	}
+	extRes := resPrefix + "/" + resName
+
+	dual, err := r.dualAdvertiseNodes(ctx, vendorRebellions, draDriverNameRebellions, extRes)
+	if err != nil {
+		return "", err
+	}
+	if len(dual) == 0 {
+		return "", nil
+	}
+	names := make([]string, len(dual))
+	for i, d := range dual {
+		names[i] = d.Node
+	}
+	return fmt.Sprintf(
+		"이중광고: 노드 %v 가 %s 을 device-plugin 과 DRA 로 동시 광고한다(스케줄러가 "+
+			"카드 1장을 자원 2개로 본다). 해당 노드에서 device-plugin 광고를 끄거나 DRA 를 끄라",
+		names, extRes), nil
+}
+
+// advertiseVendorDriverName 은 advertiseVendors() 의 다섯 벤더 키가 발행물에 쓰는
+// spec.driver 값이다. furiosa·rngd 는 칩 세대는 다르지만 DRA 드라이버는 하나뿐이라
+// (draVendors 참고 — Furiosa.Rngd.DRA 하나만 배포 대상이다) 같은 이름을 쓴다. 모르는
+// 벤더는 빈 문자열 — dualAdvertiseNodes 는 그러면 어떤 슬라이스와도 안 맞아 항상 0건이다.
+func advertiseVendorDriverName(vendor string) string {
+	switch vendor {
+	case vendorNvidia:
+		return draDriverNameNvidia
+	case vendorFuriosa, vendorRngd:
+		return draDriverNameFuriosa
+	case vendorTenstorrent:
+		return draDriverNameTenstorrent
+	case vendorRebellions:
+		return draDriverNameRebellions
+	}
+	return ""
+}
+
+// advertiseVendorDRADSName 은 advertiseVendors() 의 다섯 벤더 키가 배포 여부 확인에 쓰는
+// DRA DaemonSet 이름이다. advertiseVendorDriverName 과 같은 이유로 furiosa·rngd 는 같은
+// DaemonSet(draVendors 참고 — Furiosa.Rngd.DRA 하나만 배포 대상)을 가리킨다. 모르는 벤더는
+// 빈 문자열 — draDaemonSetExists 는 그러면 조회 없이 false 를 돌려준다.
+func advertiseVendorDRADSName(vendor string) string {
+	switch vendor {
+	case vendorNvidia:
+		return draDSNameNvidia
+	case vendorFuriosa, vendorRngd:
+		return draDSNameFuriosa
+	case vendorTenstorrent:
+		return draDSNameTenstorrent
+	case vendorRebellions:
+		return draDSNameRebellions
+	}
+	return ""
+}
+
+// advertiseVendorResourceName 은 이 벤더가 device-plugin 으로 광고하는 전체 장치
+// 리소스명이다. tenstorrent·rebellions 는 spec 오버라이드를 실제 렌더러가 반영하므로
+// 그 필드를 그대로 읽는다. furiosa(warboy)·rngd 는 intent.WholeDeviceResource 의
+// 카탈로그 값을 쓴다 — nvidia 처럼 오버라이드 필드가 아예 없거나(furiosa), rngd 처럼
+// CRD 필드는 있어도 공식 이미지가 무시해 실제 광고명과 무관하기 때문이다
+// (ensureFuriosaRngdDevicePlugin 의 주석 참고). 모르는 벤더는 빈 문자열. ctx 는 카탈로그
+// 조회 실패를 다른 조회 실패처럼 로깅하는 데만 쓴다(review Minor — 이전에는 조용히 버렸다).
+func advertiseVendorResourceName(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, vendor string) string {
+	switch vendor {
+	case vendorNvidia:
+		return nvidiaGPUResource
+	case vendorFuriosa:
+		res, err := intent.WholeDeviceResource(vendorFuriosa, "warboy")
+		if err != nil {
+			logf.FromContext(ctx).Error(err, "furiosa(warboy) 리소스명 조회 실패", "vendor", vendor)
+		}
+		return res
+	case vendorRngd:
+		res, err := intent.WholeDeviceResource(vendorFuriosa, "rngd")
+		if err != nil {
+			logf.FromContext(ctx).Error(err, "furiosa(rngd) 리소스명 조회 실패", "vendor", vendor)
+		}
+		return res
+	case vendorTenstorrent:
+		name := policy.Spec.Tenstorrent.ResourceName
+		if name == "" {
+			name = ttResourceDefault
+		}
+		return name
+	case vendorRebellions:
+		name := policy.Spec.Rebellions.ResourceName
+		if name == "" {
+			name = rbllnsResourceNameDefault
+		}
+		prefix := policy.Spec.Rebellions.ResourcePrefix
+		if prefix == "" {
+			prefix = rbllnsResourcePrefixDfault
+		}
+		return prefix + "/" + name
+	}
+	return ""
+}
+
+// detectDualAdvertisement 는 advertiseVendors() 다섯 벤더를 모두 훑어, device-plugin 과
+// DRA 가 같은 물리 장치를 동시에 광고하는 노드가 있는지를 top-level Condition
+// (ConditionDualAdvertisement)으로 남긴다. spec.<vendor>.advertiseBy·dra.enabled 값은
+// 보지 않는다 — 실측(allocatable·ResourceSlice)만 본다. advertiseBy 를 devicePlugin 으로
+// 되돌려도 DRA 발행이 아직 안 꺼진 창을 그대로 드러내야 하기 때문이다. 벤더별 Rebellions
+// 통지(rebellionsDualAdvertiseNote, DRADriverStatus.Message)는 그대로 둔다 — 이 Condition 은
+// 정책 전체 단위의 별도 표면이다.
+func (r *NPUClusterPolicyReconciler) detectDualAdvertisement(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) {
+	logger := logf.FromContext(ctx)
+
+	var parts []string
+	for vendor := range advertiseVendors(policy) {
+		driverName := advertiseVendorDriverName(vendor)
+		resourceName := advertiseVendorResourceName(ctx, policy, vendor)
+		if driverName == "" || resourceName == "" {
+			continue
+		}
+		nodes, err := r.dualAdvertiseNodes(ctx, vendor, driverName, resourceName)
+		if err != nil {
+			// 부분 결과로 조건을 잘못 내리지 않는다 — 이번 pass 는 건너뛰고 다음 reconcile 에서 다시 본다.
+			logger.Error(err, "이중광고 감지 조회 실패", "vendor", vendor)
+			return
+		}
+		for _, n := range nodes {
+			parts = append(parts, fmt.Sprintf("%s: %s(%s=%d, slices=%d)", vendor, n.Node, resourceName, n.ResourceQty, n.Slices))
+		}
+	}
+	sort.Strings(parts)
+
+	// 전이 판정용 이전 상태는 SetStatusCondition 전에 값으로 잡는다 — FindStatusCondition 이
+	// 돌려주는 포인터를 나중에 비교하면 SetStatusCondition 의 제자리 수정 때문에 항상 "바뀌지
+	// 않음" 으로 보인다(vendoroperator_detect.go 의 같은 함정 참고).
+	prevStatus := metav1.ConditionUnknown
+	if prev := meta.FindStatusCondition(policy.Status.Conditions, npuv1alpha1.ConditionDualAdvertisement); prev != nil {
+		prevStatus = prev.Status
+	}
+
+	if len(parts) == 0 {
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               npuv1alpha1.ConditionDualAdvertisement,
+			Status:             metav1.ConditionFalse,
+			Reason:             "NoDualAdvertise",
+			Message:            "device-plugin 과 DRA 가 같은 장치를 동시에 광고하는 노드가 없다",
+			ObservedGeneration: policy.Generation,
+		})
+		return
+	}
+
+	message := strings.Join(parts, "; ")
+	meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+		Type:               npuv1alpha1.ConditionDualAdvertisement,
+		Status:             metav1.ConditionTrue,
+		Reason:             "DualAdvertiseDetected",
+		Message:            message,
+		ObservedGeneration: policy.Generation,
+	})
+	// 전이(→True, 최초 포함)에서만 경고한다 — 매 reconcile 마다 내면 이벤트가 넘친다.
+	if prevStatus != metav1.ConditionTrue && r.Recorder != nil {
+		r.Recorder.Eventf(policy, corev1.EventTypeWarning, "DualAdvertise", "%s", message)
+	}
+}
+
 // reconcileOneDRADriver 는 벤더 하나를 맞춘다. 판정 순서가 곧 안전 순서다 —
 // 끄기가 먼저이고, 렌더러 없는 벤더는 배포 시도조차 하지 않는다.
 func (r *NPUClusterPolicyReconciler) reconcileOneDRADriver(
 	ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, v draVendor,
 ) (npuv1alpha1.DRADriverStatus, error) {
 	st := npuv1alpha1.DRADriverStatus{Vendor: v.name, Phase: npuv1alpha1.DRAPhaseAbsent}
+
+	// delegated·external 이면 이 벤더의 DRA 드라이버를 배포도 회수도 하지 않는다 — kcloud 가
+	// 소유하지 않으므로 관측만 한다(배포 여부는 IsOperatorOwned() 하나로 묻는다).
+	// (managed→delegated·external 로 바뀌어 기존 드라이버가 남아 있어도 지우지 않는다 — Global Constraint.)
+	if !vendorIsOperatorOwned(policy, v.name) {
+		st.Message = "delegated·external 관리 모드 — kcloud 가 DRA 드라이버를 배포·회수하지 않는다"
+		return st, nil
+	}
 
 	if !v.spec.IsEnabled() {
 		// 배포한 적이 없으면 지울 것도 없다. DaemonSet 존재 여부를 먼저 보는 이유는
@@ -407,6 +720,18 @@ func (r *NPUClusterPolicyReconciler) reconcileOneDRADriver(
 			return st, err
 		}
 		return st, r.deleteDRAObjects(ctx, v.render(policy))
+	}
+
+	note := ignoredDRAConfigNote(v.name, v.spec)
+	if note != "" {
+		// 통지 내용이 바뀔 때만 이벤트를 낸다. 발행물이 관측되지 않으면 draRequeue
+		// (npuclusterpolicy_controller.go)가 30초마다 재조정하므로, 무조건 내면 spec 이
+		// 그대로인데도 같은 경고가 30초마다 갱신된다.
+		if r.Recorder != nil && !strings.Contains(priorDRAMessage(policy, v.name), note) {
+			r.Recorder.Eventf(policy, corev1.EventTypeWarning, "DRAConfigIgnored",
+				"%s DRA: %s", v.name, note)
+		}
+		st.Message = note
 	}
 
 	if v.name == vendorNvidia {
@@ -453,8 +778,36 @@ func (r *NPUClusterPolicyReconciler) reconcileOneDRADriver(
 	if nodes == 0 {
 		st.Phase = npuv1alpha1.DRAPhaseInstalling
 		st.Message = "드라이버는 배포됐으나 ResourceSlice 발행이 아직 관측되지 않음"
+		if note != "" {
+			// 구분자가 ". " 인 것은 통지 문장이 자기 안에 이미 " — " 를 쓰기 때문이다.
+			st.Message += ". " + note
+		}
 		return st, nil
 	}
+
+	// advertiseBy=dra 로 전환하지 않은(파일럿) 노드의 이중광고를 감지한다 — DRA 를 켜도
+	// device-plugin 광고가 그대로 살아 있을 수 있다. 같은 노드가 extended
+	// resource 를 allocatable(device-plugin)과 ResourceSlice(DRA) 양쪽으로 내면 스케줄러는
+	// 카드 1장을 자원 2개로 본다. 스케줄링 후보 경로는 이미 이 노드를 뺀다
+	// (AWReasonDRADoubleAdvertised, intent/translate.go) — 여기서는 관리자에게 표면화만 한다.
+	// 통지 내용이 바뀔 때만 이벤트를 낸다(위 DRAConfigIgnored 와 같은 이유).
+	if v.name == vendorRebellions {
+		dualNote, err := r.rebellionsDualAdvertiseNote(ctx, policy)
+		if err != nil {
+			return st, err
+		}
+		if dualNote != "" {
+			if r.Recorder != nil && !strings.Contains(priorDRAMessage(policy, v.name), dualNote) {
+				r.Recorder.Eventf(policy, corev1.EventTypeWarning, "RebellionsDualAdvertise", "%s", dualNote)
+			}
+			if st.Message != "" {
+				st.Message += ". " + dualNote
+			} else {
+				st.Message = dualNote
+			}
+		}
+	}
+
 	st.Phase = npuv1alpha1.DRAPhaseReady
 	return st, nil
 }
@@ -466,6 +819,26 @@ func (r *NPUClusterPolicyReconciler) draDeployed(ctx context.Context, v draVendo
 	}
 	var ds appsv1.DaemonSet
 	err := r.Get(ctx, types.NamespacedName{Name: v.dsName, Namespace: draNamespace}, &ds)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// draDaemonSetExists 는 이름으로 DRA DaemonSet 존재 여부만 본다 — draDeployed 와 달리
+// draVendor(render 필드 포함) 를 요구하지 않는다. advertiseVendors() 축의 다섯 벤더 키 중
+// rngd 는 draVendors() 표에 별도 항목이 없어(furiosa 항목이 그 DaemonSet 을 겸함) draVendor
+// 값을 만들어 넘기기 애매하다 — reconcileDRARetiredLabel 이 dra.enabled=false 로 retired
+// 라벨을 지우기 전에 그 벤더의 DaemonSet 이 실제로 사라졌는지 확인하는 데 쓴다.
+func (r *NPUClusterPolicyReconciler) draDaemonSetExists(ctx context.Context, dsName string) (bool, error) {
+	if dsName == "" {
+		return false, nil
+	}
+	var ds appsv1.DaemonSet
+	err := r.Get(ctx, types.NamespacedName{Name: dsName, Namespace: draNamespace}, &ds)
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -585,7 +958,7 @@ func renderNvidiaDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object
 		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: draDSNameNvidia, Namespace: draNamespace}},
 	}
 
-	out := []client.Object{sa, cr, crb, renderNvidiaDRADaemonSet(policy, spec, labels)}
+	out := []client.Object{sa, cr, crb, renderNvidiaDRADaemonSet(spec, labels)}
 	for _, dc := range []struct{ name, kind string }{
 		{"gpu.nvidia.com", "gpu"},
 		{"mig.nvidia.com", "mig"},
@@ -609,7 +982,7 @@ func renderNvidiaDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object
 
 // renderNvidiaDRADaemonSet 은 kubelet-plugin DaemonSet 을 만든다. 컨테이너·볼륨·환경변수는
 // chart 원본을 그대로 쓰고 스케줄 조건과 init container 순서만 우리 것으로 바꾼다.
-func renderNvidiaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1alpha1.DRASpec,
+func renderNvidiaDRADaemonSet(spec *npuv1alpha1.DRASpec,
 	labels map[string]string) *appsv1.DaemonSet {
 	image := draDriverImageNvidiaDefault
 	if spec != nil && spec.Image != "" {
@@ -654,7 +1027,7 @@ func renderNvidiaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1a
 		}}
 	}
 
-	return &appsv1.DaemonSet{
+	ds := &appsv1.DaemonSet{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: draDSNameNvidia, Namespace: draNamespace, Labels: labels,
@@ -666,7 +1039,7 @@ func renderNvidiaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1a
 				Spec: corev1.PodSpec{
 					// chart affinity 는 NFD 4종과 외부 operator 라벨 1종의 OR 이다.
 					// 우리는 둘 다 안 쓰므로 자립 라벨로 갈아 끼운다.
-					NodeSelector:       map[string]string{"kcloud.ai/nvidia.present": labelValueTrue},
+					NodeSelector:       map[string]string{vendorPresentLabel(vendorNvidia): labelValueTrue},
 					Affinity:           nil,
 					ServiceAccountName: draDSNameNvidia,
 					PriorityClassName:  "system-node-critical",
@@ -675,7 +1048,7 @@ func renderNvidiaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1a
 					Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					InitContainers: []corev1.Container{
 						// CDI 활성화가 반드시 먼저다. 벤더 prestart 가 CDI 없는 상태에서 돌면 안 된다.
-						renderCDIInitContainer(policy),
+						renderCDIInitContainer(),
 						{
 							Name:            "vendor-prestart",
 							Image:           image,
@@ -712,4 +1085,407 @@ func renderNvidiaDRADaemonSet(policy *npuv1alpha1.NPUClusterPolicy, spec *npuv1a
 			},
 		},
 	}
+	// nvidiaDRABlockReason 이 advertiseBy: dra 가 아니면 이미 배포 자체를 거절하므로 이
+	// 노드가 retired 인 채로 이 DaemonSet 이 뜰 일은 실제로 없다 — 그래도 다섯 벤더 모두
+	// 같은 규칙을 갖도록 대칭으로 건다.
+	excludeDRARetiredNodes(&ds.Spec.Template.Spec, vendorNvidia)
+	return ds
+}
+
+// renderRebellionsDRADriver 는 벤더 chart(k8s-dra-driver-npu)를 우리 규약으로 옮긴 것이다.
+// 바꾼 것은 둘이다. nodeSelector 를 벤더 라벨에서 자립 라벨로 바꾸고, 네임스페이스를
+// 우리 것으로 고정한다. 나머지 컨테이너·볼륨·환경변수는 원본 그대로다.
+func renderRebellionsDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object {
+	spec := policy.Spec.Rebellions.DRA
+	labels := map[string]string{
+		"app.kubernetes.io/name":      draDSNameRebellions,
+		"app.kubernetes.io/component": "dra-driver",
+	}
+
+	sa := &corev1.ServiceAccount{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameRebellions, Namespace: draNamespace, Labels: labels},
+	}
+
+	// 벤더 chart clusterrole.yaml 세 줄 그대로다.
+	cr := &rbacv1.ClusterRole{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameRebellions, Labels: labels},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaims"},
+				Verbs: []string{"get"}},
+			{APIGroups: []string{""}, Resources: []string{"nodes"},
+				Verbs: []string{"get"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceslices"},
+				Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+		},
+	}
+
+	crb := &rbacv1.ClusterRoleBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameRebellions, Labels: labels},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: draDSNameRebellions},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: draDSNameRebellions, Namespace: draNamespace}},
+	}
+
+	dc := &resourcev1.DeviceClass{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "resource.k8s.io/v1", Kind: "DeviceClass"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDriverNameRebellions, Labels: labels},
+		Spec: resourcev1.DeviceClassSpec{
+			Selectors: []resourcev1.DeviceSelector{{
+				CEL: &resourcev1.CELDeviceSelector{
+					Expression: "device.driver == '" + draDriverNameRebellions + "'",
+				},
+			}},
+		},
+	}
+
+	return []client.Object{sa, cr, crb, renderRebellionsDRADaemonSet(spec, labels), dc}
+}
+
+// renderRebellionsDRADaemonSet 은 kubeletplugin DaemonSet 을 만든다.
+func renderRebellionsDRADaemonSet(spec *npuv1alpha1.DRASpec, labels map[string]string) *appsv1.DaemonSet {
+	image := draDriverImageRebellionsDefault
+	if spec != nil && spec.Image != "" {
+		image = spec.Image
+	}
+	command := []string{"npu-kubelet-plugin"}
+	if spec != nil && len(spec.Args) > 0 {
+		command = append(command, spec.Args...)
+	}
+	env := []corev1.EnvVar{
+		{Name: "DRIVER_NAME", Value: draDriverNameRebellions},
+		{Name: "CDI_ROOT", Value: draCDIRoot},
+		{Name: "KUBELET_REGISTRAR_DIRECTORY_PATH", Value: "/var/lib/kubelet/plugins_registry"},
+		{Name: "KUBELET_PLUGINS_DIRECTORY_PATH", Value: "/var/lib/kubelet/plugins"},
+		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+		}},
+		{Name: "NAMESPACE", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+		}},
+		{Name: "HEALTHCHECK_PORT", Value: fmt.Sprintf("%d", draHealthcheckPortRebellions)},
+	}
+	if spec != nil {
+		env = mergeEnv(env, spec.Env)
+	}
+	// probe 포트는 병합이 끝난 env 를 되읽어 정한다. spec.Env 가 HEALTHCHECK_PORT 를
+	// 덮어썼는데 probe 는 상수 포트를 그대로 찌르면, 바이너리는 새 포트로 듣고
+	// kubelet 은 옛 포트를 찔러 정상 파드가 liveness 실패로 재시작 루프에 빠진다.
+	//
+	// 리터럴 값이 1~65535 범위일 때만 probe 를 붙인다(GRPCAction.Port 계약, K8s API
+	// "Number must be in the range 1 to 65535"). 이 범위를 벗어나면 API 서버가
+	// DaemonSet 자체를 거절해 probe 하나가 아니라 배포 전체가 실패한다. -1 은 벤더
+	// 관례상 헬스체크를 끈다는 뜻이라 이 값을 쓰는 사용자도 여기 걸려 probe 없이
+	// 렌더된다. ValueFrom(Secret·ConfigMap·fieldRef 참조)은 렌더 시점에 값을 알 수
+	// 없어 마찬가지로 probe 를 붙이지 않는다 — 상수로 폴백하면 바이너리는 참조가
+	// 풀린 값으로 듣고 kubelet 은 상수 포트를 찔러 같은 어긋남이 키 모양만 바꿔
+	// 재발한다. env 값 자체는 사용자 것이니 그대로 둔다.
+	var healthPort int32
+	var attachProbe bool
+	for _, e := range env {
+		if e.Name != "HEALTHCHECK_PORT" {
+			continue
+		}
+		if e.ValueFrom == nil {
+			if v, err := strconv.ParseInt(e.Value, 10, 32); err == nil && v >= 1 && v <= 65535 {
+				healthPort = int32(v)
+				attachProbe = true
+			}
+		}
+		break
+	}
+
+	hostPathDir := func(p string) corev1.VolumeSource {
+		return corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: p}}
+	}
+
+	plugin := corev1.Container{
+		Name:            "plugin",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         command,
+		Env:             env,
+		SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "plugins-registry", MountPath: "/var/lib/kubelet/plugins_registry"},
+			{Name: "plugins", MountPath: "/var/lib/kubelet/plugins"},
+			{Name: "cdi", MountPath: draCDIRoot},
+			{Name: "host-dev", MountPath: "/dev"},
+			{Name: "host-run-rbln", MountPath: "/run/rbln"},
+			{Name: "host-usr-bin", MountPath: "/host/usr/bin", ReadOnly: true},
+		},
+	}
+	if attachProbe {
+		// 벤더 chart 가 같은 포트에 gRPC 헬스체크를 건다. HEALTHCHECK_PORT 를
+		// 켜기만 하고 probe 를 안 걸면 쓰이지 않는 설정으로 남는다. 지연·주기·
+		// 실패 임계값은 벤더 chart 원본을 이 저장소에서 확인하지 못해 보수적으로
+		// 고른 기본값이다(확정 실측 아님). 이 드라이버는 라이브에서 CDI 단계를
+		// 넘긴 적이 없어 포트가 언제 열리는지 실측치가 없다.
+		plugin.LivenessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				GRPC: &corev1.GRPCAction{Port: healthPort},
+			},
+			InitialDelaySeconds: 30,
+			PeriodSeconds:       10,
+			FailureThreshold:    3,
+		}
+	}
+
+	ds := &appsv1.DaemonSet{
+		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: draDSNameRebellions, Namespace: draNamespace, Labels: labels,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: draDSNameRebellions,
+					HostPID:            true,
+					Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+					InitContainers:     []corev1.Container{renderCDIInitContainer()},
+					PriorityClassName:  "system-node-critical",
+					NodeSelector: map[string]string{
+						vendorPresentLabel(vendorRebellions): labelValueTrue,
+					},
+					Containers: []corev1.Container{plugin},
+					Volumes: []corev1.Volume{
+						{Name: "plugins-registry", VolumeSource: hostPathDir("/var/lib/kubelet/plugins_registry")},
+						{Name: "plugins", VolumeSource: hostPathDir("/var/lib/kubelet/plugins")},
+						{Name: "cdi", VolumeSource: hostPathDir(draCDIRoot)},
+						{Name: "host-dev", VolumeSource: hostPathDir("/dev")},
+						{Name: "host-run-rbln", VolumeSource: hostPathDir("/run/rbln")},
+						{Name: "host-usr-bin", VolumeSource: hostPathDir("/usr/bin")},
+						{Name: "host-etc-containerd", VolumeSource: hostPathDir("/etc/containerd")},
+					},
+				},
+			},
+		},
+	}
+	excludeDRARetiredNodes(&ds.Spec.Template.Spec, vendorRebellions)
+	return ds
+}
+
+const (
+	// draDSNameTenstorrent 는 배포되는 DaemonSet 이름이다.
+	draDSNameTenstorrent = "kcloud-tenstorrent-dra-driver"
+	// draDriverNameTenstorrent 는 이 드라이버가 발행물에 쓰는 spec.driver 값이다.
+	draDriverNameTenstorrent = "tenstorrent.com"
+	// draDriverImageTenstorrentDefault 는 spec 미지정 시 기본 이미지다.
+	// 벤더가 chart 를 주지 않아 태그를 우리가 고정한다(2026-08-05 라이브 확인 판).
+	draDriverImageTenstorrentDefault = "ghcr.io/tenstorrent/tt-dra-driver:0.0.48"
+	// draFMImageTenstorrentDefault 는 장치 발견을 맡는 보조 데몬이다. 드라이버가
+	// 이것에 gRPC 로 물어야 ASIC 을 찾는다 — 없으면 드라이버가 CrashLoop 에 빠진다
+	// (2026-08-05 라이브 실측).
+	//
+	// 태그를 고정하지 못했다. 이 파일은 위 draDriverImageRebellionsDefault 에서 latest 를
+	// 재현 불가라고 물리치는데 여기서는 쓴다 — ghcr.io/tenstorrent/tt-fabric-manager 가
+	// 공개하는 태그가 latest·main·sha 뿐이고 벤더가 버전 태그를 발행하지 않기 때문이다
+	// (같은 기록 §2 의 태그 실측). 실재를 확인하지 않은 태그를 적을 수는 없다.
+	// 배포자가 할 일 둘: 재현 가능한 배포가 필요하면 sha 태그나 digest 를 골라
+	// tenstorrent.dra.fabricManager.tag 로 덮고, air-gap 이면 드라이버 이미지와 함께
+	// 이것도 사설 미러에 올린 뒤 global.vendorRegistry 를 준다.
+	draFMImageTenstorrentDefault = "ghcr.io/tenstorrent/tt-fabric-manager:latest"
+	// draFMPortTenstorrent 는 FM agent 가 듣는 포트다. 드라이버 기본값과 맞춘다.
+	draFMPortTenstorrent = 50053
+)
+
+// renderTenstorrentDRADriver 는 Tenstorrent DRA 드라이버 오브젝트 여섯을 만든다.
+// 다른 벤더와 달리 ConfigMap 이 하나 더 붙는다 — FM agent 가 설정 파일 없이
+// 기동을 거부하는데 그 파일이 이미지에 없다(2026-08-05 실측).
+func renderTenstorrentDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object {
+	spec := policy.Spec.Tenstorrent.DRA
+	labels := map[string]string{
+		"app.kubernetes.io/name":      draDSNameTenstorrent,
+		"app.kubernetes.io/component": "dra-driver",
+	}
+
+	sa := &corev1.ServiceAccount{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Namespace: draNamespace, Labels: labels},
+	}
+	cr := &rbacv1.ClusterRole{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Labels: labels},
+		// 규칙 8종은 renderFuriosaDRADriver 의 ClusterRole 을 그대로 복제한 것이다.
+		// 손으로 좁혀 쓰지 않는다 — 그 집합이 1.34 에서 DRA 가 실제로 동작한 판이고,
+		// 라이브 기록이 요구한 resourceclaims/driver 의 associated-node 권한을 이미 담는다.
+		// 좁혀서 생기는 실패는 "claim 이 노드에 묶이지 않음" 이라 라이브에서야 드러난다.
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaims"},
+				Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaims/status"},
+				Verbs: []string{"update", "patch"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaims/driver"},
+				Verbs: []string{"associated-node:update", "associated-node:patch"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaimtemplates"},
+				Verbs: []string{"get", "list", "watch", "create", "update", "delete"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaimtemplates/status"},
+				Verbs: []string{"update", "patch"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceslices"},
+				Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceslices/status"},
+				Verbs: []string{"update", "patch"}},
+		},
+	}
+	crb := &rbacv1.ClusterRoleBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Labels: labels},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: draDSNameTenstorrent},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: draDSNameTenstorrent, Namespace: draNamespace}},
+	}
+	// 바이너리 문자열에서 뽑은 최소 설정이다. 벤더가 예제를 주지 않아 이 두 줄로
+	// 검증을 통과시켰다(2026-08-05). 벤더 판이 오르면 여기가 먼저 깨진다.
+	//
+	// 이 구성의 한계(2026-08-05 라이브 실측). listen_address 가
+	// 가리키는 FM controller 를 우리는 어디에도 배치하지 않는다. agent 는 등록에 실패하고
+	// 노드마다 초당 1회 장치 재발견을 재시도한다. DRA 경로 자체는 끝까지 성립하지만
+	// (GetTopology 는 등록 여부와 무관하게 응답한다) 그 기록 자신의 판정은 "단일 노드
+	// 시험에서는 무해했지만 운영에 올릴 구성은 아니다" 다. 여러 노드에 걸친 fabric
+	// 토폴로지도 controller 없이는 쓸 수 없다(미검증). controller 배치는 별개 과제이고,
+	// 같은 경고가 values.yaml 의 tenstorrent.dra 블록에도 있다.
+	cm := &corev1.ConfigMap{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Namespace: draNamespace, Labels: labels},
+		Data: map[string]string{
+			"config.yaml": "controller:\n  listen_address: \"127.0.0.1:50051\"\n",
+		},
+	}
+	dc := &resourcev1.DeviceClass{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "resource.k8s.io/v1", Kind: "DeviceClass"},
+		ObjectMeta: metav1.ObjectMeta{Name: draDriverNameTenstorrent, Labels: labels},
+		Spec: resourcev1.DeviceClassSpec{
+			Selectors: []resourcev1.DeviceSelector{{
+				CEL: &resourcev1.CELDeviceSelector{
+					Expression: "device.driver == '" + draDriverNameTenstorrent + "'",
+				},
+			}},
+		},
+	}
+	return []client.Object{sa, cr, crb, cm, renderTenstorrentDRADaemonSet(spec, labels), dc}
+}
+
+// renderTenstorrentDRADaemonSet 은 드라이버와 FM agent 를 한 파드에 담는다.
+// 드라이버가 localhost 로 FM 에 질의하므로 같은 파드여야 한다.
+func renderTenstorrentDRADaemonSet(
+	spec *npuv1alpha1.DRASpec, labels map[string]string,
+) *appsv1.DaemonSet {
+	image := draDriverImageTenstorrentDefault
+	if spec != nil && spec.Image != "" {
+		image = spec.Image
+	}
+	fmImage := draFMImageTenstorrentDefault
+	if spec != nil && spec.FabricManagerImage != "" {
+		fmImage = spec.FabricManagerImage
+	}
+	// spec.Args·spec.Env 는 이 벤더에서만 반영하지 않는다. 다른 세 렌더러가 이 자리에서
+	// args 를 통째로 갈아끼우는데, 여기서 같은 일을 하면 --fabric-manager-agent-address 와
+	// --device-profile 이 사라져 드라이버가 기동하지 못한다 — 이 벤더는 장치 발견을 FM
+	// agent 에 맡기는 구조라 그 둘이 선택 인자가 아니다(라이브 기록 §2·§3.1).
+	// 덮어쓰기를 열려면 통째 교체가 아니라 병합 규칙을 먼저 정해야 하고, 컨테이너가 둘이라
+	// 어느 쪽에 적용할지도 함께 정해야 한다. 그때까지는 이미지 덮어쓰기만 연다.
+	hostPathDir := func(p string) corev1.VolumeSource {
+		return corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: p}}
+	}
+	priv := true
+
+	ds := &appsv1.DaemonSet{
+		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: draDSNameTenstorrent, Namespace: draNamespace, Labels: labels,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: draDSNameTenstorrent,
+					PriorityClassName:  "system-node-critical",
+					HostPID:            true,
+					NodeSelector: map[string]string{
+						vendorPresentLabel(vendorTenstorrent): labelValueTrue,
+					},
+					Tolerations:    []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+					InitContainers: []corev1.Container{renderCDIInitContainer()},
+					// 목록 순서는 기동 순서를 뜻하지 않는다 — Kubernetes 는 일반 컨테이너를
+					// 동시에 시작한다. FM 이 늦게 떠도 무해하다: 드라이버는 gRPC 등록 실패를
+					// 초당 1회 재시도하고, GetTopology 는 FM 준비 여부와 무관하게 응답한다
+					// (라이브 기록 §3.5).
+					Containers: []corev1.Container{
+						{
+							Name:            "plugin",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							// 벤더 이미지는 ENTRYPOINT 가 없고 Cmd=[tt-dra-driver-kubeletplugin] 뿐이다.
+							// Args 를 주면 Cmd 가 통째로 덮이므로 Command 를 명시하지 않으면 kubelet 이
+							// 첫 인자(--device-profile)를 실행 파일로 exec 해 StartError 로 죽는다(라이브 확인).
+							Command: []string{"tt-dra-driver-kubeletplugin"},
+							// force-fallback-discovery 를 넣지 않는다. 이 메인보드는
+							// 벤더 화이트리스트에 없어 fallback 이 빈 ResourceSlice 를 낸다.
+							Args: []string{
+								"--device-profile", "tenstorrent",
+								"--fabric-manager-agent-address",
+								fmt.Sprintf("localhost:%d", draFMPortTenstorrent),
+								"--cdi-root", draCDIRoot,
+							},
+							// tt-dra-driver-kubeletplugin 은 --node-name(=$NODE_NAME)이 필수다.
+							// 다른 벤더 DRA 렌더처럼 downward API 로 노드명을 주입한다 — 없으면
+							// "Required flag node-name not set" 로 크래시한다(라이브 확인).
+							Env: []corev1.EnvVar{
+								{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+								}},
+							},
+							SecurityContext: &corev1.SecurityContext{Privileged: &priv},
+							// plugins-registry 는 다른 세 벤더 모두가 마운트하는 kubelet 플러그인
+							// 등록 경로다(표준 DRA kubeletplugin 라이브러리가 요구). 라이브 기록은
+							// 마운트 구성을 Furiosa chart 에서 그대로 본떴다고 적었으므로 이 경로도
+							// 포함한다 — 빠지면 kubelet 이 플러그인을 찾지 못해 장치 주입이 조용히
+							// 실패한다(Rebellions 가 host-dev 볼륨 누락으로 겪은 것과 같은 종류).
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "plugins-registry", MountPath: "/var/lib/kubelet/plugins_registry"},
+								{Name: "plugins", MountPath: "/var/lib/kubelet/plugins"},
+								{Name: "cdi", MountPath: draCDIRoot},
+								{Name: "host-dev", MountPath: "/dev"},
+							},
+						},
+						{
+							Name:            "fabric-manager",
+							Image:           fmImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							// 이미지 Cmd 는 tt-fabric-manager-controller 지만 plugin 이 dial 하는 건
+							// localhost:50053 의 agent 다. 이미지에 tt-fabric-manager-agent 바이너리가
+							// 있으므로 그것을 Command 로 명시한다(없으면 Args 가 Cmd 를 덮어 --host-id 를
+							// exec 해 StartError — plugin 과 같은 원인, 라이브 확인).
+							Command: []string{"tt-fabric-manager-agent"},
+							// 등호 표기는 Unknown argument 로 거부된다. 공백 분리만 받는다.
+							Args:            []string{"--host-id", "0"},
+							SecurityContext: &corev1.SecurityContext{Privileged: &priv},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "fm-config", MountPath: "/etc/fabric-manager"},
+								{Name: "host-dev", MountPath: "/dev"},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{Name: "plugins-registry", VolumeSource: hostPathDir("/var/lib/kubelet/plugins_registry")},
+						{Name: "plugins", VolumeSource: hostPathDir("/var/lib/kubelet/plugins")},
+						{Name: "cdi", VolumeSource: hostPathDir(draCDIRoot)},
+						{Name: "host-dev", VolumeSource: hostPathDir("/dev")},
+						{Name: "host-etc-containerd", VolumeSource: hostPathDir("/etc/containerd")},
+						{Name: "fm-config", VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{Name: draDSNameTenstorrent},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+	excludeDRARetiredNodes(&ds.Spec.Template.Spec, vendorTenstorrent)
+	return ds
 }

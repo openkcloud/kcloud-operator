@@ -3,7 +3,7 @@
 # 상세: 모든 이미지를 단일 사설 미러에서 당기도록 지정하는 방법.
 #       사용:  helm install/upgrade <release> kcloud-operator/deploy/helm -f values-airgap.example.yaml
 #       <your-registry> 부분을 실제 미러 host:port (예: registry.internal:5000) 로 교체한다.
-# 생성일: 2026-06-02 | 수정일: 2026-09-09 (global.vendorRegistry 도입)
+# 생성일: 2026-06-02 | 수정일: 2026-09-16 (Tenstorrent DRA 둘·Rebellions DRA 하나 추가)
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,11 @@ global:
   #       <your-registry>/furiosaai/furiosa-device-plugin:2026.1.1
   #       <your-registry>/furiosaai/furiosa-dra-driver:2026.1.1
   #       <your-registry>/rebellions/k8s-device-plugin:v0.3.6
-  #     DRA 드라이버 두 개는 해당 기능을 켤 때만 필요하다.
+  #       <your-registry>/rebellions/k8s-dra-driver-npu:v0.2.0
+  #       <your-registry>/tenstorrent/tt-dra-driver:0.0.48
+  #       <your-registry>/tenstorrent/tt-fabric-manager:latest
+  #     DRA 관련 다섯 개는 해당 기능을 켤 때만 필요하다. Tenstorrent 는 드라이버가 같은 파드의
+  #     Fabric Manager agent 에 장치 발견을 맡기므로 이미지가 둘이고, 둘 다 있어야 기동한다.
   # ───────────────────────────────────────────────────────────────────────────
   vendorRegistry: "<your-registry>"   # 위와 같은 미러여도 되고 달라도 된다
 

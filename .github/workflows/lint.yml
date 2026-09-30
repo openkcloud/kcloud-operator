@@ -1,3 +1,8 @@
+# lint.yml: push·PR 시 golangci-lint 와 footprint 회귀 게이트를 돈다.
+# 상세: CRD embed 번들을 먼저 만들어야 golangci-lint 타입체크가 fresh clone 에서도 통과한다.
+#       footprint-check 는 kcloud 차트 정적 렌더 결과를 test/footprint/baseline.json 과
+#       대조한다. 클러스터가 없어 static 모드만 돈다.
+# 생성일: 2025-07-04 | 수정일: 2026-09-21 (CRD kustomization 목록 검사 step 추가)
 name: Lint
 
 on:
@@ -23,7 +28,21 @@ jobs:
       - name: Generate CRD embed bundle
         run: make embed-crds
 
+      - name: Verify CRD kustomization list
+        run: make crd-check
+
       - name: Run linter
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.1.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install jq and PyYAML
+        run: sudo apt-get update -y && sudo apt-get install -y jq python3-yaml
+
+      # kcloud 차트 정적 렌더의 상주 operand(Deployment+DaemonSet+StatefulSet) 수가
+      # baseline 을 넘으면 실패한다(test/footprint/baseline.json).
+      - name: Footprint regression gate
+        run: make footprint-check

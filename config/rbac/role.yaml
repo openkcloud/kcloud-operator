@@ -67,11 +67,15 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - pods/log
   verbs:
   - get
-  - list
-  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
 - apiGroups:
   - apps
   resources:
@@ -122,12 +126,28 @@ rules:
   - npu.ai
   resources:
   - acceleratorclasses
+  - acceleratordescriptors
   - acceleratorhealthpolicies
   - driverinstallpolicies
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - npu.ai
+  resources:
+  - acceleratordescriptors/status
+  - acceleratorhealths/status
+  - acceleratoroperations/status
+  - acceleratorpartitionpolicies/status
+  - acceleratorworkloads/status
+  - driverupgradestates/status
+  - nodedevicereports/status
+  - npuclusterpolicies/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - npu.ai
   resources:
@@ -147,20 +167,6 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
-  - acceleratorhealths/status
-  - acceleratoroperations/status
-  - acceleratorpartitionpolicies/status
-  - acceleratorworkloads/status
-  - driverupgradestates/status
-  - nodedevicereports/status
-  - npuclusterpolicies/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - npu.ai
-  resources:
   - acceleratorpartitionpolicies/finalizers
   - npuclusterpolicies/finalizers
   verbs:
@@ -177,23 +183,15 @@ rules:
   - update
   - watch
 - apiGroups:
-  - policy
-  resources:
-  - poddisruptionbudgets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
   - clusterroles
-  - rolebindings
-  - roles
   verbs:
+  - bind
   - create
   - delete
+  - escalate
   - get
   - list
   - patch

@@ -3,12 +3,13 @@
 // 상세: 벤더 지식이 0인 일반 device-plugin 런타임에 줄 ConfigMap 과 DaemonSet 을
 //       descriptor 하나로 조립한다. 벤더 하드코딩은 여기 없다 - vendor·product 는
 //       전부 desc.Spec 에서 읽는다.
-// 생성일: 2026-08-11
+// 생성일: 2026-08-11 | 수정일: 2026-09-20
 // ============================================================
 
 package controller
 
 import (
+	"errors"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -185,6 +186,10 @@ func renderGeneratedDRADriver(
 	applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 
 	driverName := descriptor.DriverNameFor(desc.Spec)
+	// ponytail: DeviceClass/driver 이름이 product.vendor.kcloud.ai 라 descriptor 별이 아니다 — 같은
+	// vendor+product 를 선언한 descriptor 둘이 이 한 DeviceClass 를 두고 SSA ForceOwnership
+	// 으로 서로 덮어쓴다(핑퐁). prune 은 desc.Name 라벨로 갈라 안전하다. 이름을 descriptor 별로
+	// 하려면 DriverNameFor(descriptor 패키지)와 DeviceClass 셀렉터까지 바꿔야 해 여기서는 보류.
 	dc := &resourcev1.DeviceClass{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "resource.k8s.io/v1", Kind: "DeviceClass"},
 		ObjectMeta: metav1.ObjectMeta{Name: driverName, Labels: labels},
@@ -261,16 +266,27 @@ func renderGeneratedDRARBAC(desc *npuv1alpha1.AcceleratorDescriptor, ns string) 
 // 손으로 쓴 YAML 을 쓰면 "descriptor 가 단일 출처" 라는 주장을 검증할 수 없다.
 // 선언하지 않은 backend 의 배포물은 내지 않는다.
 func RenderGeneratedBackends(
-	desc *npuv1alpha1.AcceleratorDescriptor, deviceIDs []string,
-	dpImage, draImage, ns string,
+	desc *npuv1alpha1.AcceleratorDescriptor, dpImage, draImage, ns string,
 ) ([]client.Object, error) {
+	// sharing(SW 시분할) 게이트는 컨트롤러와 backendtool 이 같은 판정을 써야 한다. Reconcile
+	// 은 여기 오기 전에 구조화된 refusal(status.refusals)로 막지만, cmd/backendtool 은 이
+	// 함수가 유일한 관문이라 게이트 없이 replicas 가 실린 YAML 을 뽑아낼 수 있었다 —
+	// 판정 지점을 sharingRefusal 하나로 모은다.
+	if rf := sharingRefusal(desc.Spec); rf != nil {
+		return nil, errors.New(rf.Reason)
+	}
 	feasible, _ := descriptor.FeasibleBackends(desc.Spec)
 	var out []client.Object
 
 	for _, b := range feasible {
 		switch b {
 		case npuv1alpha1.BackendDevicePlugin:
-			cfg, err := descriptor.CompileDevicePlugin(desc.Spec, deviceIDs)
+			// 이미지 미설정이면 이 backend 는 렌더하지 않는다 — 빈 이미지 DaemonSet 은
+			// InvalidImageName 로 죽는다. 컨트롤러가 그 사유를 refusal 로 남긴다.
+			if dpImage == "" {
+				continue
+			}
+			cfg, err := descriptor.CompileDevicePlugin(desc.Spec)
 			if err != nil {
 				return nil, err
 			}
@@ -278,7 +294,10 @@ func RenderGeneratedBackends(
 			out = append(out, cm, ds)
 
 		case npuv1alpha1.BackendDRA:
-			cfg, err := descriptor.CompileDRA(desc.Spec, deviceIDs)
+			if draImage == "" {
+				continue
+			}
+			cfg, err := descriptor.CompileDRA(desc.Spec)
 			if err != nil {
 				return nil, err
 			}

@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-09-09 (공개 배포 기본값: global.registry/vendorRegistry 분리)
+# 생성일: 2026-03-25 | 수정일: 2026-09-28 (managementMode 주석에 delegated 추가)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -7,7 +7,8 @@
 #
 # global.registry: **kcloud 가 빌드하는 이미지**의 레지스트리다. operator, node-manager,
 #   host-exec, furiosa-exporter, 드라이버 설치기 3종, Furiosa 통합 device-plugin,
-#   Tenstorrent device-plugin 이 여기에 속한다. 기본값은 공개 배포 경로이므로
+#   Tenstorrent device-plugin, descriptor auto-apply 생성 런타임 2종(generic-device-plugin·
+#   generic-dra-driver)이 여기에 속한다. 기본값은 공개 배포 경로이므로
 #   그대로 설치하면 GHCR 에서 당긴다. 사설 미러를 쓰면 한 줄로 바꾼다:
 #     --set global.registry=<host:port>/<project>
 #
@@ -22,7 +23,7 @@
 #   furiosaai/furiosa-dra-driver, rebellions/k8s-device-plugin.
 #
 #   전체 경로를 그대로 적는 값(nvidia.devicePluginImage, furiosa.devicePluginImage,
-#   nvidia.dcgmExporter.image, acpp.probeImage, crdUpgrade.kubectlImage,
+#   nvidia.dcgmExporter.image, acpp.probeImage, acpp.probeImages.*, crdUpgrade.kubectlImage,
 #   driverInstallPolicies.nvidia.toolkit.image)은 두 레지스트리 어느 쪽도 적용받지
 #   않는다. 사용자가 미러 경로를 직접 적는 자리이기 때문이다.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -32,15 +33,27 @@ global:
 
 # metrics: controller-runtime 지표 노출. 기본은 끈다 — 라이브에 인증 없는 포트를
 # 열지 않기 위해서다. 제어면 비용 측정(KWOK 하네스)에서만 켠다.
+# 켜려면: metrics.enabled=true metrics.secure=true metrics.service.enabled=true
+#   metrics.serviceMonitor.enabled=true (secure 는 TokenReview 기반 인증, cert 는
+#   --metrics-cert-path 로 지정). operator 자체 지표 목록은 운영 구성 안내의
+#   "operator 지표" 절 참고.
 metrics:
   enabled: false
   port: 8080
   secure: false
+  # Service 는 Prometheus 가 긁을 대상이다. enabled 여야 의미가 있으므로 함께 판정한다.
+  service:
+    enabled: false
+  # ServiceMonitor 는 Prometheus Operator 가 설치된 클러스터에서만 의미가 있다.
+  # monitoring.coreos.com CRD 가 없는 곳에 렌더하면 helm install 이 실패하므로 별도 스위치다.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
 
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.7.30
+  tag: v0.8.0
   pullPolicy: IfNotPresent
 
 # hostExec: operator 가 호스트에서 명령을 대신 실행할 때 띄우는 특권 hostPID Job 이미지
@@ -53,11 +66,61 @@ hostExec:
   repository: "kcloud-host-exec"
   tag: "v0.1.0"
 
+# generatedBackend: AcceleratorDescriptor auto-apply(D4b/c)가 만드는 일반 런타임
+#   DaemonSet(device-plugin/DRA driver) 이미지. hostExec 과 같은 규약이다 — registry 는
+#   global.registry 로 조립되고(kcloud 빌드 이미지), repository 를 비우면 operator
+#   Deployment 인자(--generated-dp-image/--generated-dra-image) 자체가 빠져 그 backend 는
+#   auto-apply 되지 않는다(빈 이미지로 DaemonSet 을 띄워 InvalidImageName 나는 것을 막는
+#   컨트롤러 쪽 거절 경로와 동일한 규약).
+#   devicePlugin 은 v3 이상이어야 한다 — descriptor spec.sharing(SW 시분할)이 컴파일해 주는
+#   backend.json 의 replicas 를 v2 는 읽지 않아 장치를 1개로만 광고한다(게이트는 통과하는데
+#   광고 수가 안 늘어나는 조용한 실패). draDriver 는 sharing 과 무관해 v2 그대로다.
+generatedBackend:
+  devicePlugin:
+    repository: "generic-device-plugin"
+    tag: "v3"
+  draDriver:
+    repository: "generic-dra-driver"
+    tag: "v2"
+
 # acpp: AcceleratorPartitionPolicy 관련 설정.
 #   probeImage: verify 단계 1-파티션 테스트 Pod 이미지. air-gap(Harbor mirror) 클러스터는
 #   미러 도달 가능 이미지로 지정. 빈 값이면 operator 코드 기본값(registry.k8s.io/pause:3.9) 사용.
 acpp:
   probeImage: docker.io/library/nginx:1.25.2-alpine
+  # probeImages: 벤더 기능 probe(파드가 벤더 CLI 를 1회 실행하고 종료코드로 판정) 이미지.
+  #   각 값은 acpp.probeImage 와 같은 규약 — global.registry/vendorRegistry 어느 쪽으로도
+  #   조립되지 않는 전체 경로 값이다(air-gap 이면 미러 경로를 직접 적는다). 빈 값(기본)인
+  #   벤더는 표에 미등록으로 취급돼 기존 pause/Running 판정을 그대로 쓴다 — 이미지를 못
+  #   받았다고 검증이 실패로 뒤집히지 않는다.
+  #   - nvidia: `nvidia-smi -L` 1회 실행. 이미지는 벤더 CLI 를 담을 필요 없이 nvidia-container
+  #     runtime 이 주입하는 base CUDA 이미지면 된다(tester/pods/gpu-pod.yaml(비추적 루트 tester/) 과 동일 전제).
+  #     예: nvidia/cuda:12.9.1-base-ubuntu22.04(Harbor 미러: kcloud/nvidia/cuda:동일 태그).
+  #   - tenstorrent: `tt-smi -s` 1회 실행. images 저장소 probe-tenstorrent(PyPI tt-smi) 빌드.
+  #   - furiosa: `furiosa-smi info` 1회 실행. docker.io/furiosaai/furiosa-smi:2026.1.0 은
+  #     라이브러리(libfuriosa_smi.so)만 담고 CLI 바이너리가 없다(2026-09-20 확인,
+  #     `furiosa-smi: executable file not found in $PATH`) — 이미지만으로는 매번 실패한다.
+  #     아래 `probeHostBinary.furiosa` 에 호스트 furiosa-smi 절대경로를 채우면 그 바이너리를
+  #     probe 파드에 마운트해 실사용 가능(기본은 비어 있어 opt-in).
+  #   - rebellions: `rbln-stat` 1회 실행. images 저장소 probe-rebellions(nsenter 로 호스트
+  #     네임스페이스 진입 후 호스트 바이너리 실행) 빌드 — ⚠ privileged+hostPID 파드다.
+  #     기본을 비워 두는 이유도 이것 하나다: 켜는 순간 특권 파드가 그 벤더 노드마다 뜬다.
+  probeImages:
+    nvidia: ""
+    tenstorrent: ""
+    furiosa: ""
+    rebellions: ""
+  # probeHostBinary.furiosa: 호스트 furiosa-smi 절대경로(예: /usr/bin/furiosa-smi).
+  #   acpp.probeImages.furiosa 이미지엔 CLI 가 없어(NEEDS VENDOR RESEARCH 기록 참고) 이 값을
+  #   채워야 furiosa probe 가 동작한다 — 설정된 노드에서만 유효하다(노드마다 버전이 다를 수 있다).
+  #   마운트되는 것은 바이너리뿐이라, 실행 시 호스트가 아니라 probeImages.furiosa 이미지에 담긴
+  #   libfuriosa_smi.so 를 로드한다 — 호스트 furiosa-smi 와 그 이미지의 라이브러리 버전이
+  #   호환돼야 한다(rngd-1 실측: 호스트 furiosa-smi 2026.1.1-3/Ubuntu 22.04 대 furiosa-smi:2026.1.0
+  #   이미지/Ubuntu 24.04 는 라이브러리 크기·체크섬이 서로 다르다). 호환 여부는 이 값만으로는
+  #   보장되지 않고 probe 파드의 종료코드·stderr 로 확인한다. Command 가 파드 PATH 로
+  #   furiosa-smi 를 찾으므로 이 경로는 이미지 PATH 안(예: /usr/bin)에 있어야 한다.
+  probeHostBinary:
+    furiosa: ""
   # MPS 공유 모드에서 필요한 control daemon. ACPP 가 sharing.mode=mps 일 때만 배치한다
   # (별도 토글 없음. 정책이 켜면 뜨고 끄면 사라진다).
   # hostExec 과 같은 규약이다: repository 가 비면 env 가 주입되지 않아 코드 기본값(공개
@@ -124,10 +187,6 @@ serviceAccount:
 rbac:
   create: true
 
-metricsService:
-  enabled: false
-  port: 8443
-
 deployClusterPolicy: true
 
 clusterPolicy:
@@ -147,6 +206,18 @@ detector:
 # ─────────────────────────────────────────────────────────────────────────────
 nvidia:
   enabled: true
+  # managementMode: managed(기본)|delegated|external. 빈 값 = managed.
+  #   managed   : kcloud 가 이 벤더의 device-plugin/DRA/exporter 를 배포·삭제한다.
+  #               벤더 operator 가 클러스터에 없을 때 고른다.
+  #   delegated : 벤더 operator(예: NVIDIA GPU Operator)가 이미 배포를 맡고 있다. kcloud 는
+  #               배포하지 않고 그 존재만 확인하며, 못 찾으면 경고만 내고 조용히 managed 로
+  #               내려가지 않는다. 벤더 operator 를 이미 쓰고 있어 중복 배포를 피하고 싶을 때
+  #               고른다.
+  #   external  : 드라이버·런타임이 kcloud 밖에서 이미 설치돼 있다(벤더 operator 는 아님).
+  #               kcloud 는 배포하지 않고 노드만 관측한다.
+  #   세 값 모두 detector 와 kcloud.ai/* 라벨, NodeDeviceReport, evidence 관측은 유지한다.
+  #   관리 모드 안내 참조.
+  managementMode: ""
   # advertiseBy: 이 벤더 장치를 누가 광고하는가. 빈 값/미지정이면 device-plugin 이다.
   #   "dra" 로 바꾸면 operator 가 대상 노드에 dra-owned 라벨을 붙이고 그 노드에서
   #   device-plugin DaemonSet 을 걷는다. 광고는 벤더 DRA 드라이버가 발행하는
@@ -177,6 +248,20 @@ nvidia:
 
 furiosa:
   enabled: true
+  # managementMode: managed(기본)|delegated|external. 빈 값 = managed.
+  #   managed   : kcloud 가 이 벤더의 device-plugin/DRA/exporter 를 배포·삭제한다.
+  #               벤더 operator 가 클러스터에 없을 때 고른다.
+  #   delegated : 벤더 operator 가 이미 배포를 맡고 있다는 뜻이다. kcloud 는 배포하지
+  #               않는다. furiosa 는 감지 시그니처가 없어(nvidia·rebellions·tenstorrent 와
+  #               다르다) 벤더 operator 존재 여부를 확인하지 못한다 — 실제로 없어도 경고가
+  #               나오지 않는다. 그래도 managed 로 조용히 내려가 중복 배포하지는 않는다.
+  #               벤더 operator 를 이미 쓰고 있어 중복 배포를 피하고 싶을 때 고른다.
+  #   external  : 드라이버·런타임이 kcloud 밖에서 이미 설치돼 있다(벤더 operator 는 아님).
+  #               kcloud 는 배포하지 않고 노드만 관측한다.
+  #   세 값 모두 detector 와 kcloud.ai/* 라벨, NodeDeviceReport, evidence 관측은 유지한다.
+  #   managed 가 아니면(delegated·external) chart 의 furiosa-exporter 도 렌더되지 않는다.
+  #   관리 모드 안내 참조.
+  managementMode: ""
   # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
   advertiseBy: ""
   devicePluginImage: "ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1"
@@ -247,6 +332,20 @@ furiosa:
 
 rebellions:
   enabled: true
+  # managementMode: managed(기본)|delegated|external. 빈 값 = managed.
+  #   managed   : kcloud 가 이 벤더의 device-plugin/DRA/exporter 를 배포·삭제한다.
+  #               벤더 operator 가 클러스터에 없을 때 고른다.
+  #   delegated : 벤더 operator 가 이미 배포를 맡고 있다. kcloud 는
+  #               배포하지 않고 그 존재만 확인하며, 못 찾으면 경고만 내고 조용히 managed 로
+  #               내려가지 않는다. 벤더 operator 를 이미 쓰고 있어 중복 배포를 피하고 싶을 때
+  #               고른다.
+  #   external  : 드라이버·런타임이 kcloud 밖에서 이미 설치돼 있다(벤더 operator 는 아님).
+  #               kcloud 는 배포하지 않고 노드만 관측한다.
+  #   세 값 모두 detector 와 kcloud.ai/* 라벨, NodeDeviceReport, evidence 관측은 유지한다.
+  #   관리 모드 안내 참조.
+  managementMode: ""
+  # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
+  advertiseBy: ""
   # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당긴다.
   devicePluginUpstream: "docker.io"
   devicePluginRepository: "rebellions/k8s-device-plugin"
@@ -261,9 +360,28 @@ rebellions:
   nodeSelector:
     kcloud.ai/rebellions.present: "true"
     kubernetes.io/arch: "amd64"
+  # DRA 드라이버 배포 여부. 기본은 끔 — 켜려면 벤더 드라이버 이미지가 닿아야 한다.
+  # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(docker.io)에서 직접 당긴다.
+  dra:
+    enabled: false
+    upstream: "docker.io"
+    repository: "rebellions/k8s-dra-driver-npu"
+    tag: "v0.2.0"
 
 tenstorrent:
   enabled: true
+  # managementMode: managed(기본)|delegated|external. 빈 값 = managed.
+  #   managed   : kcloud 가 이 벤더의 device-plugin/DRA/exporter 를 배포·삭제한다.
+  #               벤더 operator 가 클러스터에 없을 때 고른다.
+  #   delegated : 벤더 operator 가 이미 배포를 맡고 있다. kcloud 는
+  #               배포하지 않고 그 존재만 확인하며, 못 찾으면 경고만 내고 조용히 managed 로
+  #               내려가지 않는다. 벤더 operator 를 이미 쓰고 있어 중복 배포를 피하고 싶을 때
+  #               고른다.
+  #   external  : 드라이버·런타임이 kcloud 밖에서 이미 설치돼 있다(벤더 operator 는 아님).
+  #               kcloud 는 배포하지 않고 노드만 관측한다.
+  #   세 값 모두 detector 와 kcloud.ai/* 라벨, NodeDeviceReport, evidence 관측은 유지한다.
+  #   관리 모드 안내 참조.
+  managementMode: ""
   # advertiseBy: nvidia 블록 주석 참조. 빈 값이면 device-plugin.
   advertiseBy: ""
   # kcloud 가 빌드하는 이미지다(images 저장소 tenstorrent-device-plugin/).
@@ -274,6 +392,28 @@ tenstorrent:
   # 자립 셀렉터(node-manager 가 Blackhole 감지 시 부여). 수동 라벨 비의존.
   nodeSelector:
     kcloud.ai/tenstorrent.present: "true"
+  # DRA 드라이버 배포 여부. 기본은 끔 — 벤더가 chart 를 주지 않아 값을 우리가 고정한다
+  # (2026-08-05 라이브 확인 판).
+  # 벤더 이미지다 — vendorRegistry 를 비우면 upstream(ghcr.io)에서 직접 당긴다.
+  dra:
+    enabled: false
+    upstream: "ghcr.io"
+    repository: "tenstorrent/tt-dra-driver"
+    tag: "0.0.48"
+    # FM(Fabric Manager) agent 이미지. 이 벤더의 드라이버는 장치 발견을 직접 하지 않고
+    # 같은 파드의 이 데몬에 gRPC 로 맡기므로, 못 받으면 드라이버가 CrashLoop 한다(위 기록 §3.1).
+    # 벤더가 버전 태그를 발행하지 않아 공개 태그가 latest·main·sha 뿐이다(§2) — 재현 가능한
+    # 배포가 필요하면 sha 태그를 골라 tag 를 덮는다. air-gap 은 드라이버 이미지와 함께 이것도
+    # 미러에 올려야 한다(둘 다 global.vendorRegistry 로 조립된다).
+    fabricManager:
+      upstream: "ghcr.io"
+      repository: "tenstorrent/tt-fabric-manager"
+      tag: "latest"
+    # 지금 렌더되는 FM 구성의 한계: operator 는 노드마다 FM agent 만 띄우고 FM controller 는
+    # 배치하지 않는다. agent 는 등록에 실패하고 노드마다 초당 1회 장치 재발견을 재시도한다.
+    # DRA 경로 자체는 이 상태로도 성립하지만(GetTopology 는 응답한다), 라이브 기록 §3.5 의
+    # 판정은 "단일 노드 시험에서는 무해했지만 운영에 올릴 구성은 아니다" 다. 여러 노드에 걸친
+    # fabric 토폴로지도 controller 없이는 쓸 수 없다(미검증).
 
 runtimeClass:
   nvidia:
@@ -375,6 +515,11 @@ driverInstallPolicies:
       versionSource: "Policy"
       # Passthrough 모드 노드에서 드라이버 설치 건너뜀
       skipOnPassthrough: true
+      # 커널별 사전 컴파일 이미지. 키는 노드의 uname -r, 값은 이미지 참조다.
+      # 태그의 버전 토큰이 위 version 과 같아야 한다 — 다르면 operator 가 이 이미지를
+      # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
+      # 사이트 값이며 기본은 비움.
+      kernelImages: {}
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -403,6 +548,8 @@ driverInstallPolicies:
       - "580.142"
       - "580.159.03"
       - "580.173.02"
+      - "580.178.04"
+      - "590.48.01"
       - "595.58.03"
       - "595.84"
     # 자립 셀렉터(node-manager 부여). 드라이버 install DS/Job + toolkit DS 공용.
@@ -416,10 +563,11 @@ driverInstallPolicies:
       # plain 태그 (e.g. 580.126.09) 는 entrypoint 누락된 broken image —
       # idempotent skip + race-safe host module pool 재검사 + 강화된 NVRM regex
       # 가 적용된 -v173 (v17.3) 사용 권장. -v16 (legacy host install) 는 deprecated.
-      # default 는 worker1 host 가 보유한 580.159.03 + -v173 (first-try Idle 도달).
-      # 2026-06-01: worker1 실설치=580.159.03 고정. 580.142-v173 → 580.159.03-v173 교정
-      #             (라이브 무중단 복구, idempotent skip 경로). 상세: docs/05 §4.2.7 알려진 이슈
-      version: "580.159.03"
+      # 2026-09-26: 이 값은 DKMS 경로에서만 설치 버전을 정한다(ADR-002). 사전 컴파일
+      # 경로에서는 이미지가 버전을 정하고 이 값은 태그와의 결합 검증에만 쓰인다.
+      # 그래서 기본값은 우분투 아카이브에 실재하는 버전이어야 한다. 아카이브에 없는
+      # 버전을 기본값에 두면 그 차트를 쓰는 다른 클러스터가 설치에 실패한다.
+      version: "580.178.04"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "nvidia-driver-ds"
       tag: "v1"
@@ -433,6 +581,12 @@ driverInstallPolicies:
       env:
         - name: NVIDIA_DRIVER_CHOICE
           value: "recommended"
+      # 커널별 사전 컴파일 이미지. 키는 노드의 uname -r, 값은 이미지 참조다.
+      # 태그의 버전 토큰이 위 version 과 같아야 한다 — 다르면 operator 가 이 이미지를
+      # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
+      # 이 맵 값은 kcloud-operator.image 헬퍼를 거치지 않고 그대로 CR 에 실리므로
+      # global.registry 를 포함한 전체 이미지 참조로 적는다.
+      kernelImages: {}
     toolkit:
       # enabled=true 시 ToolkitDaemonSet reconciler 가 nvidia-container-toolkit DS 를
       # 생성하여 containerd 에 nvidia runtime 을 등록한다(nvidia-ctk, idempotent).
@@ -501,6 +655,11 @@ driverInstallPolicies:
       versionSource: "Policy"
       # Passthrough 모드 노드에서 드라이버 설치 건너뜀
       skipOnPassthrough: true
+      # 커널별 사전 컴파일 이미지. 키는 노드의 uname -r, 값은 이미지 참조다.
+      # 태그의 버전 토큰이 위 version 과 같아야 한다 — 다르면 operator 가 이 이미지를
+      # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
+      # 사이트 값이며 기본은 비움.
+      kernelImages: {}
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -509,15 +668,14 @@ driverInstallPolicies:
       validationTimeout: "10m"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Tenstorrent Blackhole (mode=job, trackOnly) — 2026-07-16 버전관리 편입 (#15 Phase 2)
+  # Tenstorrent Blackhole (mode=job) — 2026-07-16 버전관리 편입 (#15 Phase 2)
   # worker3 p150. TT 를 DIP→DUS 버전 관리 체계에 편입한다.
-  # ⚠️ trackOnly=true — DUS 추적(버전 관측 + verifiedVersions 게이트)만 수행하고
-  #    설치 Job/DaemonSet 은 생성하지 않는다(mode=job 이나 설치 경로 자체가 비활성).
-  #    NDR 이 이미 driverVersion 2.8.0 을 보고 중이므로 DUS 는 Idle 로 수렴한다.
-  #    tt-kmd 실제 설치(DKMS)는 job 모드 2차(#15 2단계)로 이관.
-  # driver.image 는 실존 installer 이미지(kcloud/tenstorrent-driver-ds:0.1.1)를 지정한다.
-  #    trackOnly 로 평시엔 pull 되지 않지만, self-heal 엣지에서 Job 이 뜨더라도
-  #    ImagePullBackOff 없이 정상 스케줄되도록 실존 태그를 둔다.
+  # trackOnly=false(실설치, 2026-07 #26) — install Job 이 baked tt-kmd 소스를 DKMS 로
+  #    빌드·설치한다(air-gap). 2.8.0→2.11.0 라이브 업그레이드 2026-09-21 로 상태기계 전이
+  #    (install Job·검증·Idle 수렴)를 하드웨어에서 확인했다
+  #    (2026-09-21 라이브 실측; 재현은 test/live/tt-kmd-upgrade/run.sh).
+  # driver.image 는 실존 installer 이미지(kcloud/tenstorrent-driver-ds:<ver>-v1)를 지정한다.
+  #    imageVersionBaked=true 이므로 이미지↔버전 1:1, 롤백은 이전 버전 태그로 재구성한다.
   # ─────────────────────────────────────────────────────────────────────
   tenstorrent:
     enabled: true
@@ -527,10 +685,12 @@ driverInstallPolicies:
     rebootStrategy: IfNeeded
     kernelAllowlist: ["5.15.*", "6.8.*"]
     containerdMinVersion: "1.7.0"
-    # verifiedVersions: 검증된 tt-kmd 버전 화이트리스트.
+    # verifiedVersions: 검증된 tt-kmd 버전 화이트리스트. 라이브에서 전이를 확인한 버전만 적는다
+    # (2.8.0: 2026-09-20 이전 라이브, 2.11.0: 2026-09-21 업그레이드 evidence). 새 버전은 이미지를
+    # 만들고 test/live/tt-kmd-upgrade/run.sh 로 전이를 확인한 뒤에 넣는다.
     verifiedVersions:
       - "2.8.0"
-      - "2.9.0"
+      - "2.11.0"
     # 자립 셀렉터(node-manager 부여). 수동 라벨 비의존.
     nodeSelector:
       kcloud.ai/tenstorrent.present: "true"
@@ -539,15 +699,19 @@ driverInstallPolicies:
       # trackOnly=false: 실설치 활성(#26). installer 이미지가 tt-kmd 소스를 baked 하여
       # DKMS 로 빌드/설치(air-gap). RUN_MODE=job → 설치 후 exit 0.
       trackOnly: false
-      version: "2.8.0"
+      version: "2.11.0"
       versionSource: "Policy"
-      # job모드 실설치 이미지(Harbor kcloud/tenstorrent-driver-ds:0.2.0-kmd<ver>).
+      # job모드 실설치 이미지(Harbor kcloud/tenstorrent-driver-ds:<ver>-v1, 예: 2.11.0-v1).
       # tag 의 kmd 버전과 version 을 함께 bump 한다(이미지↔버전 1:1 baked).
       repository: "tenstorrent-driver-ds"
-      tag: "2.8.0-v1"
+      tag: "2.11.0-v1"
       installer: script
+      imageVersionBaked: true   # 이미지↔버전 1:1 baked — 롤백은 이전 버전 태그(2.8.0-v1)로
       allowDowngrade: false
       skipOnPassthrough: true
+      # 커널별 사전 컴파일 이미지. 예: "5.15.0-190-generic": "<registry>/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1".
+      # 사이트 값이며 기본은 비움. mode=job 전제.
+      kernelImages: {}
     upgradePolicy:
       autoUpgrade: false
       drainEnabled: true
@@ -565,7 +729,7 @@ rollingUpdate:
 # pre-upgrade Job은 operator 이미지(image.repository:image.tag)를 재사용하므로
 # 별도 이미지 미러링이 불필요함.
 # 운영 정책상 수동 적용을 선호하거나 Job이 사용할 권한을 부여할 수 없는 환경에서는
-# `enabled: false`로 비활성화하고 기존 절차(docs/operator_v1.3.md §3.4) 사용.
+# `enabled: false`로 비활성화하고 기존 수동 설치 절차 사용.
 # ─────────────────────────────────────────────────────────────────────────────
 crdUpgrade:
   enabled: true

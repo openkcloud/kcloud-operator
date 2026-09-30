@@ -30,6 +30,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -59,12 +60,28 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme      = runtime.NewScheme()
+	setupLog    = ctrl.Log.WithName("setup")
+	buildCommit = "unknown" // ldflags -X main.buildCommit 로 빌드 시 주입
 )
+
+// versionLine 은 --version 플래그의 한 줄 출력이다. ldflags 로 박힌 buildCommit 을 그대로 내고,
+// 비어 있으면 "unknown" 으로 낸다. test/collect/evidence.sh 가 기동 로그의 "starting manager"
+// 줄이 로테이션으로 사라졌을 때 `kubectl exec ... -- /manager --version` 으로 같은 값을 읽는다.
+// 서브명령이 아니라 플래그인 이유: 이 플래그를 모르는 구버전 바이너리는 usage 를 내고 종료 코드 2 로
+// 끝나 manager 를 한 번 더 기동하지 않는다.
+func versionLine() string {
+	if buildCommit == "" {
+		return "unknown"
+	}
+	return buildCommit
+}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// apiextensionsv1 은 vendoroperator_detect.go 의 CRD 재확인(APIReader.Get 으로
+	// CustomResourceDefinition 직접 조회)이 쓴다. client-go 의 기본 scheme 에는 없다.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 
 	utilruntime.Must(npuv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
@@ -125,11 +142,23 @@ func main() {
 		"Address for the management REST API (e.g. :9444). Empty (default) disables it.")
 	flag.StringVar(&apiCertPath, "api-cert-path", "",
 		"Directory containing the management API TLS cert (tls.crt/tls.key). Empty serves plain HTTP.")
+	var genDPImage, genDRAImage string
+	flag.StringVar(&genDPImage, "generated-dp-image", "",
+		"Image for descriptor-generated device-plugin DaemonSets (helm 이 주입). 비면 device-plugin backend 를 auto-apply 하지 않는다.")
+	flag.StringVar(&genDRAImage, "generated-dra-image", "",
+		"Image for descriptor-generated DRA driver DaemonSets (helm 이 주입). 비면 DRA backend 를 auto-apply 하지 않는다.")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "빌드 커밋을 한 줄로 출력하고 종료한다.")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println(versionLine())
+		return
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -250,9 +279,10 @@ func main() {
 	}
 
 	if err := (&controller.NPUClusterPolicyReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("npuclusterpolicy-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("npuclusterpolicy-controller"),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NPUClusterPolicy")
 		os.Exit(1)
@@ -290,9 +320,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DriverUpgrade")
 		os.Exit(1)
 	}
+	// probeLogs 는 벤더 기능 probe 파드의 마지막 로그를 읽는 seam 이다 — controller-runtime client 는
+	// log 서브리소스를 못 읽어 clientset 이 필요하다(실패 사유가 근거에 남지 않으면 파드는 이미 지워진 뒤다).
+	probeLogs, err := controller.NewPodLogGetter(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to build probe log getter")
+		os.Exit(1)
+	}
 	// acppLiveVerifier 는 apply 검증과 근거 게이트의 allocation probe 가 공유하는 단일 인스턴스다 —
 	// 따로 만들면 ACPP_PROBE_IMAGE 설정이 두 곳으로 갈라진다.
-	acppLiveVerifier := controller.NewLiveVerifier(mgr.GetClient())
+	acppLiveVerifier := controller.NewLiveVerifier(mgr.GetClient(), probeLogs)
 	acppReconciler := &controller.AcceleratorPartitionPolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -330,6 +367,8 @@ func main() {
 			operation.RecoverDevice:        controller.NewRecoverDeviceParticipant(acppReconciler),
 			operation.NodeReboot: controller.NewNodeRebootParticipant(
 				mgr.GetClient(), controller.HostExecImage()),
+			operation.DeviceReset: controller.NewDeviceResetParticipant(
+				mgr.GetClient(), controller.HostExecImage()),
 		},
 		Leases: &operation.LeaseManager{
 			Client: mgr.GetClient(), Namespace: naming.OperatorNamespace(),
@@ -337,7 +376,7 @@ func main() {
 		},
 		Verification: &verification.Verifier{
 			Client: mgr.GetClient(),
-			Prober: controller.NewAllocationProber(controller.NewLiveVerifier(mgr.GetClient())),
+			Prober: controller.NewAllocationProber(controller.NewLiveVerifier(mgr.GetClient(), probeLogs)),
 		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorOperation")
@@ -350,6 +389,19 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("accelerator-health"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorHealth")
+		os.Exit(1)
+	}
+	if err := (&controller.AcceleratorDescriptorReconciler{
+		Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+		DPImage:            genDPImage,
+		DRAImage:           genDRAImage,
+		GeneratedNamespace: naming.OperatorNamespace(),
+		Verification: &verification.Verifier{
+			Client: mgr.GetClient(),
+			Prober: controller.NewAllocationProber(acppLiveVerifier),
+		},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AcceleratorDescriptor")
 		os.Exit(1)
 	}
 	if err := (&controller.AcceleratorWorkloadReconciler{
@@ -455,7 +507,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager", "commit", buildCommit)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)

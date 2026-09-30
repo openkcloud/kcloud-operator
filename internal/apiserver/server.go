@@ -129,6 +129,15 @@ func (s *Server) Handler() http.Handler {
 	// accelerators 와 같은 이유로 nodedevicereports 인가도, node 파생 필드(schedulable/advertised) 때문에
 	// nodes 인가도 함께 요구한다.
 	mux.HandleFunc("GET /api/v1/capabilities", s.authzAll(invGates, s.handleCapabilities))
+	// 벤더×능력 선언·검증 뷰: evidence·ACPP·NDR·검증 정책·nodes 를 읽으므로 다섯 다 인가한다
+	// (검증 정책은 evidence 신선도 판정의 감시축을 정한다 — CollectVendorCapabilitiesWith).
+	mux.HandleFunc("GET /api/v1/vendors/capabilities", s.authzAll([]authzPair{
+		npuPair("list", "acceleratorevidences"),
+		npuPair("list", "acceleratorpartitionpolicies"),
+		npuPair("list", "nodedevicereports"),
+		npuPair("list", "acceleratorverificationpolicies"),
+		nodeGate,
+	}, s.handleVendorCapabilities))
 	// track ③ CR 투영: 각 라우트는 자기 응답이 실제로 읽는 CR 종류의 list 권한만 요구한다
 	// (조인이 없으므로 accelerators/capabilities 처럼 이중 게이트가 필요 없다).
 	mux.HandleFunc("GET /api/v1/classes", s.authz("list", "acceleratorclasses", s.handleClasses))

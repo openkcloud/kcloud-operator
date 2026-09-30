@@ -62,8 +62,7 @@ func (p *recoverDeviceParticipant) Apply(ctx context.Context,
 	// 드라이버 업그레이드 사이클 안이면 아무것도 지우지 않는다. 그 구간의 driverLoaded=false 는
 	// 고장이 아니라 설치가 스스로 구 모듈을 내린 예정된 상태다. 여기서 설치 주체를 지우면 노드의
 	// apt 가 DKMS 빌드 도중 죽어 패키지가 half-configured 로 남고, 버전 보고가 막혀 검증이 영원히
-	// 실패하는 자기강화 루프가 된다(2026-08-10 라이브,
-	// docs/impl/furiosa-version-swap-20260812.md §3.4).
+	// 실패하는 자기강화 루프가 된다(2026-08-10 라이브).
 	//
 	// 실패가 아니라 완료로 보고한다 — ApplyFailed 는 세 번 쌓이면 멀쩡한 노드를 격리로 보낸다.
 	if p.upgradingDriver(ctx, op.Spec.NodeName) {

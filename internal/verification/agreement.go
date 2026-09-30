@@ -38,10 +38,16 @@ type Inputs struct {
 	ReportErrors map[string]string
 	// ReportValidationPassed 는 node-agent 5단계 Validation 결과다. nil = 아직 안 돌렸다(모름).
 	ReportValidationPassed *bool
-	Allocatable            map[string]int32
-	ProbeAttempted         bool
-	ProbeAllocated         bool
-	ProbeMessage           string
+	// ExpectedDevices 는 descriptor 요청이 resolve 한 장치 수다. 0 이 아니면 ReportGeometry 가 이
+	// 수 이상이어야 NDR check 가 통과한다(geometry 를 관측하지 않는 descriptor 의 대조 기준).
+	ExpectedDevices int
+	// ReportValidationSkipped 가 비어 있지 않으면 node-agent validation 을 판정에 쓰지 않은 사유다
+	// (descriptor 가 backend 를 직접 공급하는 요청). 사실은 check 메시지로만 남긴다.
+	ReportValidationSkipped string
+	Allocatable             map[string]int32
+	ProbeAttempted          bool
+	ProbeAllocated          bool
+	ProbeMessage            string
 }
 
 // Result 는 판정 결과다. Agreed=false 면 Level 은 빈 문자열이다.
@@ -135,7 +141,11 @@ func evalDeviceObservation(in Inputs, record func(name, target string, passed bo
 // 없으므로 등급을 Observed 위로 올리지 않는다(evalAdvertisement 와 같은 규율).
 func evalNodeDeviceReport(in Inputs, record func(name, target string, passed bool, msg string)) bool {
 	const name = v1alpha1.EvidenceCheckNodeDeviceReport
-	if in.ReportValidationPassed != nil && !*in.ReportValidationPassed {
+	if in.ReportValidationSkipped != "" {
+		// descriptor 가 backend 를 직접 공급하는 요청이다 — 벤더 device-plugin 검증은 그 플러그인이
+		// 꺼진 상태를 정상으로 다루지 못해 판정에 못 쓰지만, 그 사실은 check message 로 남긴다.
+		record(name, "", true, "node agent validation not applied: "+in.ReportValidationSkipped)
+	} else if in.ReportValidationPassed != nil && !*in.ReportValidationPassed {
 		record(name, "", false, "node agent validation reported a failure")
 		return false
 	}
@@ -147,8 +157,15 @@ func evalNodeDeviceReport(in Inputs, record func(name, target string, passed boo
 		record(name, "", false, "no node device report geometry available")
 		return false
 	}
-	if in.ReportValidationPassed == nil {
+	if in.ReportValidationPassed == nil && in.ReportValidationSkipped == "" {
 		record(name, "", true, "node agent validation has not run yet")
+	}
+	// ExpectedDevices 는 descriptor 요청의 대조 기준이다 — descriptor 는 per-PCI geometry 를
+	// 관측하지 않으므로(Expectation.Geometry=="") 아래 geometry 비교 루프 대신 보고된 장치 수만 본다.
+	if in.ExpectedDevices > 0 && len(in.ReportGeometry) < in.ExpectedDevices {
+		record(name, "", false, fmt.Sprintf("report has %d matching devices, expected at least %d",
+			len(in.ReportGeometry), in.ExpectedDevices))
+		return false
 	}
 	if in.Expectation.Geometry == "" {
 		// 공유 전용 정책처럼 비교할 geometry 가 없다는 사실 자체를 남긴다 — 안 남기면 근거만

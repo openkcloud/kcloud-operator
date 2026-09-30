@@ -1,0 +1,16 @@
+# acpp-a30-mig-retain.yaml: Round 3 라이브 1회차 적용본 — k8s-worker1 A30 MIG 1g.6gb×4(deletionPolicy Retain), probe 파드가 nvidia-smi -L 로 검증(2026-09-20 .91) | 생성일: 2026-09-20
+apiVersion: npu.ai/v1alpha1
+kind: AcceleratorPartitionPolicy
+metadata:
+  name: r3-a30-mig-probe
+spec:
+  vendor: nvidia
+  nodeSelector:
+    kubernetes.io/hostname: k8s-worker1
+  layout:
+    - profile: 1g.6gb
+      countPerDevice: 4
+  quiescePolicy:
+    timeoutSeconds: 600
+    onTimeout: Fail
+  deletionPolicy: Retain

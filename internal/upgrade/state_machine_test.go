@@ -200,6 +200,9 @@ func TestExtractImageVariantSuffix(t *testing.T) {
 		"registry/repo:1.7.8-v2":     "-v2",
 		"registry/repo:580.142":      "",
 		"registry/repo":              "",
+		// 커널 토큰은 variant 가 아니므로 재구성에 쓰지 않는다(kernelImages 는 previousImage
+		// 캡처만 사용). variant 접미사는 태그 맨 끝 -v1 이며, 그 앞의 커널 토큰은 무시된다.
+		"reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1": "-v1",
 	}
 	for image, expected := range cases {
 		if got := extractImageVariantSuffix(image); got != expected {
@@ -444,6 +447,40 @@ func TestFailedState_IsTerminal_NoFurtherTransition(t *testing.T) {
 		if dus.Status.RollbackAttempts != 4 {
 			t.Errorf("Failed 상태에서 RollbackAttempts 가 변경됨 (call #%d): got %d, want 4",
 				i+1, dus.Status.RollbackAttempts)
+		}
+	}
+}
+
+// podWithResource 는 지정한 extended resource 를 limits 에 요청하는 Pod 를 만든다.
+func podWithResource(resourceName string) *corev1.Pod {
+	return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceName(resourceName): qty(1)},
+		},
+	}}}}
+}
+
+// TestPodUsesDevice_RecognizesEveryVendorResource 는 podUsesDevice(hasDeviceWorkloads 와
+// evictDevicePods 가 함께 쓰는 판정)가 등록된 벤더 넷의 가속기 리소스를 모두 인식하는지
+// 본다. rebellions.ai/ATOM 은 한때 이 판정의 하드코딩 목록에서 빠져 있었다 — 드라이버
+// 업그레이드 drain 이 rebellions ATOM 파드를 장치 파드로 못 알아봐 PDB 를 존중하는
+// eviction 대상에서 제외할 위험이 있었다(2026-09-28).
+func TestPodUsesDevice_RecognizesEveryVendorResource(t *testing.T) {
+	cases := []struct {
+		name     string
+		resource string
+		want     bool
+	}{
+		{"nvidia", "nvidia.com/gpu", true},
+		{"furiosa rngd", "furiosa.ai/rngd", true},
+		{"furiosa warboy", "beta.furiosa.ai/npu", true},
+		{"tenstorrent", "tenstorrent.com/blackhole", true},
+		{"rebellions", "rebellions.ai/ATOM", true},
+		{"non-accelerator", "cpu", false},
+	}
+	for _, c := range cases {
+		if got := podUsesDevice(podWithResource(c.resource)); got != c.want {
+			t.Errorf("%s: podUsesDevice(%q) = %v, want %v", c.name, c.resource, got, c.want)
 		}
 	}
 }

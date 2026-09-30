@@ -1,6 +1,6 @@
 {{- if .Values.deployClusterPolicy }}
 # clusterpolicy.yaml: NPUClusterPolicy 샘플 CR
-# 생성일: 2026-03-25 | 수정일: 2026-09-09 (벤더 이미지를 global.vendorRegistry 로 분리)
+# 생성일: 2026-03-25 | 수정일: 2026-09-28 (managementMode 허용 목록에 delegated 추가)
 apiVersion: npu.ai/v1alpha1
 kind: NPUClusterPolicy
 metadata:
@@ -18,6 +18,10 @@ spec:
     enabled: {{ .Values.nvidia.enabled }}
     {{- with .Values.nvidia.advertiseBy }}
     advertiseBy: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.nvidia.managementMode }}
+    {{- if not (has . (list "managed" "delegated" "external")) }}{{ fail (printf "nvidia.managementMode must be managed, delegated, or external, got %q" .) }}{{- end }}
+    managementMode: {{ . | quote }}
     {{- end }}
     devicePluginImage: "{{ .Values.nvidia.devicePluginImage }}"
     {{- if .Values.nvidia.nodeSelector }}
@@ -40,6 +44,10 @@ spec:
     enabled: {{ .Values.furiosa.enabled }}
     {{- with .Values.furiosa.advertiseBy }}
     advertiseBy: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.furiosa.managementMode }}
+    {{- if not (has . (list "managed" "delegated" "external")) }}{{ fail (printf "furiosa.managementMode must be managed, delegated, or external, got %q" .) }}{{- end }}
+    managementMode: {{ . | quote }}
     {{- end }}
     devicePluginImage: "{{ .Values.furiosa.devicePluginImage }}"
     configMapName: "{{ .Values.furiosa.configMapName }}"
@@ -76,6 +84,13 @@ spec:
   {{- if .Values.rebellions }}
   rebellions:
     enabled: {{ .Values.rebellions.enabled }}
+    {{- with .Values.rebellions.advertiseBy }}
+    advertiseBy: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.rebellions.managementMode }}
+    {{- if not (has . (list "managed" "delegated" "external")) }}{{ fail (printf "rebellions.managementMode must be managed, delegated, or external, got %q" .) }}{{- end }}
+    managementMode: {{ . | quote }}
+    {{- end }}
     devicePluginImage: {{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.rebellions.devicePluginUpstream "repo" .Values.rebellions.devicePluginRepository "tag" .Values.rebellions.devicePluginTag) | quote }}
     resourceName: {{ .Values.rebellions.resourceName | quote }}
     resourcePrefix: {{ .Values.rebellions.resourcePrefix | quote }}
@@ -85,6 +100,11 @@ spec:
     nodeSelector:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- if .Values.rebellions.dra }}
+    dra:
+      enabled: {{ .Values.rebellions.dra.enabled }}
+      image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.rebellions.dra.upstream "repo" .Values.rebellions.dra.repository "tag" .Values.rebellions.dra.tag) }}"
+    {{- end }}
   {{- end }}
   {{- if .Values.tenstorrent }}
   tenstorrent:
@@ -92,11 +112,23 @@ spec:
     {{- with .Values.tenstorrent.advertiseBy }}
     advertiseBy: {{ . | quote }}
     {{- end }}
+    {{- with .Values.tenstorrent.managementMode }}
+    {{- if not (has . (list "managed" "delegated" "external")) }}{{ fail (printf "tenstorrent.managementMode must be managed, delegated, or external, got %q" .) }}{{- end }}
+    managementMode: {{ . | quote }}
+    {{- end }}
     devicePluginImage: {{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.tenstorrent.devicePluginRepository "tag" .Values.tenstorrent.devicePluginTag) | quote }}
     resourceName: {{ .Values.tenstorrent.resourceName | quote }}
     {{- with .Values.tenstorrent.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if .Values.tenstorrent.dra }}
+    dra:
+      enabled: {{ .Values.tenstorrent.dra.enabled }}
+      image: "{{ include "kcloud-operator.vendorImage" (dict "registry" .Values.global.vendorRegistry "upstream" .Values.tenstorrent.dra.upstream "repo" .Values.tenstorrent.dra.repository "tag" .Values.tenstorrent.dra.tag) }}"
+      {{- with .Values.tenstorrent.dra.fabricManager }}
+      fabricManagerImage: "{{ include "kcloud-operator.vendorImage" (dict "registry" $.Values.global.vendorRegistry "upstream" .upstream "repo" .repository "tag" .tag) }}"
+      {{- end }}
     {{- end }}
   {{- end }}
 {{- end }}

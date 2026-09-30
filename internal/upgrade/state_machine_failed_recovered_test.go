@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 )
@@ -143,5 +144,62 @@ func TestHandleFailed_NoDeviceReport_StaysFailed(t *testing.T) {
 	if dus.Status.State != v1alpha1.UpgradeStateFailed {
 		t.Errorf("state=%q, want Failed — NDR 이 없으면 드라이버 로드 여부를 확인할 수 없다",
 			dus.Status.State)
+	}
+}
+
+// ── 시험 4: Failed→Idle 탈출이 남은 cordon 을 푼다 ─────────────────────────
+// 해제 로직이 Uncordoning 경로(state_machine.go:680)에만 있어서, 복구 탈출로 나가면
+// 드라이버가 정상인데 노드가 계속 cordon 된다(2026-09-17 라이브에서 수동 uncordon 필요).
+func TestFailedStateRecovered_ReleasesCordon(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verNew, verNew)
+	node := makeCordonedNode(dus.Name, nil)
+	dus.Spec.NodeName = node.Name // makeCordonedNode 가 쓰는 노드 이름에 맞춘다
+
+	dip := makeCordonTestDIP()
+	sm := newUpgradeSMWithRecorder(dus, dip, node, makeNDRWithDriver(true, verNew))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Fatalf("state=%q, want Idle", dus.Status.State)
+	}
+
+	var got corev1.Node
+	if err := sm.Get(context.Background(),
+		client.ObjectKey{Name: node.Name}, &got); err != nil {
+		t.Fatalf("노드 조회 실패: %v", err)
+	}
+	if got.Spec.Unschedulable {
+		t.Error("Idle 로 탈출했는데 노드가 여전히 cordon 상태다 — 드라이버는 정상인데 스케줄이 막힌다")
+	}
+}
+
+// ── 시험 5: Failed→Idle 탈출이 남의 cordon 을 건드리지 않는다 ──────────────
+// ACPP quiesce 와 운영자 수동 cordon 은 소유 표식을 남기지 않는다. 그 cordon 을 우리가 풀면
+// 파티션 적용 중이거나 정비 중인 노드에 파드가 다시 들어간다.
+func TestFailedStateRecovered_LeavesForeignCordon(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verNew, verNew)
+	// 빈 문자열을 owner로 주면 표식 없는(= 남의) cordon 이 된다
+	node := makeCordonedNode("", nil)
+	dus.Spec.NodeName = node.Name
+
+	dip := makeCordonTestDIP()
+	sm := newUpgradeSMWithRecorder(dus, dip, node, makeNDRWithDriver(true, verNew))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Fatalf("state=%q, want Idle", dus.Status.State)
+	}
+
+	var got corev1.Node
+	if err := sm.Get(context.Background(),
+		client.ObjectKey{Name: node.Name}, &got); err != nil {
+		t.Fatalf("노드 조회 실패: %v", err)
+	}
+	if !got.Spec.Unschedulable {
+		t.Error("Idle 로 탈출했는데 남의 cordon 이 풀렸다 — 파티션 적용 중이거나 정비 중인 노드에 파드가 들어간다")
 	}
 }

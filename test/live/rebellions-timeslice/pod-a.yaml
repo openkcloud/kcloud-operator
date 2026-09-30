@@ -1,0 +1,115 @@
+# ============================================================
+# pod-a.yaml: co-run 소비자 A — descriptor 가 광고한 rebellions/atom 1개로 /dev/rbln0·/dev/rsd0 를
+#             받아 workload.py 를 DEVICE_ID=0 으로 실행(같은 장치를 pod-b 와 동시에 공유)
+# 상세: descriptor(rebellions-timeslice)가 광고한 rebellions/atom 1개를 요청해 node5 의
+#       /dev/rbln0·/dev/rsd0 를 주입받고, ConfigMap(rbln-ts-workload)의 /work/workload.py 를
+#       PHASE=corun-a 로 돈다. DEVICE_ID=0 으로 고정해 pod-b 와 같은 물리 장치를 잡는다(장치
+#       두 장 노드에서 서로 다른 장치를 잡아 통과하는 것 방지). 두 파드의 측정 창을 맞추려면
+#       apply 전에 두 파드 env START_AT 을 같은 epoch 초로 채운다(예: now+40, run.sh 의
+#       set_start_at 이 렌더한 사본을 apply 한다).
+#
+#       이미지는 images 저장소 rbln-workload(Task 1, ubuntu22.04-v1)다. 마운트는 dist-packages
+#       둘에 더해 벤더 CDI 요건의 라이브러리 셋·도구 둘을 읽기 전용으로 더한다(node5 의
+#       /etc/cdi/rbln.yaml 과 같은 목록, task-2-report.md "추가 3·4 실행"으로 확정). 파드 안
+#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로(task-2-report.md
+#       "추가 5 실행"), RBLN_COMPILED_PATH 로 호스트 사전 컴파일 모델을 적재만 한다 — run.sh 의
+#       precompile_host 가 같은 이름의 파일을 node5 에 미리 만들어 둔다. RBLN_NPU_NAME 은
+#       rebel.get_npu_name() 자동탐지가 실패할 때의 폴백이다(실제로는 자동탐지가 성공한다,
+#       task-2-report.md "추가 4 실행").
+# 생성일: 2026-09-25 | 수정일: 2026-09-29
+# ============================================================
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rbln-ts-corun-a
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: node5
+  containers:
+    - name: c
+      image: <레지스트리>:5100/kcloud/rebellions/rbln-workload:ubuntu22.04-v1
+      command: ["python3", "/work/workload.py"]
+      env:
+        - name: PHASE
+          value: "corun-a"
+        - name: DURATION
+          value: "30"
+        - name: DEVICE_ID
+          value: "0"
+        - name: MATMUL_DIM
+          value: "2048"
+        - name: START_AT
+          value: ""          # apply 전에 pod-b 와 같은 epoch 초로 채운다(측정 창 정렬)
+        - name: PYTHONPATH
+          value: /host-local:/host-lib
+        - name: RBLN_NPU_NAME
+          value: "RBLN-CA22"
+        - name: RBLN_COMPILED_PATH
+          value: /models/matmul-2048-RBLN-CA22.rbln
+      resources:
+        limits:
+          rebellions/atom: "1"
+      volumeMounts:
+        - name: workload
+          mountPath: /work
+        - name: host-local
+          mountPath: /host-local
+          readOnly: true
+        - name: host-lib
+          mountPath: /host-lib
+          readOnly: true
+        - name: rbln-thunk-so
+          mountPath: /usr/lib/librbln-thunk.so.3.0.0
+          readOnly: true
+        - name: rbln-ccl-so
+          mountPath: /usr/lib/librbln-ccl.so.3.0.0
+          readOnly: true
+        - name: rbln-ml-so
+          mountPath: /usr/lib/librbln-ml.so
+          readOnly: true
+        - name: rbln-stat-bin
+          mountPath: /usr/bin/rbln-stat
+          readOnly: true
+        - name: rbln-smi-bin
+          mountPath: /usr/bin/rbln-smi
+          readOnly: true
+        - name: models
+          mountPath: /models
+          readOnly: true
+  volumes:
+    - name: workload
+      configMap:
+        name: rbln-ts-workload
+    - name: host-local
+      hostPath:
+        path: /usr/local/lib/python3.10/dist-packages
+        type: Directory
+    - name: host-lib
+      hostPath:
+        path: /usr/lib/python3/dist-packages
+        type: Directory
+    - name: rbln-thunk-so
+      hostPath:
+        path: /usr/lib/librbln-thunk.so.3.0.0
+        type: File
+    - name: rbln-ccl-so
+      hostPath:
+        path: /usr/lib/librbln-ccl.so.3.0.0
+        type: File
+    - name: rbln-ml-so
+      hostPath:
+        path: /usr/lib/librbln-ml.so
+        type: File
+    - name: rbln-stat-bin
+      hostPath:
+        path: /usr/bin/rbln-stat
+        type: File
+    - name: rbln-smi-bin
+      hostPath:
+        path: /usr/bin/rbln-smi
+        type: File
+    - name: models
+      hostPath:
+        path: /home/kcloud/rbln-ts-cache
+        type: Directory

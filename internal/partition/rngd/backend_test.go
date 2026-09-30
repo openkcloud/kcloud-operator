@@ -296,3 +296,35 @@ func TestDiscoverAcceptsLowercaseModel(t *testing.T) {
 		t.Errorf("driverVersion = %q, want 2026.1.0", res.DriverVersion)
 	}
 }
+
+// fakeVerifier 는 partition.Verifier 를 구현해 Verify 에 넘겨진 Target 을 기록한다.
+type fakeVerifier struct {
+	res       *partition.VerifyResult
+	err       error
+	gotTarget partition.Target
+}
+
+func (f *fakeVerifier) VerifyAllocatable(t partition.Target, _ map[string]int32) (*partition.VerifyResult, error) {
+	f.gotTarget = t
+	return f.res, f.err
+}
+
+func (f *fakeVerifier) VerifyAllocation(t partition.Target, _ string) (*partition.VerifyResult, error) {
+	f.gotTarget = t
+	return f.res, f.err
+}
+
+// TestRngdVerifyPassesVendor 는 Target.Vendor 가 주입된 verifier 까지 그대로 전달되는지 검증한다
+// (apply 경로 벤더 probe 스위치, furiosa 기능 probe 활성의 전제).
+func TestRngdVerifyPassesVendor(t *testing.T) {
+	fv := &fakeVerifier{res: &partition.VerifyResult{TestPodAllocated: true}}
+	b := New(nil).WithVerifier(fv)
+	target := partition.Target{Ctx: context.Background(), NodeName: "rngd-1", Vendor: "furiosa"}
+
+	if _, err := b.Verify(target); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if fv.gotTarget.Vendor != "furiosa" {
+		t.Errorf("verifier got Target.Vendor = %q, want %q", fv.gotTarget.Vendor, "furiosa")
+	}
+}

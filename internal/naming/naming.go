@@ -121,6 +121,18 @@ func AcppRebootJobName(nodeName string) string {
 	return RebootJobName(nodeName) + "-acpp"
 }
 
+// DeviceResetJobName 은 DeviceReset 작업이 만드는 호스트 명령 Job 의 결정론적 이름이다
+// (노드+벤더+작업 해시). 재부팅 Job 과 겹치지 않아야 한다 — 겹치면 서로의 Job 을 자기 것으로
+// 오인한다.
+//
+// transactionID 가 해시에 들어가는 이유: 이름이 (노드, 벤더)만으로 정해지면 앞선 작업이 남긴
+// 성공 Job 을 TTL 이 걷기 전에 새 작업이 자기 Job 으로 읽는다. 리셋은 실행되지 않았는데 성공이
+// 보고된다. 작업마다 이름이 갈려야 그 오인이 성립하지 않는다.
+func DeviceResetJobName(nodeName, vendor, transactionID string) string {
+	sum := sha256.Sum256([]byte(nodeName + "/" + vendor + "/" + transactionID))
+	return "kcloud-device-reset-" + hex.EncodeToString(sum[:])[:8]
+}
+
 // ToolkitLegacyDSName 은 접두사를 떼기 전 NVIDIA toolkit DaemonSet 이름이다.
 // nvidia-container-toolkit 은 벤더 이미지를 그대로 쓰는 워크로드라 접두사를 뗐고,
 // 옛 오브젝트는 생성 전에 한 번 정리한다(두 DS 가 같은 노드에서 containerd 설정을

@@ -21,6 +21,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/partition"
 	"kcloud-operator/internal/partition/nvidia"
 )
@@ -46,7 +47,13 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 	log := logf.FromContext(t.Ctx)
 	layout := partition.SharingLayoutFrom(acpp.Spec)
 	if layout.Mode == npuv1alpha1.SharingModeExclusive {
-		return r.disableSharing(acpp, backend, t, ts)
+		out, err := r.disableSharing(acpp, backend, t, ts)
+		if err == nil {
+			// "disabled" 는 여기서 센다 — disableSharing 안에서 세면 rejectSharing 이
+			// 같은 청소 함수를 재사용하므로 거절이 disabled 로도 중복 집계된다.
+			metrics.RecordACPPApply(acpp.Spec.Vendor, layout.Mode, "disabled")
+		}
+		return out, err
 	}
 
 	sb, rejected, ok, err := r.precheckSharing(t.Ctx, acpp, backend, ts)
@@ -99,7 +106,9 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 		vr, verr := r.verifySharedAllocatable(pt, expected)
 		cancel()
 		if verifySucceeded(vr, verr) {
-			return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas), nil
+			// 저널이 이미 이 mode·replicas 를 반영하고 있어(위 if 의 gate) 여기는 재확인일
+			// 뿐 mutation 이 아니다 — 적용 계수를 세지 않는다(transitioned=false).
+			return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas, false), nil
 		}
 		log.Info("sharing: applied journal present but allocatable not converged; re-applying", "node", t.NodeName)
 	}
@@ -199,7 +208,9 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 		return ts, verr
 	}
 
-	return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas), nil
+	// ConfigMap 을 쓰고 daemon 을 올리고 device-plugin 을 재시작해 검증까지 마친 뒤라
+	// 이 호출은 언제나 실제 mutation 이다(transitioned=true).
+	return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas, true), nil
 }
 
 // runSharingOnly 는 layout 없는(순수 공유) 정책의 전체 경로다(라이브 결함 D-3, Task 5 §5.1).
@@ -221,6 +232,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharingOnly(
 		if out, derr := r.disableSharing(acpp, backend, t, ts); derr != nil {
 			return out, derr
 		}
+		metrics.RecordACPPApply(acpp.Spec.Vendor, acpp.Spec.EffectiveSharingMode(), "disabled")
 		ts.Phase = npuv1alpha1.ACPPPhaseFailed
 		setCond(&ts, npuv1alpha1.ACPPCondValidated, metav1.ConditionFalse, "ValidationFailed",
 			"spec.layout and spec.sharing are both empty; the policy requests nothing", acpp.Generation)
@@ -357,6 +369,7 @@ func (r *AcceleratorPartitionPolicyReconciler) rejectSharing(
 	t partition.Target,
 	rejected npuv1alpha1.TargetStatus,
 ) (npuv1alpha1.TargetStatus, error) {
+	metrics.RecordACPPApply(acpp.Spec.Vendor, acpp.Spec.EffectiveSharingMode(), "rejected")
 	if _, err := r.disableSharing(acpp, backend, t, rejected); err != nil {
 		// 거절 판정은 그대로 사실이므로 종점은 유지하고, 청소만 requeue 로 다시 시도한다.
 		return rejected, err
@@ -532,29 +545,65 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreSharingRecord(t partition.
 	}
 }
 
-// sharingReady 는 공유 적용 성공 종점(Ready + 광고 배수 반영 + 격리 등급 강등)을 찍는다.
+// sharingReady 는 공유 적용 성공 종점(Ready + 광고 배수 반영 + 격리 등급 재기록)을 찍는다.
 //
-// 격리 강등이 핵심이다: Discover 가 채운 IsolationCapability 는 "장치가 무엇을 할 수 있는가" 이고,
+// 등급 재기록이 핵심이다: Discover 가 채운 IsolationCapability 는 "장치가 무엇을 할 수 있는가" 이고,
 // 여기서 반영하는 것은 "지금 무엇이 적용돼 있는가" 다. MIG 로 하드웨어 분리된 장치라도 그 위에
 // 시분할 replica 를 얹은 순간 replica 사이에는 compute/memory 격리가 없다 — 그 상태에서
 // `advertisedResources: 16` + `isolation.compute: hardware` 를 함께 보고하면 status 만 읽는
 // 소비자에게는 "하드웨어 격리된 장치 16개" 로 읽힌다(실제로는 4조각을 4중 시분할).
-// fault 축은 건드리지 않는다 — 시분할이 바꾸는 것이 아니다.
-func sharingReady(ts npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorPartitionPolicy, expected map[string]int32, mode string, replicas int32) npuv1alpha1.TargetStatus {
+// 다만 늘 none 으로 내리는 것은 아니다 — 아래 분기가 모드마다 다른 등급을 적는다.
+// fault 축은 건드리지 않는다 — 공유가 바꾸는 것이 아니다.
+// transitioned 는 이 호출이 실제 mutation(적용) 사건인지를 caller 가 판정해 넘긴 값이다.
+// ts.Phase 나 acpp.Status.Targets 같은 간접 신호로 여기서 다시 추정하지 않는다 — 두 신호 모두
+// "이 노드가 Ready 다" 는 사실만 담고 있어 "무엇이 방금 바뀌었는지" 를 구분하지 못한다(예: MIG
+// 파티션은 이미 Ready 였고 spec.sharing 만 이번에 처음 추가된 경우, 두 신호 모두 진입 시점에
+// 이미 Ready 를 가리켜 첫 적용을 재확인으로 오판한다). 진짜 판정은 runSharing 의 두 호출부가
+// 이미 저널(rec.SharingMode/SharingReplicas 대 layout.Mode/Replicas)로 확정해 두고 있으므로,
+// 그 값을 그대로 전달받는다.
+func sharingReady(ts npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorPartitionPolicy, expected map[string]int32, mode string, replicas int32, transitioned bool) npuv1alpha1.TargetStatus {
 	ts.Advertisement.AdvertisedResources = expected
-	ts.Advertisement.Reason = fmt.Sprintf(
-		"%s x%d — replicas share one device; no isolation between replicas", mode, replicas)
+	if mode == npuv1alpha1.SharingModeMPS {
+		ts.Advertisement.Reason = fmt.Sprintf(
+			"%s x%d — replicas share one device; compute and memory capped per process "+
+				"by the control daemon, no bandwidth isolation", mode, replicas)
+	} else {
+		ts.Advertisement.Reason = fmt.Sprintf(
+			"%s x%d — replicas share one device; no isolation between replicas", mode, replicas)
+	}
+	// 모드마다 다른 등급을 적는다. MPS 는 제어 데몬이 프로세스별 상한을 실제로 강제하므로
+	// (2026-08-11 실측) 연산·메모리를 none 으로 내리면 실측된 강제를 없다고 보고하게 된다.
+	// 축마다 근거가 따로 있다.
+	//   연산: 솔로 클라이언트가 A30 전체 9370.7 GFLOPS 의 26.2% 만 냈다. 경쟁자가 없는데도
+	//     카드의 1/4 인 것이 상한의 직접 증거이며, 데몬 질의
+	//     get_default_active_thread_percentage 가 replicas 4 와 일치하는 25.0 을 돌려준다.
+	//     4-tenant 동시 실행의 ratio 1.0014 는 테넌트 사이 간섭비이지 상한의 유무가 아니다 —
+	//     모두가 25% 에 묶여 있으니 서로 간섭하지 않아 1 에 가깝다.
+	//   메모리: 5888/23808 MiB 로 카드의 1/4.
+	// 대역폭은 ratio 0.4540 으로 실제로 새지만 IsolationCapability 에 축이 없어 광고 사유
+	// 문구로만 밝힌다. 시분할은 두 축 모두 강제가 관측되지 않았다.
+	// 빈 축은 그대로 둔다 — 근거 없는 등급을 적지 않는다는 규율이 우선한다.
+	grade := npuv1alpha1.IsolationNone
+	if mode == npuv1alpha1.SharingModeMPS {
+		grade = npuv1alpha1.IsolationProcess
+	}
 	for i := range ts.Devices {
 		iso := &ts.Devices[i].IsolationCapability
 		if iso.Compute != "" {
-			iso.Compute = npuv1alpha1.IsolationNone
+			iso.Compute = grade
 		}
 		if iso.Memory != "" {
-			iso.Memory = npuv1alpha1.IsolationNone
+			iso.Memory = grade
 		}
 	}
 	ts.Phase = npuv1alpha1.ACPPPhaseReady
 	setCond(&ts, npuv1alpha1.ACPPCondVerified, metav1.ConditionTrue,
 		npuv1alpha1.ReasonSharingVerified, "shared allocatable converged", acpp.Generation)
+	// 이 계수는 적용 사건을 센다. 조정 루프가 이미 반영된 저널을 재확인만 한 경우
+	// (transitioned=false)는 사건이 아니므로 세지 않는다. 그렇게 하지 않으면 계수가
+	// 조정 통과 횟수가 되어 지표 이름과 세는 대상이 어긋난다.
+	if transitioned {
+		metrics.RecordACPPApply(acpp.Spec.Vendor, mode, "ready")
+	}
 	return ts
 }

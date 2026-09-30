@@ -11,6 +11,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +33,8 @@ import (
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/upgrade"
+	"kcloud-operator/internal/vendorcap"
+	"kcloud-operator/internal/verification"
 )
 
 // +kubebuilder:rbac:groups=npu.ai,resources=driverupgradestates,verbs=get;list;watch;create;update;patch;delete
@@ -40,7 +44,6 @@ import (
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
@@ -160,6 +163,24 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 		return err
 	}
 
+	// 벤더별 NodeDeviceReport 노드 수 게이지. 지원 벤더 전량을 매 pass 다시 써서(없으면 0)
+	// 벤더가 사라졌을 때 옛 값이 남지 않게 한다.
+	nodeCounts := map[string]int{}
+	for _, ndr := range ndrList.Items {
+		seen := map[string]bool{}
+		for _, d := range ndr.Status.Devices {
+			v := strings.ToLower(d.Vendor)
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			nodeCounts[v]++
+		}
+	}
+	for _, v := range vendorcap.Vendors() {
+		metrics.SetNPUNodes(v, nodeCounts[v])
+	}
+
 	var dipList v1alpha1.DriverInstallPolicyList
 	if err := r.List(ctx, &dipList); err != nil {
 		return err
@@ -186,6 +207,7 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 		// DUS 는 (노드, 벤더) 당 하나인데 이 루프는 장치마다 돈다 — spec.model 은 장치 단위가
 		// 아니라 벤더 단위 값이어야 한다. 정책 선택(findPolicy)은 계속 장치별 model 을 쓴다.
 		vendorModels := vendorRepresentativeModels(ndr.Status.Devices)
+		observedModels := vendorObservedModels(ndr.Status.Devices)
 
 		for _, device := range ndr.Status.Devices {
 			// 매칭 DIP 찾기
@@ -201,21 +223,22 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 			// TrackOnly 정책: DUS 를 Idle 로 추적만 한다(설치/업그레이드 전이 없음).
 			// installer 이미지 미비 벤더(예: Tenstorrent, 실제 설치는 DKMS 2차)의 버전 관측용.
 			if policy.Spec.Driver.TrackOnly {
-				if err := r.ensureTrackOnlyState(ctx, nodeName, device, policy, vendorModels[device.Vendor]); err != nil {
+				if err := r.ensureTrackOnlyState(ctx, nodeName, device, policy, vendorModels[device.Vendor], observedModels[device.Vendor]); err != nil {
 					logger.Error(err, "TrackOnly DUS 동기화 실패", "node", nodeName, "vendor", device.Vendor)
 				}
 				continue
 			}
 
-			r.syncUpgradeState(ctx, nodeName, device, policy, vendorModels[device.Vendor])
+			r.syncUpgradeState(ctx, nodeName, device, policy, vendorModels[device.Vendor], observedModels[device.Vendor])
 		}
 	}
 	return nil
 }
 
 // modelUnknown 은 제품명을 특정할 수 없다는 표시다. 이름이 아니라 "모른다" 라서
-// upgrade.DeviceModelMatches 가 양방향 와일드카드로 취급한다.
-const modelUnknown = "generic"
+// upgrade.DeviceModelMatches 가 양방향 와일드카드로 취급한다. 값은
+// v1alpha1.DriverModelUnknown 하나뿐이다 — pkg/npuctl 도 그 상수를 그대로 쓴다.
+const modelUnknown = v1alpha1.DriverModelUnknown
 
 // vendorRepresentativeModels 는 벤더별 대표 model 이다. DriverUpgradeState 는 (노드, 벤더) 당
 // 하나인데 NodeDeviceReport 의 장치는 벤더당 여럿일 수 있다(라이브 worker1 = nvidia a30 + a2).
@@ -240,6 +263,44 @@ func vendorRepresentativeModels(devices []v1alpha1.DeviceEntry) map[string]strin
 	return models
 }
 
+// vendorObservedModels 는 벤더별로 관측된 장치 모델을 정렬·중복 제거해 모은다 —
+// vendorRepresentativeModels 가 대표값 하나로 뭉갤 때 잃는 정보를 status 에 남기기 위해서다.
+func vendorObservedModels(devices []v1alpha1.DeviceEntry) map[string][]string {
+	seen := map[string]map[string]bool{}
+	for _, d := range devices {
+		if d.Model == "" {
+			continue
+		}
+		if seen[d.Vendor] == nil {
+			seen[d.Vendor] = map[string]bool{}
+		}
+		seen[d.Vendor][d.Model] = true
+	}
+	out := make(map[string][]string, len(seen))
+	for vendor, models := range seen {
+		list := make([]string, 0, len(models))
+		for m := range models {
+			list = append(list, m)
+		}
+		sort.Strings(list)
+		out[vendor] = list
+	}
+	return out
+}
+
+// syncDUSObservedModels 는 status.observedModels 를 관측값과 맞춘다(같으면 쓰지 않는다).
+func (r *DriverUpgradeReconciler) syncDUSObservedModels(
+	ctx context.Context, existing *v1alpha1.DriverUpgradeState, observed []string) {
+	if reflect.DeepEqual(existing.Status.ObservedModels, observed) {
+		return
+	}
+	patch := client.MergeFrom(existing.DeepCopy())
+	existing.Status.ObservedModels = observed
+	if err := r.Status().Patch(ctx, existing, patch); err != nil {
+		logf.FromContext(ctx).Error(err, "DriverUpgradeState status.observedModels 동기화 실패", "name", existing.Name)
+	}
+}
+
 // resetRebootTracking 은 새 업그레이드 사이클 진입 시 이전 사이클의 재부팅 추적 상태를 초기화한다.
 // RebootAttempts 가 stale 이면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀
 // cross-major 자연 재부팅이 발화하지 않는다(P2-2 결함). RequestedTime/BootID 는 handleRebootRequired 가
@@ -250,11 +311,22 @@ func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 	s.RebootBootID = ""
 }
 
+// defaultDriftGrace 는 버전 드리프트를 확정하기까지 기다리는 유예 시간이다(EvaluateVersionDrift 입력).
+const defaultDriftGrace = 10 * time.Minute
+
+// timeOrZero 는 *metav1.Time 이 nil 이면 zero time.Time 을 돌려준다(EvaluateVersionDrift 입력 변환용).
+func timeOrZero(t *metav1.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return t.Time
+}
+
 // syncUpgradeState 는 설치형(비-TrackOnly) 정책에 대해 device 하나의 DUS 를 생성/전이합니다.
 // 신규 생성(버전 비교로 초기 State), 정책 버전 변경, 버전 불일치→UpgradeRequired,
 // currentVersion 동기화를 처리합니다. 에러는 로깅 후 skip(기존 동작 보존).
 func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName string,
-	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string) {
+	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string, observed []string) {
 	logger := logf.FromContext(ctx)
 	dusName := driverUpgradeStateName(nodeName, device.Vendor)
 
@@ -279,6 +351,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 				CurrentVersion:     device.DriverVersion,
 				DesiredVersion:     policy.Spec.Driver.Version,
 				LastTransitionTime: metav1.Now(),
+				ObservedModels:     observed,
 			},
 		}
 		if err := r.Create(ctx, &dus); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -293,10 +366,51 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 
 	// 아래 두 분기가 조건부로 조기 return 하므로 model 동기화를 먼저 한다.
 	r.syncDUSModel(ctx, &existing, vendorModel)
+	r.syncDUSObservedModels(ctx, &existing, observed)
 
-	// Bug #7 fix: desiredVersion이 정책과 다르면 업데이트 (상태에 무관)
+	// 대역외 드라이버 변경 감지(감지 전용). Idle 에서 정책 선언 버전과 NDR 실측이 어긋난 채
+	// 유예를 넘기면 Warning 이벤트로 알린다. 자동 재설치·재부팅은 하지 않는다(호스트 임의 재부팅 방지).
+	// 기준은 policy.Spec.Driver.Version(안정값) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다.
+	if existing.Status.State == v1alpha1.UpgradeStateIdle && device.DriverVersion != "" {
+		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
+			State:           existing.Status.State,
+			DeclaredVersion: policy.Spec.Driver.Version,
+			ObservedVersion: device.DriverVersion,
+			ObservedAt:      time.Now(),
+			Since:           timeOrZero(existing.Status.DriftFirstSeen),
+			Grace:           defaultDriftGrace,
+		})
+		next := existing.Status.DriftFirstSeen
+		switch verdict {
+		case verification.VersionDriftConfirmed:
+			if r.Recorder != nil {
+				r.Recorder.Event(&existing, corev1.EventTypeWarning, "DriverVersionDrift", reason)
+			}
+		case verification.VersionDriftPending:
+			if next == nil {
+				now := metav1.Now()
+				next = &now
+			}
+		case verification.VersionDriftNone:
+			next = nil
+		}
+		if (next == nil) != (existing.Status.DriftFirstSeen == nil) ||
+			(next != nil && existing.Status.DriftFirstSeen != nil && !next.Equal(existing.Status.DriftFirstSeen)) {
+			patch := client.MergeFrom(existing.DeepCopy())
+			existing.Status.DriftFirstSeen = next
+			if err := r.Status().Patch(ctx, &existing, patch); err != nil {
+				logger.Error(err, "DriftFirstSeen 갱신 실패", "name", dusName)
+			}
+		}
+	}
+
+	// Bug #7 fix: desiredVersion이 정책과 다르면 update. 단 State==Idle 에서만 —
+	// mid-cycle 은 상태기계가 DesiredVersion 을 소유하고, 롤백은 그것을 PreviousVersion 으로 놓는다.
+	// 여기서 되돌리면 롤백을 깨고 매 롤백마다 재부팅 예산이 리셋돼 MaxReboots 상한이 무력화된다(A2).
+	// Idle 새 사이클 리셋은 handleIdle(state_machine.go:324)이 백업한다.
 	desiredVersion := policy.Spec.Driver.Version
-	if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion {
+	if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion &&
+		existing.Status.State == v1alpha1.UpgradeStateIdle {
 		oldDesired := existing.Status.DesiredVersion
 		patch := client.MergeFrom(existing.DeepCopy())
 		existing.Status.DesiredVersion = desiredVersion
@@ -344,7 +458,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 // 설치/업그레이드 전이 없이 currentVersion(NDR) 과 desiredVersion(정책)만 동기화하여
 // 버전 관측·verifiedVersions 게이트 용도로 추적합니다(installer 미비 벤더 임시 편입).
 func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, nodeName string,
-	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string) error {
+	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string, observed []string) error {
 	const trackMsg = "TrackOnly: 버전 관측 전용(설치 경로 없음)"
 	dusName := driverUpgradeStateName(nodeName, device.Vendor)
 
@@ -364,6 +478,7 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 				DesiredVersion:     policy.Spec.Driver.Version,
 				LastTransitionTime: metav1.Now(),
 				Message:            trackMsg,
+				ObservedModels:     observed,
 			},
 		}
 		if createErr := r.Create(ctx, &dus); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
@@ -376,6 +491,7 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 	}
 
 	r.syncDUSModel(ctx, &existing, vendorModel)
+	r.syncDUSObservedModels(ctx, &existing, observed)
 
 	// 기존 DUS: currentVersion/desiredVersion 동기화, State 는 항상 Idle 로 강제.
 	if existing.Status.State != v1alpha1.UpgradeStateIdle ||

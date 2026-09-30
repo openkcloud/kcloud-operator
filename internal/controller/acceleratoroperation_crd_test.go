@@ -74,4 +74,18 @@ var _ = Describe("AcceleratorOperation CRD", func() {
 		op.Status.Phase = "AlmostDone"
 		Expect(k8sClient.Status().Update(ctx, op)).NotTo(Succeed())
 	})
+
+	// 증명: 빈 transactionID 는 apiserver 가 거부한다. 빈 값이 들어오면 DeviceReset 의 Job
+	// 이름이 (노드, 벤더)로 붕괴해 앞선 작업의 성공 Job 을 자기 성공으로 오인한다.
+	// 깨는 뮤테이션: TransactionID 의 MinLength 마커를 지우면 실패한다.
+	It("rejects an empty transactionID", func() {
+		op := &npuv1alpha1.AcceleratorOperation{
+			ObjectMeta: metav1.ObjectMeta{Name: "aop-emptytx"},
+			Spec: npuv1alpha1.AcceleratorOperationSpec{
+				Type: "DeviceReset", NodeName: "aop-node", Vendor: "nvidia", TransactionID: "",
+				Owner: npuv1alpha1.OperationOwner{Kind: "Administrator", Name: "admin"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, op)).NotTo(Succeed())
+	})
 })

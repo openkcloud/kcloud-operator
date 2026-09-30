@@ -1,4 +1,4 @@
-<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 -->
+<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 | 수정일: 2026-10-01 -->
 
 # kcloud-operator 설치 · 확인 절차
 
@@ -29,13 +29,13 @@ serverVersion:
 
 | Service K8s | 차트 | 프리셋 | 설치용 values 주소 |
 |---|---|---|---|
-| 1.31~1.34 | 0.7.30 | `values-k8s1.34.yaml` | `.../45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml` |
+| 1.31~1.34 | 0.8.0 | `values-k8s1.34.yaml` | `.../45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml` |
 | 1.26~1.30 | 0.6.2 | `values-k8s1.28.yaml` | `.../9397ea30fe494120877d65cb27053a2a3eb09340/deploy/helm/values-k8s1.28.yaml` |
 
 브랜치 주소(`release.yaml` 의 `valuesBrowseURL`)는 최신 내용을 사람이 확인할 때만 씁니다. 브랜치는 새 커밋이 들어오면 같은 주소가 다른 내용을 돌려주므로 설치에는 쓰지 않습니다.
 
 ```bash
-export CHART_VERSION=0.7.30
+export CHART_VERSION=0.8.0
 export VALUES_SHA=45fcbedc83008c81c6976774b6af4ef8b01cd44d
 export VALUES_URL="https://raw.githubusercontent.com/openkcloud/kcloud-operator/$VALUES_SHA/deploy/helm/values-k8s1.34.yaml"
 ```
@@ -67,7 +67,7 @@ helm template kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
   | grep -E "image:|kind:" | sort -u
 ```
 
-operator 이미지가 `ghcr.io/openkcloud/kcloud-operator:v0.7.30` 으로 나오는지 봅니다. 목록에 DRA 드라이버 이미지 두 개가 함께 보이는데, 기본값이 꺼져 있어 실제로 배포되지는 않습니다. `kcloud-host-exec` 과 Tenstorrent device-plugin 은 차트가 아니라 operator 가 실행 중에 만들기 때문에 이 목록에 나오지 않습니다.
+operator 이미지가 `ghcr.io/openkcloud/kcloud-operator:v0.8.0` 으로 나오는지 봅니다. 목록에 DRA 드라이버 이미지 두 개가 함께 보이는데, 기본값이 꺼져 있어 실제로 배포되지는 않습니다. `kcloud-host-exec` 과 Tenstorrent device-plugin 은 차트가 아니라 operator 가 실행 중에 만들기 때문에 이 목록에 나오지 않습니다.
 
 ## 5. 설치
 

@@ -256,25 +256,27 @@ func TestFuriosaUnified_LegacyObjectRemoved(t *testing.T) {
 	}
 }
 
-// TestDeleteDaemonSetIfExists는 존재/부재 DS 삭제가 멱등적으로 동작하는지 검증한다.
-func TestDeleteDaemonSetIfExists(t *testing.T) {
+// TestDeleteDaemonSetIn 은 존재/부재 DS 이름 삭제가 멱등적으로 동작하는지 검증한다.
+// deleteDaemonSetIn 은 kcloud 전용 이름(통합 DS·개명 전 kcloud- 이름)에만 쓴다 — 벤더 일반
+// 이름은 소유권 검사가 있는 deleteOwnedDaemonSet* 로 지운다.
+func TestDeleteDaemonSetIn(t *testing.T) {
 	existing := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: furiosaWarboyLegacyDSName, Namespace: "kube-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: furiosaUnifiedLegacyDSName, Namespace: "kube-system"},
 	}
 	r := newNPUReconciler(existing)
 	ctx := context.Background()
 
 	// 존재하는 DS 삭제 성공
-	if err := r.deleteDaemonSetIfExists(ctx, furiosaWarboyLegacyDSName); err != nil {
+	if err := r.deleteDaemonSetIn(ctx, "kube-system", furiosaUnifiedLegacyDSName); err != nil {
 		t.Fatalf("존재 DS 삭제 오류: %v", err)
 	}
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, types.NamespacedName{Name: furiosaWarboyLegacyDSName, Namespace: "kube-system"}, &ds); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: furiosaUnifiedLegacyDSName, Namespace: "kube-system"}, &ds); err == nil {
 		t.Errorf("DS 가 삭제되지 않음")
 	}
 
 	// 부재 DS 삭제는 NotFound 무시(멱등)
-	if err := r.deleteDaemonSetIfExists(ctx, "no-such-ds"); err != nil {
+	if err := r.deleteDaemonSetIn(ctx, "kube-system", "no-such-ds"); err != nil {
 		t.Errorf("부재 DS 삭제는 nil 이어야 함: %v", err)
 	}
 }
@@ -439,7 +441,12 @@ func TestFuriosaPerModelDS_VendorNamespaceAndLegacyRemoved(t *testing.T) {
 			t.Setenv("OPERATOR_NAMESPACE", "kcloud")
 			var objs []client.Object
 			for _, ref := range tc.legacy {
-				objs = append(objs, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: ref.Namespace}})
+				// kcloud 가 만든 옛 DS 는 owner annotation 을 갖는다(2026-04-17 이후 항상 stamp).
+				// 개명 정리는 owner 일치만 지우므로, 옛 DS 에 이 policy 의 소유 표시를 달아 둔다.
+				objs = append(objs, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{
+					Name: ref.Name, Namespace: ref.Namespace,
+					Annotations: map[string]string{ownerAnnotation: "default/test-policy"},
+				}})
 			}
 			r := newNPUReconciler(objs...)
 			ctx := context.Background()

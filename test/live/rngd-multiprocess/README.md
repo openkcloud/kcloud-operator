@@ -44,7 +44,7 @@ NODE_HOST=<user>@<rngd-node> HOLD_SECONDS=20 bash test/live/rngd-multiprocess/pr
 1. 두 pod 에서 동일 모델 추론 루프 60초 — 각각 throughput 기록
 2. 단독 실행 대비 저하율, P95/P99 latency
 3. 한 pod 강제 종료(`kubectl delete pod --grace-period=0`) 후 다른 pod 생존 여부 → fault isolation 등급 근거
-4. 결과를 `docs/impl/rngd-sharing-measurement-<날짜>.md` 에 기록하고, 이 결과가 있을 때만
+4. 결과를 `docs/.superpowers/worklog/evidence/<날짜>-rngd-sharing-measurement.md` 에 기록하고, 이 결과가 있을 때만
    `SharingCapability.MultiProcess.Verification=verified` 로 승격한다.
    (이 단계는 `furiosa-smi` 를 담은 이미지를 Harbor 에 올려야 실행 가능 — 2026-07-29 기준 없음.)
 

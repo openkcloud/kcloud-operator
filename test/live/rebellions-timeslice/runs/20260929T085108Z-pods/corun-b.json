@@ -1,0 +1,1 @@
+{"phase": "corun-b", "iters": 10574, "seconds": 30.005, "iters_per_sec": 352.4126, "dim": 2048, "device_open_seconds": 0.007, "init_seconds": 2.055, "start": "2026-09-29T08:53:21.037201Z", "end": "2026-09-29T08:53:51.041801Z", "compile_seconds": 0.0, "compiled_from": "file"}

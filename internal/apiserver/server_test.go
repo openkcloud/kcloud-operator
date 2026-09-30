@@ -201,13 +201,15 @@ func TestToggle_MissingEnabled400(t *testing.T) {
 // 최종 리뷰 Important #4 로 추가한 core-group nodes 게이트를 고정한다. 게이트가 있는데
 // 아무 테스트도 잠그지 않으면 다음 리팩터가 조용히 지워도 초록으로 남는다 — 이 트랙이
 // 반복해서 값을 치른 형태다(I-6 의 동어반복 테스트와 같은 부류, 인가 쪽 버전).
-// 응답에 node 이름·schedulable·nodeAdvertised 를 싣는 5개 라우트 전부가 대상이다.
+// 응답이 노드 파생 값을 싣는 6개 라우트 전부가 대상이다.
 func TestNodeAuthzGateOnNodeDerivedRoutes(t *testing.T) {
 	cases := []struct{ name, method, path, body string }{
 		{"accelerators", "GET", "/api/v1/accelerators", ""},
 		{"acceleratorByUID", "GET", "/api/v1/accelerators/GPU-aaa", ""},
 		{"nodeAccelerators", "GET", "/api/v1/nodes/worker1/accelerators", ""},
 		{"capabilities", "GET", "/api/v1/capabilities", ""},
+		// 벤더 능력 뷰도 노드 라벨·allocatable 을 읽는다(CollectVendorCapabilitiesWith).
+		{"vendorCapabilities", "GET", "/api/v1/vendors/capabilities", ""},
 		{"preview", "POST", "/api/v1/preview", `{"class":"whole-gpu","access":{"mode":"exclusive"}}`},
 	}
 	for _, tc := range cases {
@@ -221,9 +223,9 @@ func TestNodeAuthzGateOnNodeDerivedRoutes(t *testing.T) {
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("core group nodes 권한 없으면 403 이어야 함: got %d (%s)", w.Code, w.Body.String())
 			}
-			// 어느 리소스가 403 에 이름을 남기는지는 authzAll 의 pairs 순서로 결정된다.
-			// 순서를 고정하지 않으면 뒤집어도 스위트가 green 이라(Task 2 리뷰가 실험으로 확인)
-			// 사용자가 받는 사유가 조용히 바뀐다. nodes 가 첫 게이트임을 여기서 고정한다.
+			// 403 은 막힌 리소스를 이름으로 알려야 한다. 이 픽스처는 nodes 만 거부하므로
+			// authzAll 의 pairs 순서와 무관하게 nodes 게이트가 사유를 결정한다 — 사유가
+			// 조용히 사라지거나 다른 리소스 이름으로 바뀌면 여기서 깨진다.
 			if body := w.Body.String(); !strings.Contains(body, "list nodes") {
 				t.Errorf("403 은 막힌 리소스(nodes)를 이름으로 알려야 함: %s", body)
 			}

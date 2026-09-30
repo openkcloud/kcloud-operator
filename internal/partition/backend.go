@@ -40,6 +40,8 @@ type Target struct {
 	Owner string
 	// Generation 은 요청 ACPP 의 .metadata.generation — Job operation-ID 재료(nvidia MIG).
 	Generation int64
+	// Vendor 는 할당 probe 가 어느 벤더 명령으로 장치를 확인할지 고르는 키다(비면 pause probe).
+	Vendor string
 }
 
 // DiscoverResult 는 discovery 산출 — status 4축을 채운다.
@@ -74,6 +76,10 @@ type VerifyResult struct {
 	AllocatableConverged bool
 	TestPodAllocated     bool
 	Snapshot             map[string]int32
+	// ProbeExitCode 는 벤더 기능 probe 의 종료코드다. pause probe(스케줄만 확인)는 nil 로 남는다.
+	ProbeExitCode *int32
+	// ProbeOutput 은 probe 파드의 마지막 로그다(판정 근거로 evidence 에 남긴다).
+	ProbeOutput string
 }
 
 // Verifier 는 하드웨어 의존 검증 seam 이다(envtest 는 fake 주입).

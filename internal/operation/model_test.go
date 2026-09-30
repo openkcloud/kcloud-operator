@@ -1,6 +1,6 @@
 // ============================================================
 // model_test.go: operation type·resource key·충돌 판정 계약 테스트
-// 상세: docs/design/conflict-matrix.md 의 표와 1:1 대응한다. 표를 바꾸면 이 테스트도 바꿔야 한다.
+// 상세: 충돌 판정표와 1:1 대응한다. 표를 바꾸면 이 테스트도 바꿔야 한다.
 // 생성일: 2026-07-31
 // ============================================================
 package operation
@@ -51,6 +51,8 @@ func TestConflictMatrixMatchesDesignDoc(t *testing.T) {
 		// 후보에 상대와 겹치는 키를 준다 — 키를 비우면 "읽기 전용이라서" 가 아니라 "겹칠 키가
 		// 없어서" 병렬이 나와 파괴성 분류를 전혀 고정하지 못한다.
 		{"revalidate 는 읽기 전용", Revalidate, PartitionReconfigure, part, part, VerdictParallel},
+		// 장치 리셋은 되돌릴 수 없으므로 같은 노드의 다른 파괴적 작업과 겹칠 수 없다.
+		{"device reset vs dp restart", DeviceReset, DevicePluginRestart, part, part, VerdictConflict},
 	}
 	for _, tc := range cases {
 		if got := Conflicts(tc.a, tc.b, tc.ka, tc.kb); got != tc.want {
@@ -91,7 +93,7 @@ func keySets() map[string][]ResourceKey {
 	}
 }
 
-// TestConflictIsSymmetricForAllTypePairs 는 10종 전체 쌍 × 자원 키 조합 전체에서
+// TestConflictIsSymmetricForAllTypePairs 는 11종 전체 쌍 × 자원 키 조합 전체에서
 // Conflicts(a,b) == Conflicts(b,a) 임을 확인한다. 한 쌍만 표본 검사하면 비대칭 규칙이
 // 새로 들어와도 통과하므로, 전수로 돌린다.
 func TestConflictIsSymmetricForAllTypePairs(t *testing.T) {
@@ -111,12 +113,12 @@ func TestConflictIsSymmetricForAllTypePairs(t *testing.T) {
 	}
 }
 
-// TestDestructiveTableCoversExactlyAllTypes 는 파괴성 표가 10종을 정확히 덮는지 본다.
+// TestDestructiveTableCoversExactlyAllTypes 는 파괴성 표가 11종을 정확히 덮는지 본다.
 // AllTypes 에 없는 유령 항목이나 중복이 있으면 표가 코드 정본 구실을 못한다.
 func TestDestructiveTableCoversExactlyAllTypes(t *testing.T) {
 	all := AllTypes()
-	if len(all) != 10 {
-		t.Fatalf("AllTypes 는 10종이어야 한다, got %d", len(all))
+	if len(all) != 11 {
+		t.Fatalf("AllTypes 는 11종이어야 한다, got %d", len(all))
 	}
 	seen := map[Type]bool{}
 	for _, ty := range all {

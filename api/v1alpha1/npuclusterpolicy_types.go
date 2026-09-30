@@ -17,7 +17,7 @@ limitations under the License.
 // ============================================================
 // npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
 // 상세: Detector/Nvidia/Furiosa/Rebellions/Tenstorrent vendor spec 포함
-// 생성일: 2025-01-01 | 수정일: 2026-08-12
+// 생성일: 2025-01-01 | 수정일: 2026-09-28
 // ============================================================
 
 package v1alpha1
@@ -36,7 +36,9 @@ type DetectorSpec struct {
 
 type FuriosaSpec struct {
 	// 광고 주체 축(devicePlugin|dra).
-	AdvertiseSpec     `json:",inline"`
+	AdvertiseSpec `json:",inline"`
+	// 관리 모드 축(managed|external). external 이면 warboy/rngd/unified 배포·회수 전부 건너뛴다.
+	ManagementSpec    `json:",inline"`
 	Enabled           bool              `json:"enabled"`
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ConfigMapName     string            `json:"configMapName,omitempty"`
@@ -98,7 +100,9 @@ type RngdSpec struct {
 
 type NvidiaSpec struct {
 	// 광고 주체 축(devicePlugin|dra).
-	AdvertiseSpec     `json:",inline"`
+	AdvertiseSpec `json:",inline"`
+	// 관리 모드 축(managed|external). external 이면 device-plugin 을 배포·회수하지 않는다.
+	ManagementSpec    `json:",inline"`
 	Enabled           bool              `json:"enabled"`
 	DevicePluginImage string            `json:"devicePluginImage"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
@@ -129,23 +133,32 @@ type DcgmExporterSpec struct {
 // RebellionsSpec defines the Rebellions ATOM+ device plugin configuration.
 // Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
 type RebellionsSpec struct {
+	// 광고 주체 축(devicePlugin|dra).
+	AdvertiseSpec `json:",inline"`
+	// 관리 모드 축(managed|external). external 이면 device-plugin 을 배포·회수하지 않는다.
+	ManagementSpec    `json:",inline"`
 	Enabled           bool              `json:"enabled,omitempty"`
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ResourceName      string            `json:"resourceName,omitempty"`   // default "ATOM"
 	ResourcePrefix    string            `json:"resourcePrefix,omitempty"` // default "rebellions.ai"
-	Namespace         string            `json:"namespace,omitempty"`      // default "rbln-system"
+	Namespace         string            `json:"namespace,omitempty"`      // default "kube-system" (rbllnsResolveNamespace; 벤더 공식 배포물 기본값 rbln-system 과 다르다)
 	ConfigMapName     string            `json:"configMapName,omitempty"`  // default "rbln-device-plugin-config"
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
 	// +optional
 	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
+	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
+	// +optional
+	DRA *DRASpec `json:"dra,omitempty"`
 }
 
 // TenstorrentSpec defines the Tenstorrent Blackhole NPU device plugin configuration.
 // Backward-compatible: all fields are omitempty; omit the whole block to keep legacy behavior.
 type TenstorrentSpec struct {
 	// 광고 주체 축(devicePlugin|dra).
-	AdvertiseSpec     `json:",inline"`
+	AdvertiseSpec `json:",inline"`
+	// 관리 모드 축(managed|external). external 이면 device-plugin 을 배포·회수하지 않는다.
+	ManagementSpec    `json:",inline"`
 	Enabled           bool              `json:"enabled,omitempty"`
 	DevicePluginImage string            `json:"devicePluginImage,omitempty"`
 	ResourceName      string            `json:"resourceName,omitempty"` // default "tenstorrent.com/blackhole"
@@ -176,6 +189,15 @@ type NPUClusterPolicySpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
+// NPUClusterPolicy Condition 타입 상수
+const (
+	// ConditionDualAdvertisement 는 한 벤더의 device-plugin 과 DRA 가 같은 노드에서 같은
+	// 물리 장치를 동시에 광고하는 창이 열려 있는지를 나타내는 Condition 타입이다. advertiseBy 를
+	// devicePlugin 으로 되돌려도 그 벤더의 DRA 드라이버 발행이 아직 안 꺼졌으면 True 로 남는다 —
+	// 전진 방향 전환(발행자 준비 → 스위치 적용) 중에는 잠깐 True 였다 꺼지는 것이 정상이다.
+	ConditionDualAdvertisement = "DualAdvertisement"
+)
+
 // NPUClusterPolicyStatus defines the observed state of NPUClusterPolicy.
 type NPUClusterPolicyStatus struct {
 	Phase      string             `json:"phase,omitempty"`
@@ -189,13 +211,20 @@ type NPUClusterPolicyStatus struct {
 	DRADrivers []DRADriverStatus `json:"draDrivers,omitempty"`
 }
 
-// AdvertiseSwitchStatus 는 노드 하나에 대한 전환 판정이다.
+// AdvertiseSwitchStatus 는 관리 벤더의 장치 노드 하나에 대한 광고 주체 판정이다. 선언
+// (Mode)과 관측이 같으면 Applied, 다르면 Reason 이 그 이유다 — devicePlugin 벤더의 노드도
+// 항목을 가지므로 "항목 없음" 이 "광고 없음" 으로 읽히지 않는다.
 type AdvertiseSwitchStatus struct {
 	Vendor string `json:"vendor"`
 	Node   string `json:"node"`
-	// Applied 는 이 노드가 실제로 DRA 소유로 넘어갔는가다.
+	// Mode 는 이 벤더가 선언한 광고 주체다.
+	// +kubebuilder:validation:Enum=devicePlugin;dra
+	// +optional
+	Mode string `json:"mode,omitempty"`
+	// Applied 는 이 노드의 광고 주체가 선언과 같은가다(dra: dra-owned 라벨 부여됨,
+	// devicePlugin: dra-owned 라벨 없음).
 	Applied bool `json:"applied"`
-	// Reason 은 넘어가지 못한 사유다(넘어갔으면 비어 있다).
+	// Reason 은 같지 않은 사유다(같으면 비어 있다).
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// BlockingPods 는 장치를 쥐고 있어 전환을 막은 pod 들이다(namespace/name).
@@ -253,6 +282,34 @@ func (a AdvertiseSpec) AdvertisedBy() string {
 	return a.AdvertiseBy
 }
 
+// ManagementSpec 은 kcloud 가 이 벤더의 data plane 을 배포하는지(managed), 벤더
+// operator 가 이미 배포를 맡고 있어 배포 없이 그 존재만 확인하는지(delegated), 아니면
+// kcloud 밖에서 설치된 것을 노드만 관측하는지(external) 다. delegated·external 모두
+// device-plugin/DRA 를 만들지도 지우지도 않는다. 장치 발견·라벨과 descriptor 중재는
+// 그대로 관리 중으로 본다.
+type ManagementSpec struct {
+	// ManagementMode 는 managed(기본)·delegated·external 이다. 미지정 = managed.
+	//   managed   : kcloud 가 벤더 operand 를 직접 배포하고 소유한다.
+	//   delegated : 벤더 operator 가 이미 배포를 맡고 있다. kcloud 는 배포하지 않고 그 존재만 확인한다.
+	//   external  : 드라이버·런타임이 kcloud 밖에서 설치됐다. 노드만 관측한다.
+	// +kubebuilder:validation:Enum=managed;delegated;external
+	// +optional
+	ManagementMode string `json:"managementMode,omitempty"`
+}
+
+// IsOperatorOwned 는 kcloud 가 배포 주체인지다. managed 일 때만 참이다. 배포 여부를
+// 묻는 자리는 이 도우미 하나를 쓴다. 모드 문자열을 직접 비교하는 곳이 늘면 새 모드를
+// 더할 때 그 자리를 모두 찾아야 한다.
+func (m ManagementSpec) IsOperatorOwned() bool {
+	return m.ManagementMode == "" || m.ManagementMode == "managed"
+}
+
+// IsDelegated 는 벤더 operator 에 위임한 상태인지다.
+func (m ManagementSpec) IsDelegated() bool { return m.ManagementMode == "delegated" }
+
+// IsExternal 은 이 벤더가 external 관리 모드인지 본다. 미지정(빈 값)은 managed 다.
+func (m ManagementSpec) IsExternal() bool { return m.ManagementMode == "external" }
+
 // DRASpec 은 이 벤더의 DRA 드라이버를 operator 가 배포할 것인가다. 벤더 블록에
 // 포인터로 들어간다 — nil 이 기본이어야 이 필드를 모르는 기존 정책이 지금까지와
 // 똑같이 동작한다.
@@ -264,6 +321,11 @@ type DRASpec struct {
 	// Image 는 드라이버 이미지를 덮는다. 비우면 렌더러 기본값.
 	// +optional
 	Image string `json:"image,omitempty"`
+	// FabricManagerImage 는 Tenstorrent 전용이다. 이 벤더의 드라이버는 장치 발견을
+	// 직접 하지 않고 같은 파드의 Fabric Manager agent 에 gRPC 로 맡기므로 이미지가
+	// 둘이다. 다른 세 벤더는 이 값을 읽지 않는다. 비우면 렌더러 기본값.
+	// +optional
+	FabricManagerImage string `json:"fabricManagerImage,omitempty"`
 	// Args 는 드라이버 컨테이너 인자를 덮는다. 비우면 렌더러 기본값.
 	// +optional
 	Args []string `json:"args,omitempty"`
@@ -297,7 +359,8 @@ type DRADriverStatus struct {
 	// PublishedNodes 는 이 드라이버가 ResourceSlice 를 발행 중인 노드 수다.
 	// +optional
 	PublishedNodes int32 `json:"publishedNodes,omitempty"`
-	// Message 는 Blocked·Installing 에서 무엇이 없는지다.
+	// Message 는 이 드라이버에 대해 사람이 알아야 할 사실이다. Blocked·Installing 에서는
+	// 무엇이 없는지이고, Ready 에서도 반영하지 않은 설정이 있으면 그 통지가 남는다.
 	// +optional
 	Message string `json:"message,omitempty"`
 }
@@ -307,4 +370,23 @@ type DRADriverStatus struct {
 // 되돌리면 라벨도 사라진다.
 func DRAOwnedNodeLabel(vendor string) string {
 	return "kcloud.ai/" + vendor + ".dra-owned"
+}
+
+// DRARetiredNodeLabel 은 "이 노드는 이 벤더의 DRA 광고를 device-plugin 으로 되돌렸지만
+// dra.enabled 는 아직 true 라 DRA 드라이버 파드가 물러나야 한다" 를 나타내는 노드 라벨이다.
+// DRAOwnedNodeLabel 을 회수하는 그 reconcile 에서 operator 가 부여하고, 다시 DRA 로
+// 돌아오거나 dra.enabled 를 false 로 내리면 회수한다(reconcileDRAOwnedLabels). furiosa·
+// rngd 는 DRAOwnedNodeLabel 처럼 서로 다른 키를 쓴다.
+func DRARetiredNodeLabel(vendor string) string {
+	return "kcloud.ai/" + vendor + ".dra-retired"
+}
+
+// PresentNodeLabel 은 node-manager 가 "이 노드에 이 벤더 장치가 있다" 로 붙이는 자립 라벨
+// 키다(NFD 비의존, 값은 "true"). furiosa 는 product 별로 furiosa(Warboy)·rngd 키를 따로
+// 쓴다. 벤더 이름은 vendorcap 어휘(nvidia·furiosa·rngd·rebellions·tenstorrent)다.
+// Go 코드에서 이 라벨 문자열의 단일 출처다(furiosa-family·gpu 라벨은 벤더 라벨이 아니라
+// 여기 속하지 않는다). deploy/helm/values.yaml 이 같은 라벨을 매니페스트마다 별도로
+// 정의하므로, 라이브 실효값은 그 차트 값이 정한다 — npuclusterpolicy_controller.go 참고.
+func PresentNodeLabel(vendor string) string {
+	return "kcloud.ai/" + vendor + ".present"
 }

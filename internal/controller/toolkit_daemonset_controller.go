@@ -30,6 +30,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driveradapter"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 )
@@ -91,9 +92,11 @@ func (r *ToolkitDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 // toolkitVendorSupported 는 container-toolkit reconciler 가 DS 를 생성하는 vendor 인지
-// 판정한다. 현재 NVIDIA 만 container-toolkit(containerd runtime 등록)이 필요하다.
+// 판정한다. 현재 NVIDIA 만 container-toolkit(containerd runtime 등록)이 필요하며, 그 판정은
+// driveradapter 가 담당한다 — 이 함수는 조회 결과를 그대로 전한다.
 func toolkitVendorSupported(vendor string) bool {
-	return strings.EqualFold(vendor, vendorNvidia)
+	a, ok := driveradapter.ForModel(vendor, "")
+	return ok && a.ToolkitRequired()
 }
 
 func (r *ToolkitDaemonSetReconciler) createOrUpdateToolkitDS(ctx context.Context, pol *npuv1alpha1.DriverInstallPolicy) error {
@@ -156,7 +159,7 @@ func renderToolkitDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.Daemon
 		"npu.ai/vendor":               strings.ToLower(pol.Spec.Vendor),
 	}
 
-	nodeSelector := vendorNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
+	nodeSelector := driverNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
 	if len(pol.Spec.NodeSelector) > 0 {
 		nodeSelector = pol.Spec.NodeSelector
 	}

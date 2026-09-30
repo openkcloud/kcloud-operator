@@ -9,6 +9,7 @@
 package verification
 
 import (
+	"strings"
 	"testing"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
@@ -257,5 +258,50 @@ func TestUnobservableReportDeviceCapsLevel(t *testing.T) {
 	if res.Level != v1alpha1.EvidenceLevelObserved {
 		t.Fatalf("level = %q, want %q (비교하지 못한 축이 있으면 등급을 올리지 않는다)",
 			res.Level, v1alpha1.EvidenceLevelObserved)
+	}
+}
+
+func TestDescriptorReportCountBelowExpectedBlocks(t *testing.T) {
+	// descriptor 요청은 geometry 를 비교하지 않는 대신 보고된 장치 수가 기대 수 이상이어야 한다.
+	in := agreeingInputs()
+	in.Expectation.Geometry = ""
+	in.ReportGeometry = map[string]string{"PCI-0000:af:00.0": ""}
+	in.ExpectedDevices = 2
+	got := Evaluate(in, DefaultPolicy())
+	if got.Agreed || !checkFailed(got, v1alpha1.EvidenceCheckNodeDeviceReport) {
+		t.Fatalf("보고 장치가 기대보다 적은데 통과했다: %+v", got)
+	}
+}
+
+func TestDescriptorReportCountMetPasses(t *testing.T) {
+	in := agreeingInputs()
+	in.Expectation.Geometry = ""
+	in.ReportGeometry = map[string]string{"PCI-0000:af:00.0": ""}
+	in.ExpectedDevices = 1
+	got := Evaluate(in, DefaultPolicy())
+	if !got.Agreed {
+		t.Fatalf("보고 장치 수가 충족되는데 실패했다: %+v", got)
+	}
+}
+
+func TestSkippedReportValidationDoesNotBlock(t *testing.T) {
+	// descriptor 가 backend 를 공급하는 요청은 벤더 device-plugin 이 꺼진 상태의 validation 실패를
+	// 근거 실패로 삼지 않는다 — 그 사실은 check 메시지에 남는다.
+	in := agreeingInputs()
+	failed := false
+	in.ReportValidationPassed = &failed
+	in.ReportValidationSkipped = "descriptor-managed backend"
+	got := Evaluate(in, DefaultPolicy())
+	if !got.Agreed {
+		t.Fatalf("검증 미적용 요청을 실패로 취급했다: %+v", got)
+	}
+	var msg string
+	for _, c := range got.Checks {
+		if c.Name == v1alpha1.EvidenceCheckNodeDeviceReport && c.Target == "" {
+			msg = c.Message
+		}
+	}
+	if !strings.Contains(msg, "not applied") {
+		t.Fatalf("검증 미적용 사실이 check 메시지에 없다: %+v", got.Checks)
 	}
 }

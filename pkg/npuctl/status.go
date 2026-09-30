@@ -236,6 +236,7 @@ func buildNodeStatuses(
 			DesiredVersion: dus.Status.DesiredVersion,
 			Message:        dus.Status.Message,
 			Retries:        dus.Status.Retries,
+			Models:         dus.Status.ObservedModels,
 		})
 	}
 

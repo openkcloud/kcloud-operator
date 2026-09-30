@@ -5,6 +5,7 @@ package npuctl
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -283,4 +284,31 @@ func TestCollectStatus_EmptyCluster(t *testing.T) {
 	if len(status.Nodes) != 0 {
 		t.Errorf("빈 클러스터에서 노드가 없어야 함: %+v", status.Nodes)
 	}
+}
+
+// TestCollectStatus_ObservedModelsCopied 는 DUS.Status.ObservedModels 가 CLI 상태
+// (UpgradeStatus.Models)로 그대로 옮겨지는지 본다.
+func TestCollectStatus_ObservedModelsCopied(t *testing.T) {
+	dus := &npuv1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1-nvidia"},
+		Spec: npuv1alpha1.DriverUpgradeStateSpec{
+			NodeName: "n1", Vendor: VendorNvidia, Model: npuv1alpha1.DriverModelUnknown,
+		},
+		Status: npuv1alpha1.DriverUpgradeStateStatus{
+			State: npuv1alpha1.UpgradeStateIdle, ObservedModels: []string{"a2", "a30"},
+		},
+	}
+	c := newTestClient(t, dus)
+	status, err := c.CollectStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range status.Nodes {
+		for _, u := range n.Upgrades {
+			if u.Name == "n1-nvidia" && strings.Join(u.Models, ",") == "a2,a30" {
+				return
+			}
+		}
+	}
+	t.Fatalf("observedModels 가 CLI 상태에 옮겨지지 않았다: %+v", status.Nodes)
 }

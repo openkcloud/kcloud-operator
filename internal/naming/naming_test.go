@@ -244,3 +244,19 @@ func TestOperatorNamespace(t *testing.T) {
 		t.Errorf("env=kcloud 시 %q, want kcloud", got)
 	}
 }
+
+func TestDeviceResetJobName(t *testing.T) {
+	a := DeviceResetJobName("k8s-worker1", "nvidia", "tx-1")
+	b := DeviceResetJobName("k8s-worker1", "furiosa", "tx-1")
+	if a == b || a == RebootJobName("k8s-worker1") || len(a) > 63 {
+		t.Fatalf("이름이 벤더별로 갈리고 재부팅 Job 과 달라야 한다: %s / %s", a, b)
+	}
+	// 작업마다 갈려야 앞선 작업의 성공 Job 을 자기 것으로 오인하지 않는다.
+	if c := DeviceResetJobName("k8s-worker1", "nvidia", "tx-2"); c == a {
+		t.Fatalf("작업이 다르면 이름도 달라야 한다: %s", c)
+	}
+	// 같은 작업의 재진입은 같은 이름을 얻어야 한다(멱등).
+	if again := DeviceResetJobName("k8s-worker1", "nvidia", "tx-1"); again != a {
+		t.Fatalf("같은 작업은 같은 이름이어야 한다: %s != %s", again, a)
+	}
+}

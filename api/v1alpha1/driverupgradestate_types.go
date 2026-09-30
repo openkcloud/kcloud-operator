@@ -1,12 +1,34 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-06-15
+// 생성일: 2026-04-13 | 수정일: 2026-09-22
 
 package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// DriverModelUnknown은 DriverUpgradeState.Spec.Model에 들어가는 값 중 하나로, 한 노드에
+// 같은 벤더 아래 서로 다른 product 장치가 섞여(예: furiosa Warboy+RNGD 혼재) 대표 model
+// 을 하나로 정할 수 없을 때의 표시입니다. 이름이 아니라 "모른다"는 뜻입니다 —
+// vendorRepresentativeModels(internal/controller)가 이 값을 채웁니다. 이 값을 보는
+// 소비자(예: pkg/npuctl)는 특정 model 로 다루면 안 됩니다.
+const DriverModelUnknown = "generic"
+
+// RollbackRequestedAnnotation 은 관리자가 롤백을 요청했다는 표시다(값은 요청 시각, RFC3339).
+// CLI(kubectl npu driver rollback)가 metadata 에 붙이고, 상태 기계가 RollbackRequestAccepted
+// 인 상태에서 읽어 Rollback 으로 전이한 뒤 지운다 — status 는 컨트롤러만 쓴다.
+const RollbackRequestedAnnotation = "npu.ai/rollback-requested"
+
+// RollbackRequestAccepted 는 관리자 롤백 요청을 받을 수 있는 상태인지다. 전이 중에는 상태
+// 기계의 자동 롤백 경로가 이미 있어 요청을 보류한다(어노테이션은 남겨 둔다).
+func RollbackRequestAccepted(state string) bool {
+	switch state {
+	case "", UpgradeStateIdle, UpgradeStateFailed:
+		return true
+	}
+	return false
+}
 
 // 업그레이드 상태 상수
 const (
@@ -79,6 +101,11 @@ type DriverUpgradeStateStatus struct {
 	// PreviousImage는 롤백 시 복구할 이전 드라이버 컨테이너 이미지 전체 레퍼런스입니다.
 	// 빌드 접미사를 포함한 원본 이미지를 그대로 보존하기 위해 태그 치환 대신 원본 이미지를 저장합니다.
 	PreviousImage string `json:"previousImage,omitempty"`
+	// ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. kernelImages 에 노드 커널의 검증된
+	// 항목이 있으면 그 이미지이고, 없으면 driver.image 입니다. 전이 중 preflight 단계와 Idle
+	// 재진입마다 다시 계산되므로, 정책에서 kernelImages 항목을 빼면 Idle 상태에서도 곧
+	// driver.image 로 돌아옵니다.
+	ResolvedImage string `json:"resolvedImage,omitempty"`
 	// RollbackAttempts는 현재 업그레이드 사이클에서의 롤백 시도 횟수입니다.
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
 	// 새 업그레이드 사이클 진입 시(handleIdle) 0으로 초기화됩니다.
@@ -101,6 +128,14 @@ type DriverUpgradeStateStatus struct {
 	// `npu.ai/quiesce-on-driver-upgrade=true` 라벨이 붙은 Deployment 만 대상입니다.
 	// (architectural plan §A6.1 — opt-in quiesce on driver upgrade)
 	QuiescedDeployments []QuiescedDeployment `json:"quiescedDeployments,omitempty"`
+	// DriftFirstSeen 은 Idle 에서 선언 버전과 실측 버전의 불일치를 처음 본 시각이다. 일치하거나
+	// 업그레이드 사이클에 들어가면 nil 로 되돌린다. 디바운스 기준이며 다른 목적과 공유하지 않는다.
+	DriftFirstSeen *metav1.Time `json:"driftFirstSeen,omitempty"`
+	// ObservedModels 는 이 노드에서 이 벤더로 관측된 장치 모델 목록이다(NodeDeviceReport 기준,
+	// 정렬·중복 제거). spec.model 이 DriverModelUnknown("generic")으로 뭉개진 혼재 노드에서도
+	// 어떤 제품이 섞여 있는지 여기서 읽는다 — 값을 지어내지 않고 관측만 옮긴다.
+	// +optional
+	ObservedModels []string `json:"observedModels,omitempty"`
 }
 
 // QuiescedDeployment 는 driver upgrade cycle 동안 일시적으로 scale=0 으로 quiesce 된

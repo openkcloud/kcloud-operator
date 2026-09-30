@@ -1,0 +1,59 @@
+### preflight (ctx=kubernetes-admin@cluster.local vendor=rebellions node=node5 ssh=<가림> desc=rebellions-timeslice resource=rebellions/atom replicas=2 duration=30 barrier=40 device_id=0)
+  [PASS] node_ready — node5 Ready=True
+  [PASS] ndr_rebellions_present — models=[atom atom ]
+  [PASS] service_present — atomplus-vllm.service=active
+### advertise: rebellions 를 잠시 끄고 descriptor 로 rebellions/atom 를 2 개 광고 확인 (원값 enabled=true)
+  1) rebellions.enabled=false → kube-system/rbln-device-plugin 회수
+npuclusterpolicy.npu.ai/npuclusterpolicy-sample patched
+  2) descriptor 적용 → 생성 device-plugin 광고 대기
+acceleratordescriptor.npu.ai/rebellions-timeslice created
+  [PASS] descriptor_advertised_n — rebellions/atom=2 (sharingRefusal 이 rebellions timeSlicing=Software 를 통과시킴)
+  3) descriptor 제거 → rebellions 재활성 복원
+acceleratordescriptor.npu.ai "rebellions-timeslice" deleted
+  [PASS] vendor_dp_restored — rebellions.ai/ATOM=2
+### measure(pods): node5 에서 파드 3개(solo, corun-a, corun-b)로 측정
+  [PASS] service_initial_state — atomplus-vllm.service=active
+npuclusterpolicy.npu.ai/npuclusterpolicy-sample patched
+acceleratordescriptor.npu.ai/rebellions-timeslice created
+### precompile(host): /home/kcloud/rbln-ts-cache/matmul-2048-RBLN-CA22.rbln 준비
+bash: warning: setlocale: LC_ALL: cannot change locale (ko_KR.UTF-8)
+bash: warning: setlocale: LC_ALL: cannot change locale (ko_KR.UTF-8)
+bash: warning: setlocale: LC_ALL: cannot change locale (ko_KR.UTF-8)
+2026-09-29 08:51:58,677 INFO [rebel-compiler] Export done. Elapsed time: 0:00:00
+/usr/lib/python3.10/copyreg.py:101: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+2026-09-29 08:51:58,876 INFO [rebel-compiler] Exported model conversion done. Elapsed time: 0:00:00, Memory change: 2.25 MB
+2026-09-29 08:51:58,917 INFO [rebel-compiler] RBLN SDK compiler version: 0.10.3
+2026-09-29 08:51:58,918 INFO [rebel-compiler] -- Target NPU: RBLN-CA22
+2026-09-29 08:51:58,918 INFO [rebel-compiler] -- Tensor parallel size: 1
+2026-09-29 08:51:58,918 INFO [rebel-compiler] +-------------------------------------------------+
+2026-09-29 08:51:58,918 INFO [rebel-compiler] |Compile(#0), mod_name=default, input_info_index=0|
+2026-09-29 08:51:58,918 INFO [rebel-compiler] +-------------------------------------------------+
+Computation graph generation                                          0% 00:00Computation graph generation ██████████                               25% 00:00Computation graph generation ████████████████████████████████████████ 100% 00:00
+[KComputation graph optimization                                            0%  00:00[KComputation graph optimization █████                                     13%  00:00[KComputation graph optimization █████████████████████████████████████     92%  00:00[KComputation graph optimization ████████████████████████████████████████ 100%  00:00
+COMPILE_ONLY_OK npu=RBLN-CA22 path=/home/kcloud/rbln-ts-cache/matmul-2048-RBLN-CA22.rbln seconds=1.46
+  [PASS] precompiled — /home/kcloud/rbln-ts-cache/matmul-2048-RBLN-CA22.rbln
+configmap/rbln-ts-workload created
+pod/rbln-ts-solo created
+pod/rbln-ts-corun-a created
+pod/rbln-ts-corun-b created
+bash: warning: setlocale: LC_ALL: cannot change locale (ko_KR.UTF-8)
+  [PASS] service_state_drift — 측정 중 atomplus-vllm.service 상태가 예상과 다름(예상=inactive 실제=inactive
+unknown) — 외부 계정 가능성, 판정 무관
+  [PASS] pods_completed — solo=rbln-ts-solo a=rbln-ts-corun-a b=rbln-ts-corun-b smi_pids=2
+{"r_solo": 430.2768, "r_corun_a": 363.781, "r_corun_b": 352.4126, "mode": "pods", "verdict": "pass", "ratio_a": 0.8455, "ratio_b": 0.819, "corun_sum": 716.1936, "sum_ratio": 1.6645, "overlap_seconds": 30.0, "min_dur_seconds": 30.0, "overlap_required_seconds": 24.0, "overlap_ok": true, "device_open_a": 0.007, "device_open_b": 0.007, "init_a": 1.953, "init_b": 2.055, "smi_distinct_pids": 2, "same_device_confirmed": true, "reason": "겹치는 창에서 두 프로세스가 각각 solo 의 0.85/0.82 배 처리량으로 동시 진행(합 1.66×solo) — 직렬화 아님"}
+  [PASS] concurrency_verdict — solo=430.2768 a=0.8455 b=0.819 sum_ratio=1.6645 overlap=30.0s open=0.007/0.007 smi_pids=2
+TIMESLICE_PODS: solo=430.2768 a=0.8455 b=0.819 sum=1.6645 overlap=30 smi_pids=2
+### cleanup: 파드·ConfigMap 정리 + descriptor 제거 + atomplus-vllm.service 복원 확인
+pod "rbln-ts-solo" deleted from default namespace
+pod "rbln-ts-corun-a" deleted from default namespace
+pod "rbln-ts-corun-b" deleted from default namespace
+configmap "rbln-ts-workload" deleted from default namespace
+acceleratordescriptor.npu.ai "rebellions-timeslice" deleted
+  [PASS] vendor_dp_restored — rebellions.ai/ATOM=2
+  atomplus-vllm.service=inactive
+unknown — 시작값(active) 기준 복원 시도
+  [PASS] service_restored — atomplus-vllm.service=active(시작값=active)
+verdict=pass
+{"test":"rebellions-timeslice","vendor":"rebellions","node":"node5","descriptor":"rebellions-timeslice","resource":"rebellions/atom","replicas":2,"duration":30,"deviceId":0,"phase":"cleanup","classification":"","blockReason":"","checks":{"node_ready":true,"ndr_rebellions_present":true,"service_present":true,"descriptor_advertised_n":true,"vendor_dp_restored":true,"service_initial_state":true,"precompiled":true,"service_state_drift":true,"pods_completed":true,"concurrency_verdict":true,"vendor_dp_restored":true,"service_restored":true},"fails":0,"verdict":"pass","dryRun":false,"concurrency":{"r_solo": 430.2768, "r_corun_a": 363.781, "r_corun_b": 352.4126, "mode": "pods", "verdict": "pass", "ratio_a": 0.8455, "ratio_b": 0.819, "corun_sum": 716.1936, "sum_ratio": 1.6645, "overlap_seconds": 30.0, "min_dur_seconds": 30.0, "overlap_required_seconds": 24.0, "overlap_ok": true, "device_open_a": 0.007, "device_open_b": 0.007, "init_a": 1.953, "init_b": 2.055, "smi_distinct_pids": 2, "same_device_confirmed": true, "reason": "겹치는 창에서 두 프로세스가 각각 solo 의 0.85/0.82 배 처리량으로 동시 진행(합 1.66×solo) — 직렬화 아님"},"coRunInitSeconds":{"a":null,"b":null},"coRunDeviceOpenSeconds":{"a":null,"b":null},"smiDistinctPids":2,"serviceFinal":"active","date":"2026-09-29T08:54:13Z"}
+EXIT_CODE=0

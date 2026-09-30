@@ -108,3 +108,31 @@ func VendorForResource(name string) string {
 	}
 	return ""
 }
+
+// AcceleratorResourceDomains 는 등록된 벤더가 쓰는 가속기 extended resource 의 도메인
+// 접두 집합이다(정렬, 중복 제거) — productResource 의 각 리소스명에서 첫 "/" 까지를 뽑아
+// 만든다. 정확한 제품명이 아니라 도메인으로 보는 이유는 이 집합을 쓰는 판정들이
+// fail-closed 여야 하기 때문이다 — 카탈로그에 아직 없는 제품명이나 device-plugin 이
+// 붙이는 변형 이름(nvidia.com/mig-1g.5gb, nvidia.com/gpu.shared 등)도 그 벤더의 사용으로
+// 세야 한다. uninstall 게이트(internal/uninstall/gate.go)와 드라이버 업그레이드 drain
+// (internal/upgrade/state_machine.go)이 이 집합 하나를 함께 쓴다 — 전에는 목록을 각자
+// 손으로도 적어 두 곳이 갈렸고, drain 쪽 목록만 rebellions.ai/ 를 빠뜨리고 있었다.
+func AcceleratorResourceDomains() []string {
+	seen := make(map[string]bool)
+	var domains []string
+	for _, products := range productResource {
+		for _, res := range products {
+			i := strings.Index(res, "/")
+			if i < 0 {
+				continue
+			}
+			d := res[:i+1]
+			if !seen[d] {
+				seen[d] = true
+				domains = append(domains, d)
+			}
+		}
+	}
+	sort.Strings(domains)
+	return domains
+}

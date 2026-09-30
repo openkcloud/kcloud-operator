@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// operation phase — docs/design/operation-model.md §3 상태머신과 1:1.
+// operation phase — operation 상태머신과 1:1.
 const (
 	OpPhasePending                = "Pending"
 	OpPhasePlanning               = "Planning"
@@ -51,15 +51,18 @@ type OperationOwner struct {
 }
 
 type AcceleratorOperationSpec struct {
-	// Type 은 internal/operation 의 operation 타입 10종 중 하나다.
-	// +kubebuilder:validation:Enum=DriverInstall;DriverUpgrade;DriverRollback;PartitionReconfigure;SharingModeChange;DevicePluginRestart;NodeReboot;Revalidate;Quarantine;RecoverDevice
+	// Type 은 internal/operation 의 operation 타입 11종 중 하나다.
+	// +kubebuilder:validation:Enum=DriverInstall;DriverUpgrade;DriverRollback;PartitionReconfigure;SharingModeChange;DevicePluginRestart;NodeReboot;Revalidate;Quarantine;RecoverDevice;DeviceReset
 	Type     string `json:"type"`
 	NodeName string `json:"nodeName"`
 	// +kubebuilder:validation:Enum=nvidia;furiosa;rebellions;tenstorrent
 	// +optional
 	Vendor string `json:"vendor,omitempty"`
 	// TransactionID 는 요청 정체성이다. 같은 의도의 재요청은 같은 값을 갖고, 그래서 중복
-	// operation 이 만들어지지 않는다.
+	// operation 이 만들어지지 않는다. 빈 값을 막는 이유: DeviceReset 의 Job 이름이 이 값을
+	// 해시에 담아 작업마다 갈리는데, 비면 이름이 (노드, 벤더)로 붕괴해 앞선 작업의 성공 Job
+	// 을 자기 성공으로 오인한다.
+	// +kubebuilder:validation:MinLength=1
 	TransactionID string         `json:"transactionID"`
 	Owner         OperationOwner `json:"owner"`
 	// ResourceKeys 는 이 작업이 읽고 쓰는 자원이다(internal/operation 의 키 생성자 산출물).

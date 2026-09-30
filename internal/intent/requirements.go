@@ -1,9 +1,12 @@
 // ============================================================
 // requirements.go: 격리 등급·최소 메모리 게이트
-// 상세: 근거가 없으면 만족으로 치지 않는다(fail closed). 공유 계열 모드는 장치가 아무리
-// 강한 격리를 해도 replica 사이에는 격리가 없으므로 none 으로 강등해서 비교한다 —
-// ACPP 의 sharingReady() 가 status 에 하는 강등과 같은 규율이다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// 상세: 근거가 없으면 만족으로 치지 않는다(fail closed). 공유 계열 모드는 replica 사이
+// 격리가 모드별로 실측돼 있지 않으므로 이 게이트에서는 none 으로 강등해서 비교한다.
+// ACPP 의 sharingReady() 는 이보다 덜 보수적이다 — MPS 는 제어 데몬이 프로세스별 상한을
+// 강제하는 것이 실측돼 status 에 process 를 적는다. 게이트가 그 값을 따라가지 않는 것은
+// 의도이며(배치는 fail closed 쪽이 안전하다), 그래서 거절 메시지는 장치의 등급이 아니라
+// 이 게이트가 쓰는 값을 밝힌다.
+// 생성일: 2026-07-29 | 수정일: 2026-09-17
 // ============================================================
 package intent
 
@@ -96,11 +99,14 @@ func checkIsolation(nc NodeCapability, req v1alpha1.AcceleratorRequirements, acc
 	if want < 0 {
 		return nil // 요구 없음
 	}
-	// 공유 계열은 replica 사이에 격리가 없다. 장치가 무엇을 하든 이것이 사용자가 실제로 받는 값이다.
+	// 공유 계열은 replica 사이 격리가 모드별로 실측돼 있지 않아 none 으로 비교한다.
+	// ACPP status 가 MPS 에 process 를 적는 것과 여기가 갈리는 지점이다(파일 헤더 참고).
+	// 메시지가 장치를 "격리 없음" 이라고 단정하지 않는 이유가 그것이다 — 같은 노드의
+	// status 와 모순되게 읽히면 사용자가 둘을 화해시킬 방법이 없다.
 	if access.Mode == v1alpha1.AccessModeShared || access.Mode == v1alpha1.AccessModePartitionedShared {
 		if want > IsolationRank(v1alpha1.IsolationNone) {
 			return &Reject{Axis: AxisIsolation, Reason: v1alpha1.AWReasonIsolationTooWeak,
-				Message: fmt.Sprintf("mode %q gives replicas no isolation from each other (effective level %q), which cannot satisfy minimumIsolation=%q",
+				Message: fmt.Sprintf("mode %q: replica isolation is not measured per mode, so this gate compares at %q, which cannot satisfy minimumIsolation=%q (ACPP status may report a higher per-axis grade for the same node)",
 					access.Mode, v1alpha1.IsolationNone, req.MinimumIsolation)}
 		}
 		return nil

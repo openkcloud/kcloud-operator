@@ -1,15 +1,15 @@
 # ============================================================
-# image-manifest.yaml: 릴리스 세트 0.7.30 이 사용하는 컨테이너 이미지 전체 목록
+# image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)와 감사용. condition 은 어떤 상황에서 실제로 pull 되는지다.
 #       digest 는 ghcr.io/openkcloud 발행본(2026-09-10)의 매니페스트 digest 다. 벤더 이미지는 upstream 그대로이며
 #       global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10 | 수정일: 2026-09-10 (GHCR digest 기입)
+# 생성일: 2026-09-10 | 수정일: 2026-10-01 (릴리스 세트 0.8.0 태그 표기)
 # ============================================================
-release: "0.7.30"
+release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
   - image: kcloud-operator
-    tag: v0.7.30
-    digest: sha256:2d88fd1df11232c22bd30f0bfd0741e6c995ef59d9e051d9a3ce244793ed2471
+    tag: v0.8.0
+    digest: sha256:2d88fd1df11232c22bd30f0bfd0741e6c995ef59d9e051d9a3ce244793ed2471  # 발행 뒤 갱신
     condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (digest sha256:2797159760b85c49ab391bc8edf9f891033e43c8a36081f01962f5c6250e9148, 나머지 이미지는 동일)
   - image: kcloud-node-manager
     tag: "0.6.17"
@@ -28,9 +28,9 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: sha256:4b696054db4bf222d54e0b80bcde7f82456200bf7f7aa98bf1d66e3b875868af
     condition: Furiosa Warboy·RNGD 노드 드라이버 설치 Job
   - image: tenstorrent-driver-ds
-    tag: 2.8.0-v1
-    digest: sha256:419c97b0380e88b21ee43204c1f9052301e826c9ef5b60d36e9eed7d2f989678
-    condition: Tenstorrent 노드 드라이버 설치 Job
+    tag: 2.11.0-v1
+    digest: sha256:25b76fa2fcfeb0ca487f04eff94e765587dabfc71d64566b92664ba5b574855a
+    condition: Tenstorrent 노드 드라이버 설치 Job (GHCR 발행 2026-09-22, workflow run 35671289211)
   - image: kcloud-tt-device-plugin
     tag: v0.1.0
     digest: sha256:f9024eccf7e74f4d93859202251159b46b9965d2f5e53b84280d91c65fdf047a
@@ -39,6 +39,26 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     tag: "0.1.3"
     digest: sha256:5caa47e01cb76f86a77e9357789b03cd4cf32e95f06ff117f361cafa3540b76e
     condition: RNGD 노드(furiosa.exporter.enabled)
+  - image: generic-device-plugin
+    tag: v3
+    digest: ""
+    condition: "AcceleratorDescriptor auto-apply 가 backend 를 생성할 때. 내부 빌드(GHCR 미발행 — 릴리스 시 digest 갱신)"
+  - image: generic-dra-driver
+    tag: v2
+    digest: ""
+    condition: "AcceleratorDescriptor auto-apply 가 backend 를 생성할 때. 내부 빌드(GHCR 미발행 — 릴리스 시 digest 갱신)"
+  - image: probe-tenstorrent
+    tag: v1
+    digest: ""
+    condition: "acpp.probeImages.tenstorrent 설정 시(내부 빌드, GHCR 미발행 — 릴리스 시 갱신). 이미지는 kcloud 저장소에 있으나 acpp.probeImages.tenstorrent 는 전체 경로 값(fullPathValues)이라 다른 kcloud 이미지와 달리 global.registry 로 자동 조립하지 않고 미러 경로를 직접 적는다. Harbor: kcloud/probe-tenstorrent:v1"
+  - image: probe-rebellions
+    tag: v1
+    digest: ""
+    condition: "acpp.probeImages.rebellions 설정 시(내부 빌드, GHCR 미발행 — 릴리스 시 갱신, privileged+hostPID 파드). 이미지는 kcloud 저장소에 있으나 acpp.probeImages.rebellions 는 전체 경로 값(fullPathValues)이라 다른 kcloud 이미지와 달리 global.registry 로 자동 조립하지 않고 미러 경로를 직접 적는다. Harbor: kcloud/probe-rebellions:v1"
+  - image: rebellions/rbln-workload
+    tag: ubuntu22.04-v1
+    digest: ""
+    condition: "test/live/rebellions-timeslice MEASURE_MODE=pods 실행 시(내부 빌드, GHCR 미발행). 벤더 SDK 미포함 — node5 hostPath 로 마운트"
 vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
   - image: nvcr.io/nvidia/k8s-device-plugin
     tag: v0.17.1
@@ -58,12 +78,25 @@ vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
   - image: docker.io/bitnamilegacy/kubectl
     tag: "1.28"
     condition: helm hook Job(CRD 갱신·옛 DS 정리·post-delete CRD 삭제)
+  - image: docker.io/nvidia/cuda
+    tag: 12.9.1-base-ubuntu22.04
+    digest: ""
+    condition: "acpp.probeImages.nvidia 설정 시(upstream 이미지를 내부 Harbor 로 미러, GHCR 미발행 — 릴리스 시 갱신). acpp.probeImages.nvidia 는 전체 경로 값(fullPathValues)이라 조립하지 않고 미러 경로를 직접 적는다. Harbor 미러: kcloud/nvidia/cuda:12.9.1-base-ubuntu22.04"
+  - image: docker.io/furiosaai/furiosa-smi
+    tag: "2026.1.0"
+    digest: ""
+    condition: "acpp.probeImages.furiosa 설정 시(upstream 이미지를 내부 Harbor 로 미러, GHCR 미발행 — 릴리스 시 갱신). NEEDS VENDOR RESEARCH: 이 이미지는 libfuriosa_smi.so 만 담고 furiosa-smi CLI 가 없음(2026-09-20 확인) — HostPathBinary 코드 배선 전까지 켜면 probe 가 항상 실패. Harbor 미러: kcloud/furiosaai/furiosa-smi:2026.1.0"
 fullPathValues:  # global 값으로 조립되지 않아 미러 시 직접 지정하는 값
   - nvidia.devicePluginImage
   - nvidia.dcgmExporter.image
   - furiosa.devicePluginImage
   - driverInstallPolicies.nvidia.toolkit.image
   - crdUpgrade.kubectlImage
+  - acpp.probeImage
+  - acpp.probeImages.nvidia
+  - acpp.probeImages.tenstorrent
+  - acpp.probeImages.furiosa
+  - acpp.probeImages.rebellions
 aptRepositories:  # 드라이버는 이미지가 아니라 노드가 apt 로 받는다
   - vendor: nvidia
     source: ppa:graphics-drivers/ppa

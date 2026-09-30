@@ -149,8 +149,11 @@ func TestDcgmExporter_DisabledNoopWhenAbsent(t *testing.T) {
 // 새 이름(dcgmExporterDSName) 삭제가 실패해도 옛 이름(dcgmExporterLegacyDSName) 삭제는
 // 계속 시도되어야 한다 — 첫 삭제 실패로 곧장 return 하면 옛 이름이 고아로 남는다.
 func TestDcgmExporter_DisabledTriesLegacyEvenWhenNewNameDeleteFails(t *testing.T) {
-	newDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterDSName, Namespace: "kube-system"}}
-	legacyDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"}}
+	// kcloud 가 배포한 dcgm DS 는 owner annotation 을 갖는다(dcgm 기능 첫 커밋부터 stamp). 회수는
+	// owner 일치만 지우므로 두 DS 에 이 policy(default/test-policy)의 소유 표시를 단다.
+	owner := map[string]string{ownerAnnotation: "default/test-policy"}
+	newDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterDSName, Namespace: "kube-system", Annotations: owner}}
+	legacyDS := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system", Annotations: owner}}
 	injected := errors.New("injected delete failure")
 
 	c := fake.NewClientBuilder().
@@ -184,7 +187,8 @@ func TestDcgmExporter_DisabledTriesLegacyEvenWhenNewNameDeleteFails(t *testing.T
 // 지우고 만들어지는지 검증한다.
 func TestDcgmExporter_VendorNameNoPrefix(t *testing.T) {
 	legacy := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system"},
+		// kcloud 가 배포한 옛 이름 DS 는 owner annotation 을 갖는다 — 회수는 owner 일치만 지운다.
+		ObjectMeta: metav1.ObjectMeta{Name: dcgmExporterLegacyDSName, Namespace: "kube-system", Annotations: map[string]string{ownerAnnotation: "default/test-policy"}},
 	}
 	policy := dcgmPolicy(&npuv1alpha1.DcgmExporterSpec{Enabled: true})
 	r := newNPUReconciler(policy, legacy)

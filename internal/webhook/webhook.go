@@ -2,7 +2,7 @@
 // webhook.go: Admission webhook 핸들러 (DIP/NCP/AcceleratorClass/AcceleratorWorkload/
 // AcceleratorPartitionPolicy validating + Pod mutating)
 // 상세: spec 검증 거부 + 추상 워크로드 변환 검증 + opt-in 라벨 Pod 에 NVIDIA runtimeClass 주입
-// 생성일: 2026-07-20 | 수정일: 2026-08-24
+// 생성일: 2026-07-20 | 수정일: 2026-09-28 (managementMode 검증을 delegated 포함 세 값으로 확장)
 // ============================================================
 
 package webhook
@@ -19,7 +19,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 )
+
+// recordRejection 은 검증이 거부(err != nil)를 돌려줄 때 kind 별 거부 카운터를 올리고
+// 그 err 를 그대로 통과시킨다. 통과(nil)는 세지 않는다. Create/Update 반환부에서만 감싼다 —
+// validateXXX 함수는 순수 판정으로 남긴다.
+func recordRejection(kind string, err error) error {
+	if err != nil {
+		metrics.RecordWebhookRejection(kind)
+	}
+	return err
+}
 
 // InjectLabel: 이 라벨이 "true" 인 Pod 만 mutating 대상(opt-in). 그 외 Pod 무개입.
 const InjectLabel = "kcloud.ai/inject"
@@ -90,11 +101,11 @@ func Setup(mgr ctrl.Manager) error {
 type DIPValidator struct{}
 
 func (v *DIPValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return nil, validateDIP(obj)
+	return nil, recordRejection("DriverInstallPolicy", validateDIP(obj))
 }
 
 func (v *DIPValidator) ValidateUpdate(_ context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
-	return nil, validateDIP(newObj)
+	return nil, recordRejection("DriverInstallPolicy", validateDIP(newObj))
 }
 
 func (v *DIPValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
@@ -163,11 +174,11 @@ func validateImageRef(img string) error {
 type NCPValidator struct{}
 
 func (v *NCPValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return nil, validateNCP(obj)
+	return nil, recordRejection("NPUClusterPolicy", validateNCP(obj))
 }
 
 func (v *NCPValidator) ValidateUpdate(_ context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
-	return nil, validateNCP(newObj)
+	return nil, recordRejection("NPUClusterPolicy", validateNCP(newObj))
 }
 
 func (v *NCPValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
@@ -180,19 +191,40 @@ func validateNCP(obj runtime.Object) error {
 		return fmt.Errorf("expected NPUClusterPolicy, got %T", obj)
 	}
 	s := ncp.Spec
+	// enum 밖 managementMode(오타 등)는 세 도우미가 모두 거짓이다 — CRD 스키마가 보통은
+	// 막지만, struct 를 직접 구성해 그 경로를 우회하는 호출자에도 안전해야 한다. 조용히
+	// managed 로 읽으면 이미지는 있어도 컨트롤러의 IsOperatorOwned() 가 거짓이라 배포가
+	// 은근슬쩍 멈춘다. furiosa.rngd 는 RngdSpec 에 관리 모드가 없어 Furiosa 를 검사한다.
+	modes := []struct {
+		name string
+		m    npuv1alpha1.ManagementSpec
+	}{
+		{"nvidia", s.Nvidia.ManagementSpec},
+		{"furiosa", s.Furiosa.ManagementSpec},
+		{"rebellions", s.Rebellions.ManagementSpec},
+		{"tenstorrent", s.Tenstorrent.ManagementSpec},
+	}
+	for _, m := range modes {
+		if !m.m.IsOperatorOwned() && !m.m.IsDelegated() && !m.m.IsExternal() {
+			return fmt.Errorf("spec.%s.managementMode %q must be one of managed, delegated, external", m.name, m.m.ManagementMode)
+		}
+	}
+	// kcloud 가 배포 주체가 아닌 벤더(delegated·external)는 device-plugin 을 배포하지
+	// 않으므로 devicePluginImage 를 요구하지 않는다.
 	checks := []struct {
 		name    string
 		enabled bool
+		owned   bool
 		img     string
 	}{
-		{"nvidia", s.Nvidia.Enabled, s.Nvidia.DevicePluginImage},
-		{"furiosa", s.Furiosa.Enabled, s.Furiosa.DevicePluginImage},
-		{"furiosa.rngd", s.Furiosa.Rngd.Enabled, s.Furiosa.Rngd.DevicePluginImage},
-		{"rebellions", s.Rebellions.Enabled, s.Rebellions.DevicePluginImage},
-		{"tenstorrent", s.Tenstorrent.Enabled, s.Tenstorrent.DevicePluginImage},
+		{"nvidia", s.Nvidia.Enabled, s.Nvidia.IsOperatorOwned(), s.Nvidia.DevicePluginImage},
+		{"furiosa", s.Furiosa.Enabled, s.Furiosa.IsOperatorOwned(), s.Furiosa.DevicePluginImage},
+		{"furiosa.rngd", s.Furiosa.Rngd.Enabled, s.Furiosa.IsOperatorOwned(), s.Furiosa.Rngd.DevicePluginImage},
+		{"rebellions", s.Rebellions.Enabled, s.Rebellions.IsOperatorOwned(), s.Rebellions.DevicePluginImage},
+		{"tenstorrent", s.Tenstorrent.Enabled, s.Tenstorrent.IsOperatorOwned(), s.Tenstorrent.DevicePluginImage},
 	}
 	for _, c := range checks {
-		if c.enabled && strings.TrimSpace(c.img) == "" {
+		if c.enabled && c.owned && strings.TrimSpace(c.img) == "" {
 			return fmt.Errorf("spec.%s.enabled=true but devicePluginImage is empty", c.name)
 		}
 	}

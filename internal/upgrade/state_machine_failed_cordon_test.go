@@ -1,6 +1,6 @@
 // ============================================================
 // state_machine_failed_cordon_test.go: Failed 터미널 상태의 cordon 해제 단위 테스트
-// 상세: 라이브 결함(2026-08-05, docs/impl/k8s134-verification-20260805.md 부록 H.3) —
+// 상세: 라이브 결함(2026-08-05 k8s 1.34 검증) —
 //   한 벤더의 드라이버 소실로 DUS 가 Failed 로 착지하면 그 사이클이 건 cordon 이 영구히 남아
 //   같은 노드의 다른 벤더 장치까지 배치 불가가 됐다. 해제되는 쪽과 해제되지 않는 쪽(광고가
 //   아직 살아 있음 / 남이 건 cordon / 진행 중 상태)을 함께 고정한다.
@@ -310,4 +310,49 @@ func TestFailedCordonRecheckInterval_IsPositive(t *testing.T) {
 		t.Fatalf("failedCordonRecheckInterval=%v, want > 0", failedCordonRecheckInterval)
 	}
 	_ = time.Second
+}
+
+// ── 시험 6: 사람이 uncordon 한 뒤 남은 stale 소유권 annotation 을 reaper 가 정리 ──────
+// EC-1: 사람이 kubectl uncordon 하면 Unschedulable=false 가 되지만 소유권 annotation 은
+// 그대로 남는다(operator 에 reaper 가 없었다). 그 뒤 다른 주체가 같은 노드를 cordon 하면
+// stale annotation 때문에 handleFailed 가 남의 cordon 을 우리 것으로 오인해 풀 수 있었다.
+func TestHandleFailed_ReapsStaleClaimOnHumanUncordon(t *testing.T) {
+	dus := makeFailedDUS("nvidia")
+	dip := makeCordonTestDIP()
+	// 1. 우리 cordon: Unschedulable=true, 소유권 annotation=이 DUS.
+	node := makeCordonedNode(jDUSNm, corev1.ResourceList{"nvidia.com/gpu": qty(0)})
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	// 2. 사람 uncordon 시뮬: Unschedulable=false 로 뒤집되 annotation 은 그대로 둔다.
+	uncordoned := getNode(t, sm)
+	uncordoned.Spec.Unschedulable = false
+	if err := sm.Update(context.Background(), uncordoned); err != nil {
+		t.Fatalf("사람 uncordon 시뮬 실패: %v", err)
+	}
+
+	// 3. handleFailed 1회 → reaper 가 stale annotation 을 지워야 한다.
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	afterReap := getNode(t, sm)
+	if afterReap.Spec.Unschedulable {
+		t.Fatal("사람이 uncordon 한 노드가 다시 cordon 됨")
+	}
+	if _, ok := afterReap.Annotations[cordonOwnerAnnotationKey]; ok {
+		t.Error("stale 소유권 annotation 잔류 — reaper 가 정리하지 않았다")
+	}
+
+	// 4. foreign 재cordon: 다른 주체가 같은 노드를 cordon(표식 없음).
+	afterReap.Spec.Unschedulable = true
+	if err := sm.Update(context.Background(), afterReap); err != nil {
+		t.Fatalf("foreign 재cordon 시뮬 실패: %v", err)
+	}
+
+	// 5. handleFailed → annotation 이 이미 정리됐으므로 남의 cordon 을 오인 해제하지 않는다.
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if !getNode(t, sm).Spec.Unschedulable {
+		t.Error("남의 cordon 을 오인 해제함 — stale annotation reaper 미작동")
+	}
 }

@@ -82,6 +82,12 @@ spec:
               desiredVersion:
                 description: DesiredVersion은 목표 드라이버 버전입니다.
                 type: string
+              driftFirstSeen:
+                description: |-
+                  DriftFirstSeen 은 Idle 에서 선언 버전과 실측 버전의 불일치를 처음 본 시각이다. 일치하거나
+                  업그레이드 사이클에 들어가면 nil 로 되돌린다. 디바운스 기준이며 다른 목적과 공유하지 않는다.
+                format: date-time
+                type: string
               lastTransitionTime:
                 description: LastTransitionTime은 마지막 상태 전환 시각입니다.
                 format: date-time
@@ -89,6 +95,14 @@ spec:
               message:
                 description: Message는 현재 상태에 대한 부가 설명입니다.
                 type: string
+              observedModels:
+                description: |-
+                  ObservedModels 는 이 노드에서 이 벤더로 관측된 장치 모델 목록이다(NodeDeviceReport 기준,
+                  정렬·중복 제거). spec.model 이 DriverModelUnknown("generic")으로 뭉개진 혼재 노드에서도
+                  어떤 제품이 섞여 있는지 여기서 읽는다 — 값을 지어내지 않고 관측만 옮긴다.
+                items:
+                  type: string
+                type: array
               previousImage:
                 description: |-
                   PreviousImage는 롤백 시 복구할 이전 드라이버 컨테이너 이미지 전체 레퍼런스입니다.
@@ -143,6 +157,13 @@ spec:
                   RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다(S2-5).
                   Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
                 format: date-time
+                type: string
+              resolvedImage:
+                description: |-
+                  ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. kernelImages 에 노드 커널의 검증된
+                  항목이 있으면 그 이미지이고, 없으면 driver.image 입니다. 전이 중 preflight 단계와 Idle
+                  재진입마다 다시 계산되므로, 정책에서 kernelImages 항목을 빼면 Idle 상태에서도 곧
+                  driver.image 로 돌아옵니다.
                 type: string
               retries:
                 description: Retries는 현재 업그레이드 시도에서의 재시도 횟수입니다.

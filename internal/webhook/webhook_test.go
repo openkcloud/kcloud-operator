@@ -1,7 +1,7 @@
 // ============================================================
 // webhook_test.go: admission webhook 핸들러 단위 테스트
 // 상세: DIP/NCP 거부·통과, Pod 주입/무개입 케이스
-// 생성일: 2026-07-20 | 수정일: 2026-07-30
+// 생성일: 2026-07-20 | 수정일: 2026-09-28 (delegated·enum 밖 managementMode 시험 추가)
 // ============================================================
 
 package webhook
@@ -10,11 +10,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/metrics"
 )
 
 func goodDIP() *npuv1alpha1.DriverInstallPolicy {
@@ -64,6 +66,23 @@ func TestValidateDIP(t *testing.T) {
 			}
 		})
 	}
+
+	// 거부가 kind 별 카운터를 올리는지 — 기록은 ValidateCreate 반환부에 있다(validateDIP 는 순수 판정).
+	// 지표는 프로세스 전역이라 델타로 본다: 거부 1 + 통과 1 => 증가 1(통과는 세지 않는다).
+	t.Run("거부 지표", func(t *testing.T) {
+		bad := goodDIP()
+		bad.Spec.Vendor = "notavendor"
+		before := testutil.ToFloat64(metrics.WebhookRejections.WithLabelValues("DriverInstallPolicy"))
+		if _, err := (&DIPValidator{}).ValidateCreate(context.Background(), bad); err == nil {
+			t.Fatal("잘못된 vendor 는 거부되어야 한다")
+		}
+		if _, err := (&DIPValidator{}).ValidateCreate(context.Background(), goodDIP()); err != nil {
+			t.Fatalf("정상 DIP 는 통과해야 한다: %v", err)
+		}
+		if got := testutil.ToFloat64(metrics.WebhookRejections.WithLabelValues("DriverInstallPolicy")) - before; got != 1 {
+			t.Errorf("거부 카운터 증가 = %v, want 1 — ValidateCreate 가 거부를 세지 않는다", got)
+		}
+	})
 }
 
 func TestValidateNCP(t *testing.T) {
@@ -88,6 +107,94 @@ func TestValidateNCP(t *testing.T) {
 	}
 	if err := validateNCP(disabled); err != nil {
 		t.Fatalf("disabled vendor should pass: %v", err)
+	}
+	// external vendor with empty image is fine — kcloud only observes, no data plane to image.
+	external := &npuv1alpha1.NPUClusterPolicy{
+		Spec: npuv1alpha1.NPUClusterPolicySpec{
+			Nvidia: npuv1alpha1.NvidiaSpec{
+				Enabled:        true,
+				ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+			},
+		},
+	}
+	if err := validateNCP(external); err != nil {
+		t.Fatalf("external vendor with empty image should pass: %v", err)
+	}
+	// furiosa 가 external 이면 rngd 도 그 모드를 따라 이미지 없이 통과한다(rngd 는 자체 관리 모드가 없다).
+	rngdExternal := &npuv1alpha1.NPUClusterPolicy{
+		Spec: npuv1alpha1.NPUClusterPolicySpec{
+			Furiosa: npuv1alpha1.FuriosaSpec{
+				Enabled:        false,
+				ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+				Rngd:           npuv1alpha1.RngdSpec{Enabled: true}, // devicePluginImage 비어 있음
+			},
+		},
+	}
+	if err := validateNCP(rngdExternal); err != nil {
+		t.Fatalf("external furiosa 의 rngd should pass with empty image: %v", err)
+	}
+	// managed 인 rngd 가 이미지 없이 켜지면 여전히 거절된다(기존 동작 보존).
+	rngdManaged := &npuv1alpha1.NPUClusterPolicy{
+		Spec: npuv1alpha1.NPUClusterPolicySpec{
+			Furiosa: npuv1alpha1.FuriosaSpec{
+				Rngd: npuv1alpha1.RngdSpec{Enabled: true}, // managed, image empty
+			},
+		},
+	}
+	if err := validateNCP(rngdManaged); err == nil {
+		t.Fatalf("managed rngd with empty image should be rejected")
+	}
+	// delegated vendor with empty image is fine — kcloud 는 배포하지 않고 벤더 operator 가 맡는다.
+	// 벤더 operator 감지 여부는 컨트롤러의 몫이라 webhook 은 이미지를 요구하지 않는다.
+	delegated := &npuv1alpha1.NPUClusterPolicy{
+		Spec: npuv1alpha1.NPUClusterPolicySpec{
+			Nvidia: npuv1alpha1.NvidiaSpec{
+				Enabled:        true,
+				ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "delegated"},
+			},
+		},
+	}
+	if err := validateNCP(delegated); err != nil {
+		t.Fatalf("delegated vendor with empty image should pass: %v", err)
+	}
+	// furiosa 가 delegated 면 rngd 도 그 모드를 따라 이미지 없이 통과한다(rngd 는 자체 관리 모드가 없다).
+	rngdDelegated := &npuv1alpha1.NPUClusterPolicy{
+		Spec: npuv1alpha1.NPUClusterPolicySpec{
+			Furiosa: npuv1alpha1.FuriosaSpec{
+				Enabled:        false,
+				ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "delegated"},
+				Rngd:           npuv1alpha1.RngdSpec{Enabled: true}, // devicePluginImage 비어 있음
+			},
+		},
+	}
+	if err := validateNCP(rngdDelegated); err != nil {
+		t.Fatalf("delegated furiosa 의 rngd should pass with empty image: %v", err)
+	}
+}
+
+// 오타 등으로 enum 밖 문자열이 들어오면 세 도우미(IsOperatorOwned·IsDelegated·IsExternal)가
+// 모두 거짓이 된다 — CRD 스키마가 보통은 막지만, 이 함수는 struct 를 직접 구성해 그 경로를
+// 우회하는 호출자(테스트 포함)에도 안전해야 한다. 조용히 managed 로 읽으면 이미지 없이도
+// 통과해 배포가 은근슬쩍 멈추는 사고로 이어진다(컨트롤러 IsOperatorOwned() 도 거짓이 됨).
+func TestWebhookRejectsUnknownManagementMode(t *testing.T) {
+	for _, vendor := range []string{"nvidia", "furiosa", "rebellions", "tenstorrent"} {
+		t.Run(vendor, func(t *testing.T) {
+			ncp := &npuv1alpha1.NPUClusterPolicy{}
+			mode := npuv1alpha1.ManagementSpec{ManagementMode: "mangaged"} // 오타
+			switch vendor {
+			case "nvidia":
+				ncp.Spec.Nvidia = npuv1alpha1.NvidiaSpec{Enabled: true, DevicePluginImage: "repo/dp:v1", ManagementSpec: mode}
+			case "furiosa":
+				ncp.Spec.Furiosa = npuv1alpha1.FuriosaSpec{Enabled: true, DevicePluginImage: "repo/dp:v1", ManagementSpec: mode}
+			case "rebellions":
+				ncp.Spec.Rebellions = npuv1alpha1.RebellionsSpec{Enabled: true, DevicePluginImage: "repo/dp:v1", ManagementSpec: mode}
+			case "tenstorrent":
+				ncp.Spec.Tenstorrent = npuv1alpha1.TenstorrentSpec{Enabled: true, DevicePluginImage: "repo/dp:v1", ManagementSpec: mode}
+			}
+			if err := validateNCP(ncp); err == nil {
+				t.Fatalf("managementMode 오타(%q)가 조용히 통과했다", "mangaged")
+			}
+		})
 	}
 }
 

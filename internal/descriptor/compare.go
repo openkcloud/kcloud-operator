@@ -17,12 +17,12 @@ import (
 )
 
 // BackendObservation 은 backend 하나를 네 축에서 관측한 값이다.
-// 정적 축(AllocationUnits·DeviceIDs)은 컴파일 출력에서, 관측 축(DevNodes·
+// 정적 축(AllocationUnits·DeviceNodes)은 컴파일 출력에서, 관측 축(DevNodes·
 // ForeignTopLevel)은 라이브 파드 안에서 온다.
 type BackendObservation struct {
 	Backend         string   `json:"backend"`
 	AllocationUnits int      `json:"allocationUnits"`
-	DeviceIDs       []string `json:"deviceIDs"`
+	DeviceNodes     []string `json:"deviceNodes"`
 	DevNodes        []string `json:"devNodes"`
 	ForeignTopLevel []string `json:"foreignTopLevel"`
 }
@@ -116,7 +116,7 @@ func Compare(a, b BackendObservation) Comparison {
 		Match:    unitMatch,
 	})
 
-	c.Axes = append(c.Axes, setAxis("장치 식별자", a.DeviceIDs, b.DeviceIDs))
+	c.Axes = append(c.Axes, setAxis("장치 노드 템플릿", a.DeviceNodes, b.DeviceNodes))
 	c.Axes = append(c.Axes, setAxis("컨테이너 /dev 노드", a.DevNodes, b.DevNodes))
 	c.Axes = append(c.Axes, setAxis("격리(다른 장치 비노출)", a.ForeignTopLevel, b.ForeignTopLevel))
 

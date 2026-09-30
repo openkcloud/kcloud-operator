@@ -6,6 +6,8 @@
 // 생성일: 2026-07-16 | 수정일: 2026-08-24
 package npuctl
 
+import "kcloud-operator/internal/health"
+
 // 벤더 식별자 상수. NPUClusterPolicy.spec의 최상위 키와 1:1 대응하며(rngd는 furiosa의 서브벤더),
 // status.go/control.go에서 반복 사용되는 리터럴을 한 곳에서 관리한다.
 const (
@@ -15,6 +17,12 @@ const (
 	VendorRebellions  = "rebellions"
 	VendorTenstorrent = "tenstorrent"
 )
+
+// HealthStateHealthy 는 AcceleratorHealth.status.state(및 devices[].state)의 "정상" 값
+// (internal/health.StateHealthy 그대로)이다. cmd/kubectl-npu 는 별도 모듈이라
+// internal/health 를 직접 import 할 수 없으므로 이 패키지가 중개한다 —
+// vendorcap.go 가 internal/vendorcap 을 중개하는 것과 같은 방식.
+const HealthStateHealthy = health.StateHealthy
 
 // ClusterStatus는 한 번의 조회로 얻는 노드×벤더 집약 상태입니다.
 // (roadmap S5-3-①, .omc/plans/management-api.md §6 수용 기준)
@@ -105,6 +113,9 @@ type UpgradeStatus struct {
 	DesiredVersion string `json:"desiredVersion,omitempty"`
 	Message        string `json:"message,omitempty"`
 	Retries        int32  `json:"retries,omitempty"`
+	// Models 는 DriverUpgradeState.Status.ObservedModels 를 그대로 옮긴 값이다 — Model 이
+	// generic 으로 뭉개진 혼재 노드에서 실제 섞인 제품을 CLI 에서 보기 위해서다.
+	Models []string `json:"models,omitempty"`
 }
 
 // ClusterPolicyStatus는 NPUClusterPolicy 하나의 조회 결과(관측 상태)입니다.

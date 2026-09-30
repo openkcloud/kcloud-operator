@@ -857,7 +857,7 @@ var _ = Describe("review-i1 M-1/M-3: reboot branch cordons before requesting a r
 
 		acpp := mkNvidiaACPP("reboot-cordon-acpp", sel)
 		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
-		DeferCleanup(func() { _ = k8sClient.Delete(ctx, acpp) })
+		DeferCleanup(func() { deleteACPPAndWait(acpp.Name) })
 
 		r := &AcceleratorPartitionPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		// devs 는 NeedsReboot(devs)==true 를 만드는 pending=Enabled, current=Disabled 조합.

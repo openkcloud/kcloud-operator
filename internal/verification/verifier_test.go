@@ -4,12 +4,13 @@
 //
 //	TTL 이 각각 맞아도 이음매가 틀리면 evidence 가 거짓을 말하므로 여기서 함께 본다.
 //
-// 생성일: 2026-07-31
+// 생성일: 2026-07-31 | 수정일: 2026-09-21
 // ============================================================
 package verification
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -42,12 +44,19 @@ func testScheme(t *testing.T) *runtime.Scheme {
 
 type fakeProber struct {
 	allocated bool
+	// result 가 있으면 그대로 돌려준다(종료코드·출력까지 실어 보내는 경로 확인용).
+	result    *ProbeResult
 	called    int
+	gotVendor string
 }
 
-func (p *fakeProber) Probe(context.Context, string, string) (bool, string, error) {
+func (p *fakeProber) Probe(_ context.Context, _, _, vendor string) (ProbeResult, error) {
 	p.called++
-	return p.allocated, "", nil
+	p.gotVendor = vendor
+	if p.result != nil {
+		return *p.result, nil
+	}
+	return ProbeResult{Allocated: p.allocated}, nil
 }
 
 func seedNodeAndReport(t *testing.T, geom string, allocatable map[string]int64) (*corev1.Node, *v1alpha1.NodeDeviceReport) {
@@ -194,8 +203,54 @@ func TestVerifyRunsProbeOnlyWhenPolicyAsksForIt(t *testing.T) {
 	if p.called != 1 {
 		t.Fatalf("프로브 호출 %d회", p.called)
 	}
+	if p.gotVendor != "nvidia" {
+		t.Fatalf("프로브에 벤더가 전달되지 않았다: %q", p.gotVendor)
+	}
 	if ev.Status.Level != v1alpha1.EvidenceLevelAllocationVerified {
 		t.Fatalf("level = %q", ev.Status.Level)
+	}
+}
+
+// TestVerifyRecordsProbeExitCodeInCheckMessage 는 벤더 기능 probe 의 종료코드·출력이 근거의
+// AllocationProbe check Message 에 남는지 본다. 종료코드가 사라지면 "실 워크로드가 왜 실패했는가"
+// 를 근거만 보고는 알 수 없다 — 파드는 이미 지워진 뒤다.
+func TestVerifyRecordsProbeExitCodeInCheckMessage(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	node, ndr := seedNodeAndReport(t, geom, map[string]int64{"nvidia.com/mig-1g.6gb": 4})
+	avpObj := &v1alpha1.AcceleratorVerificationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "with-probe"},
+		Spec: v1alpha1.AcceleratorVerificationPolicySpec{
+			NodeSelector: map[string]string{"role": "gpu"},
+			Checks:       []string{v1alpha1.EvidenceCheckAllocationProbe},
+		},
+	}
+	exit := int32(3)
+	p := &fakeProber{result: &ProbeResult{Allocated: false, ExitCode: &exit, Output: "no devices found"}}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(node, ndr, avpObj).
+		WithStatusSubresource(&v1alpha1.AcceleratorEvidence{}).Build()
+	v := &Verifier{Client: c, Prober: p, Now: time.Now}
+	ev, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probeCheck *v1alpha1.EvidenceCheck
+	for i := range ev.Status.Checks {
+		if ev.Status.Checks[i].Name == v1alpha1.EvidenceCheckAllocationProbe {
+			probeCheck = &ev.Status.Checks[i]
+		}
+	}
+	if probeCheck == nil {
+		t.Fatalf("AllocationProbe check 가 없다: %+v", ev.Status.Checks)
+	}
+	if probeCheck.Passed {
+		t.Error("종료코드 3 인 probe 를 통과로 기록했다")
+	}
+	if !strings.Contains(probeCheck.Message, "exit=3") {
+		t.Errorf("Message 에 종료코드가 없다: %q", probeCheck.Message)
+	}
+	if !strings.Contains(probeCheck.Message, "no devices found") {
+		t.Errorf("Message 에 probe 출력이 없다: %q", probeCheck.Message)
 	}
 }
 
@@ -302,7 +357,7 @@ func TestLoadReturnsNilWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestVerifyThenFreshnessSeam 은 Task 2·3·5·6 의 이음매다 — 각 단계가 따로 통과해도 이어
+// TestVerifyThenFreshnessSeam 은 검증→지문→신선도 판정을 잇는 이음매다 — 각 단계가 따로 통과해도 이어
 // 붙였을 때 재부팅 후 근거가 계속 신선하다고 나오면 아무 소용이 없다.
 func TestVerifyThenFreshnessSeam(t *testing.T) {
 	geom := nvidia.GeometrySummary("1g.6gb", 4)
@@ -357,5 +412,298 @@ func TestReportGeometryScopesToTargets(t *testing.T) {
 	got := reportGeometry(ndr, "nvidia", []string{"0000:18:00.0"})
 	if len(got) != 1 || got["0000:18:00.0"] != "1g.6gb x4" {
 		t.Fatalf("reportGeometry = %v, want only the target device", got)
+	}
+}
+
+// probeVerifierSetup 은 probe 결과 재사용 테스트가 공유하는 클러스터·정책 구성이다.
+func probeVerifierSetup(t *testing.T, p AllocationProber) (*Verifier, *time.Time) {
+	t.Helper()
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	node, ndr := seedNodeAndReport(t, geom, map[string]int64{"nvidia.com/mig-1g.6gb": 4})
+	avpObj := &v1alpha1.AcceleratorVerificationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "with-probe"},
+		Spec: v1alpha1.AcceleratorVerificationPolicySpec{
+			Checks: []string{v1alpha1.EvidenceCheckAllocationProbe},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(node, ndr, avpObj).
+		WithStatusSubresource(&v1alpha1.AcceleratorEvidence{}).Build()
+	current := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	v := &Verifier{Client: c, Prober: p, Now: func() time.Time { return current }}
+	return v, &current
+}
+
+func findCheck(ev *v1alpha1.AcceleratorEvidence, name, target string) *v1alpha1.EvidenceCheck {
+	for i := range ev.Status.Checks {
+		if ev.Status.Checks[i].Name == name && ev.Status.Checks[i].Target == target {
+			return &ev.Status.Checks[i]
+		}
+	}
+	return nil
+}
+
+// TestVerifyReusesPassedProbeWithinTTLWindow 는 probe 결과 재사용 규칙을 고정한다: 같은 노드·벤더·
+// 자원에 대해 직전 AllocationProbe 가 evidence TTL 안에서 이미 pass 했으면 probe Pod 를 다시
+// 띄우지 않고 그 결과를 재사용한다. 라이브에서 한 번의 수렴에 11·17개 probe Pod 가 스케줄된
+// 기록이 있다(test/live/acpp-probe/README.md) — 이 재사용이 그 수를 줄인다.
+func TestVerifyReusesPassedProbeWithinTTLWindow(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: true}
+	v, current := probeVerifierSetup(t, p)
+
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 1 {
+		t.Fatalf("첫 호출 프로브 횟수 = %d, want 1", p.called)
+	}
+
+	*current = current.Add(5 * time.Minute) // DefaultPolicy TTL(30분) 안
+	ev, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 1 {
+		t.Fatalf("재사용창 안인데 프로브가 다시 불렸다: 호출 횟수 = %d", p.called)
+	}
+	probeCheck := findCheck(ev, v1alpha1.EvidenceCheckAllocationProbe, "nvidia.com/mig-1g.6gb")
+	if probeCheck == nil || !probeCheck.Passed {
+		t.Fatalf("재사용 check 가 없거나 실패로 기록됐다: %+v", ev.Status.Checks)
+	}
+	if !strings.Contains(probeCheck.Message, "reused") {
+		t.Errorf("재사용 근거가 메시지에 없다: %q", probeCheck.Message)
+	}
+}
+
+// TestVerifyReprobesWhenEvidenceExpired 는 재사용창(=직전 probe 시각+TTL)을 한 번에 넘기면
+// 다시 probe 하는지 본다 — 창을 TTL 이상으로 늘리면 실 장치 실패를 그만큼 늦게 잡는다.
+// (창이 재조정마다 밀리지 않는지는 TestVerifyReuseWindowDoesNotSlide 가 따로 본다.)
+func TestVerifyReprobesWhenEvidenceExpired(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: true}
+	v, current := probeVerifierSetup(t, p)
+
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+
+	*current = current.Add(DefaultPolicy().TTL + time.Minute) // 창을 넘김
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 2 {
+		t.Fatalf("만료된 evidence 인데 재사용했다: 프로브 호출 횟수 = %d, want 2", p.called)
+	}
+}
+
+// TestVerifyReprobesWhenPreviousProbeFailed 는 직전 probe 가 실패였으면 창 안이어도 다시
+// 확인하는지 본다 — 실패를 재사용하면 이미 안 되는 장치를 계속 통과로 보고할 수 있다.
+func TestVerifyReprobesWhenPreviousProbeFailed(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: false}
+	v, current := probeVerifierSetup(t, p)
+
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+
+	*current = current.Add(5 * time.Minute) // 창 안
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 2 {
+		t.Fatalf("실패했던 probe 를 재사용했다: 프로브 호출 횟수 = %d, want 2", p.called)
+	}
+}
+
+// TestVerifyReprobesWhenProbeResourceDiffers 는 요청 자원명이 바뀌면 창 안이어도 다시 확인하는지
+// 본다 — 저장된 check 의 Target 은 이전 자원을 가리키므로 다른 자원을 그 결과로 대신할 수 없다.
+func TestVerifyReprobesWhenProbeResourceDiffers(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: true}
+	v, current := probeVerifierSetup(t, p)
+
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+
+	*current = current.Add(5 * time.Minute) // 창 안
+	other := verifyRequest(geom)
+	other.Expectation.ProbeResource = "nvidia.com/mig-2g.12gb"
+	if _, err := v.Verify(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 2 {
+		t.Fatalf("다른 자원인데 이전 probe 를 재사용했다: 프로브 호출 횟수 = %d, want 2", p.called)
+	}
+}
+
+// TestVerifyReuseWindowDoesNotSlide 는 재사용이 창을 밀지 못하는지 본다: 실제 probe 시각 기준
+// TTL 안의 재사용은 probe 를 다시 안 띄우되(20분 시점) 창 자체는 실제 probe 시각에 고정돼,
+// 실제 probe 시각+40분(TTL 30분 밖)에는 다시 probe 한다. 재사용창을 evidence ExpiresAt 으로
+// 잡으면 매 재조정이 ExpiresAt 을 갱신해 창이 무한히 밀려 실 probe 가 영영 안 돈다(C1 회귀).
+func TestVerifyReuseWindowDoesNotSlide(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: true}
+	v, current := probeVerifierSetup(t, p)
+
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 1 {
+		t.Fatalf("첫 probe 호출 = %d, want 1", p.called)
+	}
+
+	*current = current.Add(20 * time.Minute) // 실제 probe 시각+20분 — 창(30분) 안이라 재사용
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 1 {
+		t.Fatalf("20분 시점은 창 안인데 probe 가 다시 불렸다: 호출 횟수 = %d", p.called)
+	}
+
+	*current = current.Add(20 * time.Minute) // 실제 probe 시각+40분 — 창 밖이라 재probe
+	if _, err := v.Verify(context.Background(), verifyRequest(geom)); err != nil {
+		t.Fatal(err)
+	}
+	if p.called != 2 {
+		t.Fatalf("실제 probe 시각+40분(창 밖)인데 창이 밀려 재probe 안 됨: 호출 횟수 = %d, want 2", p.called)
+	}
+}
+
+// TestVerifyReuseKeepsProbedAtAndDoesNotGrowMessage 는 재사용이 (a) 직전 probe 시각(ProbedAt)을
+// 바꾸지 않고 이어싣는지, (b) 재사용 표시를 한 번만 붙여 message 가 pass 마다 자라지 않는지 본다.
+// ProbedAt 이 재사용마다 갱신되면 창이 밀리고(C1), message 가 중첩되면 etcd 객체가 무한 성장한다.
+func TestVerifyReuseKeepsProbedAtAndDoesNotGrowMessage(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	p := &fakeProber{allocated: true}
+	v, current := probeVerifierSetup(t, p)
+
+	ev0, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c0 := findCheck(ev0, v1alpha1.EvidenceCheckAllocationProbe, "nvidia.com/mig-1g.6gb")
+	if c0 == nil || c0.ProbedAt == nil {
+		t.Fatalf("실제 probe check 에 ProbedAt 이 없다: %+v", ev0.Status.Checks)
+	}
+	firstProbedAt := c0.ProbedAt.Time
+
+	reuseLen := -1
+	for i := 0; i < 5; i++ {
+		*current = current.Add(2 * time.Minute) // 매번 창(30분) 안
+		ev, verr := v.Verify(context.Background(), verifyRequest(geom))
+		if verr != nil {
+			t.Fatal(verr)
+		}
+		if p.called != 1 {
+			t.Fatalf("재사용 %d회차인데 probe 가 다시 불렸다: 호출 횟수 = %d", i+1, p.called)
+		}
+		c := findCheck(ev, v1alpha1.EvidenceCheckAllocationProbe, "nvidia.com/mig-1g.6gb")
+		if c == nil || c.ProbedAt == nil || !c.ProbedAt.Time.Equal(firstProbedAt) {
+			t.Fatalf("재사용이 ProbedAt 을 바꿨다: %v, want %v", c.ProbedAt, firstProbedAt)
+		}
+		if reuseLen < 0 {
+			reuseLen = len(c.Message)
+		} else if len(c.Message) != reuseLen {
+			t.Fatalf("재사용 message 가 자란다: %d회차 len=%d(1회차 len=%d) msg=%q", i+1, len(c.Message), reuseLen, c.Message)
+		}
+	}
+}
+
+func TestVerifySkipsStatusWriteWhenUnchanged(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	node, ndr := seedNodeAndReport(t, geom, map[string]int64{"nvidia.com/mig-1g.6gb": 4})
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(node, ndr).
+		WithStatusSubresource(&v1alpha1.AcceleratorEvidence{}).Build()
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	v := &Verifier{Client: c, Now: func() time.Time { return now }}
+	first, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 같은 세계, 1분 뒤 — 내용이 같으므로 쓰지 않는다(resourceVersion 불변, ExpiresAt 불변).
+	now = now.Add(time.Minute)
+	second, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Fatalf("내용이 같은데 status 를 다시 썼다: rv %s → %s", first.ResourceVersion, second.ResourceVersion)
+	}
+	if !second.Status.ExpiresAt.Time.Equal(first.Status.ExpiresAt.Time) {
+		t.Fatalf("no-op pass 가 ExpiresAt 을 바꿨다: %v → %v", first.Status.ExpiresAt, second.Status.ExpiresAt)
+	}
+	// 만료까지 TTL/2 미만으로 남으면 시각을 갱신해 쓴다 — CheckFreshness/usableBaseline 이 만료로 읽지 않게.
+	now = first.Status.ExpiresAt.Add(-DefaultPolicy().TTL/2 + time.Second)
+	third, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.ResourceVersion == first.ResourceVersion {
+		t.Fatalf("만료가 가까운데 ExpiresAt 을 갱신하지 않았다")
+	}
+	if !third.Status.ExpiresAt.Time.Equal(now.Add(DefaultPolicy().TTL)) {
+		t.Fatalf("갱신된 ExpiresAt 이 now+TTL 이 아니다: %v", third.Status.ExpiresAt)
+	}
+}
+
+func TestVerifyWritesWhenChecksChange(t *testing.T) {
+	geom := nvidia.GeometrySummary("1g.6gb", 4)
+	node, ndr := seedNodeAndReport(t, geom, map[string]int64{"nvidia.com/mig-1g.6gb": 4})
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(node, ndr).
+		WithStatusSubresource(&v1alpha1.AcceleratorEvidence{}).Build()
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	v := &Verifier{Client: c, Now: func() time.Time { return now }}
+	first, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 광고가 줄면 판정이 바뀐다 — 시각 외 내용이 달라졌으므로 써야 한다.
+	var cur corev1.Node
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "worker1"}, &cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Status.Allocatable["nvidia.com/mig-1g.6gb"] = *resourceQuantity(1)
+	if err := c.Status().Update(context.Background(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	second, err := v.Verify(context.Background(), verifyRequest(geom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ResourceVersion == first.ResourceVersion || second.Status.Level != "" {
+		t.Fatalf("판정이 바뀌었는데 쓰지 않았다: rv %s→%s level=%q", first.ResourceVersion, second.ResourceVersion, second.Status.Level)
+	}
+}
+
+func TestVerifyMatchesReportByProductForDescriptorRequests(t *testing.T) {
+	// rngd descriptor 는 vendor="rngd" 로 부르지만 NDR 은 vendor=furiosa/model=rngd 로 보고한다 —
+	// 벤더 키 대조는 빈 보고서가 되고(R-B15), 제품 키 대조는 장치를 찾는다. 벤더 플러그인이 꺼져
+	// validation 이 실패해도 descriptor 요청은 그것을 적용하지 않는다.
+	node, ndr := seedNodeAndReport(t, "", map[string]int64{"furiosa.ai/rngd": 1})
+	ndr.Status.Devices = []v1alpha1.DeviceEntry{{Vendor: "furiosa", Model: "rngd", PCIeAddress: testPCI, DriverVersion: "2026.1.0"}}
+	ndr.Status.Validation = &v1alpha1.ValidationStatus{Passed: false, Vendor: "furiosa"}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(node, ndr).
+		WithStatusSubresource(&v1alpha1.AcceleratorEvidence{}).Build()
+	v := &Verifier{Client: c, Now: time.Now}
+	ev, err := v.Verify(context.Background(), Request{
+		NodeName: "worker1", Vendor: "rngd", SourcePolicy: "desc-rngd", Generation: 1,
+		Expectation:       Expectation{ProbeResource: "furiosa.ai/rngd"},
+		ObservedGeometry:  map[string]string{"PCI-" + testPCI: ""},
+		ObservationErrors: map[string]string{},
+		Product:           "rngd",
+		ExpectedDevices:   1,
+		DescriptorManaged: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Status.Level != v1alpha1.EvidenceLevelObserved {
+		t.Fatalf("level = %q reason=%q checks=%+v", ev.Status.Level, ev.Status.Reason, ev.Status.Checks)
 	}
 }

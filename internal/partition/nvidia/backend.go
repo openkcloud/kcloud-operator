@@ -286,10 +286,11 @@ func mpsSupportForNonMigDevice(mc, obsErr, model string) v1alpha1.SharingModeSup
 		// 관측을 신뢰할지에 대해 두 사이트가 반대로 답하면 안 된다.
 		mps.Supported = true
 		mps.Reason = reasonMPSNoMigHardware
-	case model != "" && model != "generic" && !migCapable(model):
-		// model 문자열이 실재하고("" 도 "generic" 도 아님) migCapable 이 아니라고 할 때만
-		// 신뢰한다 — "generic"/빈값은 detector 가 host nvidia-smi 를 못 읽어 "모른다"는
-		// 뜻이지 "아니다"가 아니다(driver_upgrade_controller.go 의 같은 관례).
+	case model != "" && model != v1alpha1.DriverModelUnknown && !migCapable(model):
+		// model 문자열이 실재하고("" 도 DriverModelUnknown("generic") 도 아님) migCapable 이
+		// 아니라고 할 때만 신뢰한다 — DriverModelUnknown("generic")/빈값은 detector 가 host
+		// nvidia-smi 를 못 읽어 "모른다"는 뜻이지 "아니다"가 아니다
+		// (driver_upgrade_controller.go 의 같은 관례).
 		mps.Supported = true
 		mps.Reason = reasonMPSNoMigHardware
 	default:

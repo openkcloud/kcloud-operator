@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -54,6 +55,11 @@ func TestControllers(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	// 경합(다중 제어 평면·다중 에이전트) 아래에서도 시간 기반 단언이 안정적으로 수렴하도록
+	// 기본 타임아웃을 올린다. 개별 스펙이 명시한 WithTimeout 은 이 값을 덮어쓴다.
+	SetDefaultEventuallyTimeout(30 * time.Second)
+	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
+
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	ctx, cancel = context.WithCancel(context.TODO())
@@ -86,10 +92,13 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	By("tearing down the test environment")
-	cancel()
-	err := testEnv.Stop()
-	Expect(err).NotTo(HaveOccurred())
+	DeferCleanup(func() {
+		cancel()
+		Expect(testEnv.Stop()).To(Succeed())
+	})
+
+	By("맨 Delete 로 남은 Terminating NPUClusterPolicy 검사")
+	Expect(terminatingNCPs()).To(BeEmpty(), "Reconcile 을 부른 스펙은 cleanup 에서 deleteNCPAndWait 을 써야 한다")
 })
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.

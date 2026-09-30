@@ -61,6 +61,11 @@ type DeviceEntry struct {
 	// MigLgipOutput 은 `nvidia-smi mig -lgip` 원문입니다(ACPP §4.2 MIG profile discovery 소스).
 	// node-manager(detector) 가 채웁니다(Task 11b). NVIDIA 이외 벤더는 공란.
 	MigLgipOutput string `json:"migLgipOutput,omitempty"`
+	// DriverVersionOnDisk 는 설치된(디스크) 드라이버 버전 = 재부팅 후 로드될 버전입니다.
+	// 로드된 버전(DriverVersion, /proc)과 다르면 대역외 드리프트입니다(2026-09-17 사고 형태).
+	// detector 가 nvidia dpkg 에서 채웁니다. 이 필드가 CRD 스키마에 있어야 apiserver 가
+	// detector 방출을 pruning 하지 않습니다.
+	DriverVersionOnDisk string `json:"driverVersionOnDisk,omitempty"`
 }
 
 type Condition struct {

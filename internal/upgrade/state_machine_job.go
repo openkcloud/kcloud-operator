@@ -7,7 +7,7 @@
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
 //       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-08-07
+// 생성일: 2026-07-16 | 수정일: 2026-09-22
 // ============================================================
 
 package upgrade
@@ -81,16 +81,21 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 ) (bool, time.Duration, error) {
 	logger := logf.FromContext(ctx)
 
-	desiredImage := policy.Spec.Driver.Image
+	// preflight 이 노드 커널로 고른 이미지를 우선 쓴다. 비어 있으면(구 DUS·커널맵 미선언) 정책
+	// 기본 이미지로 폴백한다.
+	desiredImage := state.Status.ResolvedImage
+	if desiredImage == "" {
+		desiredImage = policy.Spec.Driver.Image
+	}
 	desiredVersion := state.Status.DesiredVersion
 	if desiredVersion == "" {
 		desiredVersion = policy.Spec.Driver.Version
 	}
 
-	// Q2: 업그레이드 착수 시점에 rollback 대상(이전 버전 이미지)을 캡처한다. Job 모드는 상주
+	// 업그레이드 착수 시점에 rollback 대상(이전 버전 이미지)을 캡처한다. Job 모드는 상주
 	// DS 가 없어 이전 이미지를 읽을 소스가 없으므로, DIP image 의 variant 접미사 + PreviousVersion
 	// 으로 검증된 build tag 를 재구성해 저장한다. 재구성 불가 시 빈 값 유지 → rollback 은 Failed(안전).
-	captureJobPreviousImage(state, desiredImage, policy.Spec.Driver.Installer)
+	captureJobPreviousImage(state, desiredImage, policy.Spec.Driver.Installer, policy.Spec.Driver.ImageVersionBaked)
 
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	var job batchv1.Job
@@ -308,10 +313,12 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 		return m.jobTransitionToFailed(ctx, state, "이전 버전 없음(job): 수동 조치 필요")
 	}
 
-	// rollback 대상 이미지: 캡처된 PreviousImage 우선, 없으면 DIP variant 재구성.
+	// rollback 대상 이미지: 캡처된 PreviousImage 우선, 없으면 DIP variant 재구성. kernelImages
+	// 정책도 재구성은 policy.Spec.Driver.Image(DKMS 이미지)에서 해 커널 토큰이 입력에 없으므로
+	// 별도 가드가 필요 없다(결과 …:<prev>-vN 는 이전 버전 DKMS 태그로 존재한다).
 	prevImage := state.Status.PreviousImage
 	if prevImage == "" {
-		prevImage = reconstructPrevImage(policy.Spec.Driver.Image, policy.Spec.Driver.Installer, prevVersion)
+		prevImage = reconstructPrevImage(policy.Spec.Driver.Image, policy.Spec.Driver.Installer, prevVersion, policy.Spec.Driver.ImageVersionBaked)
 	}
 	if prevImage == "" {
 		metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
@@ -408,13 +415,13 @@ func (m *UpgradeStateMachine) deleteInstallJob(ctx context.Context, job *batchv1
 	return m.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 }
 
-// captureJobPreviousImage 는 Q2 에 따라 rollback 대상 이미지를 DUS status 에 캡처한다.
+// captureJobPreviousImage 는 업그레이드 착수 시 rollback 대상 이미지를 DUS status 에 캡처한다.
 // 이미 캡처됐거나 PreviousVersion 이 없으면 no-op. 재구성 결과가 검증된 build tag 일 때만 저장한다.
-func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage, installer string) {
+func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage, installer string, versionBaked bool) {
 	if state.Status.PreviousImage != "" || state.Status.PreviousVersion == "" {
 		return
 	}
-	candidate := reconstructPrevImage(desiredImage, installer, state.Status.PreviousVersion)
+	candidate := reconstructPrevImage(desiredImage, installer, state.Status.PreviousVersion, versionBaked)
 	if candidate != "" {
 		state.Status.PreviousImage = candidate
 	}
@@ -422,15 +429,25 @@ func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage, i
 
 // reconstructPrevImage 는 desired 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해
 // 이전 버전 이미지를 재구성한다. variant 미검출/검증 실패 시 빈 문자열.
-func reconstructPrevImage(dipImage, installer, prevVersion string) string {
+func reconstructPrevImage(dipImage, installer, prevVersion string, versionBaked bool) string {
 	if dipImage == "" || prevVersion == "" {
 		return ""
 	}
-	// apt/script 인스톨러는 이미지가 버전을 담지 않는다 — 드라이버 버전은 DRIVER_VERSION 환경
+	// apt/script 인스톨러는 보통 이미지가 버전을 담지 않는다 — 드라이버 버전은 DRIVER_VERSION 환경
 	// 변수로 들어간다. 그런데도 태그를 버전으로 갈아 끼우면 레지스트리에 없는 이미지가 만들어지고,
 	// rollback Job 이 ImagePullBackOff 로 앉아 노드가 cordon 상태로 고착된다(라이브 실측).
-	// 되돌릴 대상은 같은 이미지 + 이전 버전이다.
-	if installer != v1alpha1.DriverInstallerNGC {
+	// 되돌릴 대상은 같은 이미지 + 이전 버전이다. 단 DIP 가 imageVersionBaked 를 선언한 이미지는
+	// 태그가 곧 설치 버전이라(tenstorrent-driver-ds:2.8.0-v1) 같은 이미지로는 이전 버전을 설치할
+	// 수 없다 — ngc 와 같이 이전 버전 태그를 재구성한다.
+	if installer != v1alpha1.DriverInstallerNGC && !versionBaked {
+		// 예외: 사전 컴파일 커널 이미지(태그 <version>-k<kernel>-vN)는 apt 라도 태그에 박힌
+		// 버전의 모듈만 담아 DRIVER_VERSION 으로 다른 버전을 설치하지 못한다. 되돌릴 버전이 그
+		// 박힌 버전과 다르면 설치기 정합성 가드가 동봉 모듈≠DRIVER_VERSION 으로 거부하므로(라이브:
+		// 580.126.09-k… 이미지 + DRIVER_VERSION 580.178.04, 노드 CrashLoopBackOff) 재구성 불가로
+		// 돌려 호출부가 버전 비종속 기본 이미지로 되돌아가게 한다. 박힌 버전이 같으면 그대로 쓴다.
+		if isPrecompiledKernelImage(dipImage) && extractKernelImageVersion(dipImage) != prevVersion {
+			return ""
+		}
 		return dipImage
 	}
 	variant := extractImageVariantSuffix(dipImage)

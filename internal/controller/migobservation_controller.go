@@ -83,7 +83,7 @@ func (r *MigObservationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.Get(ctx, types.NamespacedName{Name: req.Name}, &node); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if node.Labels["kcloud.ai/nvidia.present"] != labelValueTrue {
+	if node.Labels[vendorPresentLabel(vendorNvidia)] != labelValueTrue {
 		return ctrl.Result{}, nil // MIG 개념이 없는 노드다
 	}
 

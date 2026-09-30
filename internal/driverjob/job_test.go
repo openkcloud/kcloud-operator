@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driveradapter"
 )
 
 // 반복 리터럴 상수(goconst 회피).
@@ -63,6 +64,14 @@ func TestRenderInstallJob_CoreShape(t *testing.T) {
 	}
 	if c.Image != "reg/nvidia:580.126.09-v16" {
 		t.Errorf("image=%q, want desired image", c.Image)
+	}
+
+	// kernelImages 정책은 커널 태그 이미지를 image 인자로 넘긴다. RenderInstallJob 은 태그를
+	// 해석하지 않고 받은 이미지를 그대로 컨테이너에 실어야 한다(선택은 상태기계가 이미 끝냈다).
+	const kernelTagImg = "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1"
+	kJob := RenderInstallJob(pol, "worker1", kernelTagImg, "2.11.0")
+	if kc := kJob.Spec.Template.Spec.Containers[0].Image; kc != kernelTagImg {
+		t.Errorf("kernel-tagged image=%q, want %q (그대로)", kc, kernelTagImg)
 	}
 
 	// CRITICAL: PreStop rmmod / probe 는 없어야 한다 (완료 시 방금 설치한 모듈 언로드 참사 방지).
@@ -137,7 +146,7 @@ func TestRenderInstallJob_FuriosaSecret(t *testing.T) {
 
 	foundVol := false
 	for _, v := range job.Spec.Template.Spec.Volumes {
-		if v.Name == tFuriosaAuth && v.Secret != nil && v.Secret.SecretName == "furiosa-apt-auth" {
+		if v.Name == tFuriosaAuth && v.Secret != nil && v.Secret.SecretName == driveradapter.AptAuthSecretName {
 			foundVol = true
 		}
 	}

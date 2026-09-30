@@ -10,7 +10,6 @@ package descriptor
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
@@ -30,41 +29,24 @@ func rngdSpec() npuv1alpha1.AcceleratorDescriptorSpec {
 	}
 }
 
-func TestCompileDevicePluginUsesDescriptorOnly(t *testing.T) {
-	out, err := CompileDevicePlugin(rngdSpec(), []string{"npu0", "npu1"})
+func TestCompileDevicePluginEmitsTemplates(t *testing.T) {
+	out, err := CompileDevicePlugin(rngdSpec())
 	if err != nil {
 		t.Fatalf("컴파일 실패: %v", err)
 	}
 	var got struct {
-		ResourceName string `json:"resourceName"`
-		Devices      []struct {
-			ID        string   `json:"id"`
-			NodeGlobs []string `json:"nodeGlobs"`
-		} `json:"devices"`
+		ResourceName string   `json:"resourceName"`
+		DeviceNodes  []string `json:"deviceNodes"`
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("설정이 JSON 이 아니다: %v", err)
+		t.Fatalf("JSON 아님: %v", err)
 	}
 	if got.ResourceName != "rngd/rngd" {
-		t.Errorf("리소스명이 descriptor 에서 나오지 않았다: %q", got.ResourceName)
+		t.Errorf("리소스명이 descriptor 에서 안 나왔다: %q", got.ResourceName)
 	}
-	if len(got.Devices) != 2 {
-		t.Fatalf("장치 2개여야 한다: %+v", got.Devices)
-	}
-	// {{id}} 가 장치별로 치환돼야 한다. 치환이 안 되면 두 장치가 같은 노드를 잡는다.
-	if got.Devices[0].NodeGlobs[0] != "/dev/rngd/npu0*" {
-		t.Errorf("첫 장치 glob 치환 실패: %v", got.Devices[0].NodeGlobs)
-	}
-	if got.Devices[1].NodeGlobs[0] != "/dev/rngd/npu1*" {
-		t.Errorf("둘째 장치 glob 치환 실패: %v", got.Devices[1].NodeGlobs)
-	}
-}
-
-// 장치 목록이 비면 컴파일하지 않는다. 빈 광고를 내면 노드가 0 을 광고한 것처럼 보인다.
-func TestCompileDevicePluginRejectsEmptyDevices(t *testing.T) {
-	_, err := CompileDevicePlugin(rngdSpec(), nil)
-	if err == nil || !strings.Contains(err.Error(), "장치") {
-		t.Fatalf("빈 장치 목록은 거절돼야 한다: %v", err)
+	// 컴파일은 치환하지 않는다 — 템플릿을 그대로 실어야 런타임이 발견한다.
+	if len(got.DeviceNodes) != 1 || got.DeviceNodes[0] != "/dev/rngd/{{id}}*" {
+		t.Errorf("deviceNodes 템플릿이 그대로 실리지 않았다: %v", got.DeviceNodes)
 	}
 }
 
@@ -72,32 +54,26 @@ func TestCompileDevicePluginRejectsEmptyDevices(t *testing.T) {
 func TestCompileDevicePluginRejectsInvalidSpec(t *testing.T) {
 	s := rngdSpec()
 	s.Vendor = ""
-	if _, err := CompileDevicePlugin(s, []string{"npu0"}); err == nil {
+	if _, err := CompileDevicePlugin(s); err == nil {
 		t.Fatal("정합 오류인데 통과했다")
 	}
 }
 
-func TestCompileDRAUsesDescriptorOnly(t *testing.T) {
-	out, err := CompileDRA(rngdSpec(), []string{"npu0", "npu1"})
+func TestCompileDRAEmitsTemplates(t *testing.T) {
+	out, err := CompileDRA(rngdSpec())
 	if err != nil {
 		t.Fatalf("컴파일 실패: %v", err)
 	}
 	var got struct {
-		DriverName  string `json:"driverName"`
-		DeviceClass string `json:"deviceClass"`
-		Devices     []struct {
-			ID        string   `json:"id"`
-			NodeGlobs []string `json:"nodeGlobs"`
-		} `json:"devices"`
+		DriverName  string   `json:"driverName"`
+		DeviceClass string   `json:"deviceClass"`
+		DeviceNodes []string `json:"deviceNodes"`
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("설정이 JSON 이 아니다: %v", err)
+		t.Fatalf("JSON 아님: %v", err)
 	}
-	if got.DriverName != DriverNameFor(rngdSpec()) {
-		t.Errorf("드라이버 이름이 descriptor 에서 나오지 않았다: %q", got.DriverName)
-	}
-	if len(got.Devices) != 2 || got.Devices[1].NodeGlobs[0] != "/dev/rngd/npu1*" {
-		t.Errorf("장치 목록이 잘못 컴파일됐다: %+v", got.Devices)
+	if got.DriverName != DriverNameFor(rngdSpec()) || len(got.DeviceNodes) != 1 {
+		t.Errorf("DRA 컴파일 결과가 잘못됐다: %+v", got)
 	}
 }
 
@@ -105,17 +81,24 @@ func TestCompileDRAUsesDescriptorOnly(t *testing.T) {
 func TestCompileDRARefusesUnstableIdentity(t *testing.T) {
 	s := rngdSpec()
 	s.Identity.StableAcrossReboot = false
-	if _, err := CompileDRA(s, []string{"npu0"}); err == nil {
+	if _, err := CompileDRA(s); err == nil {
 		t.Fatal("불안정 식별자인데 통과했다")
 	}
 }
 
-// 장치가 하나면 치환자가 없어도 컴파일된다. 이 경계가 무너지면 고정 노드
-// descriptor 가 전부 막힌다.
-func TestCompileDevicePluginAcceptsSingleFixedNode(t *testing.T) {
-	s := validSpec()
-	s.DeviceNodes = []string{"/dev/nvidia0", "/dev/nvidiactl"}
-	if _, err := CompileDevicePlugin(s, []string{"only"}); err != nil {
-		t.Fatalf("단일 장치는 통과해야 한다: %v", err)
+func TestCompileDevicePluginThreadsReplicas(t *testing.T) {
+	s := rngdSpec()
+	s.Backends = []string{npuv1alpha1.BackendDevicePlugin}
+	s.Sharing = &npuv1alpha1.DescriptorSharing{Mode: npuv1alpha1.SharingModeTimeSliced, Replicas: 3}
+	out, err := CompileDevicePlugin(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Replicas int32 `json:"replicas"`
+	}
+	_ = json.Unmarshal(out, &got)
+	if got.Replicas != 3 {
+		t.Fatalf("replicas=%d, want 3", got.Replicas)
 	}
 }

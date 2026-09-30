@@ -38,18 +38,25 @@ func chartAppVersion(t *testing.T) string {
 	return strings.Trim(string(m[1]), `"'`)
 }
 
-// presetImageTag 는 values 프리셋의 image.tag 를 읽는다.
+// presetImageTag 는 values 프리셋 파일의 image.tag 를 읽는다.
 func presetImageTag(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("%s 읽기 실패: %v", path, err)
 	}
+	return imageTagIn(t, raw, path)
+}
+
+// imageTagIn 은 values 문서 바이트에서 image.tag 를 읽는다. 작업 트리의 파일과 고정
+// 커밋의 blob 이 같은 파서를 쓰게 하려고 분리했다.
+func imageTagIn(t *testing.T, raw []byte, name string) string {
+	t.Helper()
 	// image: 블록 아래 tag: 만 잡는다(detector 등 다른 블록의 tag 와 섞이지 않게).
 	re := regexp.MustCompile(`(?m)^image:\s*\n(?:\s+\S.*\n)*?\s+tag:\s*(\S+)\s*$`)
 	m := re.FindSubmatch(raw)
 	if m == nil {
-		t.Fatalf("%s 에 image.tag 가 없다", path)
+		t.Fatalf("%s 에 image.tag 가 없다", name)
 	}
 	return strings.Trim(string(m[1]), `"'`)
 }

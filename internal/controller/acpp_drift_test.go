@@ -9,6 +9,9 @@
 package controller
 
 import (
+	"context"
+	"reflect"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -19,9 +22,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/partition"
 	"kcloud-operator/internal/partition/nvidia"
+	"kcloud-operator/internal/verification"
 )
 
 // withdrawMig 는 device-plugin 이 죽어 MIG 조각 광고가 사라진 상태를 만든다.
@@ -72,12 +78,64 @@ func degradedReason(name string) string {
 	return string(c.Status) + "/" + c.Reason
 }
 
+// TestMonitorDriftSkipsDRAOwnedNode 는 DRA 소유 라벨이 붙은 노드를 monitorDrift 가 드리프트로
+// 오판하지 않는지 본다. DRA 로 전환한 노드는 자원을 ResourceSlice 로 광고해 allocatable 이 0 이다
+// — draOwnedNode 게이트 없이 그 0 을 그대로 재면 항상 "장치 다 사라짐" 으로 읽는다. 적용 경로
+// (runTarget:270)에는 이 게이트가 있었지만 재검증 경로(shouldReverify 가 false 인 pass)는 그보다
+// 먼저 return 해 우회하고 있었다.
+func TestMonitorDriftSkipsDRAOwnedNode(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "n1",
+			Labels: map[string]string{npuv1alpha1.DRAOwnedNodeLabel(vendorNvidia): labelValueTrue},
+		},
+		// Status.Allocatable 비움 — DRA 소유 노드는 실제로 이렇다(ResourceSlice 로만 광고).
+	}
+	c := fake.NewClientBuilder().WithScheme(sharingScheme()).WithObjects(node).Build()
+	r := &AcceleratorPartitionPolicyReconciler{Client: c, Scheme: c.Scheme(), Verification: &verification.Verifier{Client: c}}
+	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "acpp-dra"},
+		Spec:       npuv1alpha1.AcceleratorPartitionPolicySpec{Vendor: vendorNvidia},
+	}
+	in := npuv1alpha1.TargetStatus{NodeName: "n1"}
+
+	got, err := r.monitorDrift(partition.Target{Ctx: context.Background(), NodeName: "n1"}, acpp, in)
+	if err != nil {
+		t.Fatalf("monitorDrift 실패: %v", err)
+	}
+	if !reflect.DeepEqual(got, in) {
+		t.Errorf("DRA 소유 노드의 allocatable=0 을 드리프트로 오판했다 — got %+v, want 입력 그대로 %+v", got, in)
+	}
+}
+
+// TestMonitorDriftStillWatchesNonDRANode 는 DRA 라벨이 없는 일반 노드에서는 monitorDrift 가
+// 여전히 기존 감시 경로를 타는지 본다(회귀 가드) — draOwnedNode 확인을 추가하면서 모든 노드를
+// 건너뛰게 만들지 않았는지 확인한다.
+func TestMonitorDriftStillWatchesNonDRANode(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}} // DRA 라벨 없음
+	c := fake.NewClientBuilder().WithScheme(sharingScheme()).WithObjects(node).Build()
+	r := &AcceleratorPartitionPolicyReconciler{Client: c, Scheme: c.Scheme(), Verification: &verification.Verifier{Client: c}}
+	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "acpp-normal"},
+		Spec:       npuv1alpha1.AcceleratorPartitionPolicySpec{Vendor: vendorNvidia},
+	}
+	in := npuv1alpha1.TargetStatus{NodeName: "n1"}
+
+	got, err := r.monitorDrift(partition.Target{Ctx: context.Background(), NodeName: "n1"}, acpp, in)
+	if err != nil {
+		t.Fatalf("monitorDrift 실패: %v", err)
+	}
+	if reflect.DeepEqual(got, in) {
+		t.Error("일반 노드인데 ts 가 입력 그대로다 — DRA skip 경로를 잘못 탄 것으로 보인다")
+	}
+}
+
 var _ = Describe("ACPP advertisement drift", func() {
 	It("leaves Ready when the advertisement collapses, and returns without re-applying", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		// MigActiveNodeLabel 을 심는다 — DevicePluginRolling 이 이 라벨로 담당 DaemonSet(mixed/flat)
-		// 을 고르므로(docs/ops/mig-mps-node-roles.md), 라벨이 없으면 존재하지 않는 flat DS 를 찾아
+		// 을 고르므로(MIG·MPS 노드 역할 규약), 라벨이 없으면 존재하지 않는 flat DS 를 찾아
 		// 조용히 "안 돈다" 로 읽는다. 이 노드는 MIG 를 쓰므로 실제로도 mixed 가 맞다.
 		labels := map[string]string{"kcloud.ai/nv-drift": "true", nvidia.MigActiveNodeLabel: "true"}
 		geom := nvidia.GeometrySummary("1g.6gb", 4)

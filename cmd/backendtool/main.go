@@ -44,12 +44,11 @@ func runEmit(args []string) int {
 	ns := fs.String("namespace", "kcloud", "배포물 네임스페이스")
 	dpImage := fs.String("dp-image", "", "device-plugin backend 런타임 이미지")
 	draImage := fs.String("dra-image", "", "DRA backend 런타임 이미지")
-	devices := fs.String("devices", "", "장치 식별자 쉼표 구분(예: npu0)")
 	only := fs.String("backend", "", "devicePlugin 또는 dra 하나만 발행(빈 값이면 전부)")
 	_ = fs.Parse(args)
 
-	if *path == "" || *devices == "" {
-		fmt.Fprintln(os.Stderr, "-descriptor, -devices 는 필수다")
+	if *path == "" {
+		fmt.Fprintln(os.Stderr, "-descriptor 는 필수다")
 		return 2
 	}
 	raw, err := os.ReadFile(*path)
@@ -79,7 +78,7 @@ func runEmit(args []string) int {
 		desc.Spec.Backends = []string{*only}
 	}
 	objs, err := controller.RenderGeneratedBackends(
-		&desc, splitComma(*devices), *dpImage, *draImage, *ns)
+		&desc, *dpImage, *draImage, *ns)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -93,25 +92,6 @@ func runEmit(args []string) int {
 		fmt.Printf("---\n%s", b)
 	}
 	return 0
-}
-
-func splitComma(s string) []string {
-	var out []string
-	cur := ""
-	for _, r := range s {
-		if r == ',' {
-			if cur != "" {
-				out = append(out, cur)
-			}
-			cur = ""
-			continue
-		}
-		cur += string(r)
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
 }
 
 func runCompare(args []string) int {
@@ -158,8 +138,8 @@ func readObservation(path string) (descriptor.BackendObservation, error) {
 		return o, err
 	}
 	// 빈 관측을 통과시키면 "관측 못 함" 이 "같음" 으로 둔갑한다.
-	if len(o.DeviceIDs) == 0 {
-		return o, fmt.Errorf("%s: 장치 식별자가 비었다 — 관측 실패로 본다", path)
+	if len(o.DeviceNodes) == 0 {
+		return o, fmt.Errorf("%s: 장치 노드 템플릿이 비었다 — 관측 실패로 본다", path)
 	}
 	return o, nil
 }

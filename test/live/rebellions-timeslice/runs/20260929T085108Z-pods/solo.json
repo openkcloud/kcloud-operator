@@ -1,0 +1,1 @@
+{"phase": "solo", "iters": 12909, "seconds": 30.002, "iters_per_sec": 430.2768, "dim": 2048, "device_open_seconds": 0.01, "init_seconds": 1.906, "start": "2026-09-29T08:52:05.565899Z", "end": "2026-09-29T08:52:35.567515Z", "compile_seconds": 0.0, "compiled_from": "file"}

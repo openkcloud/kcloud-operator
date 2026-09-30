@@ -110,6 +110,53 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	$(MAKE) embed-crds
 	$(MAKE) sync-helm-crds
 
+.PHONY: capmatrix
+capmatrix: ## Generate compatibility matrix into the docs repo (../docs/features/compatibility_matrix.md).
+	go run ./cmd/capmatrix -out $(MAKEFILE_DIR)/../docs/features/compatibility_matrix.md
+
+.PHONY: capmatrix-check
+capmatrix-check: ## Verify the compatibility matrix is up to date (로컬 전용 — CI 환경엔 docs 저장소가 없다).
+	go run ./cmd/capmatrix | cmp - $(MAKEFILE_DIR)/../docs/features/compatibility_matrix.md
+
+.PHONY: private-ip-check
+private-ip-check: ## Verify no internal addresses or accounts are in tracked files.
+	bash hack/private-ip-check.sh
+
+.PHONY: docs-path-check
+docs-path-check: ## Verify no sibling docs/ paths leak into code, charts, or scripts.
+	bash hack/docs-path-check.sh
+
+.PHONY: version-check
+version-check: ## Verify docs release-set matches Chart.yaml (로컬 전용 — CI 엔 docs 저장소가 없다).
+	bash hack/version-check.sh
+
+.PHONY: manifest-check
+manifest-check: ## Verify images.yaml kcloud images are all in image-manifest.yaml (로컬 전용 — CI 엔 images 저장소가 없어 values.yaml 폴백만 검사한다).
+	bash test/airgap/manifest-coverage.sh
+
+.PHONY: crd-check
+crd-check: ## Verify config/crd/kustomization.yaml lists every CRD in config/crd/bases.
+	bash hack/crd-kustomize-check.sh
+
+.PHONY: conformance
+conformance: ## Verify every registered vendor satisfies the onboarding contract (test/conformance + internal/controller).
+	go test ./test/conformance/... -v
+	go test ./internal/controller/... -run 'TestIsAcceleratorNodeRecognizesEveryVendorPresentLabel|TestAcceleratorOperationVendorsMatchesCRDEnum' -count=1 -v
+
+# footprint 회귀 게이트 — test/footprint/measure.sh 로 kcloud 차트 정적 렌더를 재고
+# baseline.json 과 상주 operand(Deployment+DaemonSet+StatefulSet) 수를 대조한다.
+# 라이브 모드는 클러스터가 필요해 CI 에서는 static 만 돌린다.
+.PHONY: footprint
+footprint: ## Static K8s footprint of the kcloud chart (JSON) — test/footprint
+	OUT=$(CURDIR)/footprint.json bash test/footprint/measure.sh -m static --charts kcloud
+
+.PHONY: footprint-check
+footprint-check: footprint ## Fail if long-running operands grew vs test/footprint/baseline.json
+	jq -e --slurpfile b test/footprint/baseline.json '(.targets.kcloud.static|type)=="object" and ($$b[0].targets.kcloud.static|type)=="object"' footprint.json >/dev/null \
+	  || (echo "footprint 측정 없음(static null) — helm template 실패 여부 확인" && exit 1)
+	jq -e --slurpfile b test/footprint/baseline.json '.targets.kcloud.static as $$s | $$b[0].targets.kcloud.static as $$base | ($$s.Deployment+$$s.DaemonSet+$$s.StatefulSet) <= ($$base.Deployment+$$base.DaemonSet+$$base.StatefulSet)' footprint.json \
+	  || (echo "footprint 회귀: 상주 operand 수가 baseline 을 넘었다 — 의도면 baseline.json 갱신" && exit 1)
+
 .PHONY: sync-helm-crds
 sync-helm-crds: ## Sync generated CRDs to helm chart crds/ directory.
 	@mkdir -p $(HELM_CRDS_DIR)
@@ -130,7 +177,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -p 1 $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 # cmd/kubectl-npu 는 자체 go.mod 를 가진 중첩 모듈이라 위의 go list ./... 에 잡히지 않는다.
 # 따로 부르지 않으면 그 안의 시험은 있는데 한 번도 돌지 않는다.
 	cd cmd/kubectl-npu && go test ./...
@@ -169,8 +216,9 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint ## Run golangci-lint linter (root module + cmd/kubectl-npu plugin module)
 	$(GOLANGCI_LINT) run
+	cd cmd/kubectl-npu && $(GOLANGCI_LINT) run ./...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
@@ -195,7 +243,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: embed-crds ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build $(DOCKER_BUILD_ARGS) -t ${IMG} .
+	$(CONTAINER_TOOL) build $(DOCKER_BUILD_ARGS) --build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -223,6 +271,27 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	mkdir -p dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default > dist/install.yaml
+
+.PHONY: disk-check
+disk-check: ## 빌드 호스트 디스크·docker 사용량 확인(여유 20% 미만이면 실패)
+	bash hack/build-host-disk-check.sh
+
+.PHONY: helm-option-check
+helm-option-check: ## helm upgrade 의 --reuse-values 단독 사용을 금지한다
+	bash hack/helm-values-option-check.sh
+
+.PHONY: chart-default-check
+chart-default-check: ## 차트 기본값만으로 드라이버 설치가 가능한 조합인지 검사
+	bash hack/chart-default-installable.sh
+
+.PHONY: vendor-branch-check
+vendor-branch-check: ## 컨트롤러의 벤더 조건 분기 수가 상한을 넘으면 실패
+	bash hack/vendor-branch-count.sh
+
+KEEP ?= 3
+.PHONY: image-gc
+image-gc: ## 로컬 빌드 이미지 저장소별 최신 3개만 남기고 정리(KEEP=N)
+	bash hack/local-image-gc.sh --keep $(KEEP)
 
 ##@ Deployment
 

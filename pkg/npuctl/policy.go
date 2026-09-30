@@ -19,8 +19,8 @@ import (
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
 
-// PolicyRequest 는 마법사가 고른 것만 담는다. 필드를 늘리기 전에 설계 문서
-// docs/superpowers/specs/2026-08-10-console-policy-and-monitoring-design.md §4 를 먼저 고친다.
+// PolicyRequest 는 마법사가 고른 것만 담는다. 필드를 늘리기 전에 콘솔 정책 설계를
+// 먼저 정한다.
 type PolicyRequest struct {
 	Name     string `json:"name"`
 	Vendor   string `json:"vendor"`

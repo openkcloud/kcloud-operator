@@ -30,6 +30,7 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/driverjob"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/partition"
@@ -98,6 +99,7 @@ type evidenceCtx struct {
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 
 func (r *AcceleratorPartitionPolicyReconciler) backendFor(vendor string) (partition.Backend, error) {
@@ -152,6 +154,7 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 
 	// 충돌 판정 — MVP-1 RNGD 단일 DS target: DS-UID 충돌/scope 부분집합/vendor 불일치.
 	target := partition.Target{Ctx: ctx, NodeName: firstNodeName(ctx, r.Client, acpp.Spec.NodeSelector), Owner: acpp.Name,
+		Vendor:        acpp.Spec.Vendor,
 		DaemonSetName: rngdUnifiedDSName, DaemonSetNamespace: rngdUnifiedDSNS()}
 
 	if win, reason := r.resolveConflict(ctx, &acpp); !win {
@@ -428,6 +431,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	// 값 없이(geometry 비교 없음, 존재·무오류만) 채운다.
 	ec.Vendor = vendorFuriosa
 	ec.ObservedGeometry = rngdObservedPCIs(ts.Devices)
+	ec.Expectation = verification.Expectation{ProbeResource: rngd.RngdResourceName}
 	ec.Verified = true
 	// 공유 요청은 여기서도 통과시킨다 — 미지원 backend 는 조용히 무시하지 않고 Unsupported 로 보고한다.
 	return r.runSharing(acpp, backend, t, ts, ts.Advertisement.AdvertisedResources)
@@ -546,6 +550,8 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	rb, aerr := backend.Apply(t, resolved)
 	if aerr != nil {
 		ts.Phase = npuv1alpha1.ACPPPhaseRollingBack
+		// generation 당 한 번 — 재진입은 (3.5) MigPhaseRolledBack 게이트가 먼저 걸러 여기 못 온다.
+		metrics.RecordACPPApply(acpp.Spec.Vendor, acpp.Spec.EffectiveSharingMode(), "rollback")
 		if rb != nil {
 			// 되돌리기 오류를 버리면 실패가 상태에 남지 않는다 — 그러면 되돌아가지 않은 장치를
 			// 되돌아간 것으로 처리하게 되고, 조정자의 보상 실패 종점도 영영 열리지 않는다.
@@ -574,6 +580,8 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	vr, verr := backend.Verify(t)
 	if !verifySucceeded(vr, verr) {
 		ts.Phase = npuv1alpha1.ACPPPhaseRollingBack
+		// generation 당 한 번 — 재진입은 (3.5) MigPhaseRolledBack 게이트가 먼저 걸러 여기 못 온다.
+		metrics.RecordACPPApply(acpp.Spec.Vendor, acpp.Spec.EffectiveSharingMode(), "rollback")
 		if rb != nil {
 			if rbErr := backend.Rollback(t, *rb); rbErr != nil {
 				ts.Phase = npuv1alpha1.ACPPPhaseRollbackFailed
@@ -784,6 +792,12 @@ func (r *AcceleratorPartitionPolicyReconciler) gateReady(ctx context.Context, ac
 func (r *AcceleratorPartitionPolicyReconciler) monitorDrift(t partition.Target, acpp *npuv1alpha1.AcceleratorPartitionPolicy,
 	ts npuv1alpha1.TargetStatus) (npuv1alpha1.TargetStatus, error) {
 	if r.Verification == nil || t.NodeName == "" {
+		return ts, nil
+	}
+	// DRA 로 광고하는 노드는 자원을 ResourceSlice 로 내보내 allocatable 이 0 이다. allocatable
+	// 드리프트로 보면 항상 "장치 0" 으로 오독한다. draOwnedNode 게이트는 runTarget 의 적용 경로
+	// (:270)에만 있고 이 재검증 경로는 그 전에 return 하므로, 여기서 같은 판정을 다시 건다.
+	if owned, oerr := r.draOwnedNode(t.Ctx, t.NodeName, acpp.Spec.Vendor); oerr == nil && owned {
 		return ts, nil
 	}
 	ev, err := r.Verification.Load(t.Ctx, t.NodeName)
@@ -1290,7 +1304,7 @@ func (r *AcceleratorPartitionPolicyReconciler) resolveConflict(ctx context.Conte
 }
 
 // rngdPresentNodeLabel 은 node-manager 가 RNGD 하드웨어 보유 노드에 부여하는 자립 라벨이다.
-const rngdPresentNodeLabel = "kcloud.ai/rngd.present"
+var rngdPresentNodeLabel = vendorPresentLabel(vendorRngd)
 
 // labelValueTrue 는 노드 라벨의 참 값 "true"(goconst 회피용 공용 상수).
 const labelValueTrue = "true"

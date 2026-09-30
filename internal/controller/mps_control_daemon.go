@@ -249,7 +249,7 @@ func renderMpsControlDaemonDS() *appsv1.DaemonSet {
 					Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 							NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{
-								{Key: "kcloud.ai/nvidia.present", Operator: corev1.NodeSelectorOpIn, Values: []string{labelValueTrue}},
+								{Key: vendorPresentLabel(vendorNvidia), Operator: corev1.NodeSelectorOpIn, Values: []string{labelValueTrue}},
 								{Key: nvidia.MigActiveNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
 							}}},
 						},

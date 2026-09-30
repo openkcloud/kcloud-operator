@@ -289,6 +289,53 @@ func TestCleanupOwnedResources_ReclaimsExclusionLabels(t *testing.T) {
 	}
 }
 
+// TestCleanupOwnedResources_ReclaimsDRALabels 는 정책 삭제 경로가 다섯 벤더의 dra-owned·
+// dra-retired 노드 라벨을 회수하는지 본다. 남으면 정책이 없는데도 DRA DaemonSet 렌더가
+// 그 노드를 계속 피하고 CLI 는 DRA 소유 노드로 보고한다.
+func TestCleanupOwnedResources_ReclaimsDRALabels(t *testing.T) {
+	worker := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: "k8s-worker3",
+		Labels: map[string]string{
+			npuv1alpha1.DRAOwnedNodeLabel("tenstorrent"):  labelValueTrue,
+			npuv1alpha1.DRARetiredNodeLabel("rebellions"): labelValueTrue,
+			"kcloud.ai/tenstorrent.present":               labelValueTrue,
+		},
+	}}
+	untouched := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: "k8s-worker1", Labels: map[string]string{"kcloud.ai/nvidia.present": labelValueTrue},
+	}}
+	policy := &npuv1alpha1.NPUClusterPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-policy", Namespace: draNamespace},
+	}
+	r := nodeExclusionReconciler(worker, untouched, policy)
+
+	if err := r.cleanupOwnedResources(context.Background(), policy); err != nil {
+		t.Fatalf("cleanupOwnedResources 오류: %v", err)
+	}
+	var got corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker3"}, &got); err != nil {
+		t.Fatalf("worker3 조회 실패: %v", err)
+	}
+	for _, key := range []string{
+		npuv1alpha1.DRAOwnedNodeLabel("tenstorrent"),
+		npuv1alpha1.DRARetiredNodeLabel("rebellions"),
+	} {
+		if _, ok := got.Labels[key]; ok {
+			t.Errorf("정책 삭제 후에도 %s 가 남음: %v", key, got.Labels)
+		}
+	}
+	if got.Labels["kcloud.ai/tenstorrent.present"] != labelValueTrue {
+		t.Errorf("present 라벨이 함께 지워짐: %v", got.Labels)
+	}
+	var other corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "k8s-worker1"}, &other); err != nil {
+		t.Fatalf("worker1 조회 실패: %v", err)
+	}
+	if other.Labels["kcloud.ai/nvidia.present"] != labelValueTrue {
+		t.Errorf("라벨 없는 노드가 바뀜: %v", other.Labels)
+	}
+}
+
 // TestNodeEventFilter_SkipsHeartbeatUpdates 는 노드 watch 가 kubelet 하트비트로 reconcile 을
 // 폭주시키지 않는지 본다. 배제 축이 보는 것은 라벨뿐이라 라벨이 안 바뀐 Update 는 통과해선
 // 안 되고, 새 control-plane 노드 합류(Create)와 이탈(Delete)은 통과해야 한다.

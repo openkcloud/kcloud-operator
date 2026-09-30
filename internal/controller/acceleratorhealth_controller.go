@@ -28,9 +28,11 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/health"
+	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/operation"
 	"kcloud-operator/internal/partition/nvidia"
 	"kcloud-operator/internal/upgrade"
+	"kcloud-operator/internal/vendorcap"
 )
 
 // QuarantineLabel 은 격리 표시다. taint 가 아니라 라벨인 이유는 계약이 "신규 할당 차단" 이기
@@ -111,6 +113,17 @@ func (r *AcceleratorHealthReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		res.State, res.Reason, res.AllocationAllowed = prev.Status.State, prev.Status.Reason, false
 	}
 
+	// 판정은 노드 단위지만 지표는 벤더별로 쌓는다 — 노드에 있는 각 벤더에 같은 판정을 센다.
+	// in.Devices 의 vendor 는 deviceInputsFromNDR 이 이미 소문자로 맞춰 둔다.
+	seenVendor := map[string]bool{}
+	for _, d := range in.Devices {
+		if d.Vendor == "" || seenVendor[d.Vendor] {
+			continue
+		}
+		seenVendor[d.Vendor] = true
+		metrics.RecordHealthVerdict(d.Vendor, res.State)
+	}
+
 	opRef, err := r.ensureRecovery(ctx, &node, res, pol)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -140,12 +153,31 @@ func quarantineWorthy(state string) bool {
 	return state != health.StateUnknown && state != health.StateHealthy && state != ""
 }
 
+// acceleratorPresentLabels 는 node-device-detector 가 실제로 쓰는 present 라벨
+// 전체 집합이다(node-device-detector/label.go computeLabels 가 정본). gpu.present
+// 는 장치가 있으면 항상, furiosa-family.present 는 PCI 0x1ed2 를 공유하는
+// Warboy·RNGD 공통으로 붙는다. 나머지는 등록된 벤더마다 vendorPresentLabel(vendor)
+// 하나씩이다 — 단 furiosa 안에서 rngd 만 detector 의 vendorKey 가 별도 키("rngd")를
+// 쓰는 유일한 product 라 따로 더한다. Warboy 는 vendorKey 가 벤더 이름 그대로
+// ("furiosa")를 쓰므로 이미 vendorPresentLabel("furiosa")로 잡힌다 —
+// "kcloud.ai/warboy.present" 는 detector 어디에서도 쓰지 않는다.
+func acceleratorPresentLabels() map[string]bool {
+	m := map[string]bool{
+		"kcloud.ai/gpu.present":            true,
+		"kcloud.ai/furiosa-family.present": true,
+	}
+	for _, v := range vendorcap.Vendors() {
+		m[vendorPresentLabel(v)] = true
+	}
+	m[vendorPresentLabel(vendorRngd)] = true
+	return m
+}
+
 // isAcceleratorNode 는 감시 대상 노드인지다. 라벨은 node-agent 가 붙인다.
 func isAcceleratorNode(node *corev1.Node) bool {
+	labels := acceleratorPresentLabels()
 	for k := range node.Labels {
-		switch k {
-		case "kcloud.ai/gpu.present", "kcloud.ai/nvidia.present", "kcloud.ai/rngd.present",
-			"kcloud.ai/warboy.present", "kcloud.ai/tenstorrent.present", "kcloud.ai/furiosa-family.present":
+		if labels[k] {
 			return true
 		}
 	}
@@ -397,7 +429,7 @@ func (r *AcceleratorHealthReconciler) ensureRecovery(ctx context.Context, node *
 	// 참가자 쪽에도 같은 가드가 있지만(recoverdevice_participant.go) 애초에 만들지 않는 편이 낫다 —
 	// 작업이 생기면 조정자·저널·검증이 모두 돌고, 쿨다운 버킷에 남은 작업이 업그레이드가 끝난 뒤
 	// 뒤늦게 실행될 여지도 생긴다. 2026-08-10 라이브에서 이 경로가 설치 Job pod 을 지워 노드의
-	// apt 를 죽였다(docs/impl/furiosa-version-swap-20260812.md §3.4).
+	// apt 를 죽였다.
 	if plan.Type == operation.RecoverDevice {
 		if _, upgrading := node.Labels[upgrade.DriverUpgradingLabelKey]; upgrading {
 			logf.FromContext(ctx).Info("드라이버 업그레이드 중 — 복구 작업 생략",

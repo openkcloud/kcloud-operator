@@ -113,6 +113,22 @@ spec:
               product:
                 description: Product 는 제품 키다("a30"·"blackhole-p150" 등).
                 type: string
+              sharing:
+                description: Sharing 은 SW 공유 선언이다(현재 timeSliced). 선언 시 devicePlugin
+                  backend 가 필수다.
+                properties:
+                  mode:
+                    enum:
+                    - timeSliced
+                    type: string
+                  replicas:
+                    format: int32
+                    maximum: 16
+                    minimum: 2
+                    type: integer
+                required:
+                - mode
+                type: object
               vendor:
                 description: Vendor 는 벤더 키다("nvidia"·"rngd"·"tenstorrent" 등, detector
                   의 vendorKey 와 같은 어휘).
@@ -158,6 +174,23 @@ spec:
                   required:
                   - backend
                   - reason
+                  type: object
+                type: array
+              resolvedDevices:
+                description: ResolvedDevices 는 이 descriptor 의 vendor/product 에 맞는
+                  NDR 카드들의 노드별 안정 ID 다.
+                items:
+                  description: NodeDeviceIDs 는 한 노드에서 이 descriptor 에 맞는 장치들의 안정 식별자
+                    목록이다.
+                  properties:
+                    ids:
+                      items:
+                        type: string
+                      type: array
+                    node:
+                      type: string
+                  required:
+                  - node
                   type: object
                 type: array
             type: object

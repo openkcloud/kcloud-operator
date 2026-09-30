@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +27,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -78,7 +81,7 @@ var _ = Describe("NPUClusterPolicy Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance NPUClusterPolicy")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			deleteNCPAndWait(resource.Name, resource.Namespace)
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
@@ -227,7 +230,7 @@ var _ = Describe("NPUClusterPolicy reconcile with Nvidia.Enabled=false", func() 
 		Expect(k8sClient.Create(ctx, flat)).To(Succeed())
 		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
 		DeferCleanup(func() {
-			_ = k8sClient.Delete(ctx, policy)
+			deleteNCPAndWait(policy.Name, policy.Namespace)
 			_ = k8sClient.Delete(ctx, mixed)
 			_ = k8sClient.Delete(ctx, flat)
 		})
@@ -269,7 +272,7 @@ var _ = Describe("NPUClusterPolicy reconcile with Nvidia.Enabled=false", func() 
 		}
 		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
 		DeferCleanup(func() {
-			_ = k8sClient.Delete(ctx, policy)
+			deleteNCPAndWait(policy.Name, policy.Namespace)
 			_ = k8sClient.Delete(ctx, unowned)
 		})
 
@@ -399,4 +402,492 @@ func TestFlatAffinityRenderIsDeterministic(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("flat affinity render must be deterministic, got %d orderings", len(seen))
 	}
+}
+
+// rebellionsPolicy는 device-plugin 렌더에 필요한 최소 정책이다.
+func rebellionsPolicy() *npuv1alpha1.NPUClusterPolicy {
+	p := &npuv1alpha1.NPUClusterPolicy{}
+	p.Spec.Rebellions.Enabled = true
+	p.Spec.Rebellions.DevicePluginImage = "docker.io/rebellions/k8s-device-plugin:v0.3.6"
+	p.Spec.Rebellions.Namespace = naming.KubeSystemNamespace
+	return p
+}
+
+// 벤더 플러그인이 Allocate 응답에서 /usr/bin/rbln-smi 를 직접 마운트한다(2026-09-15 node5 실측).
+// 우리가 거는 단일 파일 hostPath 는 중복이고, SDK 가 /usr/bin 에 설치한 노드에서는
+// type=File 검사가 실패해 파드가 ContainerCreating 에서 멈춘다.
+func TestEnsureRebellionsDevicePlugin_NoSingleFileSmiBridge(t *testing.T) {
+	p := rebellionsPolicy()
+	r := newDRAReconciler(p)
+	if err := r.ensureRebellionsDevicePlugin(context.Background(), p); err != nil {
+		t.Fatalf("ensureRebellionsDevicePlugin: %v", err)
+	}
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), types.NamespacedName{
+		Name: rbllnsDaemonSetName, Namespace: naming.KubeSystemNamespace}, &ds); err != nil {
+		t.Fatalf("DaemonSet 이 생성되지 않았다: %v", err)
+	}
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == "host-rbln-smi" {
+			t.Fatal("host-rbln-smi 볼륨이 남아 있다 — /usr/bin 설치 노드에서 파드가 멈춘다")
+		}
+	}
+	for _, m := range ds.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == "/usr/bin/rbln-smi" {
+			t.Fatal("/usr/bin/rbln-smi 마운트가 남아 있다")
+		}
+	}
+	// 호스트 /usr/bin 자체를 읽기 전용으로 붙이는 경로는 유지한다. 벤더 이미지가
+	// 그 아래에서 도구를 찾는 대체 경로다.
+	var hasUsrBin bool
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == "host-usr-bin" && v.HostPath != nil && v.HostPath.Path == "/usr/bin" {
+			hasUsrBin = true
+		}
+	}
+	if !hasUsrBin {
+		t.Error("host-usr-bin 볼륨까지 사라졌다 — 제거 범위가 넓다")
+	}
+}
+
+// fake client 는 PodSpec 의 volumeMount→volume 참조를 검증하지 않는다. 그래서 볼륨을
+// 하나 지우고 마운트를 남겨도 시험이 통과한다. 이 단언이 그 구멍을 막는다.
+func TestEnsureRebellionsDevicePlugin_AllMountsHaveVolumes(t *testing.T) {
+	p := rebellionsPolicy()
+	r := newDRAReconciler(p)
+	if err := r.ensureRebellionsDevicePlugin(context.Background(), p); err != nil {
+		t.Fatalf("ensureRebellionsDevicePlugin: %v", err)
+	}
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), types.NamespacedName{
+		Name: rbllnsDaemonSetName, Namespace: naming.KubeSystemNamespace}, &ds); err != nil {
+		t.Fatalf("DaemonSet 이 생성되지 않았다: %v", err)
+	}
+	have := map[string]bool{}
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		have[v.Name] = true
+	}
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if !have[m.Name] {
+				t.Errorf("volumeMount %q 에 대응하는 volume 이 없다 — apiserver 가 PodSpec 을 거부한다", m.Name)
+			}
+		}
+	}
+}
+
+var _ = Describe("NPUClusterPolicy managementMode=external/delegated", func() {
+	ctx := context.Background()
+
+	newExternalNvidiaPolicy := func(name string) *npuv1alpha1.NPUClusterPolicy {
+		return &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/detector:test"},
+				Nvidia: npuv1alpha1.NvidiaSpec{
+					Enabled:           true,
+					DevicePluginImage: "img:v1",
+					ManagementSpec:    npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+				},
+			},
+		}
+	}
+
+	newDelegatedNvidiaPolicy := func(name string) *npuv1alpha1.NPUClusterPolicy {
+		return &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/detector:test"},
+				Nvidia: npuv1alpha1.NvidiaSpec{
+					Enabled:           true,
+					DevicePluginImage: "img:v1",
+					ManagementSpec:    npuv1alpha1.ManagementSpec{ManagementMode: "delegated"},
+				},
+			},
+		}
+	}
+
+	reconcileExternal := func(policy *npuv1alpha1.NPUClusterPolicy) {
+		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
+		DeferCleanup(func() { deleteNCPAndWait(policy.Name, policy.Namespace) })
+		r := &NPUClusterPolicyReconciler{
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Recorder: record.NewFakeRecorder(100),
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	It("does not create the vendor device-plugin DaemonSet and reports Ready=ExternalManaged", func() {
+		policy := newExternalNvidiaPolicy("np-external-nvidia")
+		reconcileExternal(policy)
+
+		for _, name := range []string{nvidia.DevicePluginNameMixed, nvidia.DevicePluginNameFlat} {
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: "kube-system"}, &appsv1.DaemonSet{})
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "external vendor must not create %s", name)
+		}
+
+		var got npuv1alpha1.NPUClusterPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}, &got)).To(Succeed())
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal("ExternalManaged"))
+	})
+
+	// delegated 도 external 과 마찬가지로 데이터플레인을 배포하지 않는다 — Ready 사유가
+	// 이를 숨기면 안 된다(2026-09-26 결함: delegated 단독이면 기본 AllResourcesReady 로 샜다).
+	It("reports Ready=ExternalManaged with a message naming the delegated vendor", func() {
+		policy := newDelegatedNvidiaPolicy("np-delegated-nvidia")
+		reconcileExternal(policy)
+
+		var got npuv1alpha1.NPUClusterPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}, &got)).To(Succeed())
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal("ExternalManaged"))
+		Expect(cond.Message).To(ContainSubstring("nvidia"))
+		Expect(cond.Message).To(ContainSubstring("delegated"))
+	})
+
+	It("leaves a pre-existing DaemonSet of the same name (no owner annotation) untouched", func() {
+		existing := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system"},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "third-party"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "third-party"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "third:v1"}}},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, existing)).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system"}})
+		})
+
+		reconcileExternal(newExternalNvidiaPolicy("np-external-preexisting"))
+
+		var survived appsv1.DaemonSet
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nvidia.DevicePluginNameMixed, Namespace: "kube-system"}, &survived)).To(Succeed())
+		Expect(survived.Spec.Template.Spec.Containers[0].Image).To(Equal("third:v1"))
+	})
+
+	It("does not deploy the vendor's exporter or DRA driver operands", func() {
+		// DRA 드라이버가 생성될 네임스페이스 — 게이트 전(RED)엔 여기 DS 가 생기고, 게이트 후엔 비어야 한다.
+		_ = k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: draNamespace}})
+
+		policy := &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "np-external-operands", Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/detector:test"},
+				Nvidia: npuv1alpha1.NvidiaSpec{
+					Enabled:           true,
+					DevicePluginImage: "img:v1",
+					ManagementSpec:    npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+					DcgmExporter:      &npuv1alpha1.DcgmExporterSpec{Enabled: true},
+					DRA:               &npuv1alpha1.DRASpec{Enabled: true},
+				},
+			},
+		}
+		reconcileExternal(policy)
+
+		// NPUClusterPolicy 가 배포하는 nvidia operand 2종(dcgm-exporter, DRA driver)이 없어야 한다.
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: dcgmExporterDSName, Namespace: "kube-system"}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "external must not create dcgm-exporter")
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: draDSNameNvidia, Namespace: draNamespace}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "external must not create nvidia DRA driver")
+		// toolkit 은 NPUClusterPolicy 가 아니라 DriverInstallPolicy(ToolkitDaemonSetReconciler)가
+		// 배포하므로 이 reconcile 경로엔 애초에 없다 — 여기서 검증 대상이 아니다.
+
+		var got npuv1alpha1.NPUClusterPolicy
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}, &got)).To(Succeed())
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal("ExternalManaged"))
+	})
+})
+
+var _ = Describe("NPUClusterPolicy delete-on-disable (owned DaemonSet recovery)", func() {
+	ctx := context.Background()
+
+	// ownedDS 는 ensure 경로가 남기는 것과 같은 owner annotation 을 단 DaemonSet 이다.
+	ownedDS := func(name, ns, owner string) *appsv1.DaemonSet {
+		return &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: ns,
+				Annotations: map[string]string{ownerAnnotation: owner},
+			},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "img:v1"}}},
+				},
+			},
+		}
+	}
+	basePolicy := func(name string) *npuv1alpha1.NPUClusterPolicy {
+		return &npuv1alpha1.NPUClusterPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Detector: &npuv1alpha1.DetectorSpec{Image: "registry.example.com/detector:test"},
+			},
+		}
+	}
+	runReconcile := func(policy *npuv1alpha1.NPUClusterPolicy) {
+		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
+		DeferCleanup(func() { deleteNCPAndWait(policy.Name, policy.Namespace) })
+		r := &NPUClusterPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(100)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+	}
+	deleteDS := func(name, ns string) {
+		_ = k8sClient.Delete(ctx, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
+	}
+
+	It("removes the tenstorrent owned DaemonSet when disabled", func() {
+		ns := naming.OperatorNamespace()
+		pol := basePolicy("np-tt-disable")
+		Expect(k8sClient.Create(ctx, ownedDS(ttDaemonSetName, ns, "default/np-tt-disable"))).To(Succeed())
+		DeferCleanup(func() { deleteDS(ttDaemonSetName, ns) })
+		runReconcile(pol) // tenstorrent.enabled defaults false
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: ttDaemonSetName, Namespace: ns}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "disabled tenstorrent must recover its owned DS")
+	})
+
+	It("keeps a same-name tenstorrent DaemonSet that we do not own", func() {
+		ns := naming.OperatorNamespace()
+		foreign := ownedDS(ttDaemonSetName, ns, "") // no owner annotation
+		foreign.Annotations = nil
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		DeferCleanup(func() { deleteDS(ttDaemonSetName, ns) })
+		runReconcile(basePolicy("np-tt-foreign"))
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ttDaemonSetName, Namespace: ns}, &appsv1.DaemonSet{})).To(Succeed(), "foreign DS must survive")
+	})
+
+	It("does not delete the tenstorrent owned DaemonSet when the vendor is external", func() {
+		ns := naming.OperatorNamespace()
+		pol := basePolicy("np-tt-external")
+		pol.Spec.Tenstorrent = npuv1alpha1.TenstorrentSpec{ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "external"}}
+		Expect(k8sClient.Create(ctx, ownedDS(ttDaemonSetName, ns, "default/np-tt-external"))).To(Succeed())
+		DeferCleanup(func() { deleteDS(ttDaemonSetName, ns) })
+		runReconcile(pol)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ttDaemonSetName, Namespace: ns}, &appsv1.DaemonSet{})).To(Succeed(), "external must neither create nor delete")
+	})
+
+	It("removes the rebellions owned DaemonSet when disabled", func() {
+		pol := basePolicy("np-rbln-disable")
+		ns := rbllnsResolveNamespace(pol)
+		Expect(k8sClient.Create(ctx, ownedDS(rbllnsDaemonSetName, ns, "default/np-rbln-disable"))).To(Succeed())
+		DeferCleanup(func() { deleteDS(rbllnsDaemonSetName, ns) })
+		runReconcile(pol)
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: rbllnsDaemonSetName, Namespace: ns}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "disabled rebellions must recover its owned DS")
+	})
+
+	It("removes the furiosa warboy and rngd owned DaemonSets when disabled", func() {
+		ns := furiosaVendorDSNamespace()
+		Expect(k8sClient.Create(ctx, ownedDS(furiosaWarboyDSName, ns, "default/np-furiosa-disable"))).To(Succeed())
+		Expect(k8sClient.Create(ctx, ownedDS(furiosaRngdDSName, ns, "default/np-furiosa-disable"))).To(Succeed())
+		DeferCleanup(func() { deleteDS(furiosaWarboyDSName, ns); deleteDS(furiosaRngdDSName, ns) })
+		runReconcile(basePolicy("np-furiosa-disable")) // furiosa + rngd default disabled
+		errW := k8sClient.Get(ctx, types.NamespacedName{Name: furiosaWarboyDSName, Namespace: ns}, &appsv1.DaemonSet{})
+		errR := k8sClient.Get(ctx, types.NamespacedName{Name: furiosaRngdDSName, Namespace: ns}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(errW)).To(BeTrue(), "disabled furiosa warboy must be recovered")
+		Expect(errors.IsNotFound(errR)).To(BeTrue(), "disabled furiosa rngd must be recovered")
+	})
+
+	It("keeps a same-name dcgm-exporter that we do not own when disabled", func() {
+		// dcgm-exporter 는 벤더 일반 이름이라 운영자가 upstream 차트로 같은 이름을 설치할 수 있다.
+		// 소유 표시가 없으면 토글 off 회수 경로가 지워선 안 된다(매 reconcile 실행되는 경로).
+		foreign := ownedDS(dcgmExporterDSName, naming.KubeSystemNamespace, "")
+		foreign.Annotations = nil
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		DeferCleanup(func() { deleteDS(dcgmExporterDSName, naming.KubeSystemNamespace) })
+		runReconcile(basePolicy("np-dcgm-foreign")) // nvidia/dcgmExporter 기본 비활성(managed)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dcgmExporterDSName, Namespace: naming.KubeSystemNamespace}, &appsv1.DaemonSet{})).
+			To(Succeed(), "소유 표시 없는 동명 dcgm-exporter 는 보존돼야 한다")
+	})
+
+	It("removes an owned dcgm-exporter when disabled", func() {
+		owned := ownedDS(dcgmExporterDSName, naming.KubeSystemNamespace, "default/np-dcgm-owned")
+		Expect(k8sClient.Create(ctx, owned)).To(Succeed())
+		DeferCleanup(func() { deleteDS(dcgmExporterDSName, naming.KubeSystemNamespace) })
+		runReconcile(basePolicy("np-dcgm-owned"))
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: dcgmExporterDSName, Namespace: naming.KubeSystemNamespace}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "소유한 dcgm-exporter 는 회수돼야 한다")
+	})
+
+	It("keeps a same-name furiosa-device-plugin (pre-rename generic name) that we do not own", func() {
+		// furiosa-device-plugin 은 kcloud 접두어 없는 벤더 일반 이름이라 3rd-party 가 같은 이름을 쓸 수 있다.
+		// 비활성 정리 경로(cleanupDisabledFuriosaLegacyDS)는 소유 표시가 없으면 지워선 안 된다.
+		foreign := ownedDS(furiosaWarboyLegacyDSName, naming.KubeSystemNamespace, "")
+		foreign.Annotations = nil
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		DeferCleanup(func() { deleteDS(furiosaWarboyLegacyDSName, naming.KubeSystemNamespace) })
+		runReconcile(basePolicy("np-furiosa-legacy-foreign")) // furiosa 기본 비활성(managed)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: furiosaWarboyLegacyDSName, Namespace: naming.KubeSystemNamespace}, &appsv1.DaemonSet{})).
+			To(Succeed(), "소유 표시 없는 동명 furiosa-device-plugin 은 보존돼야 한다")
+	})
+
+	It("removes an owned furiosa-device-plugin (pre-rename generic name) when disabled", func() {
+		owned := ownedDS(furiosaWarboyLegacyDSName, naming.KubeSystemNamespace, "default/np-furiosa-legacy-owned")
+		Expect(k8sClient.Create(ctx, owned)).To(Succeed())
+		DeferCleanup(func() { deleteDS(furiosaWarboyLegacyDSName, naming.KubeSystemNamespace) })
+		runReconcile(basePolicy("np-furiosa-legacy-owned"))
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: furiosaWarboyLegacyDSName, Namespace: naming.KubeSystemNamespace}, &appsv1.DaemonSet{})
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "소유한 옛 이름 furiosa-device-plugin 은 회수돼야 한다")
+	})
+})
+
+// nonOperandVendorNames 는 external·delegated 를 모드별로 갈라 담아야 한다 — 둘 다 데이터플레인이
+// 없어도 정상이라는 결과는 같지만, Ready 메시지가 어느 벤더가 어느 모드인지 밝히려면 섞이면 안 된다.
+// furiosa 케이스는 rngd 만 켜져 있고(Furiosa.Enabled=false) 상위 furiosa 모드를 따르는 경로를 겸해 본다.
+func TestNonOperandVendorNames(t *testing.T) {
+	cases := []struct {
+		name          string
+		policy        *npuv1alpha1.NPUClusterPolicy
+		wantExternal  []string
+		wantDelegated []string
+	}{
+		{
+			name: "external only (furiosa, rngd 만 활성)",
+			policy: &npuv1alpha1.NPUClusterPolicy{Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Furiosa: npuv1alpha1.FuriosaSpec{
+					Enabled:        false,
+					ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+					Rngd:           npuv1alpha1.RngdSpec{Enabled: true},
+				},
+			}},
+			wantExternal: []string{vendorFuriosa},
+		},
+		{
+			name: "delegated only (nvidia)",
+			policy: &npuv1alpha1.NPUClusterPolicy{Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Nvidia: npuv1alpha1.NvidiaSpec{
+					Enabled:        true,
+					ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "delegated"},
+				},
+			}},
+			wantDelegated: []string{vendorNvidia},
+		},
+		{
+			name: "external 과 delegated 동시(nvidia=external, tenstorrent=delegated)",
+			policy: &npuv1alpha1.NPUClusterPolicy{Spec: npuv1alpha1.NPUClusterPolicySpec{
+				Nvidia: npuv1alpha1.NvidiaSpec{
+					Enabled:        true,
+					ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "external"},
+				},
+				Tenstorrent: npuv1alpha1.TenstorrentSpec{
+					Enabled:        true,
+					ManagementSpec: npuv1alpha1.ManagementSpec{ManagementMode: "delegated"},
+				},
+			}},
+			wantExternal:  []string{vendorNvidia},
+			wantDelegated: []string{vendorTenstorrent},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotExternal, gotDelegated := nonOperandVendorNames(tc.policy)
+			if !reflect.DeepEqual(gotExternal, tc.wantExternal) {
+				t.Errorf("external = %v, want %v", gotExternal, tc.wantExternal)
+			}
+			if !reflect.DeepEqual(gotDelegated, tc.wantDelegated) {
+				t.Errorf("delegated = %v, want %v", gotDelegated, tc.wantDelegated)
+			}
+		})
+	}
+}
+
+// nonOperandReadyMessage 는 external·delegated 어느 쪽이든, 둘 다든 벤더 이름을 한 줄에서
+// 읽을 수 있어야 한다 — 셋 중 어느 조합이 와도 메시지에 그 벤더 이름과 모드가 같이 남는다.
+func TestNonOperandReadyMessage(t *testing.T) {
+	cases := []struct {
+		name            string
+		external        []string
+		delegated       []string
+		wantContainsAll []string
+	}{
+		{
+			name:            "external only",
+			external:        []string{vendorNvidia},
+			wantContainsAll: []string{vendorNvidia, "external"},
+		},
+		{
+			name:            "delegated only",
+			delegated:       []string{vendorNvidia},
+			wantContainsAll: []string{vendorNvidia, "delegated"},
+		},
+		{
+			name:            "external 과 delegated 동시",
+			external:        []string{vendorNvidia},
+			delegated:       []string{vendorTenstorrent},
+			wantContainsAll: []string{vendorNvidia, vendorTenstorrent, "external", "delegated"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := nonOperandReadyMessage(tc.external, tc.delegated)
+			if strings.Contains(msg, "\n") {
+				t.Errorf("message 는 한 줄이어야 한다: %q", msg)
+			}
+			for _, want := range tc.wantContainsAll {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message %q 에 %q 가 없다", msg, want)
+				}
+			}
+		})
+	}
+}
+
+// createOrUpdateDS 는 deletionTimestamp 가 찍힌(삭제 진행 중) DaemonSet 을 Update 하지 않고
+// 오류를 돌려 다음 reconcile 로 backoff 재시도해야 한다 — 죽어가는 객체를 갱신하면 GC 가 곧 지워
+// 광고가 사라진다(비활성→즉시 재활성 경쟁).
+func TestCreateOrUpdateDS_RefusesTerminatingDaemonSet(t *testing.T) {
+	ctx := context.Background()
+	existing := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kcloud-tt-device-plugin", Namespace: "kcloud",
+			Finalizers: []string{"kcloud.ai/test-hold"},
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "x"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "img:v1"}}},
+			},
+		},
+	}
+	r := newNPUReconciler(existing)
+
+	// finalizer 가 있어 Delete 는 객체를 지우지 않고 deletionTimestamp 만 찍는다(terminating).
+	if err := r.Delete(ctx, existing); err != nil {
+		t.Fatalf("terminating 유도용 Delete 실패: %v", err)
+	}
+	var cur appsv1.DaemonSet
+	key := types.NamespacedName{Name: existing.Name, Namespace: existing.Namespace}
+	if err := r.Get(ctx, key, &cur); err != nil {
+		t.Fatalf("terminating DS 조회 실패: %v", err)
+	}
+	if cur.DeletionTimestamp.IsZero() {
+		t.Fatalf("전제 위반: finalizer 로 deletionTimestamp 를 유도해야 한다")
+	}
+
+	desired := cur.DeepCopy()
+	desired.Finalizers = nil
+	desired.Spec.Template.Spec.Containers[0].Image = "img:v2"
+	if err := r.createOrUpdateDS(ctx, desired); err == nil {
+		t.Fatalf("삭제 진행 중 DaemonSet 에는 createOrUpdateDS 가 오류를 돌려줘야 한다(backoff)")
+	}
+
+	// cleanup: finalizer 제거로 GC 진행.
+	cur.Finalizers = nil
+	_ = r.Update(ctx, &cur)
 }

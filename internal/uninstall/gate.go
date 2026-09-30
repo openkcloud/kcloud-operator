@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/intent"
 	"kcloud-operator/internal/naming"
 )
 
@@ -40,13 +41,10 @@ import (
 // 목록(intent.VendorForResource)이 아니라 도메인으로 보는 이유는 게이트의 판정이
 // fail-closed 여야 하기 때문이다. 카탈로그에 아직 없는 제품명이나 device-plugin 이
 // 붙이는 변형 이름(nvidia.com/mig-1g.5gb, nvidia.com/gpu.shared)도 사용으로 센다.
-var acceleratorDomains = []string{
-	"nvidia.com/",
-	"furiosa.ai/",
-	"beta.furiosa.ai/",
-	"tenstorrent.com/",
-	"rebellions.ai/",
-}
+// intent.AcceleratorResourceDomains 가 정본이다 — 드라이버 업그레이드 drain
+// (internal/upgrade/state_machine.go)도 같은 집합을 쓴다. 예전엔 이 목록을 여기 손으로도
+// 따로 적어 뒀는데, drain 쪽 목록은 rebellions.ai/ 를 빠뜨린 채 갈라져 있었다.
+var acceleratorDomains = intent.AcceleratorResourceDomains()
 
 // waitKinds 는 삭제 후 실제로 사라질 때까지 기다리는 종류다. operator 가 finalizer 로
 // DaemonSet 을 정리하므로, 기다리지 않고 다음 단계로 넘어가면 아직 지워지는 중인
@@ -82,6 +80,7 @@ var managedJobComponents = []string{
 	"mig-apply",
 	"driver-install",
 	"node-reboot",
+	"device-reset",
 }
 
 // Options 는 게이트 동작을 정하는 값이다.
@@ -511,11 +510,23 @@ func deleteOwnedObjects(ctx context.Context, c client.Client, out io.Writer) err
 	return nil
 }
 
-// deleteDaemonSets 는 남은 DaemonSet 을 이름과 라벨 양쪽으로 정리한다.
+// deleteDaemonSets 는 남은 DaemonSet 을 이름과 라벨 양쪽으로 정리한다. 이름 목록은
+// 후보일 뿐이다 — 실제로 존재해도 소유 표시(operatorOwned)가 없으면 지우지 않는다.
+// 같은 이름을 벤더 operator 나 사람이 쓰고 있을 수 있어서다.
 func deleteDaemonSets(ctx context.Context, c client.Client, out io.Writer) error {
 	deleted := 0
 	for _, key := range managedDaemonSets() {
-		ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+		ds := &appsv1.DaemonSet{}
+		if err := c.Get(ctx, key, ds); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("DaemonSet %s/%s 조회 실패: %w", key.Namespace, key.Name, err)
+		}
+		if !operatorOwned(ds) {
+			logf(out, "소유 표시 없는 DaemonSet 은 보존한다: %s/%s\n", key.Namespace, key.Name)
+			continue
+		}
 		if err := c.Delete(ctx, ds); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -526,21 +537,16 @@ func deleteDaemonSets(ctx context.Context, c client.Client, out io.Writer) error
 		deleted++
 	}
 
+	// 라벨 경로도 이름 경로와 같은 소유 판정(operatorOwned)을 거친다 — 서버 필터가 이미
+	// 관리 component 만 고르지만, 판정 지점을 sweep 하나로 두어 조건이 두 곳에 갈라지지 않게 한다.
 	for _, ns := range cleanupNamespaces() {
 		for _, comp := range managedComponents {
-			var list appsv1.DaemonSetList
-			if err := c.List(ctx, &list, client.InNamespace(ns),
-				client.MatchingLabels{componentLabel: comp}); err != nil {
-				return fmt.Errorf("DaemonSet 조회 실패(%s, %s): %w", ns, comp, err)
+			n, err := sweep(ctx, c, out, "DaemonSet", &appsv1.DaemonSetList{},
+				client.InNamespace(ns), client.MatchingLabels{componentLabel: comp})
+			if err != nil {
+				return err
 			}
-			for i := range list.Items {
-				item := &list.Items[i]
-				if err := c.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
-					return fmt.Errorf("DaemonSet %s/%s 삭제 실패: %w", ns, item.Name, err)
-				}
-				logf(out, "DaemonSet 삭제: %s/%s (component=%s)\n", ns, item.Name, comp)
-				deleted++
-			}
+			deleted += n
 		}
 	}
 	logf(out, "정리 완료: DaemonSet %d 개 삭제.\n", deleted)

@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driveradapter"
 	"kcloud-operator/internal/intent"
 	"kcloud-operator/internal/upgrade"
 )
@@ -402,10 +403,13 @@ func renderDeployment(aw *npuv1alpha1.AcceleratorWorkload, res *intent.Result) *
 	// 그런데도 Pod 은 Ready 가 되어 status 가 Running 이라고 거짓말한다. PodMutator 는
 	// webhook.enabled=false(차트 기본값)면 아예 불리지 않으므로 거기 기댈 수 없다.
 	// podInjectLabel 은 계속 붙인다 — webhook 이 켜져 있으면 무해한 이중 방어다.
+	// runtimeClass 는 벤더마다 다르고 그 판정은 driveradapter 가 담당한다. Lookup 은 조회 키가
+	// 정확히 일치할 때만 맞으므로 기존 res.Vendor==vendorNvidia 와 같이 대소문자를 구분한다.
 	var runtimeClass *string
-	if res.Vendor == vendorNvidia {
-		rc := vendorNvidia
-		runtimeClass = &rc
+	if a, ok := driveradapter.Lookup(res.Vendor, ""); ok {
+		if rc := a.RuntimeClass(); rc != "" {
+			runtimeClass = &rc
+		}
 	}
 	var affinity *corev1.Affinity
 	if len(res.Nodes) > 0 {

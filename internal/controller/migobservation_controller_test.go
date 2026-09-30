@@ -66,6 +66,23 @@ func cleanupMigNode(name string) {
 	_ = k8sClient.Delete(ctx, &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: name}})
 }
 
+// owningACPPNames 는 이 노드를 겨냥하는 ACPP 이름을 모두 돌려준다 — nodeHasOwningPolicy 와 같은
+// nodeMatchesSelector 판정을 그대로 재사용한다(판정을 여기서 다시 구현하면 두 곳이 갈릴 수 있다).
+// terminating(DeletionTimestamp 설정) 여부는 가리지 않는다 — nodeHasOwningPolicy 도 안 가리고,
+// 그 격차가 바로 이 진단이 잡으려는 누수의 정의다. 오염원이 재발했을 때 이름으로 바로 지목하기 위한
+// 시험 전용 진단이다.
+func owningACPPNames(node *corev1.Node) []string {
+	var list npuv1alpha1.AcceleratorPartitionPolicyList
+	Expect(k8sClient.List(ctx, &list)).To(Succeed())
+	var names []string
+	for i := range list.Items {
+		if nodeMatchesSelector(node, list.Items[i].Spec.NodeSelector) {
+			names = append(names, list.Items[i].Name)
+		}
+	}
+	return names
+}
+
 // patchMigObservationAttemptedAt 은 노드의 마지막 관측 시도 시각 주석을 직접 심는다
 // (rate limit 판정 시험용).
 func patchMigObservationAttemptedAt(name string, t time.Time) {
@@ -225,6 +242,15 @@ var _ = Describe("MigObservation controller", func() {
 		seedMigNode(node, map[string]string{nvidia.MigActiveNodeLabel: "true"})
 		DeferCleanup(func() { cleanupMigNode(node) })
 
+		// 전제: 이 노드를 소유하는 ACPP 가 하나도 없어야 한다. 있으면(다른 스펙이 cleanup 에서
+		// finalizer 를 못 지워 terminating 으로 남긴 ACPP 포함 — nodeHasOwningPolicy 는 그것을
+		// 가리지 않는다) 아래 라벨 정리가 조용히 스킵되고, 이 스펙만 봐서는 원인을 못 찾는다.
+		// 재발 시 오염원을 이름으로 바로 지목한다(2026-09-20 단독·직렬 실행 1회 FAIL 재발 방지).
+		var seeded corev1.Node
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node}, &seeded)).To(Succeed())
+		Eventually(func() []string { return owningACPPNames(&seeded) }, "5s", "200ms").Should(BeEmpty(),
+			"이 노드를 소유하는 ACPP 가 남아 있다 — 위 이름의 스펙이 cleanup 에서 finalizer 를 제거하지 않았다")
+
 		obs := &fakeObserver{obs: []nvidia.Observation{{
 			PCI: "0000:18:00.0", ModeCurrent: migModeDisabled, ModePending: migModeDisabled, Geometry: "disabled",
 		}}}
@@ -281,7 +307,7 @@ var _ = Describe("MigObservation controller", func() {
 			},
 		}
 		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
-		DeferCleanup(func() { _ = k8sClient.Delete(ctx, acpp) })
+		DeferCleanup(func() { deleteACPPAndWait(acpp.Name) })
 
 		obs := &fakeObserver{obs: []nvidia.Observation{{
 			PCI: "0000:18:00.0", ModeCurrent: migModeDisabled, ModePending: migModeDisabled, Geometry: "disabled",
@@ -351,7 +377,7 @@ var _ = Describe("MigObservation controller", func() {
 			},
 		}
 		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
-		DeferCleanup(func() { _ = k8sClient.Delete(ctx, acpp) })
+		DeferCleanup(func() { deleteACPPAndWait(acpp.Name) })
 
 		obs := &fakeObserver{obs: []nvidia.Observation{{
 			PCI: "0000:18:00.0", ModeCurrent: migModeDisabled, ModePending: migModeDisabled, Geometry: "disabled",

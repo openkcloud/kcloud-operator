@@ -30,11 +30,11 @@ var nativeProfileRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9
 type ACValidator struct{}
 
 func (v *ACValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return nil, validateAcceleratorClass(obj)
+	return nil, recordRejection("AcceleratorClass", validateAcceleratorClass(obj))
 }
 
 func (v *ACValidator) ValidateUpdate(_ context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
-	return nil, validateAcceleratorClass(newObj)
+	return nil, recordRejection("AcceleratorClass", validateAcceleratorClass(newObj))
 }
 
 func (v *ACValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {

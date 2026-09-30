@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driveradapter"
 	"kcloud-operator/internal/naming"
 )
 
@@ -58,8 +59,7 @@ func RenderInstallJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, ver
 // 정책의 `driver.allowDowngrade` 는 *정책 변경으로 버전을 낮추는 것*을 막는 장치다. 롤백은
 // 그것과 다른 일이다 — 방금 실패한 업그레이드를 원래 자리로 되돌리는 것이고, 정의상 내려간다.
 // 둘을 한 값으로 묶으면 installer 자신의 다운그레이드 가드가 롤백을 거부해 되돌릴 수 없는
-// 업그레이드가 만들어지고, 노드는 실패한 버전에 갇힌다(2026-08-10 라이브,
-// docs/impl/furiosa-version-swap-20260812.md §3.4).
+// 업그레이드가 만들어지고, 노드는 실패한 버전에 갇힌다(2026-08-10 라이브).
 //
 // VERSION_SOURCE 도 Policy 로 고정한다. Host 로 두면 installer 가 호스트에 남은 *실패한* 버전을
 // desired 로 채택해 롤백이 그대로 무동작이 된다.
@@ -95,7 +95,13 @@ func renderJob(
 	activeDeadline := defaultActiveDeadlineSeconds
 
 	// vendor 셀렉터 — nodeName 고정으로 스케줄은 우회되지만 parity 를 위해 유지.
-	nodeSelector := vendorNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
+	// 미등록·셀렉터 없는 벤더(tenstorrent)는 nil 이 아닌 빈 맵을 유지(현재 default 동작 보존).
+	nodeSelector := map[string]string{}
+	if a, ok := driveradapter.ForModel(pol.Spec.Vendor, pol.Spec.Model); ok {
+		if sel := a.PresentNodeSelector(); sel != nil {
+			nodeSelector = sel
+		}
+	}
 	if len(pol.Spec.NodeSelector) > 0 {
 		nodeSelector = pol.Spec.NodeSelector
 	}
@@ -138,13 +144,13 @@ func renderJob(
 	// Furiosa APT 인증 Secret 마운트 — Warboy 전용(DS 경로와 동일 규칙).
 	// RNGD 는 공개 repo 라 entrypoint 가 /secrets 를 참조하지 않으므로 마운트하지 않는다
 	// (secret 부재 클러스터에서 install Job 파드가 스케줄 실패하는 버그를 Job 경로에 복제하지 않음).
-	if furiosaAptAuthRequired(pol.Spec.Vendor, pol.Spec.Model) {
+	if a, ok := driveradapter.ForModel(pol.Spec.Vendor, pol.Spec.Model); ok && a.AptAuthRequired() {
 		volumeMounts = append(volumeMounts,
 			corev1.VolumeMount{Name: "furiosa-auth", MountPath: "/secrets", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "furiosa-auth",
 			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: "furiosa-apt-auth"},
+				Secret: &corev1.SecretVolumeSource{SecretName: driveradapter.AptAuthSecretName},
 			},
 		})
 	}
@@ -210,33 +216,6 @@ func renderJob(
 		},
 	}
 	return job
-}
-
-// vendorNodeSelector 는 벤더/모델별 기본 노드 셀렉터를 반환한다.
-// controller.vendorNodeSelector 와 동일 규칙(패키지 순환 회피를 위해 최소 복제).
-func vendorNodeSelector(vendor, model string) map[string]string {
-	v := strings.ToLower(vendor)
-	m := strings.ToLower(model)
-	switch v {
-	case "nvidia":
-		return map[string]string{"kcloud.ai/nvidia.present": "true"}
-	case "furiosa":
-		if m == "rngd" {
-			return map[string]string{"kcloud.ai/rngd.present": "true"}
-		}
-		return map[string]string{"kcloud.ai/furiosa.present": "true"}
-	case "rebellions":
-		return map[string]string{"kcloud.ai/rebellions.present": "true"}
-	default:
-		return map[string]string{}
-	}
-}
-
-// furiosaAptAuthRequired 는 Furiosa APT 인증 secret 마운트 필요 여부를 반환한다.
-// Warboy=true(사설 repo 인증 필수), RNGD=false(공개 repo). controller 패키지의 동일 헬퍼와
-// 규칙을 일치시킨다(패키지 순환 회피를 위해 최소 복제).
-func furiosaAptAuthRequired(vendor, model string) bool {
-	return strings.EqualFold(vendor, "furiosa") && !strings.EqualFold(model, "rngd")
 }
 
 // versionSourcePolicy 는 정책이 선언한 버전을 그대로 쓰라는 값이다(entrypoint 의 VERSION_SOURCE).

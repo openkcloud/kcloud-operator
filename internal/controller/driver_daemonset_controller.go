@@ -24,6 +24,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driveradapter"
 	"kcloud-operator/internal/metrics"
 	"kcloud-operator/internal/naming"
 )
@@ -113,14 +114,17 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	}
 
 	// 벤더별 nodeSelector (model 포함, RNGD 분기 지원)
-	nodeSelector := vendorNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
+	nodeSelector := driverNodeSelector(pol.Spec.Vendor, pol.Spec.Model)
 	// DriverInstallPolicy에 nodeSelector가 지정된 경우 우선 사용
 	if len(pol.Spec.NodeSelector) > 0 {
 		nodeSelector = pol.Spec.NodeSelector
 	}
 
 	// 벤더별 rmmod 명령 (model 포함, RNGD 분기 지원)
-	rmmodCmd := vendorRmmodCommand(pol.Spec.Vendor, pol.Spec.Model)
+	rmmodCmd := "true" // 미등록 벤더 방어 기본값 — 내릴 모듈 없음(셸 no-op)
+	if a, ok := driveradapter.ForModel(pol.Spec.Vendor, pol.Spec.Model); ok {
+		rmmodCmd = a.RmmodCommand()
+	}
 
 	image := pol.Spec.Driver.Image
 
@@ -312,7 +316,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	// 반면 RNGD 는 공개 repo 를 사용하여 entrypoint 가 /secrets 를 전혀 참조하지 않으므로, secret
 	// 오브젝트(furiosa-apt-auth)를 하드코딩 마운트하면 공개 repo 클러스터에서 secret 부재 시 파드가
 	// 스케줄되지 못한다(service 클러스터 실측 버그). → RNGD 는 마운트를 부착하지 않는다.
-	if furiosaAptAuthRequired(pol.Spec.Vendor, pol.Spec.Model) {
+	if a, ok := driveradapter.ForModel(pol.Spec.Vendor, pol.Spec.Model); ok && a.AptAuthRequired() {
 		ds.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 			ds.Spec.Template.Spec.Containers[0].VolumeMounts,
 			corev1.VolumeMount{Name: "furiosa-auth", MountPath: "/secrets", ReadOnly: true},
@@ -321,7 +325,7 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 			corev1.Volume{
 				Name: "furiosa-auth",
 				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{SecretName: "furiosa-apt-auth"},
+					Secret: &corev1.SecretVolumeSource{SecretName: driveradapter.AptAuthSecretName},
 				},
 			},
 		)
@@ -338,56 +342,16 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	return ds
 }
 
-// vendorNodeSelector는 벤더/모델별 기본 노드 셀렉터를 반환합니다.
-// model 이 비어 있거나 "warboy" 인 경우 기존 Furiosa Warboy 셀렉터를 유지하고,
-// model="rngd" 인 경우 RNGD 전용 셀렉터를 반환합니다.
-func vendorNodeSelector(vendor, model string) map[string]string {
-	v := strings.ToLower(vendor)
-	m := strings.ToLower(model)
-	switch v {
-	case vendorNvidia:
-		return map[string]string{"kcloud.ai/nvidia.present": "true"}
-	case vendorFuriosa:
-		if m == "rngd" {
-			return map[string]string{"kcloud.ai/rngd.present": "true"}
+// driverNodeSelector 는 벤더 장치가 있는 노드를 고르는 셀렉터를 어댑터에서 가져온다.
+// 미등록 벤더와 셀렉터 없는 벤더(tenstorrent)는 빈 맵을 돌려준다 — 현재 default 동작이고,
+// nodeSelector 필드에 nil 대신 빈 맵을 유지해 회귀를 막는다.
+func driverNodeSelector(vendor, model string) map[string]string {
+	if a, ok := driveradapter.ForModel(vendor, model); ok {
+		if sel := a.PresentNodeSelector(); sel != nil {
+			return sel
 		}
-		return map[string]string{"kcloud.ai/furiosa.present": "true"}
-	case "rebellions":
-		// Rebellions ATOM+ 는 DriverInstallPolicy 를 생성하지 않음 (host-managed driver).
-		// 호출 경로가 실제로 도달하지 않지만 분기 완전성을 위해 셀렉터 반환.
-		return map[string]string{"kcloud.ai/rebellions.present": "true"}
-	default:
-		return map[string]string{}
 	}
-}
-
-// vendorRmmodCommand는 벤더/모델별 커널 모듈 언로드 명령을 반환합니다.
-// Furiosa RNGD 는 별도 커널 모듈(furiosa_rngd)을 사용하므로 분기합니다.
-func vendorRmmodCommand(vendor, model string) string {
-	v := strings.ToLower(vendor)
-	m := strings.ToLower(model)
-	switch v {
-	case vendorNvidia:
-		return "rmmod nvidia_uvm nvidia_drm nvidia || true"
-	case vendorFuriosa:
-		if m == "rngd" {
-			return "rmmod furiosa_rngd || true"
-		}
-		return "rmmod npu_pdma npu_mgmt || true"
-	case "rebellions":
-		// Rebellions 드라이버는 호스트에서 관리되므로 rmmod 금지 (no-op).
-		return "true" //nolint:goconst // 셸 no-op 관용구, 라벨 값 labelValueTrue 와 의미가 다르다
-	default:
-		return "true" //nolint:goconst // 셸 no-op 관용구, 라벨 값 labelValueTrue 와 의미가 다르다
-	}
-}
-
-// furiosaAptAuthRequired 는 벤더/모델이 Furiosa APT 인증 secret(furiosa-apt-auth) 마운트를
-// 필요로 하는지 반환합니다. Warboy 는 사설 repo 인증이 필수라 true, RNGD 는 공개 repo 라
-// 불필요하여 false(마운트 미부착 → secret 부재 클러스터에서도 스케줄 가능). Furiosa 이외
-// 벤더는 애초에 이 경로에 도달하지 않지만 방어적으로 false.
-func furiosaAptAuthRequired(vendor, model string) bool {
-	return strings.EqualFold(vendor, vendorFuriosa) && !strings.EqualFold(model, "rngd")
+	return map[string]string{}
 }
 
 // versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작인 "Policy" 를 반환합니다.

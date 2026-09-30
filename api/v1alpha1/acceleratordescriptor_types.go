@@ -4,9 +4,8 @@
 //
 //	다르게 모델링한 실측(Furiosa DP 4유닛 vs DRA 카드 1개)이 이 타입의 존재
 //	이유다. 할당 단위와 식별자를 여기서 못 박아 두 backend 가 갈리지 않게 한다.
-//	계약 정의는 docs/design/device-descriptor-contract.md.
 //
-// 생성일: 2026-08-10
+// 생성일: 2026-08-10 | 수정일: 2026-09-19
 // ============================================================
 package v1alpha1
 
@@ -56,6 +55,17 @@ type DescriptorCleanup struct {
 	ResetCommand []string `json:"resetCommand,omitempty"`
 }
 
+// DescriptorSharing 은 SW 공유 선언이다. 현재 timeSliced 만 지원한다 — device-plugin 이
+// 장치 1개를 replicas 개로 광고한다(격리 없음). 벤더 런타임이 동시 접근을 견딜 때만 안전하며,
+// 그 판정은 internal/vendorcap 레지스트리가 한다(컨트롤러 게이트).
+type DescriptorSharing struct {
+	// +kubebuilder:validation:Enum=timeSliced
+	Mode string `json:"mode"`
+	// +kubebuilder:validation:Minimum=2
+	// +kubebuilder:validation:Maximum=16
+	Replicas int32 `json:"replicas,omitempty"`
+}
+
 // AcceleratorDescriptorSpec 은 장치 하나의 backend 중립 기술이다.
 type AcceleratorDescriptorSpec struct {
 	// Vendor 는 벤더 키다("nvidia"·"rngd"·"tenstorrent" 등, detector 의 vendorKey 와 같은 어휘).
@@ -78,6 +88,9 @@ type AcceleratorDescriptorSpec struct {
 	// Cleanup 은 반납 후 조건이다.
 	// +optional
 	Cleanup DescriptorCleanup `json:"cleanup,omitempty"`
+	// Sharing 은 SW 공유 선언이다(현재 timeSliced). 선언 시 devicePlugin backend 가 필수다.
+	// +optional
+	Sharing *DescriptorSharing `json:"sharing,omitempty"`
 }
 
 // AcceleratorDescriptorStatus 는 정적 검증 결과다.
@@ -90,6 +103,15 @@ type AcceleratorDescriptorStatus struct {
 	Refusals []DescriptorRefusal `json:"refusals,omitempty"`
 	// +optional
 	Conditions []Condition `json:"conditions,omitempty"`
+	// ResolvedDevices 는 이 descriptor 의 vendor/product 에 맞는 NDR 카드들의 노드별 안정 ID 다.
+	// +optional
+	ResolvedDevices []NodeDeviceIDs `json:"resolvedDevices,omitempty"`
+}
+
+// NodeDeviceIDs 는 한 노드에서 이 descriptor 에 맞는 장치들의 안정 식별자 목록이다.
+type NodeDeviceIDs struct {
+	Node string   `json:"node"`
+	IDs  []string `json:"ids,omitempty"`
 }
 
 // DescriptorRefusal 은 backend 하나가 왜 거절됐는지다.

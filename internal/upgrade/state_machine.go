@@ -130,6 +130,43 @@ func (m *UpgradeStateMachine) TransitionState(
 	// 현재 상태를 Prometheus 메트릭에 기록
 	metrics.SetUpgradeState(state.Spec.NodeName, state.Spec.Vendor, state.Status.State)
 
+	// 관리자 롤백 요청(어노테이션)은 Idle·Failed 에서만 받는다 — 전이 중에는 자동 롤백 경로가
+	// 이미 있고 둘이 겹치면 진행 상태가 뒤섞인다.
+	//
+	// 어노테이션은 결과(상태 전이)가 영속된 뒤에 지운다 — 먼저 지우고 나중에 영속하면, 영속이
+	// 실패했을 때 요청 신호(어노테이션)는 이미 사라졌는데 상태는 그대로 남아 다음 reconcile 이
+	// 재시도할 방법이 없어진다. 그래서 이 분기는 상태를 스스로(m.Status().Update) 영속한다 —
+	// 위 broken-PreviousImage 정리와 같은 패턴이며, 호출자(controller)가 뒤이어 하는
+	// Status().Update 는 이미 영속된 값을 다시 쓰는 멱등 호출이 된다.
+	if requestedAt, ok := state.Annotations[v1alpha1.RollbackRequestedAnnotation]; ok {
+		switch {
+		case v1alpha1.RollbackRequestAccepted(state.Status.State):
+			requeue, requeueAfter, _ := m.transitionTo(state, v1alpha1.UpgradeStateRollback,
+				"관리자 요청 롤백("+requestedAt+")", 0)
+			if err := m.Status().Update(ctx, state); err != nil {
+				return false, 0, err
+			}
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "RollbackRequested",
+				"관리자 요청(%s)으로 Rollback 전이 (node=%s)", requestedAt, state.Spec.NodeName)
+			if err := m.clearRollbackRequest(ctx, state); err != nil {
+				// 상태는 이미 Rollback 으로 영속됐다 — 아래 case(state==Rollback)가 다음
+				// reconcile 에서 어노테이션 제거만 재시도한다(재전이는 하지 않는다).
+				logger.Error(err, "롤백 요청 어노테이션 제거 실패 — 다음 reconcile 에서 재시도")
+			}
+			return requeue, requeueAfter, nil
+		case state.Status.State == v1alpha1.UpgradeStateRollback:
+			// 이 요청으로 이미 Rollback 에 들어간 뒤, 어노테이션 제거만 실패해 남은 경우다.
+			// 위 case 조건이 이미 거짓이라 재전이는 없다 — 제거만 재시도한다. 그러지 않으면
+			// 상태가 나중에 Idle·Failed 로 돌아왔을 때 같은 요청이 새 요청으로 오인돼
+			// 다시 전이한다.
+			if err := m.clearRollbackRequest(ctx, state); err != nil {
+				logger.Error(err, "롤백 요청 어노테이션 제거 재시도 실패")
+			}
+		default:
+			logger.Info("롤백 요청 보류 — 전이 중", "requestedAt", requestedAt)
+		}
+	}
+
 	switch state.Status.State {
 	case "", v1alpha1.UpgradeStateIdle:
 		return m.handleIdle(ctx, state, policy)
@@ -191,6 +228,12 @@ func (m *UpgradeStateMachine) handleIdle(
 ) (bool, time.Duration, error) {
 	desiredVersion := policy.Spec.Driver.Version
 	currentVersion := state.Status.CurrentVersion
+
+	// Idle 에서도 선택 결과를 최신으로 유지한다. 호출부(driver_upgrade_controller.go 의
+	// Status().Update)가 전이 여부와 무관하게 status 를 저장하므로 여기서 바꾼 값이 영속한다.
+	if err := m.refreshResolvedImage(ctx, state, policy); err != nil {
+		return false, 0, err
+	}
 
 	// TrackOnly 정책: 설치/업그레이드 경로를 절대 트리거하지 않는다(버전 관측 전용).
 	// 아래 Job 모드 self-heal(driverLoaded=false) 트리거보다 먼저 차단하여, installer 미비
@@ -366,6 +409,19 @@ func (m *UpgradeStateMachine) handlePreFlight(
 	}
 
 	kernelVersion := node.Status.NodeInfo.KernelVersion
+	// 노드 커널로 사전 컴파일 이미지를 고른다. 여기서 고른 값은 handleUpgradingJob 이 install Job
+	// 에 실을 이미지이며, 호출부(driver_upgrade_controller.go Reconcile 의 Status().Update)가 이번
+	// 전이의 status 저장에 함께 실어 영속한다.
+	resolvedImage, imageSkipReason := resolveDriverImage(policy, kernelVersion)
+	state.Status.ResolvedImage = resolvedImage
+	// 정책이 이 커널용 사전 컴파일 이미지를 선언했지만 쓰지 않았다면 그 이유를 드러낸다. 기본
+	// 이미지(DKMS 컴파일)로 되돌아가므로 설치는 올바른 버전으로 진행되지만, 운영자가 정책의 태그를
+	// 바로잡을 수 있도록 경고 이벤트와 로그를 남긴다.
+	if imageSkipReason != "" {
+		logf.FromContext(ctx).Info("사전 컴파일 커널 이미지를 쓰지 않고 기본 이미지로 되돌아감",
+			"kernel", kernelVersion, "reason", imageSkipReason)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "KernelImageRejected", "%s", imageSkipReason)
+	}
 	allowlist := policy.Spec.KernelAllowlist
 
 	if len(allowlist) > 0 {
@@ -701,7 +757,7 @@ func (m *UpgradeStateMachine) handleUncordoning(
 // 여기서 하는 일은 단 하나, **이 사이클이 걸어 둔 cordon 을 조건이 맞으면 푸는 것**이다.
 // 상태는 Failed 로 남고 사람의 수동 조치는 여전히 필요하다.
 //
-// 왜 푸는가 — 라이브 실측(2026-08-05, docs/impl/k8s134-verification-20260805.md 부록 H.3):
+// 왜 푸는가 — 라이브 실측(2026-08-05):
 // worker1 의 Furiosa 드라이버가 사라지자 DUS 가 Draining("노드 cordon 완료") → Failed("롤백할
 // 이전 버전 없음(job)") 로 착지했고, cordon 이 남은 채 방치됐다. cordon 된 노드는 BuildSnapshot
 // 이 후보에서 통째로 뺀다. 그래서 같은 노드에서 멀쩡히 돌던 NVIDIA GPU 2장까지 배치 불가가
@@ -742,6 +798,22 @@ func (m *UpgradeStateMachine) handleFailed(
 		// 한도에 걸린다.
 		state.Status.RollbackAttempts = 0
 		resetRebootTracking(&state.Status)
+
+		// 우리가 건 cordon 이 있으면 푼다. ACPP quiesce(internal/partition/quiesce.go Cordon) 와
+		// 운영자의 수동 cordon 은 표식을 남기지 않으므로, 여기서 직접 소유권을 확인해야 한다.
+		// 표식이 없거나 남의 이름이면 그 cordon 은 남겨 둔다(파티션 적용 중 / 정비 중).
+		var node corev1.Node
+		if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &node); err == nil {
+			if err := m.reapStaleCordonClaim(ctx, &node, state); err != nil {
+				return false, 0, fmt.Errorf("stale cordon claim 정리 실패: %w", err)
+			}
+			if node.Spec.Unschedulable && node.Annotations[cordonOwnerAnnotationKey] == state.Name {
+				if err := m.uncordonNode(ctx, state.Spec.NodeName, state); err != nil {
+					return false, 0, fmt.Errorf("복구 탈출 중 노드 uncordon 실패: %w", err)
+				}
+			}
+		}
+
 		return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
 			fmt.Sprintf("복구 확인(%s): 목표 버전 도달·드라이버 로드", state.Status.DesiredVersion),
 			60*time.Second)
@@ -754,6 +826,10 @@ func (m *UpgradeStateMachine) handleFailed(
 			return false, 0, nil
 		}
 		return false, 0, err
+	}
+
+	if err := m.reapStaleCordonClaim(ctx, &node, state); err != nil {
+		return false, 0, fmt.Errorf("stale cordon claim 정리 실패: %w", err)
 	}
 
 	// 해제 조건 (a) cordon 이 실제로 남아 있고 (b) 그 cordon 의 주인이 이 DUS 여야 한다.
@@ -998,6 +1074,16 @@ func (m *UpgradeStateMachine) logPersistencedStop(ctx context.Context, nodeName 
 // ─────────────────────────────────────────────
 // 헬퍼 함수
 // ─────────────────────────────────────────────
+
+// clearRollbackRequest 는 롤백 요청 어노테이션을 metadata patch 로 지운다(status 갱신과 별개).
+func (m *UpgradeStateMachine) clearRollbackRequest(ctx context.Context, state *v1alpha1.DriverUpgradeState) error {
+	patch := client.MergeFrom(state.DeepCopy())
+	delete(state.Annotations, v1alpha1.RollbackRequestedAnnotation)
+	if err := m.Patch(ctx, state, patch); err != nil {
+		return fmt.Errorf("롤백 요청 어노테이션 제거 실패: %w", err)
+	}
+	return nil
+}
 
 // transitionTo는 상태를 변경하고 requeue 정보를 반환합니다.
 // requeueAfter=0이면 즉시 requeue (Requeue=true).
@@ -1342,6 +1428,18 @@ func (m *UpgradeStateMachine) uncordonNode(ctx context.Context, nodeName string,
 	return nil
 }
 
+// reapStaleCordonClaim 은 우리가 노드의 unschedulable==false 를 관측했는데 우리 소유 annotation
+// 이 남아 있으면 그 annotation 을 지운다. 사람이 uncordon 한 뒤 stale 로 남아 이후 남의 cordon 을
+// 오인 해제하는 것을 막는다(마커 수명==cordon 수명 불변식 복원, EC-1).
+func (m *UpgradeStateMachine) reapStaleCordonClaim(ctx context.Context, node *corev1.Node, state *v1alpha1.DriverUpgradeState) error {
+	if node.Spec.Unschedulable || node.Annotations[cordonOwnerAnnotationKey] != state.Name {
+		return nil
+	}
+	patch := client.MergeFrom(node.DeepCopy())
+	delete(node.Annotations, cordonOwnerAnnotationKey)
+	return m.Patch(ctx, node, patch)
+}
+
 // clearUpgradingLabel은 Failed 전이 시 device-plugin 재스케줄이 가능하도록
 // driver-upgrading 라벨과 driver-upgrading-blocking 라벨을 모두 제거한다.
 // unschedulable은 수동 조치를 위해 보존.
@@ -1370,6 +1468,21 @@ func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName 
 	return nil
 }
 
+// hasAcceleratorResourceName 은 리소스명이 등록된 벤더의 가속기 extended resource
+// 도메인 밑에 있는지를 본다. intent.AcceleratorResourceDomains 를 그대로 써서 uninstall
+// 게이트(internal/uninstall/gate.go)와 같은 fail-closed 판정을 공유한다 — 전에는
+// hasDeviceWorkloads·podUsesDevice 가 이 판정을 각자 세 문자열로 따로 적어 두고 있었고,
+// 그 목록에 rebellions.ai/ 가 빠져 있어 rebellions ATOM 파드가 드라이버 업그레이드
+// drain 에서 PDB 를 존중하는 eviction 대상으로 인식되지 못했다.
+func hasAcceleratorResourceName(rn string) bool {
+	for _, domain := range intent.AcceleratorResourceDomains() {
+		if strings.Contains(rn, domain) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasDeviceWorkloads는 노드에 GPU/NPU 리소스를 사용하는 Running Pod가 있는지 확인합니다.
 func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName string) (bool, error) {
 	var podList corev1.PodList
@@ -1385,8 +1498,7 @@ func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName s
 		}
 		for _, c := range pod.Spec.Containers {
 			for resName := range c.Resources.Limits {
-				rn := string(resName)
-				if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") || strings.Contains(rn, "tenstorrent.com/") {
+				if hasAcceleratorResourceName(string(resName)) {
 					return true, nil
 				}
 			}
@@ -1455,8 +1567,7 @@ func (m *UpgradeStateMachine) evictDevicePods(ctx context.Context, state *v1alph
 func podUsesDevice(pod *corev1.Pod) bool {
 	for _, c := range pod.Spec.Containers {
 		for resName := range c.Resources.Limits {
-			rn := string(resName)
-			if strings.Contains(rn, "nvidia.com/gpu") || strings.Contains(rn, "furiosa.ai/") || strings.Contains(rn, "tenstorrent.com/") {
+			if hasAcceleratorResourceName(string(resName)) {
 				return true
 			}
 		}
@@ -1594,6 +1705,71 @@ func isNodeReady(node *corev1.Node) bool {
 	return false
 }
 
+// resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지가 정책에 선언돼 있으면 그것을, 아니면
+// 기본 설치 이미지를 돌려준다. 두 번째 반환값은 선언된 커널 이미지를 쓰지 않은 이유이며, 이미지를
+// 썼거나 애초에 커널 이미지가 없으면 빈 문자열이다. 호출부가 이 이유를 경고로 드러낸다. 커널
+// 이미지를 무시하는 경우는 두 가지다.
+//   - 태그가 검증 빌드 태그(…-vN)가 아니다. 존재하지 않는 이미지를 Job 에 싣지 않기 위해서다.
+//   - 태그의 버전 토큰이 spec.driver.version 과 다르다. 사전 컴파일 이미지는 자기가 구운 사용자
+//     공간과 모듈을 함께 설치하므로 그 둘이 어긋날 수는 없다. 그래도 이 검사를 두는 이유는 정책이
+//     선언한 버전과 이미지가 실제로 담은 버전이 다를 때 운영자 의도와 다른 드라이버가 깔리기
+//     때문이다. 기본 이미지로 되돌아가면 DKMS 가 spec.driver.version 으로 컴파일하므로 선언과
+//     결과가 맞는다.
+//
+// 두 경로에서 spec.driver.version 의 뜻이 다르다. 사전 컴파일 경로에서는 이미지가 설치 버전을
+// 정하고 이 값은 위 대조에만 쓰인다. DKMS 경로에서는 이 값이 설치 버전을 정하므로 노드의 apt
+// 저장소에 실재해야 한다 — 그래서 차트 기본값은 우분투 아카이브에 있는 버전이어야 한다.
+//
+// spec.driver.version 이 비어 있으면 대조 기준이 없으므로 버전 검사를 건너뛴다. 버전을 비우는 것은
+// 설치기가 버전을 고르는 하위호환 경로다.
+func resolveDriverImage(policy *v1alpha1.DriverInstallPolicy, kernelVersion string) (image string, skipReason string) {
+	if kernelVersion == "" {
+		return policy.Spec.Driver.Image, ""
+	}
+	img, ok := policy.Spec.Driver.KernelImages[kernelVersion]
+	if !ok {
+		return policy.Spec.Driver.Image, ""
+	}
+	ref := string(img)
+	if !isVerifiedBuildTag(ref) {
+		return policy.Spec.Driver.Image, fmt.Sprintf(
+			"커널 %s 의 사전 컴파일 이미지 %q 가 검증 빌드 태그(…-vN)가 아니어서 쓰지 않는다",
+			kernelVersion, ref)
+	}
+	if want := policy.Spec.Driver.Version; want != "" {
+		if got := extractKernelImageVersion(ref); got != want {
+			return policy.Spec.Driver.Image, fmt.Sprintf(
+				"커널 %s 의 사전 컴파일 이미지 버전 토큰 %q 가 spec.driver.version %q 와 달라서 쓰지 않는다",
+				kernelVersion, got, want)
+		}
+	}
+	return ref, ""
+}
+
+// refreshResolvedImage 는 status.ResolvedImage 를 지금 정책 기준으로 다시 계산한다.
+// PreFlight 에서만 계산하면 정책에서 kernelImages 항목을 뺀 뒤에도 옛 태그가 status 에 남아
+// 운영자가 그 이미지를 아직 쓰는 것으로 오해한다. 노드 조회는 controller-runtime 캐시에서
+// 읽으므로 API 호출이 늘지 않는다. 노드를 찾지 못하면 값을 그대로 둔다 — 노드가 빠지는
+// 중일 수 있고 그때 마지막 관측값을 지우는 것은 얻는 것이 없다.
+// 이미지를 쓰지 않은 사유는 여기서 버린다. 경고 이벤트는 실제 설치가 일어나는 PreFlight 에서만
+// 낸다(Idle 은 60초마다 다시 들어오므로 같은 경고가 반복된다).
+func (m *UpgradeStateMachine) refreshResolvedImage(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+	policy *v1alpha1.DriverInstallPolicy,
+) error {
+	var node corev1.Node
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("노드 조회 실패: %w", err)
+	}
+	image, _ := resolveDriverImage(policy, node.Status.NodeInfo.KernelVersion)
+	state.Status.ResolvedImage = image
+	return nil
+}
+
 // matchesKernelAllowlist는 커널 버전이 allowlist 패턴 중 하나와 일치하는지 확인합니다.
 // 패턴에서 "*"는 정규식 ".*"로 변환됩니다.
 func matchesKernelAllowlist(kernelVersion string, allowlist []string) bool {
@@ -1634,6 +1810,39 @@ func extractImageVariantSuffix(image string) string {
 		return ""
 	}
 	return imageVariantSuffixRe.FindString(image[idx+1:])
+}
+
+// kernelImageVersionRe 는 커널 이미지 태그 앞머리의 드라이버 버전 토큰을 매치한다.
+// 태그 규약은 "<version>[-<variant>]-k<kernel>-vN" 이며, version 은 숫자로 시작하는 점 구분
+// 버전이다. 하위 번호가 있으면 "-<숫자>" 하나까지 포함한다(예 "1.9.8-3"). variant(예 "rngd")
+// 와 커널·빌드 접미사는 숫자로 시작하지 않으므로 여기에 걸리지 않는다.
+var kernelImageVersionRe = regexp.MustCompile(`^[0-9][0-9.]*(-[0-9]+)?`)
+
+// extractKernelImageVersion 은 image reference 태그 앞머리의 드라이버 버전 토큰만 뽑는다.
+// variant·커널·빌드 접미사는 버린다. 예: "…:2026.3.1-rngd-k6.8.0-138-generic-v1" → "2026.3.1".
+// 태그가 없거나 버전 토큰이 없으면 빈 문자열을 돌려준다.
+func extractKernelImageVersion(image string) string {
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 {
+		return ""
+	}
+	return kernelImageVersionRe.FindString(image[idx+1:])
+}
+
+// precompiledKernelImageRe 는 사전 컴파일 커널 이미지 태그의 커널 토큰(-k<커널버전>)을 매치한다.
+// 태그 규약 "<version>[-<variant>]-k<kernel>-vN" 에서 커널 버전은 숫자로 시작하므로 "-k<숫자>"
+// 로 식별한다. 버전 비종속 태그(예 580.159.03-v179)에는 이 토큰이 없다.
+var precompiledKernelImageRe = regexp.MustCompile(`-k[0-9]`)
+
+// isPrecompiledKernelImage 는 image reference 의 태그가 사전 컴파일 커널 이미지인지 반환한다.
+// 커널 이미지는 특정 드라이버 버전의 모듈을 담아 그 버전 전용이다 — DRIVER_VERSION 만 바꿔서는
+// 다른 버전을 설치하지 못한다. 되돌리기·재구성 경로가 이 판별로 버전 종속 이미지를 거른다.
+func isPrecompiledKernelImage(image string) bool {
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 {
+		return false
+	}
+	return precompiledKernelImageRe.MatchString(image[idx+1:])
 }
 
 // replaceImageTag 는 image reference 의 tag 만 newTag 로 치환한다.
