@@ -30,7 +30,7 @@ kubernetesProfiles:
   - range: "1.31-1.34"
     chartVersion: "0.8.0"
     valuesFile: values-k8s1.34.yaml
-    valuesURL: https://raw.githubusercontent.com/openkcloud/kcloud-operator/45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml
+    valuesURL: https://raw.githubusercontent.com/openkcloud/kcloud-operator/c636694d823c4c7197f8ff23c61038ae8dcbda05/deploy/helm/values-k8s1.34.yaml
     valuesBrowseURL: https://raw.githubusercontent.com/openkcloud/kcloud-operator/main/deploy/helm/values-k8s1.34.yaml
     operatorTag: v0.8.0
   - range: "1.26-1.30"
