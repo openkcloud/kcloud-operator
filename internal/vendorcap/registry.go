@@ -200,7 +200,7 @@ var registry = map[Key]map[Capability]Support{
 		CapIsolation:        withAssurance(AssuranceHardware, unsupported("tt-metal UMD 가 /dev/tenstorrent/0 에 KMD 락을 잡아 두 워크로드가 직렬화 — 공유가 불가해 격리를 잴 대상이 없음(co-run 실측 2026-09-23)", "test/live/tt-timeslice-throughput/run.sh")),
 		CapTelemetry:        unsupported("exporter 없음", ""),
 		CapHealth:           native("AcceleratorHealth 컨트롤러"),
-		CapReset:            withAssurance(AssuranceHardware, unsupported("tt-smi -r 이 호스트 급정지를 일으킴 — 2026-09-28 두 번 재현(08:33:09Z·13:55:57Z), 두 시각 모두 BMC SEL 에 그 정각 Critical Interrupt PCIe Fatal Error Asserted 뒤 53~56초 만에 OEM System boot event. 실시간 dmesg -w·journalctl -kf 스트리밍 캡처로 리셋 전후 새 커널 로그 0줄 확인(오류가 커널까지 올라오지 않음). PCIe Fatal Error 의 근본 원인(펌웨어·보드·호스트)은 미규명", "test/live/device-reset/run.sh")),
+		CapReset:            withAssurance(AssuranceHardware, unsupported("쓸 수 있는 장치 리셋 수단 미제공으로 확정(2026-10-02) — 벤더가 tt-smi -r 을 제공하지만 실행하면 호스트가 내려갔다 스스로 재부팅한다(2026-09-28 두 번 재현 08:33:09Z·13:55:57Z, 두 시각 모두 BMC SEL 에 그 정각 Critical Interrupt PCIe Fatal Error Asserted 뒤 53~56초 만에 OEM System boot event, 실시간 dmesg -w·journalctl -kf 캡처에서 리셋 전후 새 커널 로그 0줄). 노드 전체를 내리는 수단은 카드 하나만 되살리려는 리셋의 목적을 충족하지 못한다. PCIe Fatal Error 의 근본 원인은 미규명이고, 등급 판단과 분리해 2026-09-29 읽기 전용 원인 조사의 후보 순위로 남겨 뒀다(후보 1 은 호스트 firmware-first PCIe 오류 처리 정책)", "test/live/device-reset/run.sh")),
 	},
 }
 
