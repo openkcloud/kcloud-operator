@@ -134,6 +134,14 @@ version-check: ## Verify docs release-set matches Chart.yaml (로컬 전용 — 
 manifest-check: ## Verify images.yaml kcloud images are all in image-manifest.yaml (로컬 전용 — CI 엔 images 저장소가 없어 values.yaml 폴백만 검사한다).
 	bash test/airgap/manifest-coverage.sh
 
+.PHONY: digest-check
+digest-check: ## Verify image-manifest.yaml digests match the registry (레지스트리 조회가 필요해 CI 게이트엔 넣지 않는다).
+	bash hack/refresh-image-digests.sh --check
+
+.PHONY: release-prepare
+release-prepare: ## 발행 준비 — 선행 조건·정합 검사와 push 명령 출력(기본 dry-run, 로컬 태그 생성은 --apply, 형제 images 저장소가 필요해 로컬 전용).
+	bash hack/release-prepare.sh
+
 .PHONY: crd-check
 crd-check: ## Verify config/crd/kustomization.yaml lists every CRD in config/crd/bases.
 	bash hack/crd-kustomize-check.sh

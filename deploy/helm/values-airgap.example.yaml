@@ -3,7 +3,7 @@
 # 상세: 모든 이미지를 단일 사설 미러에서 당기도록 지정하는 방법.
 #       사용:  helm install/upgrade <release> kcloud-operator/deploy/helm -f values-airgap.example.yaml
 #       <your-registry> 부분을 실제 미러 host:port (예: registry.internal:5000) 로 교체한다.
-# 생성일: 2026-06-02 | 수정일: 2026-09-16 (Tenstorrent DRA 둘·Rebellions DRA 하나 추가)
+# 생성일: 2026-06-02 | 수정일: 2026-10-03 (생성 backend·dcgm-exporter 미러 경로 주석)
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -11,6 +11,9 @@
 #     operator / node-manager / host-exec / furiosa-exporter / 드라이버 설치기 3종 /
 #     Furiosa 통합 device-plugin / Tenstorrent device-plugin 이 모두
 #     <your-registry>/<repo>:<tag> 로 조립된다.
+#     generatedBackend 두 이미지(generic-device-plugin·generic-dra-driver)도 이 줄로
+#     조립된다 — operator Deployment 의 --generated-dp-image·--generated-dra-image 인자가
+#     그 값을 받는다. 아래에 따로 적지 않는다(적으면 차트 기본값이 올라갈 때 구 태그로 덮는다).
 # ─────────────────────────────────────────────────────────────────────────────
 global:
   registry: "<your-registry>"   # 예: registry.internal:5000/kcloud
@@ -39,6 +42,8 @@ global:
 nvidia:
   devicePluginImage: "<your-registry>/nvidia/k8s-device-plugin:v0.17.1"
   # GPU 텔레메트리 exporter(선택). 켤 경우 이미지도 미러 경로로 지정한다.
+  # upstream 은 nvcr.io/nvidia/k8s/dcgm-exporter 로 경로에 k8s/ 가 들어간다. 미러에는
+  # 그 세그먼트 없이 nvidia/dcgm-exporter 로 올린다 — 미러를 만들 때 경로를 맞춘다.
   dcgmExporter:
     enabled: false
     image: "<your-registry>/nvidia/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
