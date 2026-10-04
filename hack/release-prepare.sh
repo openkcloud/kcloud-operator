@@ -12,7 +12,7 @@
 #       공개 트리가 빼는 경로·변환하는 파일 목록은 hack/public-chain.sh 에서 읽는다 —
 #       그 파일 자체가 공개 트리에 없으므로, 없으면 그 검사만 건너뛴다(내부 전용 검사).
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03
+# 생성일: 2026-10-03 | 수정일: 2026-10-04
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -67,12 +67,34 @@ fi
 
 # 프리셋 image.tag 대조는 chart_version_sync_test.go 가 이미 한다. 같은 대조를 여기에
 # 다시 적으면 한쪽만 고쳐 또 어긋난다.
-log="$(mktemp)"; trap 'rm -f "$log"' EXIT
+log="$(mktemp)"; blob="$(mktemp)"; trap 'rm -f "$log" "$blob"' EXIT
 if go test ./internal/controller/ -count=1 \
      -run 'TestChartAppVersionMatchesPresets|TestDefaultValuesTagMatchesAppVersion' >"$log" 2>&1; then
-  ok "세 프리셋 image.tag 가 차트 선언과 맞는다 (chart_version_sync_test.go)"
+  ok "작업 트리 프리셋 image.tag 가 차트 선언과 맞는다 (chart_version_sync_test.go)"
 else
   bad "프리셋 image.tag 대조 실패 (chart_version_sync_test.go)"
+  indent <"$log"
+fi
+
+# 두 라인 프리셋이 operator 이미지 말고는 같은 이미지를 쓰는지 본다. 라인별로 갈리는
+# 산출물이 operator 하나뿐이라는 것이 릴리스 세트의 전제이고, 프리셋에 다른 이미지가
+# 끼면 그 전제가 조용히 깨진다. 반대 라인 프리셋은 이 차트에 없으므로(kubeVersion 선언과
+# 실재를 맞추려고 뺐다) 그 브랜치의 blob 을 꺼내 같은 Go 시험에 넘긴다 — 규칙을 두 번
+# 적지 않는다. ref 가 없으면 건너뛰지 않고 걸린 것으로 센다. 건너뛰면 이 검사가 한 번도
+# 돌지 않은 채 늘 초록이 된다.
+other_ref=release/k8s-1.28
+other_preset=deploy/helm/values-k8s1.28.yaml
+if ! git show "${other_ref}:${other_preset}" >"$blob" 2>"$log"; then
+  bad "${other_ref}:${other_preset} 를 읽지 못했다 — 두 라인 프리셋 대조를 할 수 없다"
+  indent <"$log"
+elif [ ! -s "$blob" ]; then
+  # 빈 blob 은 Go 시험을 공허하게 통과시킨다 — 이미지 좌표가 0건이라 아무것도 걸리지 않는다.
+  bad "${other_ref}:${other_preset} 가 비었다 — 대조할 내용이 없다"
+elif KCLOUD_OTHER_LINE_PRESET="$blob" go test ./internal/controller/ -count=1 \
+       -run TestReleaseLinePresetsShareNonOperatorImages >"$log" 2>&1; then
+  ok "두 라인 프리셋이 operator 이미지 말고는 같은 이미지를 쓴다 (${other_ref} blob 대조)"
+else
+  bad "프리셋이 operator 외 이미지를 재정의한다 (${other_ref}:${other_preset} 대조)"
   indent <"$log"
 fi
 

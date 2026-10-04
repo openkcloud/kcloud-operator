@@ -5,6 +5,11 @@
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
 VERSION ?= 0.0.1
 
+# CHART_APP_VERSION 은 이미지에 박을 릴리스 버전이다. 정본은 Chart.yaml 의 appVersion
+# 이고(release.yml 이 태그와 같은지 검사한다), apply-crds 가 이 값으로 CRD 의 릴리스
+# 표식을 대조한다. release/k8s-1.28 브랜치에서는 같은 줄이 v0.6.2-k8s1.28 을 읽는다.
+CHART_APP_VERSION := $(shell grep -oP '^appVersion:\s*\K\S+' deploy/helm/Chart.yaml)
+
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
 # To re-generate a bundle for other specific channels without changing the standard setup, you can:
@@ -251,7 +256,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: embed-crds ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build $(DOCKER_BUILD_ARGS) --build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) -t ${IMG} .
+	$(CONTAINER_TOOL) build $(DOCKER_BUILD_ARGS) --build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) --build-arg RELEASE_VERSION=$(CHART_APP_VERSION) -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -270,7 +275,10 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name kcloud-operator-builder
 	$(CONTAINER_TOOL) buildx use kcloud-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) \
+		--build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) \
+		--build-arg RELEASE_VERSION=$(CHART_APP_VERSION) \
+		--tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm kcloud-operator-builder
 	rm Dockerfile.cross
 

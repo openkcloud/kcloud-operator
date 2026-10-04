@@ -1,5 +1,20 @@
 # deployment.yaml: NPU Operator Controller Manager Deployment
-# 생성일: 2026-03-25 | 수정일: 2026-10-04 (rollingUpdate.maxUnavailable 선언 값 반영)
+# 생성일: 2026-03-25 | 수정일: 2026-10-04 (반대 라인 operator 태그 거절)
+{{/*
+operator 이미지 태그가 이 차트와 같은 릴리스 라인인지 render 단계에서 본다.
+-k8s1.28 접미는 K8s 1.26~1.30 라인 릴리스이고, 그 라인의 차트는 release/k8s-1.28
+브랜치의 0.6.x 다. 섞으면 pre-upgrade Job 이 구 라인 operator 로 1.31+ CRD 를 덮어쓴다.
+Chart.yaml 의 kubeVersion 은 클러스터 버전만 보므로 --set image.tag 로 라인을 섞는 이
+경로를 막지 못한다. 그래서 이 자리가 필요하다.
+
+접미 문자열이 internal/crdapply/apply.go 의 k8s128Suffix 와 두 곳에 있다. 차트는 render
+단계에서 Go 상수를 읽을 수 없고, 두 검사가 성립하는 시점도 다르다 — 차트는 설치·업그레이드
+입력을 보고, 바이너리는 이미 돌아가는 클러스터의 CRD 표식을 본다. 발행된 구 이미지에는
+바이너리 쪽 검사가 없으므로 그 조합에서는 이 자리가 유일한 방어다.
+*/}}
+{{- if hasSuffix "-k8s1.28" (.Values.image.tag | toString) }}
+{{- fail (printf "image.tag %q 는 K8s 1.26~1.30 라인(-k8s1.28 접미) operator 릴리스다. 이 차트 %s 는 K8s 1.31+ 전용이라 두 라인을 섞으면 구 라인 operator 가 CRD 를 덮어쓴다. 1.26~1.30 클러스터는 release/k8s-1.28 브랜치의 chart 0.6.x 를 쓰고, 이 차트에는 접미 없는 태그를 준다." .Values.image.tag .Chart.Version) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

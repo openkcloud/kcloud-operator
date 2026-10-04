@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -63,6 +64,10 @@ var (
 	scheme      = runtime.NewScheme()
 	setupLog    = ctrl.Log.WithName("setup")
 	buildCommit = "unknown" // ldflags -X main.buildCommit 로 빌드 시 주입
+	// releaseVersion 은 이 바이너리의 릴리스 버전이다. 정본은 deploy/helm/Chart.yaml 의
+	// appVersion 이고 Makefile 의 docker-build 가 그 값을 빌드 인자로 넘긴다. apply-crds 가
+	// 이 값으로 CRD 의 릴리스 표식을 대조한다 — 비면 대조도 기록도 하지 않는다.
+	releaseVersion = "" // ldflags -X main.releaseVersion 로 빌드 시 주입
 )
 
 // versionLine 은 --version 플래그의 한 줄 출력이다. ldflags 로 박힌 buildCommit 을 그대로 내고,
@@ -92,8 +97,11 @@ func main() {
 	// === apply-crds 서브명령 분기 (반드시 flag.Parse() 이전) ===
 	if len(os.Args) > 1 && os.Args[1] == "apply-crds" {
 		ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
-		setupLog.Info("apply-crds 서브명령 시작")
-		if err := crdapply.Run(context.Background()); err != nil {
+		// --force 는 릴리스 표식 대조를 넘겨 하향 적용을 강제한다. 되돌리기를 영구히
+		// 막지 않으려고 둔 수단이고, 넘겼다는 사실은 crdapply 가 로그에 남긴다.
+		force := slices.Contains(os.Args[2:], "--force")
+		setupLog.Info("apply-crds 서브명령 시작", "release", releaseVersion, "force", force)
+		if err := crdapply.Run(context.Background(), releaseVersion, force); err != nil {
 			setupLog.Error(err, "apply-crds 실패")
 			os.Exit(1)
 		}

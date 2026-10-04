@@ -3,7 +3,7 @@ pre-upgrade-crd-apply.yaml: helm upgrade 시 operator 바이너리의 apply-crds
 상세: Helm은 설계상 crds/ 디렉토리를 install 시에만 처리하고 upgrade에서는 건드리지 않음.
       이 Job이 operator 이미지(apply-crds 서브명령 내장)를 재사용하여 CRD를 server-side apply로 반영함.
       post-install hook(DIP/NCP) 이전에 실행되도록 weight=-10 지정.
-생성일: 2026-04-17 | 수정일: 2026-04-17
+생성일: 2026-04-17 | 수정일: 2026-10-04
 */}}
 {{- if .Values.crdUpgrade.enabled }}
 ---
@@ -58,7 +58,12 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 2
-  ttlSecondsAfterFinished: 300
+  # 실패한 Job 의 로그가 사유를 읽을 수 있는 유일한 자리다(이 Job 은 붙일 객체가 없어
+  # 이벤트를 남기지 않는다). 거절 사유 — 클러스터와 이미지의 릴리스 라인·버전 — 는
+  # 여기에만 있으므로, 운영자가 다음 근무일에 와도 읽히도록 24시간을 준다.
+  # 성공 경로는 helm 의 hook-delete-policy(hook-succeeded)가 먼저 지우고, 실패한 Job 도
+  # 다음 upgrade 의 before-hook-creation 이 지우므로 24시간이 쌓이지는 않는다.
+  ttlSecondsAfterFinished: 86400
   template:
     spec:
       serviceAccountName: {{ .Release.Name }}-crd-upgrade

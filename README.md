@@ -113,7 +113,9 @@ helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-op
 벤더의 공개 레지스트리(`nvcr.io`, `docker.io/furiosaai` 등)에서 받습니다. 소스 체크아웃에서 설치할  
 때는 차트 경로 `deploy/helm` 을 대신 지정합니다.
 
-K8s 1.26~1.30 클러스터에는 `values-k8s1.28.yaml` 프리셋을 지정합니다. 프리셋은 그 릴리스 라인의  
+K8s 1.26~1.30 클러스터에는 차트 0.6.x 와 `values-k8s1.28.yaml` 프리셋을 씁니다. 그 프리셋은 차트  
+0.6.x 를 담은 `release/k8s-1.28` 브랜치에 있고 이 차트(0.8.x)에는 없습니다 — 0.8.x 는 `kubeVersion`  
+으로 1.31 미만을 거절하므로 1.26~1.30 클러스터에 설치되지 않습니다. 프리셋은 그 릴리스 라인의  
 operator 이미지 태그와 기능 토글을 담으므로, 프리셋 없이 설치하면 라이브와 다른 구성이 배포됩니다.
 
 ### 옵션 B: 래퍼 스크립트

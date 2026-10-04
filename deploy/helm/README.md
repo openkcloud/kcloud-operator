@@ -3,8 +3,12 @@
 NVIDIA GPU + Furiosa(Warboy/RNGD) + Tenstorrent Blackhole + Rebellions ATOM+ 를
 단일 Operator 로 관리하는 Kubernetes NPU/GPU Operator 의 Helm 차트.
 
-두 릴리스 라인이 있다. 차트 0.8.x 는 Kubernetes 1.31~1.34(프리셋 `values-k8s1.34.yaml`),
-차트 0.6.x 는 Kubernetes 1.26~1.30(프리셋 `values-k8s1.28.yaml`, 브랜치 `release/k8s-1.28`).
+두 릴리스 라인이 있다. 이 디렉터리는 차트 0.8.x 로 Kubernetes 1.31~1.34 를 담당하고
+(프리셋 `values-k8s1.34.yaml`), `Chart.yaml` 의 `kubeVersion: ">=1.31.0-0"` 이 그 범위 밖
+클러스터의 설치를 거절한다. Kubernetes 1.26~1.30 은 차트 0.6.x 가 담당한다 — 그 차트와
+프리셋 `values-k8s1.28.yaml` 은 `release/k8s-1.28` 브랜치에 있고 이 디렉터리에는 없다.
+두 라인의 프리셋을 한 차트에 함께 두면 선언한 `kubeVersion` 과 실재가 어긋나고, 그 조합으로
+설치하면 1.26~1.30 라인 operator 가 1.31+ CRD 를 덮어쓴다.
 
 프리셋을 raw URL 로 줄 때 브랜치 주소는 최신 내용을 확인하는 용도다. Magnum 같은 운영
 자동화는 `deploy/integration/release.yaml` 의 커밋 SHA 로 고정된 `valuesURL` 을 쓴다.

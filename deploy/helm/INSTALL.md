@@ -1,4 +1,4 @@
-<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 | 수정일: 2026-10-01 -->
+<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 | 수정일: 2026-10-04 -->
 
 # kcloud-operator 설치 · 확인 절차
 
@@ -40,7 +40,7 @@ export VALUES_SHA=c636694d823c4c7197f8ff23c61038ae8dcbda05
 export VALUES_URL="https://raw.githubusercontent.com/openkcloud/kcloud-operator/$VALUES_SHA/deploy/helm/values-k8s1.34.yaml"
 ```
 
-1.26~1.30 클러스터라면 `CHART_VERSION=0.6.2`, `VALUES_SHA=9397ea30fe494120877d65cb27053a2a3eb09340`, 프리셋 파일 이름은 `values-k8s1.28.yaml` 입니다.
+1.26~1.30 클러스터라면 `CHART_VERSION=0.6.2`, `VALUES_SHA=9397ea30fe494120877d65cb27053a2a3eb09340`, 프리셋 파일 이름은 `values-k8s1.28.yaml` 입니다. 그 프리셋은 차트 `0.6.2` 를 담은 `release/k8s-1.28` 브랜치에 있고 차트 `0.8.0` 의 소스 트리에는 없습니다 — 위 표의 values 주소는 그 브랜치 커밋을 가리키므로 설치 절차는 같습니다. 차트 `0.8.0` 을 1.26~1.30 클러스터에 설치하려 하면 `kubeVersion` 선언 때문에 helm 이 거절합니다.
 
 ## 3. site-values.yaml 작성
 
