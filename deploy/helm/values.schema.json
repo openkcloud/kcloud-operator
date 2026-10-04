@@ -442,7 +442,9 @@
             },
             "kernelImages": {
               "description": "열어 둔다: 키가 커널 릴리스 문자열(uname -r)이다. 노드 커널마다 생기므로 차트가 미리 적을 수 없다."
-            }
+            },
+            "kernelImageBuildRevision": { "type": "string" },
+            "kernelImageVariant": { "type": "string" }
           }
         },
         "toolkit": {

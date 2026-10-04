@@ -20,8 +20,18 @@
 #       1단계의 Go 시험 둘은 envtest 가 필요해 KUBEBUILDER_ASSETS 를 Makefile 의 test
 #       타깃과 같은 방법으로 직접 만들어 넘긴다 — 없이 부르면 패키지 TestMain 이 panic 해
 #       무엇을 검사했는지와 무관하게 늘 FAIL 하고, 그러면서 --apply 를 영구 차단한다.
+#       커널별 사전 컴파일 이미지의 발행 대상(operator)과 묶음(images) 대조도 2단계에
+#       직접 돌린다 — bundle-check 는 공개 ref 를 보고 그 ref 에 release-bundle.yaml 이
+#       없으면 묶음 검사를 건너뛰므로 그 대조도 함께 빠진다. 그 이미지의 미발행은 선행
+#       조건 실패로 세지 않는다 — 굽기 전에는 미발행이 정답인 구간이기 때문이다. 다만 그
+#       묶음 태그는 이 스크립트가 아예 만들지 않는다(3단계 want_bundle_tag): 발행 워크플로가
+#       묶음 항목별 build-arg 를 넘기지 못해 push 가 상태를 악화시킨다. 막는 사유와 가드를
+#       지워도 되는 조건은 그 함수 머리 주석에 있다.
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-04 (image-tag-check 를 2단계에 추가, digest-check
+# 생성일: 2026-10-03 | 수정일: 2026-10-05 (커널 이미지 발행 대상·묶음 대조와 미발행 보고
+#         추가, 커널 이미지 묶음 태그 생성 차단, 조회 집계 세 수 읽기, 막을 묶음 이름을
+#         유도 스크립트의 --bundle-name 모드로 받기 — 소스를 긁으면 선언의 따옴표가 값에
+#         섞여 가드가 비켜난다) | 2026-10-04 (image-tag-check 를 2단계에 추가, digest-check
 #         의 미발행 완화 조건을 어긋남 전체 설명 여부로 강화, manifest-coverage 의 역방향을
 #         CHECK_REVERSE_COVERAGE=1 로 2단계에 추가, 1단계 Go 시험에 KUBEBUILDER_ASSETS
 #         명시 — 없이는 TestMain panic 으로 늘 FAIL)
@@ -33,6 +43,16 @@ op="$PWD"
 img="$PWD/../images/kcloud-operator-images"
 pub=public/main
 chain=hack/public-chain.sh
+# 태그를 만들지 않는 묶음. 사유는 3단계 want_bundle_tag 머리 주석에 있다.
+# 이름을 여기 다시 적지 않고 유도 스크립트가 내주는 값으로 받는다 — 그 이름을 바꾸는 사람이
+# 이 가드를 함께 고치지 않아도 따라오게 한다.
+#
+# 소스를 긁지 않는 이유: 전에는 그 파일의 bundle_name 할당을 정규식으로 읽었는데, 선언이
+# bundle_name="kernel-images" 로 바뀌면 값에 따옴표가 섞여 들어왔다. 빈 값이 아니라서 아래
+# 빈 값 가드가 걸리지 않고 비교만 어긋나 가드가 조용히 사라졌다. 선언 형식은 또 바뀔 수 있으므로
+# 정규식을 정교하게 만드는 대신 셸이 값을 풀어 주는 모드로 받는다.
+derive_sh=hack/kernel-image-targets.sh
+blocked_bundle="$(bash "$derive_sh" --bundle-name 2>/dev/null || true)"
 
 apply=0
 bundle=""
@@ -206,6 +226,19 @@ else
 fi
 
 echo
+# 위 bundle-check 는 공개 ref 를 보고, 그 ref 에 release-bundle.yaml 이 없으면 묶음 검사를
+# 건너뛴다 — 그러면 kernel-images 묶음 대조도 함께 빠진다. 작업 트리의 묶음은 여기서 직접
+# 본다. 발행 대상 목록(operator)과 묶음(images) 중 한쪽만 고치면 굽는 태그와 당기는 태그가
+# 갈린다.
+out="$(bash hack/kernel-image-targets.sh --check-bundle "$img/release-bundle.yaml" 2>&1)" && rc=0 || rc=$?
+printf '%s\n' "$out" | indent
+if [ "$rc" -eq 0 ]; then
+  ok "커널 이미지 발행 대상과 images 작업 트리의 묶음이 맞는다"
+else
+  bad "커널 이미지 발행 대상과 images 작업 트리의 묶음이 어긋난다"
+fi
+
+echo
 out="$(bash hack/refresh-image-digests.sh --check 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out" | indent
 # 두 빨강을 구분한다 — 기록과 다른 digest 가 올라와 있는 것(결함)과, 아직 발행되지 않아
@@ -232,6 +265,37 @@ if [ "$rc" -eq 0 ]; then
   ok "차트 기본값이 당기는 이미지 태그가 레지스트리에 있다 (image-tag-check)"
 else
   bad "이미지 태그 실재 확인 실패 — 네트워크가 없거나 미발행 태그가 있다 (image-tag-check)"
+fi
+
+# 커널별 사전 컴파일 이미지는 위 rc 에 들어가지 않는다 — 아직 굽지 않은 것이 정답인 구간이
+# 있어 image-tag-check 가 결함으로 세지 않는다. 그 수를 여기서 읽어 눈에 띄게 둔다.
+# 미발행을 선행 조건 실패로 세지 않는 이유는 그것이 push 로 해소되는 사실이기 때문이다.
+# "발행 경로가 올바른 내용을 만들 수 없다" 는 다른 사실이고 3단계의 blocked_bundle 이 막는다.
+#
+# 세 수를 다 읽는다. 발행 수를 읽지 않으면 "없다고 확답받은 것이 없다"(kmiss==0)를 "다 있다" 로
+# 적는다 — 요율 제한으로 9건 중 8건이 401 이어도 초록이 된다.
+ktotal="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 \K[0-9]+' | head -1 || true)"
+kpub="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 [0-9]+건 중 발행 \K[0-9]+' | head -1 || true)"
+kmiss="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 [0-9]+건 중 발행 [0-9]+건, 미발행 \K[0-9]+' | head -1 || true)"
+kskip="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 [0-9]+건 중 발행 [0-9]+건, 미발행 [0-9]+건, 조회 못 함 \K[0-9]+' | head -1 || true)"
+if [ -z "$ktotal" ]; then
+  if printf '%s\n' "$out" | LC_ALL=C grep -q '커널 이미지 발행 대상 0건'; then
+    note "커널 이미지 발행 대상 0건 — deploy/kernel-image-targets.yaml 이 비어 있다"
+  else
+    bad "커널 이미지 발행 대상 보고를 찾지 못했다 — image-tag-check 가 그 목록을 보지 않았다"
+  fi
+elif [ -z "$kpub" ] || [ -z "$kmiss" ] || [ -z "$kskip" ]; then
+  bad "커널 이미지 집계 세 수를 다 읽지 못했다 — image-tag-check 출력 형식이 바뀌었다"
+elif [ "$kskip" -gt 0 ]; then
+  # 모르는 것을 "있다" 로도 "없다" 로도 적지 않는다. 릴리스 게이트는 전부 확답을 요구한다.
+  bad "커널 이미지 ${kskip}/${ktotal}건을 조회하지 못했다 — 발행 상태를 모르는 채로 발행할 수 없다"
+elif [ "$kmiss" -gt 0 ]; then
+  note "커널 이미지 ${kmiss}/${ktotal}건 미발행 — 항목별 build-arg 전달 경로가 생기기 전에는" \
+       "bundle/${blocked_bundle} 태그를 push 하지 말 것"
+elif [ "$kpub" -eq "$ktotal" ]; then
+  ok "커널 이미지 발행 대상 ${ktotal}건이 모두 레지스트리에 있다"
+else
+  bad "커널 이미지 집계가 맞지 않는다 — 대상 ${ktotal}건, 발행 ${kpub}건, 미발행 ${kmiss}건"
 fi
 
 echo
@@ -279,6 +343,41 @@ want_tag() {
 
 want_tag "$op" "$op_tag" "$pub" "operator 이미지·차트 발행"
 
+# blocked_bundle 은 태그를 만들지 않는 묶음이다. publish-bundle.yml 이 build-arg 를
+# images.yaml 에서만 읽어 묶음 항목마다 다른 값을 넘기지 못하는데, 사전 컴파일에는 커널마다
+# 다른 PREBUILD_* 가 필요하다. 그래서 이 태그를 push 하면 사전 컴파일이 아닌 이미지가 커널
+# 이미지 태그를 달고 발행된다. 같은 태그 재발행이 거절되므로 그 빌드 개정은 영구히 못 쓰게 된다.
+#
+# "미발행이면 실패" 와 다른 사실이다 — 미발행은 push 가 해소하지만 이것은 push 가 악화시킨다.
+# 그래서 2단계의 미발행 집계는 note 로 두고 태그 생성만 여기서 막는다.
+#
+# 이 가드를 지워도 되는 조건 둘:
+#   - publish-bundle.yml 이 묶음 항목의 build-arg 를 images.yaml 값 위에 병합한다
+#   - 발행본의 사전 컴파일 라벨(org.kcloud.prebuild-kernel)을 읽어 태그의 -k<커널> 토막과
+#     대조하는 검사가 images 저장소에 있다(지금은 그 라벨을 붙이는 쪽도, 읽는 쪽도 없다)
+#
+# want_bundle_tag 는 묶음 태그 요청을 한 자리로 모은다. 두 호출부(이름 지정·묶음 하나)가
+# 각자 want_tag 를 부르면 한쪽에만 가드가 걸린다.
+want_bundle_tag() {
+  local name="$1"
+  # 막을 이름을 받지 못했으면 가드가 없는 것과 같다. 빈 문자열을 비교에 쓰면 어떤 묶음도
+  # 걸리지 않아 가드가 조용히 사라지므로, 모르는 채로 태그를 만들지 않고 멈춘다.
+  # 받지 못하는 경우는 --bundle-name 모드가 없어졌거나(모드 이름 변경) 그 스크립트가 먼저
+  # 실패하는 때다. 값이 섞여 들어오는 경우는 모드 호출로 바꾼 뒤 더 이상 없다.
+  if [ -z "$blocked_bundle" ]; then
+    bad "images: ${derive_sh} --bundle-name 이 묶음 이름을 내주지 않았다 —" \
+        "막을 묶음을 모르는 채로 태그를 만들지 않는다"
+    return
+  fi
+  if [ "$name" = "$blocked_bundle" ]; then
+    bad "images: ${name} 묶음 태그를 만들지 않는다 — 항목별 build-arg 전달 경로가 생기기" \
+        "전에는 이 태그를 push 하지 말라 (사유는 이 스크립트의 blocked_bundle 주석과" \
+        "images 저장소 release-bundle.yaml 의 ${name} 주석)"
+    return
+  fi
+  want_tag "$img" "bundle/${name}" "$pub" "묶음 ${name} 발행"
+}
+
 # 묶음 이름은 release-bundle.yaml 의 키에서 읽는다. snap yq 는 /tmp 를 읽지 못해 PyYAML 을 쓴다.
 names="$(python3 -c '
 import sys, yaml
@@ -289,12 +388,12 @@ if [ "$count" -eq 0 ]; then
   bad "images: release-bundle.yaml 에서 묶음을 읽지 못했다"
 elif [ -n "$bundle" ]; then
   if printf '%s\n' "$names" | grep -qxF -- "$bundle"; then
-    want_tag "$img" "bundle/${bundle}" "$pub" "묶음 ${bundle} 발행"
+    want_bundle_tag "$bundle"
   else
     bad "images: release-bundle.yaml 에 ${bundle} 묶음이 없다 (있는 것: $(printf '%s' "$names" | tr '\n' ' '))"
   fi
 elif [ "$count" -eq 1 ]; then
-  want_tag "$img" "bundle/${names}" "$pub" "묶음 ${names} 발행"
+  want_bundle_tag "$names"
 else
   bad "images: 묶음이 ${count}개다 — 인자로 이름을 지정하라 ($(printf '%s' "$names" | tr '\n' ' '))"
 fi

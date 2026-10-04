@@ -4,16 +4,19 @@
 //
 //	순수 함수라 어느 호출부(webhook·컨트롤러·CLI)에서든 같은 판정을 낸다.
 //
-// 생성일: 2026-08-10 | 수정일: 2026-09-19
+// 생성일: 2026-08-10 | 수정일: 2026-10-05
 // ============================================================
 package descriptor
 
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
+	resourcev1 "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -134,7 +137,90 @@ func Validate(spec npuv1alpha1.AcceleratorDescriptorSpec) field.ErrorList {
 		}
 	}
 
+	errs = append(errs, validateDeclarations(p, spec)...)
+
 	return errs
+}
+
+// cIdentRE 는 DRA 속성·capacity 이름의 식별자 토막 규칙이다.
+var cIdentRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateDeclarations 는 descriptor 가 선언한 속성·capacity 를 본다. 생성 DRA 런타임도 기동 때
+// 같은 검사를 하지만(generic-dra-driver 의 validateDeclarations) 거기서 걸리면 드라이버 파드가
+// CrashLoop 에 앉아, 운영자가 보는 자리가 status.refusals 에서 파드 로그로 옮겨간다. deviceNodes
+// 경로를 런타임도 보는데 여기서 먼저 막는 것과 같은 이유다.
+//
+// 조건은 런타임과 같은 것을 쓴다 — 벌리면 런타임이 받아 주는 선언을 operator 가 거절해 사이트가
+// 막힌다. 상한 수(세 맵의 개수 합)는 CRD MaxProperties 가 이미 런타임 예산 아래로 묶으므로 여기서
+// 다시 세지 않는다.
+func validateDeclarations(p *field.Path, spec npuv1alpha1.AcceleratorDescriptorSpec) field.ErrorList {
+	var errs field.ErrorList
+	for _, m := range []struct {
+		child string
+		vals  map[string]string
+	}{
+		{"attributes", spec.Attributes},
+		{"capacity", spec.Capacity},
+		{"capacityFiles", spec.CapacityFiles},
+	} {
+		for name := range m.vals {
+			if msg := qualifiedNameErr(name); msg != "" {
+				errs = append(errs, field.Invalid(p.Child(m.child).Key(name), name, msg))
+			}
+		}
+	}
+	for name, value := range spec.Attributes {
+		np := p.Child("attributes").Key(name)
+		switch {
+		case strings.TrimSpace(value) == "":
+			// 빈 값을 실으면 셀렉터가 그것을 유효한 값으로 읽는다. 런타임은 발행에서 조용히
+			// 빼지 않고 기동 때 막는다 — 선언한 값이 안 나가는 것을 운영자가 알아야 한다.
+			errs = append(errs, field.Invalid(np, value, "값이 비었다"))
+		case len(value) > resourcev1.DeviceAttributeMaxValueLength:
+			errs = append(errs, field.Invalid(np, value,
+				fmt.Sprintf("값이 %d자를 넘는다", resourcev1.DeviceAttributeMaxValueLength)))
+		}
+	}
+	for name, value := range spec.Capacity {
+		if _, err := resource.ParseQuantity(value); err != nil {
+			errs = append(errs, field.Invalid(p.Child("capacity").Key(name), value,
+				"Quantity 표기여야 한다(예 \"48Gi\")"))
+		}
+	}
+	for name, rel := range spec.CapacityFiles {
+		// 장치의 PCI sysfs 디렉터리 아래 상대 경로여야 한다. 절대경로나 상위 참조를 담은 선언을
+		// operator 가 ConfigMap 에 써 주고 런타임이 그것을 막는 구조는 방향이 뒤집혀 있다.
+		// path.Clean 은 슬래시 구분 경로용이고 sysfs 경로가 그것이다(런타임 filepath.Clean 과
+		// 리눅스에서 같은 결과).
+		if rel == "" || strings.HasPrefix(rel, "/") || path.Clean(rel) != rel ||
+			rel == ".." || strings.HasPrefix(rel, "../") {
+			errs = append(errs, field.Invalid(p.Child("capacityFiles").Key(name), rel,
+				"PCI 디렉터리 아래 상대 경로여야 한다 — 절대경로·상위 참조·비정규화 경로 불가"))
+		}
+	}
+	return errs
+}
+
+// qualifiedNameErr 는 DRA 속성·capacity 이름 규칙 위반 사유를 낸다. 통과하면 빈 문자열.
+// C 식별자이거나 DNS subdomain + "/" + C 식별자여야 한다.
+func qualifiedNameErr(name string) string {
+	id := name
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		domain, rest := name[:i], name[i+1:]
+		if msgs := validation.IsDNS1123Subdomain(domain); len(msgs) > 0 {
+			return "도메인 접두사가 DNS subdomain 이 아니다: " + msgs[0]
+		}
+		// IsDNS1123Subdomain 은 253자까지 받지만 DRA 상한은 더 좁다. 여기서 안 막으면
+		// API 서버가 ResourceSlice 전체를 거절한다.
+		if len(domain) > resourcev1.DeviceMaxDomainLength {
+			return fmt.Sprintf("도메인 접두사가 %d자를 넘는다", resourcev1.DeviceMaxDomainLength)
+		}
+		id = rest
+	}
+	if !cIdentRE.MatchString(id) || len(id) > resourcev1.DeviceMaxIDLength {
+		return fmt.Sprintf("이름이 C 식별자(%d자 이하)가 아니다", resourcev1.DeviceMaxIDLength)
+	}
+	return ""
 }
 
 // firstDuplicate 는 처음 중복된 원소를 낸다. 없으면 빈 문자열.

@@ -24,10 +24,22 @@
 #       미발행을 숨겼다. 그 예외에도 ALLOWED_PRIVATE(hack/registry-head.sh 에서 source,
 #       refresh-image-digests.sh 와 공유) 목록은 비켠다 — 조건부 기능 전용이라 GHCR 발행
 #       계획이 없는 이미지를 두 검사가 같은 말로 "허용된 비공개" 로 센다.
+#       커널별 사전 컴파일 이미지는 차트 렌더에 태그가 적히지 않는다 — 조립이 노드 커널을
+#       받아 런타임에 일어난다. 그래서 그 대상은 deploy/kernel-image-targets.yaml 에서
+#       hack/kernel-image-targets.sh 로 따로 읽어 같은 조회·분류 규칙으로 묻고, 세는 통만
+#       나눈다. 미발행을 위 결함 통에 합치지 않는다 — 아직 굽지 않은 이미지가 정답인 구간이
+#       있고 합치면 이 게이트가 평시 빨강이 된다. 다만 지금은 묶음 태그를 push 해도 해소되지
+#       않는다 — 발행 워크플로가 묶음 항목별 build-arg 를 넘기지 못해 사전 컴파일이 아닌
+#       이미지가 그 태그를 달게 된다. 그래서 hack/release-prepare.sh 가 그 태그 생성을 막는다.
+#       "조회 못 함" 은 "있다" 도 "없다" 도 아니다 — 조회 실패가 레지스트리에 물을 수 있는
+#       자리의 넷 중 하나를 넘으면 이 구간은 실패로 끝낸다. 레지스트리 주소가 없어 애초에
+#       못 묻는 자리는 그 비율에서 뺀다(기준은 위 기본 렌더 조회와 같다).
 # 용법: hack/image-tag-check.sh
 #       hack/image-tag-check.sh --collect-only < <렌더>   (수집기만, 조회 없음 — 회귀 시험용)
-# 생성일: 2026-10-04 | 수정일: 2026-10-04 (ALLOWED_PRIVATE 허용 목록을
-#         refresh-image-digests.sh 와 공유)
+#       hack/image-tag-check.sh --kernel-refs             (커널 이미지 대상만, 조회 없음)
+# 생성일: 2026-10-04 | 수정일: 2026-10-05 (커널별 사전 컴파일 이미지 발행 대상 조회 추가,
+#         부분 조회 실패 가드, 해소 수단 문안 정정, 커널 구간의 조회 실패·주소 없음 분리로
+#         비율 기준을 기본 렌더 조회와 같게, 항목별 발행 수단 문안 추가)
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -128,6 +140,17 @@ if [ "${1:-}" = "--collect-only" ]; then
   exit 0
 fi
 
+# 커널별 사전 컴파일 이미지의 대상 목록. 차트 렌더에는 없다 — 조립은 노드 커널을 받아
+# 런타임에 일어나므로 렌더에 그 태그가 적히지 않는다. 그래서 목록을 따로 읽는다.
+kernel_refs() { bash hack/kernel-image-targets.sh --refs; }
+
+# 조회 없이 "무엇을 물을지" 만 낸다. internal/upgrade/kernel_image_targets_test.go 가
+# 이 경로로 목록을 보는 분기를 고정한다 — 그 분기가 사라지면 이 모드도 사라진다.
+if [ "${1:-}" = "--kernel-refs" ]; then
+  kernel_refs
+  exit 0
+fi
+
 if ! default_render="$(render)"; then
   echo "!! 차트 기본값 렌더가 실패했다: $(head -1 "$renderlog")" >&2
   exit 1
@@ -219,6 +242,78 @@ echo ">> 조회 — 발행 ${published}건, 미발행 ${missing}건, 건너뜀 $
 [ -n "$miss_list" ] && { echo "미발행(설치하면 당기지 못한다):"; printf '%s' "$miss_list"; }
 [ -n "$skip_list" ] && { echo "건너뛴 항목(발행 여부를 확인하지 못했다):"; printf '%s' "$skip_list"; }
 [ -n "$allow_list" ] && { echo "허용된 비공개 항목(결함 아님):"; printf '%s' "$allow_list"; }
+
+# ---------------------------------------------------------------- 커널 이미지
+# 위 조회와 분류 규칙은 같고(200 발행 / 404 미발행 / 그 밖 조회 못 함) 세는 통만 다르다.
+# 미발행을 위 missing 에 합치지 않는 이유는 그것이 결함이 아니라 아직 굽지 않은 이미지라서다 —
+# 굽기 전까지는 미발행이 정답이고, 합치면 이 게이트가 평시 빨강이 되어 신호가 아니게 된다.
+# 릴리스 준비 스크립트가 이 수를 읽는다(세 수를 다 읽는다 — 발행 수를 빼면 "조회 못 함" 이
+# "다 있다" 로 읽힌다).
+#
+# 묶음 태그로는 굽지 못한다. 묶음 태그를 push 해도 발행 워크플로가 항목별 build-arg 를 넘기지
+# 못해 사전 컴파일이 아닌 이미지가 이 태그를 단다 — hack/release-prepare.sh 의 blocked_bundle
+# 이 그 태그 생성을 막고, 거기 주석에 가드를 지워도 되는 조건이 적혀 있다.
+#
+# 항목별로는 지금도 구울 수 있다. images 저장소 publish-image.yml 의 workflow_dispatch 가
+# build_args 입력을 받아 images.yaml 기본값 뒤에 붙이므로(같은 키면 입력이 이긴다) 커널을
+# build-arg 로 넘길 수 있고, 받는 ARG 도 있다 — tenstorrent 는 PREBUILD_KERNEL, furiosa 는
+# PREBUILD_KERNEL·PREBUILD_VARIANT·PREBUILD_PKG_VERSION. 그래서 아래 대상 9건 중 6건
+# (tenstorrent·rngd)은 한 건씩 수동 dispatch 로 발행할 수 있다.
+# nvidia 3건은 그 경로로도 못 굽는다 — 라이선스 때문에 공개 트리에 설치기 빌드 경로가 없고
+# (deploy/kernel-image-targets.yaml 의 nvidia 주석), 내부 트리에서 Makefile 로 굽는다.
+#
+# 수동 dispatch 로 구운 것이 규약과 맞는지 보는 검사는 아직 없다. 사전 컴파일 커널을 밝히는
+# org.kcloud.prebuild-kernel 라벨을 그 워크플로가 붙이지 않고 읽는 쪽도 없어, 태그의 -k<커널>
+# 토막과 이미지 내용이 어긋나도 이 게이트는 200 으로 본다.
+kernel_rows="$(kernel_refs | sort -u)"
+kernel_n="$(printf '%s\n' "$kernel_rows" | grep -c . || true)"
+echo
+if [ "$kernel_n" -eq 0 ]; then
+  echo ">> 커널 이미지 발행 대상 0건 — deploy/kernel-image-targets.yaml 의 대상이 비어 있다(조회할 것이 없다)"
+else
+  # 확답을 못 받은 자리를 둘로 가른다 — 위 기본 렌더 조회가 unresolved·unqueryable 로
+  # 가른 것과 같은 구분이다. 주소가 없어 애초에 물을 수 없는 자리는 일시적 장애가 아니므로
+  # 아래 비율 기준에서 빠진다.
+  kpub=0; kmiss=0; kunres=0; kunq=0; kmiss_list=""
+  while read -r ref; do
+    [ -n "$ref" ] || continue
+    host="${ref%%/*}"; rest="${ref#*/}"
+    # 레지스트리 주소가 없으면 어디에 물을지 알 수 없다(global.registry 가 빈 차트).
+    if [ "$host" = "$ref" ] || { [ "${host#*.}" = "$host" ] && [ "${host#*:}" = "$host" ]; }; then
+      kunq=$((kunq + 1)); continue
+    fi
+    repo="${rest%:*}"; tag="${rest##*:}"
+    read -r code _ <<<"$(head_manifest_retry "$host" "$repo" "$tag")"
+    case "$code" in
+      200) kpub=$((kpub + 1)) ;;
+      404)
+        kmiss=$((kmiss + 1))
+        kmiss_list="${kmiss_list}  - ${ref}
+"
+        ;;
+      *) kunres=$((kunres + 1)) ;;
+    esac
+  done <<< "$kernel_rows"
+  kskip=$((kunres + kunq))
+  echo ">> 커널 이미지 — 대상 ${kernel_n}건 중 발행 ${kpub}건, 미발행 ${kmiss}건, 조회 못 함 ${kskip}건(조회 실패 ${kunres}, 주소 없음 ${kunq})"
+  [ -n "$kmiss_list" ] && {
+    echo "커널 이미지 미발행(결함 아님 — 아직 굽지 않았다. 묶음 태그 push 로는 해소되지 않는다):"
+    printf '%s' "$kmiss_list"
+  }
+  # 조회 실패가 넷 중 하나를 넘으면 이 구간은 발행 상태를 확인했다고 할 수 없다. 전부
+  # 실패(kpub+kmiss==0)만 보던 때는 9건 중 1건만 확답인 상태가 통과했다 — 미발행 0건이
+  # "다 있다" 로 읽혔다. 분자·분모를 위 기본 렌더 조회와 같게 둔다(정책을 두 번 정의하지
+  # 않는다): 분자는 조회 실패뿐이고, 분모는 레지스트리가 확답을 줄 수 있는 자리
+  # (발행+미발행+조회 실패)다. 주소가 없어 못 묻는 자리를 분모에 넣으면 global.registry 가
+  # 빈 차트에서 이 구간이 통째로 빨강이 된다. 커널 조회가 요청을 아홉 건 늘려 요율 제한이
+  # 실제로 일어날 수 있다.
+  kqueryable=$((kpub + kmiss + kunres))
+  if [ "$kunres" -gt 0 ] && [ $((kunres * 4)) -gt "$kqueryable" ]; then
+    echo "!! 커널 이미지 조회 실패 ${kunres}건이 조회 대상 ${kqueryable}건의 4분의 1을 넘는다 — 발행 상태를 확인하지 못했다." >&2
+    exit 1
+  fi
+fi
+echo
 
 # 다른 프리셋은 수집만 한다. 사설 미러·자리표시자를 가리켜 익명 조회가 성립하지 않는다.
 preset_fail=0

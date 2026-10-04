@@ -529,6 +529,15 @@ driverInstallPolicies:
       # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
       # 사이트 값이며 기본은 비움.
       kernelImages: {}
+      # 커널별 사전 컴파일 이미지의 빌드 개정(…-vN)과 variant 토막.
+      # 값을 주면 kernelImages 에 노드 커널 항목이 없어도
+      # "<version>-<variant>-k<커널>-<빌드 개정>" 규약으로 이미지 참조를 조립한다.
+      # Warboy 발행 규약은 variant 토막이 필수라 아래 값을 비우면 없는 태그를 당긴다.
+      # 다만 Warboy 사전 컴파일 이미지는 아직 발행되지 않는다 — 벤더 apt 저장소 자격 증명이
+      # 필요해 빌드 타깃이 warboy variant 를 거절한다. 그래서 빌드 개정은 비움이 기본이고,
+      # 발행이 시작되기 전에 이 값을 켜면 install Job 이 그 태그를 당기지 못한다.
+      kernelImageBuildRevision: ""
+      kernelImageVariant: "warboy"
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -595,6 +604,13 @@ driverInstallPolicies:
       # 이 맵 값은 kcloud-operator.image 헬퍼를 거치지 않고 그대로 CR 에 실리므로
       # global.registry 를 포함한 전체 이미지 참조로 적는다.
       kernelImages: {}
+      # 커널별 사전 컴파일 이미지의 빌드 개정(…-vN). 값을 주면 kernelImages 에 노드 커널
+      # 항목이 없어도 "<version>-k<커널>-<빌드 개정>" 규약으로 이미지 참조를 조립한다 —
+      # 커널 하나하나를 위 맵에 적지 않아도 사전 컴파일 경로가 동작한다.
+      # NVIDIA 발행 규약에는 variant 토막이 없다(예 580.126.09-k5.15.0-171-generic-v4).
+      # 빈 값(기본)이면 조립하지 않고 image(DKMS 컴파일)를 쓴다. 발행된 커널 이미지가 없는
+      # 레지스트리에서 이 값을 켜면 install Job 이 그 태그를 당기지 못하므로 기본은 비움이다.
+      kernelImageBuildRevision: ""
     toolkit:
       # enabled=true 시 ToolkitDaemonSet reconciler 가 nvidia-container-toolkit DS 를
       # 생성하여 containerd 에 nvidia runtime 을 등록한다(nvidia-ctk, idempotent).
@@ -667,6 +683,13 @@ driverInstallPolicies:
       # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
       # 사이트 값이며 기본은 비움.
       kernelImages: {}
+      # 커널별 사전 컴파일 이미지의 빌드 개정(…-vN)과 variant 토막.
+      # RNGD 발행 규약은 "<pkgVersion>-rngd-k<커널>-vN" 이라 variant 토막이 필수다 —
+      # 아래 variant 를 비우면 존재하지 않는 태그를 조립해 install Job 이 그것을 당기지 못한다.
+      # 빈 값(기본)이면 조립하지 않고 image(DKMS 컴파일)를 쓴다. 발행된 커널 이미지가 없는
+      # 레지스트리에서 빌드 개정을 켜면 같은 실패가 나므로 기본은 비움이다.
+      kernelImageBuildRevision: ""
+      kernelImageVariant: "rngd"
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -718,6 +741,12 @@ driverInstallPolicies:
       # 커널별 사전 컴파일 이미지. 예: "5.15.0-190-generic": "<registry>/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1".
       # 사이트 값이며 기본은 비움. mode=job 전제.
       kernelImages: {}
+      # 커널별 사전 컴파일 이미지의 빌드 개정(…-vN). 값을 주면 kernelImages 에 노드 커널
+      # 항목이 없어도 "<version>-k<커널>-<빌드 개정>" 규약으로 이미지 참조를 조립한다.
+      # Tenstorrent 발행 규약에는 variant 토막이 없다(예 2.11.0-k5.15.0-190-generic-v1).
+      # 빈 값(기본)이면 조립하지 않고 image(baked tt-kmd 소스를 DKMS 로 빌드)를 쓴다.
+      # 발행된 커널 이미지가 없는 레지스트리에서 켜면 install Job 이 그 태그를 당기지 못한다.
+      kernelImageBuildRevision: ""
     upgradePolicy:
       autoUpgrade: false
       drainEnabled: true

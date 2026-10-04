@@ -119,6 +119,44 @@ spec:
                     - ngc
                     - script
                     type: string
+                  kernelImageBuildRevision:
+                    description: |-
+                      KernelImageBuildRevision 은 사전 컴파일 커널 이미지 태그의 빌드 개정(…-vN)이다. 선언하면
+                      kernelImages 에 노드 커널 항목이 없어도 태그 규약
+                      "<version>[-<kernelImageVariant>]-k<커널>-<빌드 개정>" 으로 이미지 참조를 조립한다 —
+                      커널 하나하나를 맵에 적지 않아도 사전 컴파일 경로가 동작한다.
+                      비우면(기본) 조립하지 않고 image(DKMS 컴파일)를 쓴다. version 이 비면 태그의 버전 토막을
+                      정할 수 없어 조립 자체가 불가능하므로 CEL 이 그 조합을 거절한다.
+
+                      불리언 토글이 아니라 이 값이 조립을 켜는 이유는 빌드 개정을 유도할 수 없기 때문이다. 같은
+                      드라이버 버전의 커널 이미지를 다시 구우면 개정만 올라가고, 그 숫자는 발행하는 쪽만 안다
+                      (라이브 예: 커널 이미지 …:580.126.09-k5.15.0-171-generic-v4 와 같은 정책의 일반 설치
+                      이미지 …:v3 은 서로 다른 개정이다).
+
+                      kernelImages 에 적힌 항목은 조립보다 우선한다 — 규약을 벗어난 이미지의 예외 지정 수단이다.
+                      조립한 참조도 kernelImages 값과 같은 검증(검증 빌드 태그·버전 토큰 대조)을 통과해야 쓰인다.
+                      조립한 태그가 레지스트리에 없으면 install Job 이 그 이미지를 당기지 못하므로, 발행된 커널
+                      집합을 벗어난 노드는 kernelImages 로 따로 지정하거나 이 값을 비워 둔다.
+                      mode=job 에서만 유효하다(kernelImages 와 같은 이유 — DaemonSet 하나는 커널별 이미지를 가질 수 없다).
+                    pattern: ^v[0-9]+(\.[0-9]+)?$
+                    type: string
+                  kernelImageVariant:
+                    description: |-
+                      KernelImageVariant 는 조립할 태그의 variant 토막이다(버전과 커널 토막 사이).
+                      벤더 발행 규약에 그 토막이 있을 때만 채운다 — Furiosa 계열은 필수이고
+                      (…:<pkgVersion>-rngd-k<커널>-vN), NVIDIA·Tenstorrent 규약에는 그 토막이 없다.
+                      벤더 차이를 코드가 아니라 정책으로 받는 이유는 컨트롤러에 벤더 이름 분기를 만들지
+                      않기 위해서다. 비우면(기본) "<version>-k<커널>-<빌드 개정>" 을 조립한다.
+                      spec.model 을 쓰지 않는 이유는 모든 벤더에 model 이 있고 그 값이 태그에 들어가서는
+                      안 되는 벤더가 있기 때문이다.
+                      kernelImageBuildRevision 이 비면 아무 효과가 없다. mode=job 에서만 유효하다.
+                      첫 문자에서 숫자를 빼는 이유는 버전 토큰 대조다. 조립한 태그에서 버전 토막을 떼는 정규식
+                      (internal/upgrade 의 kernelImageVersionRe)은 숫자·점으로 이어진 앞머리를 버전으로 읽으므로,
+                      "2x" 같은 값이면 버전 토막이 variant 첫 자까지 삼켜 spec.driver.version 과 달라진다.
+                      그러면 조립한 이미지가 거절되고 DKMS 이미지로 조용히 떨어진다.
+                    maxLength: 63
+                    pattern: ^[a-zA-Z][a-zA-Z0-9._]*$
+                    type: string
                   kernelImages:
                     additionalProperties:
                       description: |-
@@ -206,6 +244,15 @@ spec:
                     self.mode == ''job'''
                 - message: driver.kernelImages values must be image references
                   rule: '!has(self.kernelImages) || self.kernelImages.all(k, self.kernelImages[k].matches(''^[a-zA-Z0-9._:/-]+:[a-zA-Z0-9._+-]+$''))'
+                - message: driver.kernelImageBuildRevision requires driver.mode=job
+                  rule: '!has(self.kernelImageBuildRevision) || size(self.kernelImageBuildRevision)
+                    == 0 || self.mode == ''job'''
+                - message: driver.kernelImageBuildRevision requires a non-empty driver.version
+                  rule: '!has(self.kernelImageBuildRevision) || size(self.kernelImageBuildRevision)
+                    == 0 || (has(self.version) && size(self.version) > 0)'
+                - message: driver.kernelImageVariant requires driver.mode=job
+                  rule: '!has(self.kernelImageVariant) || size(self.kernelImageVariant)
+                    == 0 || self.mode == ''job'''
               imagePullSecrets:
                 description: |-
                   ImagePullSecrets 는 operator 가 생성하는 driver DaemonSet pod spec 에 부착되는

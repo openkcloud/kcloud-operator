@@ -101,10 +101,14 @@ type DriverUpgradeStateStatus struct {
 	// PreviousImage는 롤백 시 복구할 이전 드라이버 컨테이너 이미지 전체 레퍼런스입니다.
 	// 빌드 접미사를 포함한 원본 이미지를 그대로 보존하기 위해 태그 치환 대신 원본 이미지를 저장합니다.
 	PreviousImage string `json:"previousImage,omitempty"`
-	// ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. kernelImages 에 노드 커널의 검증된
-	// 항목이 있으면 그 이미지이고, 없으면 driver.image 입니다. 전이 중 preflight 단계와 Idle
-	// 재진입마다 다시 계산되므로, 정책에서 kernelImages 항목을 빼면 Idle 상태에서도 곧
-	// driver.image 로 돌아옵니다.
+	// ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. 고르는 순서는 셋입니다 —
+	// kernelImages 에 노드 커널의 검증된 항목이 있으면 그 이미지, 없고
+	// driver.kernelImageBuildRevision 이 선언됐으면 태그 규약으로 조립한 이미지, 둘 다 아니면
+	// driver.image 입니다. 조립한 이미지도 맵 값과 같은 검증(검증 빌드 태그·버전 토큰 대조)을
+	// 통과해야 여기에 실립니다. 전이 중 preflight 단계와 Idle 재진입마다 다시 계산되므로,
+	// 정책에서 kernelImages 항목이나 빌드 개정을 빼면 Idle 상태에서도 곧 driver.image 로
+	// 돌아옵니다. 이 값은 install Job 에만 실립니다(mode=job) — 롤백 대상 이미지는 커널 이미지의
+	// 빌드 개정이 일반 설치 이미지의 개정과 다르므로 이 값이 아니라 driver.image 에서 만듭니다.
 	ResolvedImage string `json:"resolvedImage,omitempty"`
 	// RollbackAttempts는 현재 업그레이드 사이클에서의 롤백 시도 횟수입니다.
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.

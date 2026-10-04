@@ -160,10 +160,14 @@ spec:
                 type: string
               resolvedImage:
                 description: |-
-                  ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. kernelImages 에 노드 커널의 검증된
-                  항목이 있으면 그 이미지이고, 없으면 driver.image 입니다. 전이 중 preflight 단계와 Idle
-                  재진입마다 다시 계산되므로, 정책에서 kernelImages 항목을 빼면 Idle 상태에서도 곧
-                  driver.image 로 돌아옵니다.
+                  ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. 고르는 순서는 셋입니다 —
+                  kernelImages 에 노드 커널의 검증된 항목이 있으면 그 이미지, 없고
+                  driver.kernelImageBuildRevision 이 선언됐으면 태그 규약으로 조립한 이미지, 둘 다 아니면
+                  driver.image 입니다. 조립한 이미지도 맵 값과 같은 검증(검증 빌드 태그·버전 토큰 대조)을
+                  통과해야 여기에 실립니다. 전이 중 preflight 단계와 Idle 재진입마다 다시 계산되므로,
+                  정책에서 kernelImages 항목이나 빌드 개정을 빼면 Idle 상태에서도 곧 driver.image 로
+                  돌아옵니다. 이 값은 install Job 에만 실립니다(mode=job) — 롤백 대상 이미지는 커널 이미지의
+                  빌드 개정이 일반 설치 이미지의 개정과 다르므로 이 값이 아니라 driver.image 에서 만듭니다.
                 type: string
               retries:
                 description: Retries는 현재 업그레이드 시도에서의 재시도 횟수입니다.

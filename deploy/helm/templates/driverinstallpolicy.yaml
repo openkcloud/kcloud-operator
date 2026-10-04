@@ -40,6 +40,12 @@ spec:
     {{- with .Values.driverInstallPolicies.furiosa.driver.kernelImages }}
     kernelImages: {{ toYaml . | nindent 6 }}
     {{- end }}
+    {{- if .Values.driverInstallPolicies.furiosa.driver.kernelImageBuildRevision }}
+    kernelImageBuildRevision: {{ .Values.driverInstallPolicies.furiosa.driver.kernelImageBuildRevision | quote }}
+    {{- with .Values.driverInstallPolicies.furiosa.driver.kernelImageVariant }}
+    kernelImageVariant: {{ . | quote }}
+    {{- end }}
+    {{- end }}
   {{- with .Values.driverInstallPolicies.furiosa.verifiedVersions }}
   verifiedVersions:
     {{- toYaml . | nindent 4 }}
@@ -91,6 +97,12 @@ spec:
     {{- end }}
     {{- with .Values.driverInstallPolicies.nvidia.driver.kernelImages }}
     kernelImages: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if .Values.driverInstallPolicies.nvidia.driver.kernelImageBuildRevision }}
+    kernelImageBuildRevision: {{ .Values.driverInstallPolicies.nvidia.driver.kernelImageBuildRevision | quote }}
+    {{- with .Values.driverInstallPolicies.nvidia.driver.kernelImageVariant }}
+    kernelImageVariant: {{ . | quote }}
+    {{- end }}
     {{- end }}
   {{- with .Values.driverInstallPolicies.nvidia.toolkit }}
   toolkit:
@@ -148,6 +160,12 @@ spec:
     {{- with .Values.driverInstallPolicies.rngd.driver.kernelImages }}
     kernelImages: {{ toYaml . | nindent 6 }}
     {{- end }}
+    {{- if .Values.driverInstallPolicies.rngd.driver.kernelImageBuildRevision }}
+    kernelImageBuildRevision: {{ .Values.driverInstallPolicies.rngd.driver.kernelImageBuildRevision | quote }}
+    {{- with .Values.driverInstallPolicies.rngd.driver.kernelImageVariant }}
+    kernelImageVariant: {{ . | quote }}
+    {{- end }}
+    {{- end }}
   {{- with .Values.driverInstallPolicies.rngd.verifiedVersions }}
   verifiedVersions:
     {{- toYaml . | nindent 4 }}
@@ -201,6 +219,12 @@ spec:
     {{- end }}
     {{- with .Values.driverInstallPolicies.tenstorrent.driver.kernelImages }}
     kernelImages: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if .Values.driverInstallPolicies.tenstorrent.driver.kernelImageBuildRevision }}
+    kernelImageBuildRevision: {{ .Values.driverInstallPolicies.tenstorrent.driver.kernelImageBuildRevision | quote }}
+    {{- with .Values.driverInstallPolicies.tenstorrent.driver.kernelImageVariant }}
+    kernelImageVariant: {{ . | quote }}
+    {{- end }}
     {{- end }}
   {{- with .Values.driverInstallPolicies.tenstorrent.verifiedVersions }}
   verifiedVersions:

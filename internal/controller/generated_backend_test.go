@@ -5,7 +5,7 @@
 //	control-plane 배제가 붙는지 고정한다. 배제를 빠뜨려 장치 없는 노드에서 벤더
 //	prestart 가 고착된 적이 있다(2026-08-07).
 //
-// 생성일: 2026-08-11
+// 생성일: 2026-08-11 | 수정일: 2026-10-04
 // ============================================================
 package controller
 
@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/descriptor"
 )
 
 func testDescriptor() *npuv1alpha1.AcceleratorDescriptor {
@@ -170,4 +171,53 @@ func TestRenderGeneratedDRARBACGrantsResourceSlices(t *testing.T) {
 	if !canPublish {
 		t.Errorf("ResourceSlice 발행 권한이 없다: %+v", cr.Rules)
 	}
+}
+
+// TestGeneratedDRAConfigMapCarriesDescriptorDeclarations 는 descriptor 에 적은 속성·capacity 가
+// 생성 ConfigMap 까지 이어지는지, 적지 않으면 그 키가 ConfigMap 에 아예 없는지 본다.
+// 빈 맵을 실으면 드라이버가 그것을 선언으로 읽어 "선언했는데 비었다" 와 "선언하지 않았다" 가
+// 구분되지 않는다. 컴파일과 렌더를 함께 돌려 descriptor 에서 ConfigMap 까지 끝까지 본다.
+func TestGeneratedDRAConfigMapCarriesDescriptorDeclarations(t *testing.T) {
+	render := func(t *testing.T, d *npuv1alpha1.AcceleratorDescriptor) string {
+		t.Helper()
+		cfg, err := descriptor.CompileDRA(d.Spec)
+		if err != nil {
+			t.Fatalf("CompileDRA 실패: %v", err)
+		}
+		cm, _, _ := renderGeneratedDRADriver(d, cfg, "reg/generic-dra-driver:0.1.0", "kcloud")
+		return cm.Data["backend.json"]
+	}
+
+	t.Run("선언하면 ConfigMap 에 나타난다", func(t *testing.T) {
+		d := testDescriptor()
+		d.Spec.Backends = []string{npuv1alpha1.BackendDRA}
+		d.Spec.Attributes = map[string]string{"productName": "RNGD"}
+		d.Spec.Capacity = map[string]string{"memory": "48Gi"}
+		d.Spec.CapacityFiles = map[string]string{"memory": "rngd/mem_total"}
+
+		got := render(t, d)
+		for _, want := range []string{
+			`"attributes":{"productName":"RNGD"}`,
+			`"capacity":{"memory":"48Gi"}`,
+			`"capacityFiles":{"memory":"rngd/mem_total"}`,
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("선언이 ConfigMap 에 없다: %s 를 찾지 못함\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("선언이 없으면 그 키가 없다", func(t *testing.T) {
+		d := testDescriptor()
+		d.Spec.Backends = []string{npuv1alpha1.BackendDRA}
+		// 빈 맵을 명시한 경우도 선언 없음과 같이 다뤄야 한다.
+		d.Spec.Attributes = map[string]string{}
+
+		got := render(t, d)
+		for _, key := range []string{"attributes", "capacity", "capacityFiles"} {
+			if strings.Contains(got, `"`+key+`"`) {
+				t.Errorf("선언하지 않은 %q 키가 ConfigMap 에 있다\n%s", key, got)
+			}
+		}
+	})
 }

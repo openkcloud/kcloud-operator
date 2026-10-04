@@ -110,6 +110,12 @@ func TestChartValuesSchemaScopesVendorOnlyKeys(t *testing.T) {
 		{"imageVersionBaked, furiosa", "driverInstallPolicies.furiosa.driver.imageVersionBaked=true", false},
 		{"imageVersionBaked, nvidia", "driverInstallPolicies.nvidia.driver.imageVersionBaked=true", false},
 		{"imageVersionBaked, rngd", "driverInstallPolicies.rngd.driver.imageVersionBaked=true", false},
+		// kernelImageBuildRevision 은 네 벤더 템플릿이 모두 읽는다 — 어느 벤더에서도 막히지 않아야
+		// 한다. 벤더 한 곳에서만 막히면 그 벤더는 조립 경로를 켤 수 없다.
+		{"kernelImageBuildRevision, furiosa", "driverInstallPolicies.furiosa.driver.kernelImageBuildRevision=v4", true},
+		{"kernelImageBuildRevision, nvidia", "driverInstallPolicies.nvidia.driver.kernelImageBuildRevision=v4", true},
+		{"kernelImageBuildRevision, rngd", "driverInstallPolicies.rngd.driver.kernelImageBuildRevision=v4", true},
+		{"kernelImageBuildRevision, tenstorrent", "driverInstallPolicies.tenstorrent.driver.kernelImageBuildRevision=v4", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ok, out := helmRenderWithSet(t, tc.set)
@@ -148,5 +154,48 @@ func TestChartValuesSchemaRejectsScalarForStructuredBlocks(t *testing.T) {
 				t.Errorf("거절 이유가 타입 위반이 아니다: %q 를 찾지 못함\n%s", tc.want, out)
 			}
 		})
+	}
+}
+
+// TestChartRendersKernelImageAssemblyKeys 는 네 벤더 템플릿이 조립 값을 실제로 CR 에 싣는지 본다.
+// 스키마가 키를 받는 것만으로는 부족하다 — 템플릿 블록이 한 벤더에서 빠지면 값이 조용히 버려지고
+// 그 벤더는 조립 경로를 켤 수 없다(이 차트가 detector.image 로 겪은 결함과 같은 모양).
+// 벤더마다 다른 값을 줘서 어느 블록이 빠졌는지 출력으로 드러나게 한다.
+func TestChartRendersKernelImageAssemblyKeys(t *testing.T) {
+	bin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm 이 PATH 에 없다 — 렌더 시험 건너뜀")
+	}
+	revisions := map[string]string{
+		"furiosa": "v11", "nvidia": "v12", "rngd": "v13", "tenstorrent": "v14",
+	}
+	args := []string{"template", "t", "../../deploy/helm"}
+	for vendor, rev := range revisions {
+		args = append(args, "--set", "driverInstallPolicies."+vendor+".driver.kernelImageBuildRevision="+rev)
+	}
+	out, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("렌더 실패: %v\n%s", err, out)
+	}
+	rendered := string(out)
+	for vendor, rev := range revisions {
+		if want := `kernelImageBuildRevision: "` + rev + `"`; !strings.Contains(rendered, want) {
+			t.Errorf("%s 템플릿이 빌드 개정을 싣지 않는다: %q 를 찾지 못함", vendor, want)
+		}
+	}
+	// variant 는 발행 규약에 그 토막이 있는 벤더에서만 실린다. 차트 기본값이 그 둘을 채운다.
+	for _, want := range []string{`kernelImageVariant: "warboy"`, `kernelImageVariant: "rngd"`} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("Furiosa 계열 variant 가 실리지 않는다: %q 를 찾지 못함", want)
+		}
+	}
+	// variant 는 빌드 개정 없이는 아무 효과가 없다 — 기본 렌더에 혼자 실려서는 안 된다.
+	// 실리면 mode=daemonset 으로 되돌린 사이트에서 CEL 이 그 DIP 를 거절한다.
+	base, err := exec.Command(bin, "template", "t", "../../deploy/helm").CombinedOutput()
+	if err != nil {
+		t.Fatalf("기본 렌더 실패: %v\n%s", err, base)
+	}
+	if strings.Contains(string(base), "kernelImageVariant") {
+		t.Error("기본 렌더에 kernelImageVariant 가 혼자 실렸다 — 빌드 개정과 함께만 실려야 한다")
 	}
 }

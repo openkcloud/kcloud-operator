@@ -187,6 +187,8 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `driverInstallPolicies.<vendor>.enabled` | `true` | 벤더별 driver 설치 정책 CR 생성 |
 | `driverInstallPolicies.<vendor>.driver.version` / `.image` | 벤더별 | 설치할 드라이버 버전·이미지 |
 | `driverInstallPolicies.<vendor>.driver.mode` | `daemonset` | (job 모드는 legacy) |
+| `driverInstallPolicies.<vendor>.driver.kernelImageBuildRevision` | `""` (빈 값) | 커널별 사전 컴파일 이미지 태그의 빌드 개정(`…-vN`). 값을 주면 노드 커널로 태그를 조립해 당긴다(`mode=job` 전용). 비우면 조립하지 않고 `driver.image` 를 쓴다 |
+| `driverInstallPolicies.<vendor>.driver.kernelImageVariant` | `warboy`(furiosa) / `rngd` / 그 외 빈 값 | 조립할 태그의 variant 토막(버전과 커널 토막 사이). `kernelImageBuildRevision` 이 비면 효과 없음 |
 | `driverInstallPolicies.<vendor>.upgradePolicy.autoUpgrade` | `true` | 버전 불일치 시 자동 업그레이드 |
 | `driverInstallPolicies.<vendor>.verifiedVersions` | 벤더별 | 검증된 버전 허용 목록(비면 검증 skip) |
 | `crdUpgrade.enabled` | `true` | upgrade 시 CRD 자동 적용 Job |

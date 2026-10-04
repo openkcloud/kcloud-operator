@@ -95,7 +95,9 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 	// 업그레이드 착수 시점에 rollback 대상(이전 버전 이미지)을 캡처한다. Job 모드는 상주
 	// DS 가 없어 이전 이미지를 읽을 소스가 없으므로, DIP image 의 variant 접미사 + PreviousVersion
 	// 으로 검증된 build tag 를 재구성해 저장한다. 재구성 불가 시 빈 값 유지 → rollback 은 Failed(안전).
-	captureJobPreviousImage(state, desiredImage, policy.Spec.Driver.Installer, policy.Spec.Driver.ImageVersionBaked)
+	// 재구성의 입력은 desiredImage(= status.resolvedImage)가 아니라 policy.Spec.Driver.Image 다 —
+	// 아래 handleRollbackJob 의 재구성과 같은 입력을 써야 두 자리가 갈리지 않는다.
+	captureJobPreviousImage(state, policy.Spec.Driver.Image, policy.Spec.Driver.Installer, policy.Spec.Driver.ImageVersionBaked)
 
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	var job batchv1.Job
@@ -417,18 +419,26 @@ func (m *UpgradeStateMachine) deleteInstallJob(ctx context.Context, job *batchv1
 
 // captureJobPreviousImage 는 업그레이드 착수 시 rollback 대상 이미지를 DUS status 에 캡처한다.
 // 이미 캡처됐거나 PreviousVersion 이 없으면 no-op. 재구성 결과가 검증된 build tag 일 때만 저장한다.
-func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, desiredImage, installer string, versionBaked bool) {
+// dipImage 는 policy.Spec.Driver.Image 다 — status.resolvedImage 를 주면 안 된다(reconstructPrevImage
+// 주석 참고).
+func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, dipImage, installer string, versionBaked bool) {
 	if state.Status.PreviousImage != "" || state.Status.PreviousVersion == "" {
 		return
 	}
-	candidate := reconstructPrevImage(desiredImage, installer, state.Status.PreviousVersion, versionBaked)
+	candidate := reconstructPrevImage(dipImage, installer, state.Status.PreviousVersion, versionBaked)
 	if candidate != "" {
 		state.Status.PreviousImage = candidate
 	}
 }
 
-// reconstructPrevImage 는 desired 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해
+// reconstructPrevImage 는 DIP 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해
 // 이전 버전 이미지를 재구성한다. variant 미검출/검증 실패 시 빈 문자열.
+//
+// dipImage 는 반드시 policy.Spec.Driver.Image 다. status.resolvedImage 를 주면 조립·맵으로 고른
+// 커널 이미지의 빌드 개정이 결과 태그에 붙는다. 커널 이미지의 개정과 일반 설치 이미지의 개정은
+// 서로 다른 수이므로(그래서 kernelImageBuildRevision 이 별도 필드다) 그렇게 만든 태그는 거의 항상
+// 레지스트리에 없고, 아래 주석이 적은 고착이 정확히 그때 일어난다. spec.driver.image 는 사이트가
+// 적은 발행된 참조라 거기서 뜬 개정은 실재한다.
 func reconstructPrevImage(dipImage, installer, prevVersion string, versionBaked bool) string {
 	if dipImage == "" || prevVersion == "" {
 		return ""

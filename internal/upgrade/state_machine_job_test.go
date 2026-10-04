@@ -4,7 +4,7 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-09-22
+// 생성일: 2026-07-16 | 수정일: 2026-10-04
 // ============================================================
 
 package upgrade
@@ -756,7 +756,7 @@ func TestResolveDriverImage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got, _ := resolveDriverImage(pol, tc.kernel); got != tc.want {
+			if got, _, _ := resolveDriverImage(pol, tc.kernel); got != tc.want {
 				t.Fatalf("resolveDriverImage(%q) = %q, want %q", tc.kernel, got, tc.want)
 			}
 		})
@@ -792,35 +792,39 @@ func TestResolveDriverImage_VersionGuard(t *testing.T) {
 	}}}
 
 	cases := []struct {
-		name     string
-		pol      *v1alpha1.DriverInstallPolicy
-		kernel   string
-		want     string
-		wantSkip bool
+		name      string
+		pol       *v1alpha1.DriverInstallPolicy
+		kernel    string
+		want      string
+		wantSkip  bool
+		wantEvent string
 	}{
 		{"버전 일치는 커널 이미지 선택", tt, "5.15.0-190-generic",
-			"reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1", false},
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1", false, ""},
 		{"버전 불일치는 기본 이미지", tt, "5.15.0-171-generic",
-			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true},
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true, eventKernelImageRejected},
 		{"검증 태그이나 버전 토큰 없음은 기본 이미지", tt, "6.8.0-138-generic",
-			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true},
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", true, eventKernelImageRejected},
 		{"variant 버전 일치는 커널 이미지 선택", rb, "6.8.0-139-generic",
-			"reg/r/rebellions-driver-ds:2026.3.0-rngd-k6.8.0-139-generic-v1", false},
+			"reg/r/rebellions-driver-ds:2026.3.0-rngd-k6.8.0-139-generic-v1", false, ""},
 		{"variant 버전 불일치는 기본 이미지", rb, "6.8.0-138-generic",
-			"reg/r/rebellions-driver-ds:2026.3.0-v1", true},
+			"reg/r/rebellions-driver-ds:2026.3.0-v1", true, eventKernelImageRejected},
 		{"KernelImages 비면 기본 이미지", empty, "5.15.0-190-generic",
-			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false},
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false, ""},
 		{"빈 커널은 기본 이미지", tt, "",
-			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false},
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, skip := resolveDriverImage(tc.pol, tc.kernel)
+			got, skip, event := resolveDriverImage(tc.pol, tc.kernel)
 			if got != tc.want {
 				t.Fatalf("resolveDriverImage(%q) 이미지 = %q, want %q", tc.kernel, got, tc.want)
 			}
 			if (skip != "") != tc.wantSkip {
 				t.Fatalf("resolveDriverImage(%q) skipReason = %q, wantSkip = %v", tc.kernel, skip, tc.wantSkip)
+			}
+			if event != tc.wantEvent {
+				t.Fatalf("resolveDriverImage(%q) 이벤트 reason = %q, want %q", tc.kernel, event, tc.wantEvent)
 			}
 		})
 	}
@@ -830,7 +834,10 @@ func TestResolveDriverImage_VersionGuard(t *testing.T) {
 // install Job 이 그대로 싣는지, 그리고 previousImage 는 커널 토큰 없이 이전 버전 이미지로
 // 캡처되는지 본다(reconstructPrevImage 는 variant 접미사와 prevVersion 만 쓴다).
 func TestHandleUpgradingJob_UsesResolvedImage(t *testing.T) {
-	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16"
+	// 커널 이미지의 빌드 개정을 일반 설치 이미지(-v16)와 **다르게** 둔다. 같게 두면 롤백 대상
+	// 재구성이 어느 입력을 썼는지 결과로 구분되지 않아, 호출부가 resolvedImage 를 넘기도록
+	// 되돌아가도 이 시험이 통과한다.
+	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v20"
 	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verNew)
 	// handleIdle 이 Upgrading 진입 전에 PreviousVersion 을 세팅한다(캡처의 소스).
 	dus.Status.PreviousVersion = verOld
@@ -858,7 +865,8 @@ func TestHandleUpgradingJob_UsesResolvedImage(t *testing.T) {
 	if got := jobContainerImage(&job); got != kernelImg {
 		t.Errorf("job image=%q, want resolvedImage %q", got, kernelImg)
 	}
-	// previousImage 는 커널 토큰 없이 이전 버전 이미지로 캡처된다(variant -v16 + prevVersion).
+	// previousImage 는 커널 토큰 없이 이전 버전 이미지로 캡처된다 — 재구성 입력이
+	// policy.Spec.Driver.Image(-v16)이므로 커널 이미지의 개정(-v20)이 결과에 섞이지 않는다.
 	if dus.Status.PreviousImage != imgOld {
 		t.Errorf("PreviousImage=%q, want %q", dus.Status.PreviousImage, imgOld)
 	}
@@ -1017,5 +1025,240 @@ func TestHandleUpgradingJob_AptKernelImageNotCaptured(t *testing.T) {
 	}
 	if got := jobContainerImage(&job); got != kernelImg {
 		t.Errorf("forward job image=%q, want %q (설치 경로는 커널 이미지 그대로)", got, kernelImg)
+	}
+}
+
+// TestResolveDriverImage_Assembled 는 kernelImages 가 비어도 kernelImageBuildRevision 이
+// 선언되면 태그 규약으로 이미지를 조립하는지, 맵 항목이 조립보다 우선하는지, 빌드 개정이
+// 비면 조립하지 않는지, 조립 결과가 기존 검증을 통과하지 못하면 쓰지 않는지 본다.
+// 이벤트 reason 도 함께 본다 — 거절된 이미지가 없는 상황에 거절 reason 이 붙으면 운영자가
+// 있지도 않은 이미지를 찾는다.
+func TestResolveDriverImage_Assembled(t *testing.T) {
+	// on: 맵은 비고 빌드 개정만 선언한 정책. 조립 경로가 유일한 선택 수단이다.
+	on := func() *v1alpha1.DriverInstallPolicy {
+		return &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+			Mode:                     "job",
+			Version:                  "580.178.04",
+			Image:                    "reg/kcloud/nvidia-driver-ds:v1",
+			KernelImageBuildRevision: "v4",
+		}}}
+	}
+	// off: 같은 정책에서 빌드 개정만 비운 것. 지금 동작(조립 없음)의 기준이다.
+	off := on()
+	off.Spec.Driver.KernelImageBuildRevision = ""
+	// pinned: 맵에 그 커널 항목이 있는 정책. 맵이 조립을 이겨야 한다.
+	pinned := on()
+	pinned.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+		"5.15.0-190-generic": "reg/other/nvidia-driver-ds:580.178.04-k5.15.0-190-generic-v9",
+	}
+	// variant: variant 토막을 선언한 정책. Furiosa 계열 발행 규약이 이 모양이다.
+	variant := on()
+	variant.Spec.Driver.Version = "2026.3.1"
+	variant.Spec.Driver.Image = "reg/kcloud/furiosa-driver-ds:v3"
+	variant.Spec.Driver.KernelImageVariant = "rngd"
+	variant.Spec.Driver.KernelImageBuildRevision = "v1"
+	// aptVer: apt 개정 접미사를 단 버전. 조립한 태그의 버전 토큰이 "580.178.04-0" 으로 끊겨
+	// spec.driver.version 과 달라지므로 기존 버전 대조가 그 태그를 거절한다.
+	aptVer := on()
+	aptVer.Spec.Driver.Version = "580.178.04-0ubuntu1"
+	// noVer: 버전이 빈 하위호환 경로. 버전 토큰이 없으면 규약을 조립할 수 없고, 조립할 것이
+	// 없으므로 경고도 내지 않는다(CRD CEL 이 이 조합을 입구에서 거절한다).
+	noVer := on()
+	noVer.Spec.Driver.Version = ""
+	// oddVer: 태그에 쓸 수 없는 문자가 섞인 버전. 커널 토막과 대칭으로 거른다.
+	oddVer := on()
+	oddVer.Spec.Driver.Version = "1.0 beta"
+
+	cases := []struct {
+		name      string
+		pol       *v1alpha1.DriverInstallPolicy
+		kernel    string
+		want      string
+		wantSkip  bool
+		wantEvent string
+	}{
+		{"맵이 비어도 조립한다", on(), "5.15.0-190-generic",
+			"reg/kcloud/nvidia-driver-ds:580.178.04-k5.15.0-190-generic-v4", false, ""},
+		{"다른 커널도 같은 규약으로 조립한다", on(), "6.8.0-138-generic",
+			"reg/kcloud/nvidia-driver-ds:580.178.04-k6.8.0-138-generic-v4", false, ""},
+		{"variant 를 선언하면 버전과 커널 사이에 끼운다", variant, "6.8.0-138-generic",
+			"reg/kcloud/furiosa-driver-ds:2026.3.1-rngd-k6.8.0-138-generic-v1", false, ""},
+		{"맵 항목이 조립보다 우선", pinned, "5.15.0-190-generic",
+			"reg/other/nvidia-driver-ds:580.178.04-k5.15.0-190-generic-v9", false, ""},
+		{"맵에 없는 커널은 조립으로 내려간다", pinned, "6.8.0-138-generic",
+			"reg/kcloud/nvidia-driver-ds:580.178.04-k6.8.0-138-generic-v4", false, ""},
+		{"빌드 개정이 비면 조립하지 않는다", off, "5.15.0-190-generic",
+			"reg/kcloud/nvidia-driver-ds:v1", false, ""},
+		{"조립 결과의 버전 토큰이 어긋나면 쓰지 않는다", aptVer, "5.15.0-190-generic",
+			"reg/kcloud/nvidia-driver-ds:v1", true, eventKernelImageRejected},
+		{"버전이 비면 조립도 경고도 없다", noVer, "5.15.0-190-generic",
+			"reg/kcloud/nvidia-driver-ds:v1", false, ""},
+		{"태그로 쓸 수 없는 커널은 조립하지 않는다", on(), "6.1.0-rpi7+custom",
+			"reg/kcloud/nvidia-driver-ds:v1", true, eventKernelImageNotAssembled},
+		{"태그로 쓸 수 없는 버전은 조립하지 않는다", oddVer, "5.15.0-190-generic",
+			"reg/kcloud/nvidia-driver-ds:v1", true, eventKernelImageNotAssembled},
+		{"빈 커널은 기본 이미지", on(), "", "reg/kcloud/nvidia-driver-ds:v1", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, skip, event := resolveDriverImage(tc.pol, tc.kernel)
+			if got != tc.want {
+				t.Fatalf("resolveDriverImage(%q) 이미지 = %q, want %q", tc.kernel, got, tc.want)
+			}
+			if (skip != "") != tc.wantSkip {
+				t.Fatalf("resolveDriverImage(%q) skipReason = %q, wantSkip = %v", tc.kernel, skip, tc.wantSkip)
+			}
+			if event != tc.wantEvent {
+				t.Fatalf("resolveDriverImage(%q) 이벤트 reason = %q, want %q", tc.kernel, event, tc.wantEvent)
+			}
+		})
+	}
+}
+
+// TestAssembledTagMatchesVendorPublishConvention 은 차트 기본값에서 뜬 네 벤더 정책이 각자의
+// 발행 규약과 같은 모양을 조립하는지 본다. variant 유무가 벤더마다 다르고 그 차이를 Go 가 아니라
+// 정책이 받는다 — 값이 어긋나면 레지스트리에 없는 태그를 install Job 에 싣는다.
+func TestAssembledTagMatchesVendorPublishConvention(t *testing.T) {
+	const kernel = "5.15.0-190-generic"
+	cases := []struct {
+		vendor, version, image, variant, build, want string
+	}{
+		// NVIDIA·Tenstorrent 규약에는 variant 토막이 없다.
+		{"nvidia", "580.126.09", "reg/kcloud/nvidia-driver-ds:v3", "", "v4",
+			"reg/kcloud/nvidia-driver-ds:580.126.09-k5.15.0-190-generic-v4"},
+		{"tenstorrent", "2.11.0", "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1", "", "v1",
+			"reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1"},
+		// Furiosa 계열 규약은 "<pkgVersion>-<variant>-k<커널>-vN" 이다.
+		{"rngd", "2026.3.1", "reg/kcloud/furiosa-driver-ds:v3", "rngd", "v1",
+			"reg/kcloud/furiosa-driver-ds:2026.3.1-rngd-k5.15.0-190-generic-v1"},
+		{"warboy", "1.9.9-3", "reg/kcloud/furiosa-driver-ds:v3", "warboy", "v1",
+			"reg/kcloud/furiosa-driver-ds:1.9.9-3-warboy-k5.15.0-190-generic-v1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.vendor, func(t *testing.T) {
+			pol := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+				Mode: "job", Version: tc.version, Image: tc.image,
+				KernelImageVariant: tc.variant, KernelImageBuildRevision: tc.build,
+			}}}
+			got, skip, _ := resolveDriverImage(pol, kernel)
+			if skip != "" {
+				t.Fatalf("조립이 거부됐다: %s", skip)
+			}
+			if got != tc.want {
+				t.Fatalf("조립 결과 = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAssembledKernelImagePassesExistingGuards 는 조립한 참조가 맵 값과 같은 검증을
+// 통과한다는 것을 그 검증 함수로 직접 확인한다. 조립이 검증을 우회하면 이 둘이 갈린다.
+func TestAssembledKernelImagePassesExistingGuards(t *testing.T) {
+	pol := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Mode:                     "job",
+		Version:                  "1.9.9-3",
+		Image:                    "reg/kcloud/furiosa-driver-ds:v3",
+		KernelImageBuildRevision: "v1",
+	}}}
+	got, skip := assembleKernelImage(pol, "5.15.0-190-generic")
+	if skip != "" {
+		t.Fatalf("조립이 거부됐다: %s", skip)
+	}
+	if want := "reg/kcloud/furiosa-driver-ds:1.9.9-3-k5.15.0-190-generic-v1"; got != want {
+		t.Fatalf("조립 결과 = %q, want %q", got, want)
+	}
+	if !isVerifiedBuildTag(got) {
+		t.Errorf("조립한 태그가 검증 빌드 태그가 아니다: %q", got)
+	}
+	if v := extractKernelImageVersion(got); v != pol.Spec.Driver.Version {
+		t.Errorf("조립한 태그의 버전 토큰 = %q, want %q", v, pol.Spec.Driver.Version)
+	}
+	if !isPrecompiledKernelImage(got) {
+		t.Errorf("조립한 태그가 사전 컴파일 이미지로 식별되지 않는다: %q", got)
+	}
+}
+
+// TestCaptureJobPreviousImage_UsesPolicyImageNotResolved 는 롤백 대상 이미지를 커널 이미지가 아니라
+// 정책의 설치 이미지에서 만드는지 본다. 커널 이미지의 빌드 개정과 일반 설치 이미지의 개정은 서로
+// 다른 수이므로, 커널 이미지에서 접미사를 떼면 레지스트리에 없는 태그가 나오고 rollback Job 이
+// ImagePullBackOff 로 앉아 노드가 cordon 에 고착된다(reconstructPrevImage 주석이 라이브 실측으로
+// 기록한 실패). 조립 경로와 맵 경로 둘 다 본다 — 맵 경로는 사이트가 개정을 설치 이미지와 같게
+// 적으면 두 입력의 결과가 우연히 같아져 결함이 가려진다. 그 우연까지 케이스로 적어 둔다.
+func TestCaptureJobPreviousImage_UsesPolicyImageNotResolved(t *testing.T) {
+	const kernel = "5.15.0-190-generic"
+	// tenstorrent 차트 기본값. imageVersionBaked 라 롤백은 이전 버전 태그 재구성 경로다.
+	ttPolicy := func() *v1alpha1.DriverInstallPolicy {
+		return &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+			Mode:              "job",
+			Version:           "2.11.0",
+			Image:             "reg/kcloud/tenstorrent-driver-ds:2.11.0-v1",
+			Installer:         v1alpha1.DriverInstallerScript,
+			ImageVersionBaked: true,
+		}}}
+	}
+	assembled := ttPolicy()
+	assembled.Spec.Driver.KernelImageBuildRevision = "v4"
+	// 커널 이미지의 개정이 설치 이미지와 다른 경우. 발행 실제 예가 이 모양이다 — 커널 이미지
+	// …-v4 와 같은 정책의 일반 설치 이미지 …-v1 은 서로 다른 개정이다.
+	mappedDiff := ttPolicy()
+	mappedDiff.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+		kernel: "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v9",
+	}
+	// 개정이 우연히 같은 경우. 결함이 가려지는 조합이라 값만 고정한다.
+	mappedSame := ttPolicy()
+	mappedSame.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+		kernel: "reg/kcloud/tenstorrent-driver-ds:2.11.0-k5.15.0-190-generic-v1",
+	}
+	// nvidia 차트 기본값. 비-baked 라 같은 이미지 + DRIVER_VERSION 으로 되돌린다.
+	apt := &v1alpha1.DriverInstallPolicy{Spec: v1alpha1.DriverInstallPolicySpec{Driver: v1alpha1.DriverSpec{
+		Mode:                     "job",
+		Version:                  "580.178.04",
+		Image:                    "reg/kcloud/nvidia-driver-ds:v1",
+		Installer:                v1alpha1.DriverInstallerAPT,
+		KernelImageBuildRevision: "v4",
+	}}}
+
+	cases := []struct {
+		name, prevVersion, want string
+		pol                     *v1alpha1.DriverInstallPolicy
+		// inputMatters 는 커널 이미지를 입력으로 줬을 때 결과가 달라지는 조합인지다.
+		inputMatters bool
+	}{
+		{"조립 경로는 일반 설치 이미지의 개정을 쓴다", "2.8.0",
+			"reg/kcloud/tenstorrent-driver-ds:2.8.0-v1", assembled, true},
+		{"맵 경로의 개정이 다르면 설치 이미지 쪽을 쓴다", "2.8.0",
+			"reg/kcloud/tenstorrent-driver-ds:2.8.0-v1", mappedDiff, true},
+		{"맵 경로의 개정이 같으면 결과가 하나다", "2.8.0",
+			"reg/kcloud/tenstorrent-driver-ds:2.8.0-v1", mappedSame, false},
+		{"비-baked 는 버전 비종속 설치 이미지로 되돌린다", "580.126.09",
+			"reg/kcloud/nvidia-driver-ds:v1", apt, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 그 커널에서 커널 이미지가 실제로 선택되는지 먼저 확인한다 — 선택되지 않으면
+			// 이 시험은 아무것도 증명하지 않는다.
+			resolved, skip, _ := resolveDriverImage(tc.pol, kernel)
+			if skip != "" || resolved == tc.pol.Spec.Driver.Image {
+				t.Fatalf("커널 이미지가 선택되지 않았다: resolved=%q skip=%q", resolved, skip)
+			}
+			state := &v1alpha1.DriverUpgradeState{Status: v1alpha1.DriverUpgradeStateStatus{
+				PreviousVersion: tc.prevVersion,
+				ResolvedImage:   resolved,
+			}}
+			captureJobPreviousImage(state, tc.pol.Spec.Driver.Image,
+				tc.pol.Spec.Driver.Installer, tc.pol.Spec.Driver.ImageVersionBaked)
+			if state.Status.PreviousImage != tc.want {
+				t.Fatalf("PreviousImage = %q, want %q", state.Status.PreviousImage, tc.want)
+			}
+			fromResolved := reconstructPrevImage(resolved, tc.pol.Spec.Driver.Installer,
+				tc.prevVersion, tc.pol.Spec.Driver.ImageVersionBaked)
+			if tc.inputMatters && fromResolved == tc.want {
+				t.Errorf("커널 이미지를 입력으로 줘도 결과가 같다(%q) — 이 케이스가 입력 차이를 못 본다",
+					fromResolved)
+			}
+			if !tc.inputMatters && fromResolved != tc.want {
+				t.Errorf("개정이 같은 조합인데 결과가 갈렸다: %q != %q", fromResolved, tc.want)
+			}
+		})
 	}
 }

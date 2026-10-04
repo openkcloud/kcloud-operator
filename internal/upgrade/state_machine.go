@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-08-07
+// 생성일: 2026-04-13 | 수정일: 2026-10-04
 // ============================================================
 
 package upgrade
@@ -414,7 +414,7 @@ func (m *UpgradeStateMachine) handlePreFlight(
 	// 노드 커널로 사전 컴파일 이미지를 고른다. 여기서 고른 값은 handleUpgradingJob 이 install Job
 	// 에 실을 이미지이며, 호출부(driver_upgrade_controller.go Reconcile 의 Status().Update)가 이번
 	// 전이의 status 저장에 함께 실어 영속한다.
-	resolvedImage, imageSkipReason := resolveDriverImage(policy, kernelVersion)
+	resolvedImage, imageSkipReason, imageSkipEvent := resolveDriverImage(policy, kernelVersion)
 	state.Status.ResolvedImage = resolvedImage
 	// 정책이 이 커널용 사전 컴파일 이미지를 선언했지만 쓰지 않았다면 그 이유를 드러낸다. 기본
 	// 이미지(DKMS 컴파일)로 되돌아가므로 설치는 올바른 버전으로 진행되지만, 운영자가 정책의 태그를
@@ -422,7 +422,7 @@ func (m *UpgradeStateMachine) handlePreFlight(
 	if imageSkipReason != "" {
 		logf.FromContext(ctx).Info("사전 컴파일 커널 이미지를 쓰지 않고 기본 이미지로 되돌아감",
 			"kernel", kernelVersion, "reason", imageSkipReason)
-		m.Recorder.Eventf(state, corev1.EventTypeWarning, "KernelImageRejected", "%s", imageSkipReason)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, imageSkipEvent, "%s", imageSkipReason)
 	}
 	allowlist := policy.Spec.KernelAllowlist
 
@@ -1749,10 +1749,63 @@ func isNodeReady(node *corev1.Node) bool {
 	return false
 }
 
-// resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지가 정책에 선언돼 있으면 그것을, 아니면
-// 기본 설치 이미지를 돌려준다. 두 번째 반환값은 선언된 커널 이미지를 쓰지 않은 이유이며, 이미지를
-// 썼거나 애초에 커널 이미지가 없으면 빈 문자열이다. 호출부가 이 이유를 경고로 드러낸다. 커널
-// 이미지를 무시하는 경우는 두 가지다.
+// 커널 이미지를 쓰지 않았을 때 그 사유를 드러낼 이벤트 reason. 둘을 나눈 이유는 상황이 다르기
+// 때문이다 — 하나는 이미지 참조가 있는데 검증에서 거절된 것이고, 하나는 참조를 만들지조차 못한
+// 것이다. 같은 reason 으로 내면 운영자가 "거절된 이미지" 를 찾아 헤맨다.
+const (
+	eventKernelImageRejected     = "KernelImageRejected"
+	eventKernelImageNotAssembled = "KernelImageNotAssembled"
+)
+
+// assembleKernelImage 는 태그 규약으로 노드 커널용 사전 컴파일 이미지 참조를 조립한다.
+// 조립 조건이 서지 않으면 빈 문자열을 돌려준다. 두 번째 반환값은 조립을 시도했으나 포기한
+// 이유이며, 애초에 조립할 것이 없으면 빈 문자열이다 — 알릴 것이 없는데 경고를 내면 PreFlight
+// 마다 같은 경고가 반복된다.
+//
+// 조립을 켜는 것은 spec.driver.kernelImageBuildRevision 이다 — 빌드 개정은 발행하는 쪽만 알아
+// 유도할 수 없다. 버전 토큰은 spec.driver.version 에서, variant 토큰은
+// spec.driver.kernelImageVariant 에서, 커널 토큰은 노드가 보고한 커널에서, 저장소 경로는
+// spec.driver.image 에서 온다. variant 유무가 벤더마다 달라 그 차이는 차트가 채운다 —
+// 여기서 벤더 이름으로 분기하지 않는다.
+func assembleKernelImage(policy *v1alpha1.DriverInstallPolicy, kernelVersion string) (image string, skipReason string) {
+	build := policy.Spec.Driver.KernelImageBuildRevision
+	version := policy.Spec.Driver.Version
+	// 버전 토큰 없이 조립하면 "-k<커널>-vN" 이 되어 규약을 벗어난다. 버전을 비우는 것은 설치기가
+	// 버전을 고르는 하위호환 경로이고 그 경로에는 사전 컴파일 이미지가 없으므로, 조립할 것이 없는
+	// 상태로 본다(CRD CEL 이 이 조합을 입구에서 거절하므로 여기는 이중 방어다).
+	if build == "" || version == "" || policy.Spec.Driver.Image == "" {
+		return "", ""
+	}
+	// 아래 세 토막은 그대로 image reference 의 태그로 들어간다. 태그에 쓸 수 없는 문자가 섞이면
+	// Job 에 실을 수 없는 참조가 만들어지므로 조립하지 않는다. 커널은 노드가 보고한 값이고(자체
+	// 빌드 커널의 localversion 접미사가 그렇다) 버전은 운영자가 적는 값이다 — 둘 다 본다.
+	// 그런 노드·정책은 kernelImages 로 따로 지정한다.
+	notAssembled := func(what string) (string, string) {
+		return "", fmt.Sprintf(
+			"커널 %s 의 사전 컴파일 이미지를 조립하지 못했다: %s에 이미지 태그로 쓸 수 없는 문자가 있다",
+			kernelVersion, what)
+	}
+	if !tagSafeTokenRe.MatchString(kernelVersion) {
+		return notAssembled("커널 문자열")
+	}
+	if !tagSafeTokenRe.MatchString(version) {
+		return notAssembled("spec.driver.version")
+	}
+	tag := version
+	if variant := policy.Spec.Driver.KernelImageVariant; variant != "" {
+		tag += "-" + variant
+	}
+	return replaceImageTag(policy.Spec.Driver.Image, tag+"-k"+kernelVersion+"-"+build), ""
+}
+
+// tagSafeTokenRe 는 조립에 넣을 토막을 image reference 의 태그 안에 그대로 써도 되는지 본다.
+// docker 태그가 받는 문자(영숫자·점·밑줄·하이픈)만 허용한다.
+var tagSafeTokenRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지가 정책에 선언돼 있거나 태그 규약으로
+// 조립되면 그것을, 아니면 기본 설치 이미지를 돌려준다. 두 번째 반환값은 그 커널 이미지를 쓰지 않은
+// 이유이며, 이미지를 썼거나 애초에 커널 이미지가 없으면 빈 문자열이다. 호출부가 이 이유를 경고로
+// 드러낸다. 커널 이미지를 무시하는 경우는 두 가지다.
 //   - 태그가 검증 빌드 태그(…-vN)가 아니다. 존재하지 않는 이미지를 Job 에 싣지 않기 위해서다.
 //   - 태그의 버전 토큰이 spec.driver.version 과 다르다. 사전 컴파일 이미지는 자기가 구운 사용자
 //     공간과 모듈을 함께 설치하므로 그 둘이 어긋날 수는 없다. 그래도 이 검사를 두는 이유는 정책이
@@ -1760,34 +1813,52 @@ func isNodeReady(node *corev1.Node) bool {
 //     때문이다. 기본 이미지로 되돌아가면 DKMS 가 spec.driver.version 으로 컴파일하므로 선언과
 //     결과가 맞는다.
 //
+// 맵에 노드 커널 항목이 없으면 kernelImageBuildRevision 이 선언됐을 때만 태그 규약으로 조립한다
+// (assembleKernelImage). 조립한 참조도 위 두 검사를 그대로 거친다 — 조립이 검증을 우회하면
+// spec.driver.version 을 잘못 적은 정책이 레지스트리에 없는 태그를 Job 에 싣는다.
+//
+// 세 번째 반환값은 skipReason 을 드러낼 이벤트 reason 이다. skipReason 이 비면 빈 문자열이다.
+//
 // 두 경로에서 spec.driver.version 의 뜻이 다르다. 사전 컴파일 경로에서는 이미지가 설치 버전을
 // 정하고 이 값은 위 대조에만 쓰인다. DKMS 경로에서는 이 값이 설치 버전을 정하므로 노드의 apt
 // 저장소에 실재해야 한다 — 그래서 차트 기본값은 우분투 아카이브에 있는 버전이어야 한다.
 //
 // spec.driver.version 이 비어 있으면 대조 기준이 없으므로 버전 검사를 건너뛴다. 버전을 비우는 것은
 // 설치기가 버전을 고르는 하위호환 경로다.
-func resolveDriverImage(policy *v1alpha1.DriverInstallPolicy, kernelVersion string) (image string, skipReason string) {
+func resolveDriverImage(
+	policy *v1alpha1.DriverInstallPolicy, kernelVersion string,
+) (image string, skipReason string, skipEventReason string) {
 	if kernelVersion == "" {
-		return policy.Spec.Driver.Image, ""
+		return policy.Spec.Driver.Image, "", ""
 	}
-	img, ok := policy.Spec.Driver.KernelImages[kernelVersion]
-	if !ok {
-		return policy.Spec.Driver.Image, ""
+	// 맵에 적힌 항목이 조립보다 우선한다 — 규약을 벗어난 이미지의 예외 지정 수단이다.
+	ref := ""
+	origin := "맵에 선언한"
+	if img, ok := policy.Spec.Driver.KernelImages[kernelVersion]; ok {
+		ref = string(img)
+	} else {
+		assembled, assembleSkip := assembleKernelImage(policy, kernelVersion)
+		if assembled == "" {
+			if assembleSkip == "" {
+				return policy.Spec.Driver.Image, "", ""
+			}
+			return policy.Spec.Driver.Image, assembleSkip, eventKernelImageNotAssembled
+		}
+		ref, origin = assembled, "규약으로 조립한"
 	}
-	ref := string(img)
 	if !isVerifiedBuildTag(ref) {
 		return policy.Spec.Driver.Image, fmt.Sprintf(
-			"커널 %s 의 사전 컴파일 이미지 %q 가 검증 빌드 태그(…-vN)가 아니어서 쓰지 않는다",
-			kernelVersion, ref)
+			"커널 %s 의 %s 사전 컴파일 이미지 %q 가 검증 빌드 태그(…-vN)가 아니어서 쓰지 않는다",
+			kernelVersion, origin, ref), eventKernelImageRejected
 	}
 	if want := policy.Spec.Driver.Version; want != "" {
 		if got := extractKernelImageVersion(ref); got != want {
 			return policy.Spec.Driver.Image, fmt.Sprintf(
-				"커널 %s 의 사전 컴파일 이미지 버전 토큰 %q 가 spec.driver.version %q 와 달라서 쓰지 않는다",
-				kernelVersion, got, want)
+				"커널 %s 의 %s 사전 컴파일 이미지 버전 토큰 %q 가 spec.driver.version %q 와 달라서 쓰지 않는다",
+				kernelVersion, origin, got, want), eventKernelImageRejected
 		}
 	}
-	return ref, ""
+	return ref, "", ""
 }
 
 // refreshResolvedImage 는 status.ResolvedImage 를 지금 정책 기준으로 다시 계산한다.
@@ -1809,7 +1880,7 @@ func (m *UpgradeStateMachine) refreshResolvedImage(
 		}
 		return fmt.Errorf("노드 조회 실패: %w", err)
 	}
-	image, _ := resolveDriverImage(policy, node.Status.NodeInfo.KernelVersion)
+	image, _, _ := resolveDriverImage(policy, node.Status.NodeInfo.KernelVersion)
 	state.Status.ResolvedImage = image
 	return nil
 }
@@ -1859,7 +1930,8 @@ func extractImageVariantSuffix(image string) string {
 // kernelImageVersionRe 는 커널 이미지 태그 앞머리의 드라이버 버전 토큰을 매치한다.
 // 태그 규약은 "<version>[-<variant>]-k<kernel>-vN" 이며, version 은 숫자로 시작하는 점 구분
 // 버전이다. 하위 번호가 있으면 "-<숫자>" 하나까지 포함한다(예 "1.9.8-3"). variant(예 "rngd")
-// 와 커널·빌드 접미사는 숫자로 시작하지 않으므로 여기에 걸리지 않는다.
+// 와 커널·빌드 접미사는 숫자로 시작하지 않으므로 여기에 걸리지 않는다. variant 쪽 전제는
+// CRD 패턴이 강제한다 — kernelImageVariant 는 영문자로 시작해야 한다.
 var kernelImageVersionRe = regexp.MustCompile(`^[0-9][0-9.]*(-[0-9]+)?`)
 
 // extractKernelImageVersion 은 image reference 태그 앞머리의 드라이버 버전 토큰만 뽑는다.

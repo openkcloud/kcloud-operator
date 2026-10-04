@@ -1,7 +1,8 @@
 # test.yml: push·PR 시 make test(단위·envtest·차트 렌더)를 돈다.
 # 상세: helm 을 설치해야 차트 렌더 시험 넷이 t.Skip 으로 빠지지 않는다 — 선언만 두고
 #       helm 이 그것을 보는지 확인하지 않으면 kubeVersion 경계 시험이 늘 초록이 된다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-04 (Setup Helm 단계 추가)
+# 생성일: 2025-07-04 | 수정일: 2026-10-05 (PyYAML 설치 단계 추가 — 발행 대상 목록을 읽는
+#         시험이 그것을 쓴다) | 2026-10-04 (Setup Helm 단계 추가)
 name: Tests
 
 on:
@@ -30,6 +31,13 @@ jobs:
       # 버전은 lint.yml 과 같이 action 기본값을 쓴다.
       - name: Setup Helm
         uses: azure/setup-helm@v4
+
+      # 차트·발행 대상 목록을 읽는 시험이 python3 의 PyYAML 을 쓴다(hack/kernel-image-targets.sh
+      # 와 hack/image-tag-check.sh 가 그것으로 YAML 을 파싱한다). 러너 이미지에 있는지에
+      # 기대지 않는다 — 없으면 ImportError 로 make test 가 하드 실패한다. lint.yml 도 같은
+      # 이유로 이 패키지를 명시한다.
+      - name: Install PyYAML
+        run: sudo apt-get update -y && sudo apt-get install -y python3-yaml
 
       # envtest 패키지 바이너리를 make test 의 -p 1 로 직렬 실행한다(제어 평면 동시 기동 방지).
       # ubuntu-latest 는 코어 수가 적어 병렬 실행 시 경합이 더 크다 — 병렬 실행으로 되돌리지 말 것.
