@@ -56,7 +56,7 @@ func TestAssertNodeQuiescedRejectsAllocatedResourceClaim(t *testing.T) {
 }
 
 // TestAssertNodeQuiescedIgnoresClaimAllocatedElsewhere 는 다른 노드에 박힌 claim 이 이 노드의
-// 정지 판정을 오염시키지 않음을 고정한다(오탐 방지 — claimAllocatedOnNode 가 노드를 구분하는지).
+// 정지 판정을 오염시키지 않음을 고정한다(오탐 방지 — draclaim.AllocatedOnNode 가 노드를 구분하는지).
 func TestAssertNodeQuiescedIgnoresClaimAllocatedElsewhere(t *testing.T) {
 	claim := &resourcev1.ResourceClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "ns"},

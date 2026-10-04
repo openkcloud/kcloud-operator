@@ -11,6 +11,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -30,6 +31,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/draclaim"
 	"kcloud-operator/internal/driverjob"
 	"kcloud-operator/internal/intent"
 	"kcloud-operator/internal/metrics"
@@ -517,6 +519,31 @@ func (m *UpgradeStateMachine) handleDraining(
 		if err := m.evictDevicePods(ctx, state, force); err != nil {
 			return false, 0, fmt.Errorf("디바이스 Pod eviction 실패: %w", err)
 		}
+		return true, 15 * time.Second, nil
+	}
+
+	// Pod 축이 비었어도 claim 축은 따로 본다 — DRA 는 장치를 Pod 이 아니라 ResourceClaim 이
+	// 쥔다. Pod 이 사라져도 claim 이 deallocate 되기 전에는 장치가 여전히 잡혀 있고, 반대로
+	// 다른 컨트롤러가 만든 claim 은 대응하는 Pod 이 이 노드에 없을 수도 있다.
+	//
+	// "아직 할당돼 있다" 는 Pod 축의 "아직 Pod 가 남았다" 와 같은 등급이므로 오류가 아니라 정상
+	// 재조정으로 돌린다. DRA 는 kubelet NodeUnprepare → reservedFor 비움 → deallocate 순서라
+	// Pod 이 사라진 뒤에도 claim 이 한동안 할당 상태로 남는 구간을 정상 drain 이 반드시 지난다.
+	// 그 구간을 오류로 올리면 DRA 노드가 정상 drain 될 때마다 오류 로그와 reconcile 오류 지표가
+	// 오르고, 15초 고정 주기 대신 controller-runtime 지수 backoff 를 타 drain 타임아웃 안의
+	// 재시도 간격이 의도보다 길어진다. 읽기 실패(List·Node Get)만 오류로 올린다.
+	//
+	// 이 분기는 transitionTo 를 쓰지 않으므로 LastTransitionTime 이 보존되고, Draining 진입점이
+	// 하나라 다음 재조정이 머리의 drain 타임아웃 검사를 다시 밟는다 — 끝내 비지 않으면 그 검사가
+	// 롤백 또는 Failed 로 보낸다.
+	if err := draclaim.AssertNoneAllocatedOnNode(ctx, m.Client, state.Spec.NodeName); err != nil {
+		if !errors.Is(err, draclaim.ErrClaimStillAllocated) {
+			return false, 0, fmt.Errorf("drain 완료 전 ResourceClaim 검사 실패: %w", err)
+		}
+		// Status.Message 는 transitionTo 만 쓰므로 Event 가 없으면 왜 멈췄는지 밖에서 보이지
+		// 않는다. 재조정 주기가 15초라 Event 폭주 방지 장치는 따로 필요 없다.
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "DrainBlockedByClaim",
+			"할당된 ResourceClaim 이 남아 drain 대기 중: %v", err)
 		return true, 15 * time.Second, nil
 	}
 
@@ -1483,25 +1510,21 @@ func hasAcceleratorResourceName(rn string) bool {
 	return false
 }
 
-// hasDeviceWorkloads는 노드에 GPU/NPU 리소스를 사용하는 Running Pod가 있는지 확인합니다.
+// hasDeviceWorkloads는 노드에 GPU/NPU 장치를 쥔 Pod가 남아 있는지 확인합니다.
+// 판정은 podUsesDevice 하나에 모아 둔다 — eviction 대상 선정(evictDevicePods)과 같은
+// 집합을 봐야 하기 때문이다. 양쪽이 갈리면 drain 이 끝나지 않는다.
 func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName string) (bool, error) {
 	var podList corev1.PodList
 	if err := m.List(ctx, &podList); err != nil {
 		return false, err
 	}
-	for _, pod := range podList.Items {
-		if pod.Spec.NodeName != nodeName {
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Spec.NodeName != nodeName || !podPhaseDrainable(pod) {
 			continue
 		}
-		if pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		for _, c := range pod.Spec.Containers {
-			for resName := range c.Resources.Limits {
-				if hasAcceleratorResourceName(string(resName)) {
-					return true, nil
-				}
-			}
+		if podUsesDevice(pod) {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -1523,7 +1546,7 @@ func (m *UpgradeStateMachine) evictDevicePods(ctx context.Context, state *v1alph
 	}
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-		if pod.Spec.NodeName != state.Spec.NodeName || pod.Status.Phase != corev1.PodRunning {
+		if pod.Spec.NodeName != state.Spec.NodeName || !podPhaseDrainable(pod) {
 			continue
 		}
 		if !podUsesDevice(pod) {
@@ -1563,12 +1586,33 @@ func (m *UpgradeStateMachine) evictDevicePods(ctx context.Context, state *v1alph
 	return nil
 }
 
-// podUsesDevice는 Pod가 GPU/NPU 리소스를 요청하는지 반환합니다.
+// podPhaseDrainable 은 drain 판정이 세는 단계인지다 — 종료 단계(Succeeded/Failed)만 제외한다.
+// Pending 을 빼면 스케줄만 된 장치 요청 Pod 가 커널 모듈 교체 도중에 시작된다.
+// hasDeviceWorkloads 와 evictDevicePods 가 이 함수를 함께 써서 같은 집합을 본다.
+func podPhaseDrainable(pod *corev1.Pod) bool {
+	return pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed
+}
+
+// podUsesDevice는 Pod가 GPU/NPU 장치를 쥐고 있는지 반환합니다 — device-plugin 축
+// (extended resource limits, containers + initContainers)과 DRA 축(pod.spec.resourceClaims)을
+// 모두 봅니다.
+//
+// DRA 로 뜬 Pod 은 resources.limits 가 비어 있다 — 장치를 extended resource 가 아니라
+// pod.spec.resourceClaims 로 쥐기 때문이다. limits 만 보면 그런 Pod 은 "아무것도 안 쥔 Pod"
+// 으로 보여 drain 대상에서 빠지고, 그 위에서 커널 모듈이 교체된다.
+// claim 을 DeviceClass→driver 로 되짚어 벤더를 가리지는 않는다: 이 판정은 안전 게이트라
+// 과하게 잡는 쪽이 옳다(과하면 가속기와 무관한 DRA claim Pod 가 한 번 쫓겨날 뿐,
+// 모자라면 장치가 밑에서 바뀐다).
 func podUsesDevice(pod *corev1.Pod) bool {
-	for _, c := range pod.Spec.Containers {
-		for resName := range c.Resources.Limits {
-			if hasAcceleratorResourceName(string(resName)) {
-				return true
+	if len(pod.Spec.ResourceClaims) > 0 {
+		return true
+	}
+	for _, ctrs := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for _, c := range ctrs {
+			for resName := range c.Resources.Limits {
+				if hasAcceleratorResourceName(string(resName)) {
+					return true
+				}
 			}
 		}
 	}

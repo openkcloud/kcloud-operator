@@ -18,14 +18,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"kcloud-operator/internal/draclaim"
 )
 
 // Quiescer 는 한 벤더의 장치 리소스를 점유한 워크로드를 노드에서 비우는 오케스트레이터다.
@@ -54,7 +52,7 @@ func RngdQuiescer(c client.Client) *Quiescer {
 // 보여 배출 대상에서 빠지고, 그대로 -mig 1 이 나간다.
 // claim 을 DeviceClass→driver 로 되짚어 벤더를 가리지는 않는다: 이 함수는 안전 게이트라 과하게
 // 잡는 쪽이 옳고(과하면 배출이 한 번 더 될 뿐, 모자라면 장치가 밑에서 재구성된다), ResourceClaim
-// 축(claimAllocatedOnNode)도 이미 벤더 무관으로 판정한다.
+// 축(draclaim.AllocatedOnNode)도 이미 벤더 무관으로 판정한다.
 func (q *Quiescer) holdsDevice(p *corev1.Pod) bool {
 	if len(p.Spec.ResourceClaims) > 0 {
 		return true
@@ -189,81 +187,7 @@ func (q *Quiescer) AssertQuiesced(ctx context.Context, node string) error {
 			return fmt.Errorf("node %s still has device-holding pod %s", node, p.Name)
 		}
 	}
-	return q.assertNoAllocatedResourceClaims(ctx, &n)
-}
-
-// assertNoAllocatedResourceClaims 는 이 노드에 할당된(status.allocation 이 이 노드를 가리키는)
-// ResourceClaim 이 없는지 검증한다. List 실패는 "없음" 이 아니라 "모른다" 다 — 이 함수는 안전
-// 게이트이므로 읽지 못했으면 오류로 올린다. 유일한 예외는 클러스터가 resource.k8s.io 자체를
-// 서빙하지 않는 경우다(그 축이 아예 없으므로 부재를 이유로 게이트를 막을 수 없다).
-func (q *Quiescer) assertNoAllocatedResourceClaims(ctx context.Context, node *corev1.Node) error {
-	var claims resourcev1.ResourceClaimList
-	if err := q.Client.List(ctx, &claims); err != nil {
-		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("list resourceclaims: %w", err)
-	}
-	for i := range claims.Items {
-		c := &claims.Items[i]
-		if claimAllocatedOnNode(c, node) {
-			return fmt.Errorf("node %s still has an allocated ResourceClaim %s/%s", node.Name, c.Namespace, c.Name)
-		}
-	}
-	return nil
-}
-
-// claimAllocatedOnNode 는 claim 이 이 노드에 할당됐는지를 status.allocation.nodeSelector 로 판정한다.
-// nodeSelector 가 nil 이면 "어디서든 쓸 수 있다"(network-attached, AllNodes)는 뜻이지 이 노드에
-// 박혔다는 뜻이 아니다 — 그대로 매칭하면 network 장치 claim 하나가 클러스터의 모든 노드 quiesce 를
-// 영구히 막는다.
-func claimAllocatedOnNode(claim *resourcev1.ResourceClaim, node *corev1.Node) bool {
-	alloc := claim.Status.Allocation
-	if alloc == nil || alloc.NodeSelector == nil {
-		return false
-	}
-	return nodeSelectorMatchesNode(alloc.NodeSelector, node)
-}
-
-// nodeSelectorOperators 는 corev1.NodeSelectorOperator → apimachinery selection.Operator 매핑이다.
-// 값을 다시 옮기는 표일 뿐 매칭 로직 자체가 아니다 — 실제 In/NotIn/Exists/DoesNotExist/Gt/Lt 평가는
-// labels.Requirement 가 이미 하므로 손으로 다시 구현하지 않는다.
-var nodeSelectorOperators = map[corev1.NodeSelectorOperator]selection.Operator{
-	corev1.NodeSelectorOpIn:           selection.In,
-	corev1.NodeSelectorOpNotIn:        selection.NotIn,
-	corev1.NodeSelectorOpExists:       selection.Exists,
-	corev1.NodeSelectorOpDoesNotExist: selection.DoesNotExist,
-	corev1.NodeSelectorOpGt:           selection.GreaterThan,
-	corev1.NodeSelectorOpLt:           selection.LessThan,
-}
-
-// nodeSelectorMatchesNode 는 corev1.NodeSelector 의 의미론(term 은 OR, term 안 요구사항은 AND)을
-// 평가한다. matchFields 는 DRA 가 노드-로컬 장치를 낼 때 쓰는 유일한 키인 metadata.name 을,
-// matchExpressions 는 노드 라벨을 대상으로 한다(AllocationResult.NodeSelector 문서).
-func nodeSelectorMatchesNode(sel *corev1.NodeSelector, node *corev1.Node) bool {
-	fields := labels.Set{"metadata.name": node.Name}
-	nodeLabels := labels.Set(node.Labels)
-	for _, term := range sel.NodeSelectorTerms {
-		if nodeSelectorRequirementsMatch(term.MatchFields, fields) &&
-			nodeSelectorRequirementsMatch(term.MatchExpressions, nodeLabels) {
-			return true
-		}
-	}
-	return false
-}
-
-func nodeSelectorRequirementsMatch(reqs []corev1.NodeSelectorRequirement, set labels.Set) bool {
-	for _, req := range reqs {
-		op, ok := nodeSelectorOperators[req.Operator]
-		if !ok {
-			return false
-		}
-		r, err := labels.NewRequirement(req.Key, op, req.Values)
-		if err != nil || !r.Matches(set) {
-			return false
-		}
-	}
-	return true
+	return draclaim.AssertNoneAllocatedOnNode(ctx, q.Client, n.Name)
 }
 
 // DeviceHoldingPods 는 이 노드에서 장치를 쥐고 있는 pod 들이다(namespace/name). cordon 여부를
