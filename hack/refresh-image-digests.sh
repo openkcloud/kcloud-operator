@@ -5,18 +5,28 @@
 #       레지스트리에 매니페스트 digest 를 물어 파일을 갱신한다. 조회만 하고 push 는 하지 않는다.
 #       레지스트리 주소는 deploy/helm/values.yaml 의 global.registry 에서 읽고 KCLOUD_REGISTRY
 #       환경변수로 덮어쓴다(사설 미러·내부 레지스트리를 볼 때. 주소를 코드에 적지 않는다).
-#       토큰은 레지스트리가 돌려주는 WWW-Authenticate 챌린지의 realm 에서 익명으로 받는다
-#       (GHCR 은 https://ghcr.io/token?scope=repository:<repo>:pull 형태).
-#       404 는 그 태그가 발행되지 않았다는 레지스트리의 확답이라 어긋남으로 센다. 401·403·
-#       그 밖의 응답과 네트워크 실패는 조회를 못 한 것이라 항목을 건드리지 않고 건너뛴 목록으로
-#       보고한다 — 조회 실패를 "digest 없음" 으로 적지 않는다.
+#       매니페스트 조회는 hack/registry-head.sh 의 head_manifest 를 쓴다(익명 토큰 처리 공유).
+#       404 는 그 태그가 발행되지 않았다는 레지스트리의 확답이라 어긋남으로 센다. 유효
+#       레지스트리가 chart_registry(values.yaml 의 global.registry, KCLOUD_REGISTRY 로
+#       덮어쓰기 전 값)와 같을 때만 — 즉 KCLOUD_REGISTRY 를 안 썼을 때만 — 401·403(익명
+#       조회 거부)도 공개 경로로 당길 수 없다는 확답이라 어긋남으로 센다(image-tag-check.sh
+#       의 own 접두 대조와 같은 가드). KCLOUD_REGISTRY 로 사설 미러를 보는 중이면 401 은
+#       그 미러의 자격 증명 문제일 뿐이라 건너뜀으로 둔다 — 안 그러면 허용 목록 밖 항목이
+#       전부 거짓으로 미발행 보고된다. ALLOWED_PRIVATE(hack/registry-head.sh 에서 source,
+#       image-tag-check.sh 와 공유) 목록에 있는 항목만 예외로 건너뛴다(조건부 기능 전용이라
+#       GHCR 발행 계획이 없는 이미지). 그 밖의 응답(빈 값·429·5xx)과 네트워크 실패는 조회를
+#       못 한 것이라 항목을 건드리지 않고 건너뛴 목록으로 보고한다 — 조회 실패를 "digest
+#       없음" 으로 적지 않는다.
 #       벤더 절은 대상이 아니다(upstream 태그 고정이고 digest 키도 대부분 없다).
 #       --check 는 파일을 고치지 않고 어긋난 항목만 세어 종료 코드로 알린다.
 # 용법: [KCLOUD_REGISTRY=<host>[:<port>]/<project>] hack/refresh-image-digests.sh [--check]
-# 생성일: 2026-10-03
+# 생성일: 2026-10-03 | 수정일: 2026-10-04 (발행 접두 아래 401·403 어긋남 판정을
+#         KCLOUD_REGISTRY 미사용 시로 한정, 그 문구가 release-prepare 완화 경로를
+#         안 타게 수정, ALLOWED_PRIVATE 를 registry-head.sh 공유 자리로 이동)
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. hack/registry-head.sh
 
 check=0
 case "${1:-}" in
@@ -29,34 +39,20 @@ manifest=deploy/integration/image-manifest.yaml
 values=deploy/helm/values.yaml
 
 # snap yq 는 /tmp 를 읽지 못한다. YAML 파싱은 python3 PyYAML 로 한다.
-registry="${KCLOUD_REGISTRY:-$(python3 -c '
+chart_registry="$(python3 -c '
 import sys, yaml
 print((((yaml.safe_load(open(sys.argv[1])) or {}).get("global") or {}).get("registry") or "").strip("/"))
-' "$values")}"
+' "$values")"
+registry="${KCLOUD_REGISTRY:-$chart_registry}"
 [ -n "$registry" ] || { echo "!! 레지스트리를 알 수 없다 (${values} global.registry 가 비었다)." >&2; exit 1; }
 host="${registry%%/*}"
 prefix="${registry#*/}"
 [ "$prefix" = "$registry" ] && prefix=""
-
-# 멀티아치 index 도 받아야 docker pull 이 보는 digest 와 같은 값이 온다.
-ACCEPT='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
-
-# "<상태코드> <digest>" 를 돌려준다. 응답이 없으면 둘 다 빈 값이다.
-head_manifest() {
-  local repo="$1" tag="$2" url="https://${host}/v2/${1}/manifests/${2}"
-  local chal realm svc scope tok=""
-  chal="$(curl -sS -m 20 -I "$url" 2>/dev/null | tr -d '\r' | grep -i '^www-authenticate:' || true)"
-  realm="$(sed -nE 's/.*realm="([^"]*)".*/\1/p' <<<"$chal")"
-  if [ -n "$realm" ]; then
-    svc="$(sed -nE 's/.*service="([^"]*)".*/\1/p' <<<"$chal")"
-    scope="$(sed -nE 's/.*scope="([^"]*)".*/\1/p' <<<"$chal")"
-    tok="$(curl -sS -m 20 "${realm}?service=${svc}&scope=${scope:-repository:${repo}:pull}" 2>/dev/null |
-      python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("token") or d.get("access_token") or "")' 2>/dev/null || true)"
-  fi
-  curl -sS -m 20 -o /dev/null -D - ${tok:+-H "Authorization: Bearer ${tok}"} -H "Accept: ${ACCEPT}" "$url" 2>/dev/null |
-    tr -d '\r' |
-    awk 'tolower($1) ~ /^http\//{c=$2} tolower($1)=="docker-content-digest:"{d=$2} END{print c, d}'
-}
+# KCLOUD_REGISTRY 로 사설 미러를 보는 중이면 거기서는 401 이 정상(자격 증명 필요)이다 —
+# "발행 접두 아래 401 은 결함" 규칙은 차트가 실제로 발행하는 레지스트리(chart_registry)를
+# 볼 때만 쓴다. image-tag-check.sh 의 own 접두 대조와 같은 가드다.
+own_registry=0
+[ "$registry" = "$chart_registry" ] && own_registry=1
 
 entries="$(python3 -c '
 import sys, yaml
@@ -69,13 +65,17 @@ for e in (d.get("kcloud") or []):
 ' "$manifest")"
 [ -n "$entries" ] || { echo "!! ${manifest} kcloud: 절에 digest 항목이 없다." >&2; exit 1; }
 
+# own_registry 일 때만 — 차트가 실제로 발행하는 레지스트리 아래서는 익명 조회
+# 거부(401·403)가 image-tag-check.sh 의 "자기 발행 접두 아래" 예외와 같은 뜻이다 — 공개
+# 경로로 당길 수 없다는 확답이라 결함(어긋남)으로 센다. ALLOWED_PRIVATE(hack/registry-head.sh
+# 에서 source, image-tag-check.sh 와 공유)에 있는 항목만 예외로 건너뛴다.
 updates=""   # 갱신할 "<이미지>\t<digest>" 줄
-ok=0; mismatch=0; stale=0
-mis_list=""; skip_list=""
+ok=0; mismatch=0; stale=0; allowed=0
+mis_list=""; skip_list=""; allow_list=""
 
 while IFS=$'\t' read -r name tag recorded; do
   [ -n "$name" ] || continue
-  read -r code got <<<"$(head_manifest "${prefix:+${prefix}/}${name}" "$tag")"
+  read -r code got <<<"$(head_manifest "$host" "${prefix:+${prefix}/}${name}" "$tag")"
   case "$code" in
     200)
       if [ -z "$got" ]; then
@@ -101,8 +101,31 @@ while IFS=$'\t' read -r name tag recorded; do
 "
       fi
       ;;
+    401|403)
+      if [ "$own_registry" -ne 1 ]; then
+        # 사설 미러를 보는 중이면 401 은 자격 증명이 필요하다는 뜻일 뿐, 그 이미지가
+        # 미발행이라는 확답이 아니다 — 결함으로 세지 않는다.
+        skip_list="${skip_list}  - ${name}:${tag} (조회 못 함: ${code})
+"
+        continue
+      fi
+      reason="${ALLOWED_PRIVATE[${name}:${tag}]:-}"
+      if [ -n "$reason" ]; then
+        allowed=$((allowed + 1))
+        allow_list="${allow_list}  - ${name}:${tag} (허용된 비공개: ${reason})
+"
+      else
+        mismatch=$((mismatch + 1)); stale=$((stale + 1))
+        # "발행본이 없다" 문구를 피한다 — release-prepare.sh 의 pend 분류(그 문구를 찾아
+        # note 로 눅인다)를 타면 image-manifest 에만 있는 이미지의 401 이 어디서도 hard
+        # FAIL 이 되지 않는다. image-tag-check.sh 와 같은 문구("공개 경로로 당길 수
+        # 없다")를 써서 늘 어긋남 그대로 bad 로 분류되게 한다.
+        mis_list="${mis_list}  - ${name}:${tag} 익명 조회 거부(${code}) — 발행 접두 아래라 공개 경로로 당길 수 없다
+"
+      fi
+      ;;
     *)
-      # 401·403 은 자격 증명이 필요한 경로, 빈 값은 응답 자체가 없는 경우다.
+      # 빈 값·429·5xx 는 응답 자체가 없거나 다시 물으면 달라질 수 있는 경우다.
       skip_list="${skip_list}  - ${name}:${tag} (조회 못 함: ${code:-응답 없음})
 "
       ;;
@@ -110,9 +133,10 @@ while IFS=$'\t' read -r name tag recorded; do
 done <<< "$entries"
 
 skipped="$(printf '%s' "$skip_list" | grep -c . || true)"
-echo ">> ${registry} 기준 — 일치 ${ok}건, 어긋남 ${mismatch}건, 건너뜀 ${skipped}건"
+echo ">> ${registry} 기준 — 일치 ${ok}건, 어긋남 ${mismatch}건, 건너뜀 ${skipped}건, 허용된 비공개 ${allowed}건"
 [ -n "$mis_list" ] && { echo "어긋난 항목:"; printf '%s' "$mis_list"; }
 [ -n "$skip_list" ] && { echo "건너뛴 항목(파일 미변경):"; printf '%s' "$skip_list"; }
+[ -n "$allow_list" ] && { echo "허용된 비공개 항목(결함 아님):"; printf '%s' "$allow_list"; }
 
 if [ "$check" -eq 1 ]; then
   [ "$mismatch" -eq 0 ] || exit 1
@@ -121,7 +145,7 @@ if [ "$check" -eq 1 ]; then
     echo "!! 확인한 항목이 0건이다. 레지스트리에 닿지 못했거나 전부 자격 증명이 필요하다." >&2
     exit 1
   fi
-  echo ">> digest ${ok}건이 레지스트리와 맞는다 (건너뛴 ${skipped}건은 확인 못 함)"
+  echo ">> digest ${ok}건이 레지스트리와 맞는다 (건너뛴 ${skipped}건은 확인 못 함, 허용된 비공개 ${allowed}건)"
   exit 0
 fi
 

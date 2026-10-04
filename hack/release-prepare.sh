@@ -2,17 +2,29 @@
 # ============================================================
 # release-prepare.sh: push 직전까지의 발행 준비를 한 번에 돌린다
 # 상세: 선행 조건과 정합 검사를 돌리고, 필요한 태그를 로컬에만 만들고, 사용자가 실행할
-#       push 명령을 순서대로 출력한다. 이 스크립트는 push 하지 않는다. remote 를 읽는
-#       곳은 digest 검사(레지스트리 조회) 하나뿐이고 git remote 는 주소를 읽는 데만 쓴다.
+#       push 명령을 순서대로 출력한다. 이 스크립트는 push 하지 않는다. 레지스트리를 읽는
+#       곳은 digest 검사와 image-tag-check 둘이고(둘 다 조회뿐, push 없음) git remote 는
+#       주소를 읽는 데만 쓴다.
 #       기본은 dry-run 이고 --apply 가 로컬 태그를 만든다. 선행 조건이 하나라도 걸리면
 #       --apply 는 태그를 만들지 않는다 — dry-run 은 그대로 끝까지 돌아 무엇이 왜 걸렸고
 #       무슨 태그·명령이 필요한지 보여준다. 이미 있는 태그는 가리키는 커밋만 대조하고
 #       옮기지 않는다.
+#       image-tag-check 는 기본은 꺼진 검사(CHECK_REGISTRY)지만 여기서는 건너뛰지 않고
+#       직접 돌린다 — 네트워크가 없으면 그 자체로 실패로 보고된다(note 로 눅이지 않는다).
+#       digest-check 의 어긋남 중 "합당한 미발행"(pend) 으로 눅이는 것은 pend 가 어긋남
+#       전체를 설명할 때만이다 — 합당한 미발행 하나(예: 다음 release 태그)가 있다고 그
+#       옆의 다른 어긋남(발행 접두 401 등)까지 덩달아 완화되지 않게 한다.
 #       형제 images 저장소 경로 규약은 test/airgap/manifest-coverage.sh 와 같다.
 #       공개 트리가 빼는 경로·변환하는 파일 목록은 hack/public-chain.sh 에서 읽는다 —
 #       그 파일 자체가 공개 트리에 없으므로, 없으면 그 검사만 건너뛴다(내부 전용 검사).
+#       1단계의 Go 시험 둘은 envtest 가 필요해 KUBEBUILDER_ASSETS 를 Makefile 의 test
+#       타깃과 같은 방법으로 직접 만들어 넘긴다 — 없이 부르면 패키지 TestMain 이 panic 해
+#       무엇을 검사했는지와 무관하게 늘 FAIL 하고, 그러면서 --apply 를 영구 차단한다.
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-04
+# 생성일: 2026-10-03 | 수정일: 2026-10-04 (image-tag-check 를 2단계에 추가, digest-check
+#         의 미발행 완화 조건을 어긋남 전체 설명 여부로 강화, manifest-coverage 의 역방향을
+#         CHECK_REVERSE_COVERAGE=1 로 2단계에 추가, 1단계 Go 시험에 KUBEBUILDER_ASSETS
+#         명시 — 없이는 TestMain panic 으로 늘 FAIL)
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -67,8 +79,28 @@ fi
 
 # 프리셋 image.tag 대조는 chart_version_sync_test.go 가 이미 한다. 같은 대조를 여기에
 # 다시 적으면 한쪽만 고쳐 또 어긋난다.
+#
+# 아래 두 Go 시험 모두 envtest(API 서버)가 필요하다 — internal/controller 패키지의 유일한
+# TestMain(acceleratordescriptor_apply_test.go) 이 -run 필터와 무관하게 항상 먼저 돈다.
+# KUBEBUILDER_ASSETS 없이 부르면 TestMain 이 패키지 전체를 panic 시켜 "무엇을 검사했는지와
+# 무관하게 늘 FAIL" 이 된다 — 릴리스 게이트 자신이 그 대조를 한 번도 안 돌리면서 --apply 를
+# 영구 차단하는 셀프 함정이다. Makefile 의 test 타깃과 같은 방법(ENVTEST use --bin-dir -p
+# path)으로 직접 만든다. --bin-dir 은 절대경로여야 한다 — go test 는 패키지 디렉터리를
+# CWD 로 바꿔 부르므로 상대경로를 주면 "그런 파일 없음" 으로 다시 panic 한다.
+# TestMain 자신도 변수가 비면 bin/k8s 를 훑어 대신 쓰지만, 그 디렉터리가 이미 있을 때만
+# 우연히 통과하는 상태라 여기서는 기대지 않고 매번 명시한다.
+# 자산을 못 구하면 건너뛰지 않고 아래 두 검사 각각을 그 사실로 FAIL 처리한다.
+k8s_ver="$(go list -m -f '{{.Version}}' k8s.io/api 2>/dev/null | awk -F'[v.]' '{printf "1.%d", $3}')"
+assets=""
+if [ -n "$k8s_ver" ] && [ -x "$op/bin/setup-envtest" ]; then
+  assets="$("$op/bin/setup-envtest" use "$k8s_ver" --bin-dir "$op/bin" -p path 2>/dev/null || true)"
+fi
+[ -n "$assets" ] && [ -d "$assets" ] || assets=""
+
 log="$(mktemp)"; blob="$(mktemp)"; trap 'rm -f "$log" "$blob"' EXIT
-if go test ./internal/controller/ -count=1 \
+if [ -z "$assets" ]; then
+  bad "프리셋 image.tag 대조를 돌리지 못했다 — envtest 자산 없음(make setup-envtest 먼저)"
+elif KUBEBUILDER_ASSETS="$assets" go test ./internal/controller/ -count=1 \
      -run 'TestChartAppVersionMatchesPresets|TestDefaultValuesTagMatchesAppVersion' >"$log" 2>&1; then
   ok "작업 트리 프리셋 image.tag 가 차트 선언과 맞는다 (chart_version_sync_test.go)"
 else
@@ -90,7 +122,9 @@ if ! git show "${other_ref}:${other_preset}" >"$blob" 2>"$log"; then
 elif [ ! -s "$blob" ]; then
   # 빈 blob 은 Go 시험을 공허하게 통과시킨다 — 이미지 좌표가 0건이라 아무것도 걸리지 않는다.
   bad "${other_ref}:${other_preset} 가 비었다 — 대조할 내용이 없다"
-elif KCLOUD_OTHER_LINE_PRESET="$blob" go test ./internal/controller/ -count=1 \
+elif [ -z "$assets" ]; then
+  bad "두 라인 프리셋 대조를 돌리지 못했다 — envtest 자산 없음(make setup-envtest 먼저)"
+elif KCLOUD_OTHER_LINE_PRESET="$blob" KUBEBUILDER_ASSETS="$assets" go test ./internal/controller/ -count=1 \
        -run TestReleaseLinePresetsShareNonOperatorImages >"$log" 2>&1; then
   ok "두 라인 프리셋이 operator 이미지 말고는 같은 이미지를 쓴다 (${other_ref} blob 대조)"
 else
@@ -175,15 +209,42 @@ echo
 out="$(bash hack/refresh-image-digests.sh --check 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out" | indent
 # 두 빨강을 구분한다 — 기록과 다른 digest 가 올라와 있는 것(결함)과, 아직 발행되지 않아
-# 대조할 것이 없는 것(발행 뒤 해소)은 다른 사실이다.
+# 대조할 것이 없는 것(발행 뒤 해소)은 다른 사실이다. pend 는 반드시 어긋남 전체를
+# 설명해야 note 로 눅인다 — kcloud-operator 처럼 합당한 미발행 항목이 하나 있다고 해서
+# 그 옆의 다른 어긋남(예: 발행 접두 아래 401, 허용 목록 밖)까지 덩달아 완화되면 안 된다.
 mis="$(printf '%s\n' "$out" | LC_ALL=C grep -c ' -> 레지스트리 ' || true)"
 pend="$(printf '%s\n' "$out" | LC_ALL=C grep -c '발행본이 없다' || true)"
+total="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '어긋남 \K[0-9]+' | head -1 || true)"
 if [ "$rc" -eq 0 ]; then
   ok "image-manifest digest 가 레지스트리와 맞는다"
-elif [ "$mis" -eq 0 ] && [ "$pend" -gt 0 ]; then
+elif [ "$mis" -eq 0 ] && [ "$pend" -gt 0 ] && [ "$pend" = "${total:-}" ]; then
   note "미발행 ${pend}건 때문에 빨강이다 — 발행 뒤 해소된다. 선행 조건 실패로 세지 않는다"
 else
-  bad "image-manifest digest 가 레지스트리와 어긋난다 (불일치 ${mis}건)"
+  bad "image-manifest digest 가 레지스트리와 어긋난다 (어긋남 ${total:-?}건, 그중 합당한 미발행 ${pend}건)"
+fi
+
+echo
+# 기본은 꺼져 있는 검사(CHECK_REGISTRY)지만 release-prepare 는 건너뛰지 않고 직접 돌린다 —
+# 네트워크가 없거나 미발행 태그가 있으면 그대로 실패로 보고한다. note 로 눅이지 않는다.
+out="$(bash hack/image-tag-check.sh 2>&1)" && rc=0 || rc=$?
+printf '%s\n' "$out" | indent
+if [ "$rc" -eq 0 ]; then
+  ok "차트 기본값이 당기는 이미지 태그가 레지스트리에 있다 (image-tag-check)"
+else
+  bad "이미지 태그 실재 확인 실패 — 네트워크가 없거나 미발행 태그가 있다 (image-tag-check)"
+fi
+
+echo
+# manifest-coverage 의 역방향(렌더 → 매니페스트)은 기본이 경고뿐이다(상시 빨강으로 무관한
+# 작업을 막지 않으려는 선택, test/airgap/manifest-coverage.sh 머리말 참고) — release-prepare
+# 는 건너뛰지 않고 CHECK_REVERSE_COVERAGE=1 로 돌려 미등재를 실패로 올린다. 정방향
+# (images.yaml → 매니페스트)은 토글과 무관하게 항상 실패로 올라간다(기존 동작 그대로).
+out="$(CHECK_REVERSE_COVERAGE=1 bash test/airgap/manifest-coverage.sh 2>&1)" && rc=0 || rc=$?
+printf '%s\n' "$out" | indent
+if [ "$rc" -eq 0 ]; then
+  ok "images.yaml·차트 렌더가 쓰는 이미지가 모두 image-manifest.yaml 에 등재돼 있다 (manifest-coverage)"
+else
+  bad "image-manifest.yaml 등재가 어긋난다 — 위 FAIL/WARN 줄 참고 (manifest-coverage)"
 fi
 
 # ------------------------------------------------------------ 3단계

@@ -2,7 +2,14 @@
 # 상세: CRD embed 번들을 먼저 만들어야 golangci-lint 타입체크가 fresh clone 에서도 통과한다.
 #       footprint-check 는 kcloud 차트 정적 렌더 결과를 test/footprint/baseline.json 과
 #       대조한다. 클러스터가 없어 static 모드만 돈다.
-# 생성일: 2025-07-04 | 수정일: 2026-09-21 (CRD kustomization 목록 검사 step 추가)
+#       image-tag-check 는 release 태그(v*) push 에만 돈다 — 차트는 발행 전에 다음
+#       태그를 먼저 적으므로 평시엔 "아직 미발행" 이 정답이라 매 push·PR 마다 돌리면
+#       상시 빨강(신호 없음)이 된다. release.yml 도 같은 push 로 도므로(그 파일 머리말
+#       참고) v* 태그 push 순간엔 실제로 돈다. CHECK_REGISTRY=1 로 직접 켠다 —
+#       helm·PyYAML 이 footprint-check 단계에서 이미 설치돼 추가 설치가 없다. test.yml 은
+#       make test 만 돌려 이 검사를 포함하지 않는다.
+# 생성일: 2025-07-04 | 수정일: 2026-10-04 (이미지 태그 실재 게이트를 release 태그
+#         push 전용으로 추가)
 name: Lint
 
 on:
@@ -46,3 +53,12 @@ jobs:
       # baseline 을 넘으면 실패한다(test/footprint/baseline.json).
       - name: Footprint regression gate
         run: make footprint-check
+
+      # 차트 기본값이 당기는 이미지 태그가 레지스트리에 실재하는지 확인한다. 기본은
+      # 꺼져 있는 검사라 CHECK_REGISTRY=1 로 직접 켠다. release 태그(v*) push 에만 —
+      # 평시 push·PR 은 "다음 태그가 아직 미발행" 이 정상 상태라 늘 빨강이 된다.
+      - name: Image tag existence gate
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: make image-tag-check
+        env:
+          CHECK_REGISTRY: "1"
