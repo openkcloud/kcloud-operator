@@ -1,4 +1,4 @@
-<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-01 -->
+<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-04 -->
 <!-- cdocs-profile: blog -->
 
 # kcloud operator
@@ -218,7 +218,7 @@ RELEASE=kcloud-operator NAMESPACE=kcloud bash deploy/helm/uninstall.sh
 | `deployClusterPolicy` | `true` | `NPUClusterPolicy` CR 자동 생성 |
 | `<vendor>.enabled` | `true` | 벤더별 device-plugin 배치 |
 | `<vendor>.advertiseBy` | `""` | 장치 광고 주체. `dra` 로 바꾸면 벤더 DRA 드라이버가 광고 |
-| `furiosa.rngd.partitionPolicy` | `dual-core` | RNGD 파티션. none/quad-core/dual-core/single-core |
+| `furiosa.rngd.partitionPolicy` | `none` | RNGD 파티션. none/quad-core/dual-core/single-core |
 | `furiosa.unified.enabled` | `false` | Warboy·RNGD 를 통합 device-plugin 하나로 배치 |
 | `driverInstallPolicies.<vendor>.enabled` | `true` | 벤더별 `DriverInstallPolicy` CR 생성 |
 | `webhook.enabled` | `false` | DIP·NCP validating webhook 과 opt-in Pod mutating webhook |

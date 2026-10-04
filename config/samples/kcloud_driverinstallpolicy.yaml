@@ -7,7 +7,6 @@ spec:
   model: generic
   rebootStrategy: IfNeeded
   kernelAllowlist: ["5.15.*", "6.8.*"]
-  containerdMinVersion: "1.7.0"
   driver:
     installer: apt
     version: "nvidia-driver-535"
@@ -27,7 +26,6 @@ spec:
   model: warboy
   rebootStrategy: IfNeeded
   kernelAllowlist: ["5.15.*", "6.8.*"]
-  containerdMinVersion: "1.7.0"
   driver:
     version: "1.0"
     image: "registry.example.com:5000/furiosa-driver-installer:1.0"

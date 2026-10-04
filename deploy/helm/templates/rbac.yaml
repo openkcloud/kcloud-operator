@@ -1,5 +1,6 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25
+# 생성일: 2026-03-25 | 수정일: 2026-10-04 (serviceAccount.create·rbac.create 가드 추가)
+{{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -8,6 +9,8 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ include "kcloud-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- if .Values.rbac.create }}
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -261,3 +264,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "kcloud-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}

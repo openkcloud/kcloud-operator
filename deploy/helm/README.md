@@ -172,13 +172,14 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | 사설 레지스트리 인증 시 |
 | `deployClusterPolicy` | `true` | NPUClusterPolicy CR 자동 생성 |
-| `detector.image` | `…/npu-detector:0.4.3` | 노드 디바이스 감지기 |
+| `detector.image` | `""` | 지정하면 `detector.repository`/`detector.tag` 조립을 무시하고 전체 경로 그대로 사용(노드 디바이스 감지기) |
 | `nvidia.enabled` / `nvidia.devicePluginImage` | `true` / `nvcr.io/nvidia/k8s-device-plugin:v0.17.1` | NVIDIA device-plugin |
 | `furiosa.enabled` / `furiosa.devicePluginImage` | `true` / `ghcr.io/furiosa-ai/k8s-device-plugin:0.10.1` | Warboy device-plugin |
 | `furiosa.rngd.enabled` | `true` | RNGD device-plugin |
 | `furiosa.rngd.devicePluginUpstream` / `devicePluginRepository` / `devicePluginTag` | `docker.io` / `furiosaai/furiosa-device-plugin` / `2026.1.1` | 벤더 공개 RNGD device-plugin(`global.vendorRegistry` 로 조립). `--policy` 미지원 |
 | `furiosa.rngd.partitionPolicy` / `debugMode` | `none` / `false` | `none`(1)/`quad-core`(2)/`dual-core`(4)/`single-core`(8) instance/card. `none` 외 값은 파티션 지원 내부 이미지(`kcloud/furiosa-device-plugin-mi`) 필요 |
-| `rebellions.enabled` / `rebellions.devicePluginImage` | `true` / `…/rebellions/k8s-device-plugin:v0.3.6` | ATOM+ device-plugin |
+| `rebellions.enabled` | `true` | ATOM+ device-plugin |
+| `rebellions.devicePluginUpstream` / `devicePluginRepository` / `devicePluginTag` | `docker.io` / `rebellions/k8s-device-plugin` / `v0.3.6` | 벤더 공개 ATOM+ device-plugin(`global.vendorRegistry` 로 조립) |
 | `driverInstallPolicies.<vendor>.enabled` | `true` | 벤더별 driver 설치 정책 CR 생성 |
 | `driverInstallPolicies.<vendor>.driver.version` / `.image` | 벤더별 | 설치할 드라이버 버전·이미지 |
 | `driverInstallPolicies.<vendor>.driver.mode` | `daemonset` | (job 모드는 legacy) |
@@ -359,7 +360,7 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values \
 ```bash
 # 특정 벤더만 끄기 (예: Rebellions 비활성)
 helm install kcloud-operator deploy/helm -n kcloud --create-namespace \
-  --set rebellions.enabled=false --set driverInstallPolicies.rebellions.enabled=false
+  --set rebellions.enabled=false
 
 # RNGD 파티션 변경 (1 instance/card)
 helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values \
@@ -390,3 +391,27 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
   운영 노트(`operator/tester.md` §5) 참조.
 - **CRD**: helm 자체는 `crds/` 의 CRD 를 삭제하지 않는다. 차트의 `post-delete` Job 이
   대신 지운다(`uninstall.purgeCRDs`, 기본 참). 남기려면 그 값을 거짓으로 둔다.
+- **containerdMinVersion 제거**(2026-10-04): `DriverInstallPolicy` 에서 `containerdMinVersion`
+  필드를 없앴다. kubectl 1.25+ 는 서버 측 필드 검증이 기본 strict 라, 이 필드를 든 손으로 쓴
+  DIP 매니페스트는 조용히 무시되지 않고 거절된다. 오류 메시지가 필드 이름을 알려주므로 그
+  한 줄만 지우면 된다. **이 차트 자신의 values·템플릿·샘플에서는 이미 지웠다.** 그러나 더
+  흔한 경로는 이쪽이다 — 그 전에 설치한 **사이트**가 자기 `-f` values 파일에
+  `driverInstallPolicies.<vendor>.driver.containerdMinVersion` 을 그대로 들고 있으면,
+  `values.schema.json`(아래 항목) 이 kubectl 과 무관하게 `helm upgrade`/`template` 자체를
+  거절한다(`additional properties 'containerdMinVersion' not allowed`). 그 값 파일에서
+  그 줄을 지우고 다시 올린다.
+- **detector.namespace 제거**(2026-10-04): 소비하는 템플릿·컨트롤러 코드가 없던 죽은 값이라
+  지웠다. detector(node-manager)의 실제 네임스페이스는 operator 가 설치된 release
+  namespace 로 고정이며, 이 값으로 바꿀 수 있던 적이 없다. 위와 같은 이유로, 그 전에 자기
+  values 파일에 `detector.namespace` 를 들고 있던 사이트는 `helm upgrade` 가 거절된다 —
+  그 줄을 지운다.
+- **values.schema.json**(2026-10-04 추가): 이 차트는 선언되지 않은 값 키를 `helm
+  template`/`install`/`upgrade` 단계에서 거절한다. 이전에는 helm 이 모르는 키를 조용히
+  버렸다 — 오타 키나 죽은 키가 몇 달째 아무 효과 없이 values 파일에 쌓이는 사고가 반복돼
+  막은 것이다. 거절되면 오류가 `at '/<부모경로>': additional properties '<키>' not allowed`
+  형태로 **키 경로를 그대로** 알려주므로, 그 경로의 그 줄만 지우면 된다. 벤더가 읽지
+  않는 키(예: furiosa 의 `toolkit`, nvidia 의 `driver.trackOnly`)는 문구가 다르다 —
+  `at '/driverInstallPolicies/furiosa': 'allOf' failed` 다음 줄에 `at
+  '.../toolkit': false schema` 로 나온다. 문구는 달라도 경로는 똑같이 알려준다.
+  `affinity`, `resources.limits`/`resources.requests` 는 쿠버네티스 쪽 키라 임의 값을
+  그대로 열어 뒀다 — 그 외 블록은 모르는 키를 전부 막는다.

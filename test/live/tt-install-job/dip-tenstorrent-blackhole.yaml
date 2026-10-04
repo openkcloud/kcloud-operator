@@ -28,7 +28,6 @@ spec:
     allowDowngrade: false
     skipOnPassthrough: true
   kernelAllowlist: ["5.15.*", "6.8.*"]
-  containerdMinVersion: "1.7.0"
   rebootStrategy: IfNeeded
   rebootExecutor: Job
   verifiedVersions:

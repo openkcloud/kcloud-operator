@@ -43,9 +43,6 @@ spec:
           spec:
             description: DriverInstallPolicySpec 은 벤더/모델별 드라이버 설치 정책을 담습니다.
             properties:
-              containerdMinVersion:
-                description: 최소 containerd 버전 (semver)
-                type: string
               driver:
                 description: 설치할 드라이버 사양
                 properties:

@@ -94,9 +94,6 @@ type DriverInstallPolicySpec struct {
 	// 허용 커널 버전 패턴 (예: ["5.15.*","6.8.*"])
 	KernelAllowlist []string `json:"kernelAllowlist,omitempty"`
 
-	// 최소 containerd 버전 (semver)
-	ContainerdMinVersion string `json:"containerdMinVersion,omitempty"`
-
 	// 재부팅 전략
 	// +kubebuilder:validation:Enum=Require;IfNeeded;Never
 	RebootStrategy string `json:"rebootStrategy,omitempty"`

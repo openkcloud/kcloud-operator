@@ -1,6 +1,6 @@
 {{- if .Values.deployClusterPolicy }}
 # clusterpolicy.yaml: NPUClusterPolicy 샘플 CR
-# 생성일: 2026-03-25 | 수정일: 2026-09-28 (managementMode 허용 목록에 delegated 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-04 (detector.image 전체 경로 덮어쓰기 반영)
 apiVersion: npu.ai/v1alpha1
 kind: NPUClusterPolicy
 metadata:
@@ -13,7 +13,7 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   detector:
-    image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.detector.repository "tag" .Values.detector.tag) }}"
+    image: "{{ .Values.detector.image | default (include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.detector.repository "tag" .Values.detector.tag)) }}"
   nvidia:
     enabled: {{ .Values.nvidia.enabled }}
     {{- with .Values.nvidia.advertiseBy }}

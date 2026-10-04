@@ -1,0 +1,152 @@
+// ============================================================
+// chart_values_schema_test.go: values.schema.json 이 모르는 키를 막는지 고정한다
+// 상세: helm 은 스키마가 없으면 오타 키를 오류 없이 받고 조용히 버린다. 그래서 설치자는
+//
+//	자기가 준 값이 먹힌 줄 안다. 닫은 블록은 거절하고, 사이트마다 키가 달라
+//	열어 둔 블록은 통과해야 한다 — 둘을 같이 고정해야 엄격함이 의도대로 걸렸음이 남는다.
+//
+// 주의: 이 시험은 os/exec 로 helm 을 부른다. Go 테스트 캐시는 그 의존을 보지 못하므로 손으로
+//
+//	돌릴 때는 `-count=1` 을 붙일 것(`make test` 는 -coverprofile 로 캐시를 끈다).
+//
+// 생성일: 2026-10-04
+// ============================================================
+package controller
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+// helmRenderWithSet 은 --set 한 쌍으로 차트 렌더를 시도하고 성공 여부와 출력을 돌려준다.
+// helmTemplate 과 달리 실패를 t.Fatalf 로 끝내지 않는다 — 거절 자체가 기대값인 시험이 있다.
+func helmRenderWithSet(t *testing.T, set string) (bool, string) {
+	t.Helper()
+	bin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm 이 PATH 에 없다 — 스키마 렌더 시험 건너뜀")
+	}
+	out, err := exec.Command(bin, "template", "t", "../../deploy/helm", "--set", set).CombinedOutput()
+	return err == nil, string(out)
+}
+
+// 스키마 파일이 실재하고 파싱되어야 한다. 깨진 JSON 이면 helm 이 모든 렌더를 거절한다.
+func TestChartValuesSchemaParses(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/helm/values.schema.json")
+	if err != nil {
+		t.Fatalf("values.schema.json 읽기 실패: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("values.schema.json 파싱 실패: %v", err)
+	}
+	if doc["additionalProperties"] != false {
+		t.Errorf("최상위가 닫혀 있지 않다: additionalProperties=%v", doc["additionalProperties"])
+	}
+}
+
+// 닫은 블록의 오타 키는 거절돼야 한다. 세 자리를 본다 — 최상위, 중첩 블록,
+// 그리고 $defs 를 $ref 로 공유하는 블록(참조가 풀리지 않으면 여기만 조용히 통과한다).
+func TestChartValuesSchemaRejectsUnknownKeyInClosedBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  string
+		want string
+	}{
+		{"최상위", "relbellions.enabled=false", "'relbellions' not allowed"},
+		{"중첩 블록", "detector.imagee=x", "'imagee' not allowed"},
+		{"$ref 공유 블록", "driverInstallPolicies.nvidia.upgradePolicy.maxUnavailble=2", "'maxUnavailble' not allowed"},
+		{"한 단 닫은 resources", "resources.limitss.cpu=1", "'limitss' not allowed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, out := helmRenderWithSet(t, tc.set)
+			if ok {
+				t.Fatalf("%s 오타 키가 거절되지 않았다 — 스키마가 그 블록을 닫지 않았다", tc.set)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("거절 이유가 스키마 위반이 아니다: %q 를 찾지 못함\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// 열어 둔 블록은 통과해야 한다. 키가 커널 릴리스 문자열·노드 라벨이라 차트가 미리 적을 수
+// 없는 자리다 — 닫으면 사전 컴파일 이미지를 커널별로 줄 수 없게 된다.
+func TestChartValuesSchemaKeepsSiteKeyedBlocksOpen(t *testing.T) {
+	for _, tc := range []struct{ name, set string }{
+		{"kernelImages", `driverInstallPolicies.nvidia.driver.kernelImages.5\.15\.0-999-generic=repo/img:tag`},
+		{"nodeSelector", `nodeSelector.example\.com/anything=yes`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, out := helmRenderWithSet(t, tc.set)
+			if !ok {
+				t.Fatalf("열어 둔 블록의 키가 거절됐다: %s\n%s", tc.set, out)
+			}
+		})
+	}
+}
+
+// 벤더 항목은 그 벤더 템플릿이 읽는 키만 받아야 한다. 공유 정의 한 벌을 네 벤더가 쓰므로
+// 합집합으로 두면 읽히지 않는 키가 통과하고 렌더에서 조용히 사라진다 — 바로 이 차트가
+// detector.image 로 겪은 결함이다. 거절과 통과를 쌍으로 고정한다.
+func TestChartValuesSchemaScopesVendorOnlyKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		set   string
+		reads bool // 그 벤더 템플릿이 이 키를 읽는가
+	}{
+		{"toolkit 은 nvidia 만", "driverInstallPolicies.nvidia.toolkit.enabled=true", true},
+		{"toolkit, furiosa", "driverInstallPolicies.furiosa.toolkit.enabled=true", false},
+		{"toolkit, rngd", "driverInstallPolicies.rngd.toolkit.enabled=true", false},
+		{"toolkit, tenstorrent", "driverInstallPolicies.tenstorrent.toolkit.enabled=true", false},
+		{"trackOnly 는 tenstorrent 만", "driverInstallPolicies.tenstorrent.driver.trackOnly=true", true},
+		{"trackOnly, furiosa", "driverInstallPolicies.furiosa.driver.trackOnly=true", false},
+		{"trackOnly, nvidia", "driverInstallPolicies.nvidia.driver.trackOnly=true", false},
+		{"trackOnly, rngd", "driverInstallPolicies.rngd.driver.trackOnly=true", false},
+		{"imageVersionBaked 는 tenstorrent 만", "driverInstallPolicies.tenstorrent.driver.imageVersionBaked=true", true},
+		{"imageVersionBaked, furiosa", "driverInstallPolicies.furiosa.driver.imageVersionBaked=true", false},
+		{"imageVersionBaked, nvidia", "driverInstallPolicies.nvidia.driver.imageVersionBaked=true", false},
+		{"imageVersionBaked, rngd", "driverInstallPolicies.rngd.driver.imageVersionBaked=true", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, out := helmRenderWithSet(t, tc.set)
+			if tc.reads {
+				if !ok {
+					t.Fatalf("그 벤더가 읽는 키가 거절됐다: %s\n%s", tc.set, out)
+				}
+				return
+			}
+			if ok {
+				t.Fatalf("읽히지 않는 키가 통과했다: %s — 렌더에서 조용히 사라진다", tc.set)
+			}
+			if !strings.Contains(out, "false schema") {
+				t.Errorf("거절 이유가 벤더 제약이 아니다: %q 를 찾지 못함\n%s", "false schema", out)
+			}
+		})
+	}
+}
+
+// 구조를 받는 자리에 스칼라가 오면 거절해야 한다. 통과시키면 템플릿의 toYaml 이
+// 엉뚱한 YAML 을 뱉거나 렌더 중에 터진다.
+func TestChartValuesSchemaRejectsScalarForStructuredBlocks(t *testing.T) {
+	for _, tc := range []struct{ name, set, want string }{
+		{"resources", "resources=notamap", "want object"},
+		{"tolerations", "tolerations=notalist", "want array"},
+		{"affinity", "affinity=notamap", "want object"},
+		{"driver.env", "driverInstallPolicies.nvidia.driver.env=notalist", "want array"},
+		{"toolkit.env", "driverInstallPolicies.nvidia.toolkit.env=notalist", "want array"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, out := helmRenderWithSet(t, tc.set)
+			if ok {
+				t.Fatalf("스칼라가 통과했다: %s", tc.set)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("거절 이유가 타입 위반이 아니다: %q 를 찾지 못함\n%s", tc.want, out)
+			}
+		})
+	}
+}

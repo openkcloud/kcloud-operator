@@ -7,7 +7,6 @@ spec:
   model: generic
   rebootStrategy: IfNeeded
   kernelAllowlist: ["5.15.*","6.8.*"]
-  containerdMinVersion: "1.7.0"
   driver:
     # 방법1) APT 자동(ubuntu-drivers autoinstall 또는 지정 패키지)
     installer: apt
