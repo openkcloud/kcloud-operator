@@ -159,6 +159,11 @@ release-prepare: ## 발행 준비 — 선행 조건·정합 검사와 push 명�
 crd-check: ## Verify config/crd/kustomization.yaml lists every CRD in config/crd/bases.
 	bash hack/crd-kustomize-check.sh
 
+.PHONY: doc-cite-check
+doc-cite-check: ## 주석·values·워크플로가 가리키는 docs/*.md 경로의 실재 검사(스크립트 자가시험 먼저)
+	bash hack/doc-cite-check.sh --self-test
+	bash hack/doc-cite-check.sh
+
 .PHONY: conformance
 conformance: ## Verify every registered vendor satisfies the onboarding contract (test/conformance + internal/controller).
 	go test ./test/conformance/... -v
