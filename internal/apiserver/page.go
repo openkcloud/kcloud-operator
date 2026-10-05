@@ -3,7 +3,7 @@
 // 상세: 이 트랙이 추가하는 모든 GET 목록 엔드포인트가 같은 봉투 {items,total,limit,offset} 를
 //       쓴다. 기존 엔드포인트(status/nodes/{node}/vendors)의 응답 형태는 건드리지 않는다.
 //       잘못된 페이지 파라미터는 오류가 아니라 기본값이다 — 조회 API 를 오타로 막지 않는다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-10-06
 // ============================================================
 
 package apiserver
@@ -57,14 +57,25 @@ func slicePage[T any](items []T, limit, offset int) []T {
 	return items[offset:end]
 }
 
-// writePage 는 잘라낸 목록을 봉투에 담아 200 으로 쓴다.
-func writePage[T any](w http.ResponseWriter, items []T, limit, offset int) {
-	writeJSON(w, http.StatusOK, listEnvelope{
+// pageEnvelope 는 잘라낸 목록을 봉투 구조체로 만든다. writePage·writePageETag 가 공유해
+// 봉투 조립 코드가 두 곳에 따로 생기지 않게 한다.
+func pageEnvelope[T any](items []T, limit, offset int) listEnvelope {
+	return listEnvelope{
 		Items:  slicePage(items, limit, offset),
 		Total:  len(items),
 		Limit:  limit,
 		Offset: offset,
-	})
+	}
+}
+
+// writePage 는 잘라낸 목록을 봉투에 담아 200 으로 쓴다.
+func writePage[T any](w http.ResponseWriter, items []T, limit, offset int) {
+	writeJSON(w, http.StatusOK, pageEnvelope(items, limit, offset))
+}
+
+// writePageETag 는 writePage 와 같되 ETag 조건부 조회를 적용한다(writeJSONETag 참고).
+func writePageETag[T any](w http.ResponseWriter, r *http.Request, items []T, limit, offset int) {
+	writeJSONETag(w, r, http.StatusOK, pageEnvelope(items, limit, offset))
 }
 
 // filterSlice 는 새 슬라이스를 만들어 거른다(입력 배열을 덮어쓰지 않는다).

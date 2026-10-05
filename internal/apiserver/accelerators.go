@@ -71,7 +71,7 @@ func (s *Server) handleAccelerators(w http.ResponseWriter, r *http.Request) {
 		items = filterSlice(items, func(a AcceleratorView) bool { return a.NodeName == n })
 	}
 	limit, offset := pageParams(r)
-	writePage(w, items, limit, offset)
+	writePageETag(w, r, items, limit, offset)
 }
 
 // handleAcceleratorByUID 는 UID 하나를 찾는다. 합성 ID 가 "/" 를 포함하므로 경로 나머지 전체가 UID 다.
@@ -90,7 +90,7 @@ func (s *Server) handleAcceleratorByUID(w http.ResponseWriter, r *http.Request) 
 	}
 	for i := range items {
 		if items[i].UID == uid {
-			writeJSON(w, http.StatusOK, items[i])
+			writeJSONETag(w, r, http.StatusOK, items[i])
 			return
 		}
 	}
@@ -117,5 +117,5 @@ func (s *Server) handleNodeAccelerators(w http.ResponseWriter, r *http.Request) 
 	}
 	items = filterSlice(items, func(a AcceleratorView) bool { return a.NodeName == name })
 	limit, offset := pageParams(r)
-	writePage(w, items, limit, offset)
+	writePageETag(w, r, items, limit, offset)
 }

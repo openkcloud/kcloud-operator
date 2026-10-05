@@ -191,5 +191,5 @@ func (s *Server) handleConsumers(w http.ResponseWriter, r *http.Request) {
 		return out[i].Name < out[j].Name
 	})
 	limit, offset := pageParams(r)
-	writePage(w, out, limit, offset)
+	writePageETag(w, r, out, limit, offset)
 }

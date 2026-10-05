@@ -10,6 +10,8 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -298,7 +300,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	writeJSONETag(w, r, http.StatusOK, status)
 }
 
 func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
@@ -415,6 +417,28 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// writeJSONETag 는 writeJSON 과 같되 본문 해시를 ETag 로 붙이고, If-None-Match 가 같으면 304 와
+// 빈 본문을 낸다. 화면이 5초마다 전체를 다시 받는 대신 왕복 하나로 "안 바뀌었다" 를 확인한다.
+// watch 스트림이 아닌 이유: Rancher 안의 화면은 장수명 연결을 유지하기 어렵고 응답은 수백 KB 를
+// 넘지 않아 전송량보다 왕복 수가 문제다.
+func writeJSONETag(w http.ResponseWriter, r *http.Request, code int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sum := sha256.Sum256(body)
+	tag := `"sha256-` + hex.EncodeToString(sum[:]) + `"`
+	w.Header().Set("ETag", tag)
+	if code == http.StatusOK && r.Header.Get("If-None-Match") == tag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(body)
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
