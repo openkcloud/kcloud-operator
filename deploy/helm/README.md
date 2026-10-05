@@ -232,15 +232,16 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `detector` | `kcloud-node-manager` | `ghcr.io/openkcloud/kcloud-node-manager` |
 | `hostExec` | `kcloud-host-exec` | `ghcr.io/openkcloud/kcloud-host-exec` |
 | `furiosa.exporter` | `furiosa-exporter` | `ghcr.io/openkcloud/furiosa-exporter` |
-| `furiosa.unified.devicePluginRepository` | `kcloud/furiosa-unified-device-plugin` | `ghcr.io/openkcloud/kcloud/furiosa-unified-device-plugin` |
+| `furiosa.unified.devicePluginRepository` | `furiosa-unified-device-plugin` | `ghcr.io/openkcloud/furiosa-unified-device-plugin` |
 | `tenstorrent.devicePluginRepository` | `kcloud-tt-device-plugin` | `ghcr.io/openkcloud/kcloud-tt-device-plugin` |
 | `driverInstallPolicies.nvidia.driver` | `nvidia-driver-ds` | `ghcr.io/openkcloud/nvidia-driver-ds` |
 | `driverInstallPolicies.furiosa.driver` / `.rngd.driver` | `furiosa-driver-ds` | `ghcr.io/openkcloud/furiosa-driver-ds` |
 | `driverInstallPolicies.tenstorrent.driver` | `tenstorrent-driver-ds` | `ghcr.io/openkcloud/tenstorrent-driver-ds` |
 
-`furiosa.unified` 의 `kcloud/` 접두는 오타가 아닙니다. 사내 Harbor 에 그 경로로만
-올라가 있어 지우면 즉시 pull 이 깨지고, `chart_image_path_test.go` 가 그 사실을
-고정하고 있습니다.
+`furiosa.unified` 는 기본값이 `false` 입니다. `true` 로 켜면 표의 그 경로를 당기는데
+해당 태그는 아직 GHCR 에 발행되지 않았습니다. 이 이미지의 빌드 컨텍스트는 공개 저장소에
+없으니, 벤더 공개 이미지에서 직접 구워 올리거나 사내 레지스트리에 올린 뒤
+`global.registry` 를 그쪽으로 돌리십시오.
 
 **벤더(3rd-party) 이미지** — `global.vendorRegistry` 로 조립됩니다. 비어 있으면
 `upstream` 값이 가리키는 공개 레지스트리에서 직접 받습니다.

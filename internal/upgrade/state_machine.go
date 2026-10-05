@@ -1495,6 +1495,11 @@ func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName 
 	return nil
 }
 
+// acceleratorDomains 는 가속기 extended resource 의 도메인 접두다. 리소스명마다 다시
+// 유도하지 않도록 한 번만 만든다 — uninstall 게이트(internal/uninstall/gate.go)가 쓰는
+// 패턴과 같다.
+var acceleratorDomains = intent.AcceleratorResourceDomains()
+
 // hasAcceleratorResourceName 은 리소스명이 등록된 벤더의 가속기 extended resource
 // 도메인 밑에 있는지를 본다. intent.AcceleratorResourceDomains 를 그대로 써서 uninstall
 // 게이트(internal/uninstall/gate.go)와 같은 fail-closed 판정을 공유한다 — 전에는
@@ -1502,7 +1507,7 @@ func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName 
 // 그 목록에 rebellions.ai/ 가 빠져 있어 rebellions ATOM 파드가 드라이버 업그레이드
 // drain 에서 PDB 를 존중하는 eviction 대상으로 인식되지 못했다.
 func hasAcceleratorResourceName(rn string) bool {
-	for _, domain := range intent.AcceleratorResourceDomains() {
+	for _, domain := range acceleratorDomains {
 		if strings.Contains(rn, domain) {
 			return true
 		}

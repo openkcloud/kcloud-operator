@@ -1,8 +1,6 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-04 (detector.image 전체 경로 덮어쓰기 반영,
-#        containerdMinVersion 제거, rollingUpdate.maxUnavailable·serviceAccount.create·
-#        rbac.create 렌더 반영, 소비 코드 없는 detector.namespace 제거,
-#        rbac.create 부분 스위치 설명 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-05 (furiosa.unified.devicePluginRepository 의
+#        중첩 경로 제거)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -334,10 +332,10 @@ furiosa:
   unified:
     enabled: false
     # 자체 구현 device-plugin. global.registry 가 앞에 붙어
-    # <registry>/kcloud/furiosa-unified-device-plugin 이 된다 — 저장소 경로가 프로젝트
-    # 이름과 겹치는 것은 harbor 프로젝트(kcloud) 아래에 kcloud/ 경로로 올렸기 때문이다.
+    # <registry>/furiosa-unified-device-plugin 이 된다. 발행 규약이 "키가 곧 이미지
+    # 이름"(images 저장소 images.yaml)이므로 중간 경로를 넣지 않는다.
     # 워크로드는 kcloud 네임스페이스에 kcloud-furiosa-device-plugin 이름으로 뜬다.
-    devicePluginRepository: "kcloud/furiosa-unified-device-plugin"
+    devicePluginRepository: "furiosa-unified-device-plugin"
     devicePluginTag: "0.1.0"
 
 rebellions:

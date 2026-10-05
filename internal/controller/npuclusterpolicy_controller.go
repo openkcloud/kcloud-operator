@@ -105,7 +105,7 @@ const (
 	// 옛 이름·자리는 furiosaUnifiedLegacy* 로 남겨 한 번 정리한다.
 	furiosaUnifiedDSName       = "kcloud-furiosa-device-plugin"
 	furiosaUnifiedLegacyDSName = "furiosa-unified-device-plugin"
-	furiosaUnifiedImgDefault   = "kcloud/furiosa-unified-device-plugin:0.1.0"
+	furiosaUnifiedImgDefault   = "furiosa-unified-device-plugin:0.1.0"
 	// 양 Furiosa 노드(Warboy/RNGD)가 공통으로 갖는 자립 라벨(node-manager 부여, PCI 0x1ed2).
 	// NFD 비의존 — 통합 DS 공통 셀렉터.
 	furiosaFamilyNodeLabel = "kcloud.ai/furiosa-family.present"

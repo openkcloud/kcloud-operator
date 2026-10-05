@@ -99,7 +99,9 @@ func chartKubeVersionFloor(t *testing.T) (string, int) {
 	if err != nil {
 		t.Fatalf("Chart.yaml 읽기 실패: %v", err)
 	}
-	m := regexp.MustCompile(`(?m)^kubeVersion:\s*(\S+)\s*$`).FindSubmatch(raw)
+	// 값 전체를 (.+?) 로 잡는다 — (\S+) 는 상한이 붙은 ">=1.31.0-0 <1.40.0-0" 에서
+	// 아예 매치하지 못해 "kubeVersion 이 없다" 는 엉뚱한 사유로 떨어진다.
+	m := regexp.MustCompile(`(?m)^kubeVersion:\s*(.+?)\s*$`).FindSubmatch(raw)
 	if m == nil {
 		t.Fatal("Chart.yaml 에 kubeVersion 이 없다 — 범위 밖 K8s 설치를 막을 수단이 없다")
 	}

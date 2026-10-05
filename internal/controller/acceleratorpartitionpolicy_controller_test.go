@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller_test.go: ACPP reconciler envtest
 // 상세: happy-path(no-diff→Ready) — unified DS(dual-core)+NDR+RNGD 노드 시드.
-// 생성일: 2026-07-23 | 수정일: 2026-07-31
+// 생성일: 2026-07-23 | 수정일: 2026-10-05
 // ============================================================
 package controller
 
@@ -186,7 +186,7 @@ func upsertUnifiedDS(nodeSelector map[string]string) {
 						NodeSelector: nodeSelector,
 						Containers: []corev1.Container{{
 							Name:  "furiosa-device-plugin",
-							Image: "kcloud/furiosa-unified-device-plugin:0.1.0",
+							Image: "furiosa-unified-device-plugin:0.1.0",
 							Env:   []corev1.EnvVar{{Name: testPartitionPolicyEnv, Value: testDualCorePolicy}},
 						}},
 					},
