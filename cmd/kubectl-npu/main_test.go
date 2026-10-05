@@ -3,7 +3,7 @@
 //
 //	describe 명령의 렌더·인자 파싱도 여기서 시험한다.
 //
-// 생성일: 2026-08-11 | 수정일: 2026-09-28
+// 생성일: 2026-08-11 | 수정일: 2026-10-06 (docs 인용 검사 제외 표식)
 package main
 
 import (
@@ -242,19 +242,19 @@ func TestPrintTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 	}
 	out := captureStdout(t, func() {
 		printTable([]string{"REASON", "SOURCE"}, [][]string{
-			{eightRuneKorean, "docs/a.md"},
-			{"ok", "docs/b.md"},
+			{eightRuneKorean, "docs/a.md"}, // doc-cite-check: ignore
+			{"ok", "docs/b.md"},            // doc-cite-check: ignore
 		})
 	})
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 3 {
 		t.Fatalf("헤더 + 데이터 2행이어야 하는데 %d 줄: %q", len(lines), lines)
 	}
-	want := utf8.RuneCountInString(eightRuneKorean) + 2 // 열 폭(가장 긴 셀) + 구분자 2칸
-	if got := runeColStart(t, lines[1], "docs/a.md"); got != want {
+	want := utf8.RuneCountInString(eightRuneKorean) + 2             // 열 폭(가장 긴 셀) + 구분자 2칸
+	if got := runeColStart(t, lines[1], "docs/a.md"); got != want { // doc-cite-check: ignore
 		t.Errorf("한글 행 SOURCE 가 rune %d 에서 시작해야 하는데 %d", want, got)
 	}
-	if got := runeColStart(t, lines[2], "docs/b.md"); got != want {
+	if got := runeColStart(t, lines[2], "docs/b.md"); got != want { // doc-cite-check: ignore
 		t.Errorf("ASCII 행 SOURCE 가 rune %d 에서 시작해야 하는데 %d — byte 폭(len())으로 퇴행하면 %d 이 된다",
 			want, got, len(eightRuneKorean)+2)
 	}
@@ -265,18 +265,18 @@ func TestPrintTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 // 셀을 쓰는 시험이 없었다.
 func TestRenderTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 	out := renderTable([]string{"REASON", "SOURCE"}, [][]string{
-		{eightRuneKorean, "docs/a.md"},
-		{"ok", "docs/b.md"},
+		{eightRuneKorean, "docs/a.md"}, // doc-cite-check: ignore
+		{"ok", "docs/b.md"},            // doc-cite-check: ignore
 	})
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 3 {
 		t.Fatalf("헤더 + 데이터 2행이어야 하는데 %d 줄: %q", len(lines), lines)
 	}
-	want := 2 + utf8.RuneCountInString(eightRuneKorean) + 2 // 들여쓰기 2 + 열 폭 + 구분자 2칸
-	if got := runeColStart(t, lines[1], "docs/a.md"); got != want {
+	want := 2 + utf8.RuneCountInString(eightRuneKorean) + 2         // 들여쓰기 2 + 열 폭 + 구분자 2칸
+	if got := runeColStart(t, lines[1], "docs/a.md"); got != want { // doc-cite-check: ignore
 		t.Errorf("한글 행 SOURCE 가 rune %d 에서 시작해야 하는데 %d", want, got)
 	}
-	if got := runeColStart(t, lines[2], "docs/b.md"); got != want {
+	if got := runeColStart(t, lines[2], "docs/b.md"); got != want { // doc-cite-check: ignore
 		t.Errorf("ASCII 행 SOURCE 가 rune %d 에서 시작해야 하는데 %d — byte 폭(len())으로 퇴행하면 %d 이 된다",
 			want, got, 2+len(eightRuneKorean)+2)
 	}

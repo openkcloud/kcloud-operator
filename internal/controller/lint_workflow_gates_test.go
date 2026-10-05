@@ -4,7 +4,7 @@
 //
 //	YAML 의 run 단계에서 `make <타깃>` 호출을 찾고, 단계가 사라지면 여기서 실패한다.
 //
-// 생성일: 2026-10-05
+// 생성일: 2026-10-05 | 수정일: 2026-10-06
 // ============================================================
 package controller
 
@@ -13,39 +13,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"sigs.k8s.io/yaml"
 )
 
 // workflowRunsMake 는 워크플로 파일의 어느 run 단계가 `make <target>` 을 부르는지 돌려준다.
 // run 블록은 여러 줄일 수 있어 줄 단위로 본다. job 이 0개면 대조가 비었으므로 실패한다.
 func workflowRunsMake(t *testing.T, wfPath, target string) bool {
 	t.Helper()
-	raw, err := os.ReadFile(wfPath)
-	if err != nil {
-		t.Fatalf("%s 읽기 실패: %v", wfPath, err)
-	}
-	var wf struct {
-		Jobs map[string]struct {
-			Steps []struct {
-				Run string `json:"run"`
-			} `json:"steps"`
-		} `json:"jobs"`
-	}
-	if err := yaml.Unmarshal(raw, &wf); err != nil {
-		t.Fatalf("%s 파싱 실패: %v", wfPath, err)
-	}
-	if len(wf.Jobs) == 0 {
-		t.Fatalf("%s: job 이 0개다 — 대조가 비었으면 통과가 아니다", wfPath)
-	}
 	want := "make " + target
-	for _, job := range wf.Jobs {
-		for _, step := range job.Steps {
-			for _, line := range strings.Split(step.Run, "\n") {
-				line = strings.TrimSpace(line)
-				if line == want || strings.HasPrefix(line, want+" ") {
-					return true
-				}
+	for _, step := range workflowSteps(t, wfPath) {
+		for _, line := range strings.Split(step.Run, "\n") {
+			line = strings.TrimSpace(line)
+			if line == want || strings.HasPrefix(line, want+" ") {
+				return true
 			}
 		}
 	}

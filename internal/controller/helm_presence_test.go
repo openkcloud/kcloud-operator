@@ -8,7 +8,7 @@
 //	그래서 판정을 helmBinary 하나로 모았다: CI 면 하드 실패, 아니면 건너뛴다.
 //	TestCIWorkflowInstallsHelm 은 그 전제의 다른 쪽 — 워크플로 선언 자체가 사라지는 경우다.
 //
-// 생성일: 2026-10-05
+// 생성일: 2026-10-05 | 수정일: 2026-10-06
 // ============================================================
 package controller
 
@@ -18,8 +18,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"sigs.k8s.io/yaml"
 )
 
 // helmBinary 는 helm 실행 파일 경로를 돌려준다. 없으면 CI 에서는 하드 실패하고 로컬에서는
@@ -118,31 +116,10 @@ func TestWorkflowStepInstallsHelmDistinguishesInstallFromUse(t *testing.T) {
 // 조용히 사라지는 전제는 test.yml 쪽뿐이다.
 func TestCIWorkflowInstallsHelm(t *testing.T) {
 	const wfPath = "../../.github/workflows/test.yml"
-	raw, err := os.ReadFile(wfPath)
-	if err != nil {
-		t.Fatalf("%s 읽기 실패: %v", wfPath, err)
-	}
-	var wf struct {
-		Jobs map[string]struct {
-			Steps []struct {
-				Name string `json:"name"`
-				Uses string `json:"uses"`
-				Run  string `json:"run"`
-			} `json:"steps"`
-		} `json:"jobs"`
-	}
-	if err := yaml.Unmarshal(raw, &wf); err != nil {
-		t.Fatalf("%s 파싱 실패: %v", wfPath, err)
-	}
-	if len(wf.Jobs) == 0 {
-		t.Fatalf("%s: job 이 0개다 — 대조가 비었으면 통과가 아니다", wfPath)
-	}
-	for _, job := range wf.Jobs {
-		for _, step := range job.Steps {
-			if workflowStepInstallsHelm(step.Uses, step.Run) {
-				t.Logf("%s: helm 설치 단계 발견 — name=%q uses=%q", wfPath, step.Name, step.Uses)
-				return
-			}
+	for _, step := range workflowSteps(t, wfPath) {
+		if workflowStepInstallsHelm(step.Uses, step.Run) {
+			t.Logf("%s: helm 설치 단계 발견 — name=%q uses=%q", wfPath, step.Name, step.Uses)
+			return
 		}
 	}
 	t.Errorf("%s 에 helm 을 설치하는 단계가 없다 — 차트 렌더 시험이 건너뛰어 조용히 "+
