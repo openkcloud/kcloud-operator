@@ -1,4 +1,4 @@
-<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-04 -->
+<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-06 (화면용 ServiceAccount 묶음 값 추가) -->
 <!-- cdocs-profile: blog -->
 
 # kcloud operator
@@ -225,6 +225,7 @@ RELEASE=kcloud-operator NAMESPACE=kcloud bash deploy/helm/uninstall.sh
 | `driverInstallPolicies.<vendor>.enabled` | `true` | 벤더별 `DriverInstallPolicy` CR 생성 |
 | `webhook.enabled` | `false` | DIP·NCP validating webhook 과 opt-in Pod mutating webhook |
 | `api.enabled` | `false` | 관리 REST API 와 웹 콘솔(`:9444` HTTPS) |
+| `api.console.extraServiceAccounts` | `[]` | 외부 화면용 SA·권한 묶음 목록(name, role=viewer\|operator) |
 | `metrics.enabled` | `false` | controller-runtime 지표 노출 |
 | `operationCoordinator.mode` | `off` | `delegate` 면 장치 변경을 `AcceleratorOperation` 트랜잭션으로 직렬화 |
 | `nvidia.dcgmExporter.enabled` | `false` | NVIDIA 텔레메트리 exporter(`:9400`) |

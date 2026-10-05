@@ -12,7 +12,8 @@
 #       담은 SA 를 따로 둔다.
 #       viewer 는 조회 라우트만, operator 는 정책 생성·삭제와 드라이버 제어까지 포함한다.
 #       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
-# 생성일: 2026-09-03 | 수정일: 2026-10-06 (operator 에 acceleratorworkloads create·delete 권한 추가)
+# 생성일: 2026-09-03 | 수정일: 2026-10-06 (operator 에 acceleratorworkloads create·delete 권한 추가;
+#         api.console.extraServiceAccounts 로 화면용 SA·바인딩 묶음 추가)
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $sa := printf "%s-console" $fullname }}
@@ -94,5 +95,34 @@ subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- range $i, $extra := (default list (.Values.api.console | default dict).extraServiceAccounts) }}
+{{- $role := default "viewer" $extra.role }}
+{{- if not (or (eq $role "viewer") (eq $role "operator")) }}
+{{- fail (printf "api.console.extraServiceAccounts[%d].role=%q — viewer 또는 operator 만 허용" $i $role) }}
+{{- end }}
+{{- $name := printf "%s-console-%s" $fullname (required "api.console.extraServiceAccounts[].name 은 필수" $extra.name) }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-viewer
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $fullname }}-console-viewer}
+subjects: [{kind: ServiceAccount, name: {{ $name }}, namespace: {{ $.Release.Namespace }}}]
+{{- if eq $role "operator" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-operator
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $fullname }}-console-operator}
+subjects: [{kind: ServiceAccount, name: {{ $name }}, namespace: {{ $.Release.Namespace }}}]
+{{- end }}
 {{- end }}
 {{- end }}

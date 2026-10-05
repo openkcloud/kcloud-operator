@@ -1,6 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-05 (furiosa.unified.devicePluginRepository 의
-#        중첩 경로 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-06 (화면용 ServiceAccount 묶음 값 추가)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -476,6 +475,11 @@ api:
       # viewer   = 조회 라우트만
       # operator = 정책 생성·삭제와 드라이버 업그레이드·토글까지
       role: viewer
+    # 화면(외부 UI)용 ServiceAccount 를 더 만든다. 항목마다 SA <release>-console-<name> 과 바인딩.
+    # role: viewer(조회만) | operator(viewer + 정책·배포 생성·삭제, 드라이버 제어). 기본 viewer.
+    extraServiceAccounts: []
+    #  - name: partner-ui
+    #    role: operator
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DriverInstallPolicy CR 자동 생성 설정 (driverInstallPolicies와 nvidia/furiosa 구분)
