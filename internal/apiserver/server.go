@@ -169,6 +169,9 @@ func (s *Server) Handler() http.Handler {
 		s.authz("create", "acceleratorpartitionpolicies", s.handleCreatePolicy))
 	mux.HandleFunc("DELETE /api/v1/policies/{name}",
 		s.authz("delete", "acceleratorpartitionpolicies", s.handleDeletePolicy))
+	// 배포 화면: AcceleratorWorkload 생성·삭제. 거절은 정책 라우트와 같은 200+rejection 계약.
+	mux.HandleFunc("POST /api/v1/workloads", s.authz("create", "acceleratorworkloads", s.handleCreateWorkload))
+	mux.HandleFunc("DELETE /api/v1/workloads/{namespace}/{name}", s.authz("delete", "acceleratorworkloads", s.handleDeleteWorkload))
 	// 정적 대시보드. "{$}" 는 정확히 그 경로만 매칭하므로 /api/* 를 가리지 않는다.
 	mux.HandleFunc("GET /ui/{$}", s.handleUI)
 	mux.HandleFunc("GET /{$}", s.handleUI)

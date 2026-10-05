@@ -12,7 +12,7 @@
 #       담은 SA 를 따로 둔다.
 #       viewer 는 조회 라우트만, operator 는 정책 생성·삭제와 드라이버 제어까지 포함한다.
 #       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
-# 생성일: 2026-09-03 | 수정일: 2026-10-05 (viewer 에 acceleratorhealths list 권한 추가)
+# 생성일: 2026-09-03 | 수정일: 2026-10-06 (operator 에 acceleratorworkloads create·delete 권한 추가)
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $sa := printf "%s-console" $fullname }}
@@ -59,9 +59,9 @@ kind: ClusterRole
 metadata:
   name: {{ $fullname }}-console-operator
 rules:
-  # 정책 만들기·되돌리기(POST/DELETE /api/v1/policies).
+  # 정책·배포 만들기·되돌리기(POST/DELETE /api/v1/policies, /api/v1/workloads).
   - apiGroups: ["npu.ai"]
-    resources: ["acceleratorpartitionpolicies"]
+    resources: ["acceleratorpartitionpolicies", "acceleratorworkloads"]
     verbs: ["create", "delete"]
   # 드라이버 업그레이드·롤백은 DIP patch, 벤더 토글은 NCP patch 를 요구한다.
   - apiGroups: ["npu.ai"]

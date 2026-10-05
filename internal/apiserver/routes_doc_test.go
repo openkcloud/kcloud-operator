@@ -24,7 +24,7 @@ import (
 // wantAPIRoutes 는 server.go 가 등록하는 /api/ 관리 라우트 개수다. UI 라우트(GET /ui/{$},
 // GET /{$})는 세지 않는다. 라우트를 더하거나 빼면 이 상수와 문서(status.md·
 // 03-objective-mapping.md 의 라우트 수 표기)를 함께 갱신해야 한다.
-const wantAPIRoutes = 18
+const wantAPIRoutes = 20
 
 // apiRoutePattern 은 server.go 에서 관리 API 라우트 등록을 센다.
 var apiRoutePattern = regexp.MustCompile(`mux\.HandleFunc\("(GET|POST|DELETE|PUT|PATCH) /api/`)
