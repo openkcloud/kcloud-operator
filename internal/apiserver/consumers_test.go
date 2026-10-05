@@ -77,7 +77,7 @@ func TestDevicePluginPodIsNodeAttributed(t *testing.T) {
 	if got.AllocationAPI != "devicePlugin" {
 		t.Errorf("AllocationAPI = %q, 기대 devicePlugin", got.AllocationAPI)
 	}
-	if got.Attribution != "node" {
+	if got.Attribution != AttributionNode {
 		t.Errorf("Attribution = %q, 기대 node", got.Attribution)
 	}
 	if len(got.DeviceUIDs) != 0 {

@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-06
 // ============================================================
 
 package apiserver
@@ -17,6 +17,8 @@ package apiserver
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -80,9 +82,17 @@ type AcceleratorView struct {
 	// Vendor 는 장치 모델을 NDR 집계 행과 매칭해 되짚은 값이다(deviceVendor). 매칭되는 NDR 행이
 	// 없으면 노드 단위 벤더(vendorForNode, 멀티벤더 노드에선 리소스명 사전순이라 부정확할 수 있음)
 	// 로 폴백한다 — 이 경우 오답 가능성이 남는다.
-	Vendor     string `json:"vendor"`
-	Model      string `json:"model,omitempty"`
-	PCIAddress string `json:"pciAddress,omitempty"`
+	Vendor string `json:"vendor"`
+	Model  string `json:"model,omitempty"`
+	// VendorID 는 응답 전체에서 한 벤더를 가리키는 하나의 값이다 — nvidia | furiosa | rebellions |
+	// tenstorrent. 서브벤더(RNGD)는 VendorID=furiosa + Model=rngd 다. Vendor 는 기존 계약대로 둔다.
+	VendorID string `json:"vendorId"`
+	// ResourceNames 는 이 노드가 이 벤더로 광고하는 확장 자원 이름 전부다(값 0 인 옛 등록 포함 —
+	// 화면이 잔재를 판단할 수 있어야 한다). 정렬. 노드 allocatable 에서 직접 읽는다 —
+	// NodeAdvertised 는 카탈로그 밖 이름을 담지 않는다(intent.BuildSnapshot 의 fail-closed
+	// 필터, 리뷰 Important).
+	ResourceNames []string `json:"resourceNames,omitempty"`
+	PCIAddress    string   `json:"pciAddress,omitempty"`
 	// Policy/Phase 는 이 장치를 관리하는 ACPP 다(없으면 빈 문자열 = 미관리).
 	Policy string `json:"policy,omitempty"`
 	Phase  string `json:"phase,omitempty"`
@@ -109,8 +119,19 @@ type AcceleratorView struct {
 	PartitionInstances []PartitionInstanceView `json:"partitionInstances,omitempty"`
 	// NodeAdvertised 는 노드 범위 값이다(장치 범위가 아니다). 이름에 Node 를 넣어 오해를 막는다.
 	NodeAdvertised map[string]int32 `json:"nodeAdvertised,omitempty"`
-	MemoryMiB      int64            `json:"memoryMiB,omitempty"`
-	Capability     CapabilityView   `json:"capability"`
+	// NodeAllocated 는 이 노드의 Running·Pending 파드가 요청한 가속기 리소스 합이다(requests, 없으면
+	// limits). Succeeded·Failed 파드는 장치를 쥐고 있지 않아 빼고, 비가속기 리소스는 세지 않는다.
+	// NodeAdvertised 와 같은 키를 쓴다. 노드 범위 값이다.
+	NodeAllocated map[string]int32 `json:"nodeAllocated,omitempty"`
+	// NodeFree 는 NodeAdvertised - NodeAllocated 다. 음수는 0 으로 깎지 않는다 — 광고보다 많이
+	// 할당된 상태는 화면이 알아야 하는 이상 신호다.
+	NodeFree   map[string]int32 `json:"nodeFree,omitempty"`
+	MemoryMiB  int64            `json:"memoryMiB,omitempty"`
+	Capability CapabilityView   `json:"capability"`
+	// Health 는 이 장치(또는 장치가 특정되지 않으면 노드)의 AcceleratorHealth 판정이다. 그 노드의
+	// CR 이 없으면 비운다 — "건강하다" 로 채우지 않는다. pending·stale 행은 장치가 없거나 낡아 비운다.
+	// +optional
+	Health *HealthView `json:"health,omitempty"`
 }
 
 // toSharingModeView 는 정직성 게이트다 — supported 주장만으로 Verified 를 켜지 않는다.
@@ -353,4 +374,146 @@ func vendorForNode(nc intent.NodeCapability, ndrs []v1alpha1.NodeDeviceReport, n
 		return e[0].Vendor
 	}
 	return ""
+}
+
+// HealthView 는 AcceleratorHealth 판정의 화면용 사본이다. State 는 CR 의 enum
+// (Unknown|Healthy|Degraded|Unhealthy|Quarantined|Recovering)을 그대로 쓴다 — 두 번째 정의를
+// 만들지 않는다. Scope 는 device(status.devices 에 이 행의 PCI 가 있음) 또는 node(노드 판정만).
+type HealthView struct {
+	State      string `json:"state"`
+	Reason     string `json:"reason,omitempty"`
+	Scope      string `json:"scope"`
+	DetectedAt string `json:"detectedAt,omitempty"`
+}
+
+// attachHealth 는 노드 이름으로 AcceleratorHealth 를 찾아 각 행에 붙인다. CR 부재와 판정 불능은
+// 다르다 — 부재는 nil, CR 이 있는데 State 가 비면 Unknown.
+func attachHealth(items []AcceleratorView, healths []v1alpha1.AcceleratorHealth) {
+	byNode := make(map[string]*v1alpha1.AcceleratorHealth, len(healths))
+	for i := range healths {
+		name := healths[i].Spec.NodeName
+		if name == "" {
+			name = healths[i].Name
+		}
+		byNode[name] = &healths[i]
+	}
+	for i := range items {
+		it := &items[i]
+		if it.Pending || it.Stale {
+			continue
+		}
+		h := byNode[it.NodeName]
+		if h == nil {
+			continue
+		}
+		view := &HealthView{State: h.Status.State, Reason: h.Status.Reason, Scope: "node"}
+		if it.PCIAddress != "" {
+			for _, d := range h.Status.Devices {
+				if d.PCIAddress == it.PCIAddress && d.State != "" {
+					view = &HealthView{State: d.State, Reason: d.Reason, Scope: "device"}
+					break
+				}
+			}
+		}
+		if view.State == "" {
+			view.State = "Unknown"
+		}
+		if !h.Status.DetectedAt.IsZero() {
+			view.DetectedAt = h.Status.DetectedAt.UTC().Format(time.RFC3339)
+		}
+		it.Health = view
+	}
+}
+
+// attachAllocation 은 노드별 요청 합을 세어 각 행에 NodeAllocated·NodeFree 를 붙인다.
+func attachAllocation(items []AcceleratorView, pods []corev1.Pod) {
+	perNode := map[string]map[string]int32{}
+	for i := range pods {
+		p := &pods[i]
+		if p.Spec.NodeName == "" || (p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending) {
+			continue
+		}
+		for _, c := range p.Spec.Containers {
+			for name, q := range c.Resources.Requests {
+				if intent.VendorForResource(string(name)) == "" {
+					continue
+				}
+				if perNode[p.Spec.NodeName] == nil {
+					perNode[p.Spec.NodeName] = map[string]int32{}
+				}
+				perNode[p.Spec.NodeName][string(name)] += int32(q.Value())
+			}
+			for name, q := range c.Resources.Limits {
+				if _, hasReq := c.Resources.Requests[name]; hasReq || intent.VendorForResource(string(name)) == "" {
+					continue
+				}
+				if perNode[p.Spec.NodeName] == nil {
+					perNode[p.Spec.NodeName] = map[string]int32{}
+				}
+				perNode[p.Spec.NodeName][string(name)] += int32(q.Value())
+			}
+		}
+	}
+	for i := range items {
+		it := &items[i]
+		if it.NodeAdvertised == nil {
+			continue
+		}
+		alloc := perNode[it.NodeName]
+		it.NodeAllocated = map[string]int32{}
+		it.NodeFree = map[string]int32{}
+		for name, adv := range it.NodeAdvertised {
+			it.NodeAllocated[name] = alloc[name]
+			it.NodeFree[name] = adv - alloc[name]
+		}
+		for name, a := range alloc {
+			if _, ok := it.NodeAdvertised[name]; !ok {
+				it.NodeAllocated[name] = a
+				it.NodeFree[name] = -a
+			}
+		}
+	}
+}
+
+// vendorIDOf 는 내부 벤더 키를 화면용 식별자로 접는다. RNGD 는 Furiosa 의 제품이라 furiosa 로
+// 접고 모델이 rngd 를 말한다. 나머지는 소문자 그대로다.
+func vendorIDOf(vendor string) string {
+	v := strings.ToLower(vendor)
+	if v == "rngd" {
+		return "furiosa"
+	}
+	return v
+}
+
+// attachVendorID 는 VendorID 와 ResourceNames 를 채운다. 자원명의 벤더 판정은
+// intent.VendorForResource 가 알면 그것으로, 모르면(옛 등록) 도메인 접두로 한다.
+// ResourceNames 는 NodeAdvertised 가 아니라 노드 status.allocatable 을 직접 본다 —
+// intent.BuildSnapshot 은 카탈로그에 없는 이름을 걸러내므로(snapshot.go 의 vendor=="" 가드가
+// fail-closed 배치 판정의 근거라 그쪽은 건드리지 않는다), NodeAdvertised 만 보면 카탈로그 밖
+// 옛 등록(예: rebellions/atom)이 영영 ResourceNames 에 오르지 못한다.
+func attachVendorID(items []AcceleratorView, nodes []corev1.Node) {
+	byNode := make(map[string][]string, len(nodes))
+	for i := range nodes {
+		names := make([]string, 0, len(nodes[i].Status.Allocatable))
+		for name := range nodes[i].Status.Allocatable {
+			names = append(names, string(name))
+		}
+		byNode[nodes[i].Name] = names
+	}
+	for i := range items {
+		it := &items[i]
+		it.VendorID = vendorIDOf(it.Vendor)
+		if it.VendorID == "" {
+			continue
+		}
+		var names []string
+		for _, name := range byNode[it.NodeName] {
+			if vendorIDOf(intent.VendorForResource(name)) == it.VendorID ||
+				strings.HasPrefix(strings.ToLower(name), it.VendorID+".") || strings.HasPrefix(strings.ToLower(name), it.VendorID+"/") {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		it.ResourceNames = names
+	}
 }

@@ -233,6 +233,27 @@ func TestNodeAuthzGateOnNodeDerivedRoutes(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesDoesNotRequireHealthList: capabilities 는 건강 판정(acceleratorhealths)을
+// 읽지 않으므로 그 권한이 없어도 403 이면 안 된다 — addendum 이 분리한 capGates/invGates 를
+// 다시 합치는 회귀가 들어오면 이 시험이 막는다. accelerators 는 반대로 그 권한을 요구한다.
+func TestCapabilitiesDoesNotRequireHealthList(t *testing.T) {
+	opts := authnOpts{
+		authenticated: true, username: "sa:no-health", allowed: true,
+		denyResources: map[string]bool{"acceleratorhealths": true},
+	}
+	s, _ := newServer(t, opts, previewObjects()...)
+	if w := do(t, s, "GET", "/api/v1/capabilities", "", "tok"); w.Code == http.StatusForbidden {
+		t.Fatalf("capabilities 는 acceleratorhealths 권한이 없어도 403 이면 안 됨: got %d (%s)", w.Code, w.Body.String())
+	}
+	w := do(t, s, "GET", "/api/v1/accelerators", "", "tok")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("accelerators 는 acceleratorhealths 권한이 없으면 403 이어야 함: got %d (%s)", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "acceleratorhealths") {
+		t.Errorf("403 은 막힌 리소스(acceleratorhealths)를 이름으로 알려야 함: %s", body)
+	}
+}
+
 // 중첩 게이트가 계층마다 TokenReview 를 반복하면 요청당 왕복이 게이트 수만큼 늘어난다.
 // 토큰이 하나면 TokenReview 도 한 번이어야 한다(최종 리뷰 후속 4번).
 func TestAuthzAllDoesOneTokenReview(t *testing.T) {

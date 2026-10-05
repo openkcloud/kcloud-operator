@@ -5,13 +5,17 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-06
 // ============================================================
 
 package apiserver
 
 import (
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -420,6 +424,214 @@ func TestBuildInventory_SyntheticIDIsStableAcrossReportOrder(t *testing.T) {
 	for pci, uid := range forward {
 		if reverse[pci] != uid {
 			t.Fatalf("보고 순서에 따라 %s 의 합성 ID 가 바뀜: %q → %q", pci, uid, reverse[pci])
+		}
+	}
+}
+
+func TestAttachHealth_NoCRMeansNoKey(t *testing.T) {
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", PCIAddress: "0000:18:00.0"}}
+	attachHealth(items, nil)
+	if items[0].Health != nil {
+		t.Fatalf("CR 이 없는 노드의 행에 health 가 붙었다: %+v", items[0].Health)
+	}
+	raw, _ := json.Marshal(items[0])
+	if strings.Contains(string(raw), `"health"`) {
+		t.Fatalf("JSON 에 health 키가 있다: %s", raw)
+	}
+}
+
+func TestAttachHealth_DeviceRowWinsOverNode(t *testing.T) {
+	items := []AcceleratorView{
+		{UID: "u1", NodeName: "n1", PCIAddress: "0000:18:00.0"},
+		{UID: "u2", NodeName: "n1", PCIAddress: "0000:3b:00.0"},
+	}
+	h := v1alpha1.AcceleratorHealth{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Spec: v1alpha1.AcceleratorHealthSpec{NodeName: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{State: "Degraded", Reason: "node-level",
+			DetectedAt: metav1.NewTime(time.Date(2026, 10, 5, 1, 2, 3, 0, time.UTC)),
+			Devices:    []v1alpha1.DeviceHealth{{PCIAddress: "0000:18:00.0", State: "Unhealthy", Reason: "xid-79"}}}}
+	attachHealth(items, []v1alpha1.AcceleratorHealth{h})
+	if got := items[0].Health; got == nil || got.State != "Unhealthy" || got.Reason != "xid-79" || got.Scope != "device" {
+		t.Fatalf("PCI 매칭 행: %+v", got)
+	}
+	if got := items[1].Health; got == nil || got.State != "Degraded" || got.Scope != "node" || got.DetectedAt != "2026-10-05T01:02:03Z" {
+		t.Fatalf("노드 폴백 행: %+v", got)
+	}
+}
+
+func TestAttachHealth_PendingAndStaleRowsCarryNoHealth(t *testing.T) {
+	items := []AcceleratorView{{NodeName: "n1", Pending: true}, {UID: "u1", NodeName: "n1", Stale: true}}
+	h := v1alpha1.AcceleratorHealth{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.AcceleratorHealthStatus{State: "Healthy"}}
+	attachHealth(items, []v1alpha1.AcceleratorHealth{h})
+	for i, it := range items {
+		if it.Health != nil {
+			t.Fatalf("행 %d(pending/stale)에 health 가 붙었다", i)
+		}
+	}
+}
+
+func TestAttachHealth_EmptyStateIsUnknownNotHealthy(t *testing.T) {
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1"}}
+	attachHealth(items, []v1alpha1.AcceleratorHealth{{ObjectMeta: metav1.ObjectMeta{Name: "n1"}}})
+	if got := items[0].Health; got == nil || got.State != "Unknown" || got.Scope != "node" {
+		t.Fatalf("CR 은 있고 판정이 비면 Unknown 이어야 한다: %+v", got)
+	}
+}
+
+// TestAttachHealth_DeviceRowWithEmptyStateFallsBackToNode: PCI 가 일치하는 장치 판정 항목이
+// 있어도 그 State 가 비어 있으면 device 로 확정하지 않고 노드 판정으로 폴백한다(attachHealth 의
+// `d.State != ""` 가드 — 이 가드가 빠지면 비어 있는 장치 판정이 노드의 실제 판정(Degraded)을
+// 가린다). 같은 PCI 라도 device.State 가 채워지면(Unhealthy) 그제서야 device 가 이긴다는
+// 대조를 같은 시험에서 함께 본다.
+func TestAttachHealth_DeviceRowWithEmptyStateFallsBackToNode(t *testing.T) {
+	// goconst: Scope 값 "node"/"device" 리터럴 비교가 이 패키지에서 이미 여러 곳에 있다
+	// (브리프가 지정한 기존 시험들) — 여기서는 상수로 참조해 리터럴 반복을 보태지 않는다.
+	const scopeNode, scopeDevice = "node", "device"
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", PCIAddress: "0000:18:00.0"}}
+	empty := v1alpha1.AcceleratorHealth{ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{State: "Degraded", Reason: "node-level",
+			Devices: []v1alpha1.DeviceHealth{{PCIAddress: "0000:18:00.0", State: ""}}}}
+	attachHealth(items, []v1alpha1.AcceleratorHealth{empty})
+	if got := items[0].Health; got == nil || got.State != "Degraded" || got.Scope != scopeNode {
+		t.Fatalf("device.State 공백은 노드 판정으로 폴백해야 함: %+v", got)
+	}
+
+	items2 := []AcceleratorView{{UID: "u1", NodeName: "n1", PCIAddress: "0000:18:00.0"}}
+	filled := v1alpha1.AcceleratorHealth{ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: v1alpha1.AcceleratorHealthStatus{State: "Degraded", Reason: "node-level",
+			Devices: []v1alpha1.DeviceHealth{{PCIAddress: "0000:18:00.0", State: "Unhealthy", Reason: "xid-79"}}}}
+	attachHealth(items2, []v1alpha1.AcceleratorHealth{filled})
+	if got := items2[0].Health; got == nil || got.State != "Unhealthy" || got.Scope != scopeDevice {
+		t.Fatalf("device.State 채워지면 device 가 이겨야 함: %+v", got)
+	}
+}
+
+// podWith 는 namespace 를 받지 않는다 — 이 파일에서 항상 "a" 하나뿐이라(unparam) acppReady 와
+// 같은 규율로 고정한다.
+func podWith(name, node string, phase corev1.PodPhase, req map[string]string) corev1.Pod {
+	rl := corev1.ResourceList{}
+	for k, v := range req {
+		rl[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	return corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: name},
+		Spec:   corev1.PodSpec{NodeName: node, Containers: []corev1.Container{{Name: "c", Resources: corev1.ResourceRequirements{Requests: rl, Limits: rl}}}},
+		Status: corev1.PodStatus{Phase: phase}}
+}
+
+func TestAttachAllocation_FreeIsAdvertisedMinusRequested(t *testing.T) {
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", NodeAdvertised: map[string]int32{"nvidia.com/gpu": 2}}}
+	attachAllocation(items, []corev1.Pod{podWith("p1", "n1", corev1.PodRunning, map[string]string{"nvidia.com/gpu": "1"})})
+	if items[0].NodeAllocated["nvidia.com/gpu"] != 1 || items[0].NodeFree["nvidia.com/gpu"] != 1 {
+		t.Fatalf("allocated=%v free=%v", items[0].NodeAllocated, items[0].NodeFree)
+	}
+}
+
+func TestAttachAllocation_NegativeFreeIsKept(t *testing.T) {
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", NodeAdvertised: map[string]int32{"nvidia.com/gpu": 1}}}
+	attachAllocation(items, []corev1.Pod{podWith("p1", "n1", corev1.PodRunning, map[string]string{"nvidia.com/gpu": "2"})})
+	if items[0].NodeFree["nvidia.com/gpu"] != -1 {
+		t.Fatalf("광고보다 많이 할당된 상태는 음수로 그대로 내보내야 한다: %v", items[0].NodeFree)
+	}
+}
+
+func TestAttachAllocation_FinishedPodsAndOtherNodesDoNotCount(t *testing.T) {
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", NodeAdvertised: map[string]int32{"furiosa.ai/rngd": 4}}}
+	attachAllocation(items, []corev1.Pod{
+		podWith("done", "n1", corev1.PodSucceeded, map[string]string{"furiosa.ai/rngd": "1"}),
+		podWith("failed", "n1", corev1.PodFailed, map[string]string{"furiosa.ai/rngd": "1"}),
+		podWith("elsewhere", "n2", corev1.PodRunning, map[string]string{"furiosa.ai/rngd": "1"}),
+		podWith("pending", "n1", corev1.PodPending, map[string]string{"furiosa.ai/rngd": "1"}),
+		podWith("cpu-only", "n1", corev1.PodRunning, map[string]string{"cpu": "1"}),
+	})
+	if items[0].NodeAllocated["furiosa.ai/rngd"] != 1 || items[0].NodeFree["furiosa.ai/rngd"] != 3 {
+		t.Fatalf("Pending 만 세고 Succeeded·Failed·타 노드·비가속기는 빠져야 한다: %v / %v", items[0].NodeAllocated, items[0].NodeFree)
+	}
+	if _, ok := items[0].NodeAllocated["cpu"]; ok {
+		t.Fatal("cpu 는 가속기 리소스가 아니다")
+	}
+}
+
+// nodeWithAllocatable 은 status.allocatable 만 채운 노드다. attachVendorID(2회차 수정)가
+// NodeAdvertised 가 아니라 이 필드를 직접 읽으므로, 그 경로를 단위 시험에서 재현하는 전용
+// 픽스처로 쓴다. 노드 이름은 이 파일에서 항상 "n1" 하나뿐이라(unparam) 파라미터로 두지 않고
+// podWith·acppReady 와 같은 규율로 고정한다.
+func nodeWithAllocatable(alloc map[string]string) corev1.Node {
+	rl := corev1.ResourceList{}
+	for k, v := range alloc {
+		rl[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	return corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: corev1.NodeStatus{Allocatable: rl}}
+}
+
+func TestAttachVendorID_RngdIsFuriosaWithModel(t *testing.T) {
+	// goconst: "furiosa" 리터럴이 이 패키지에 이미 여러 곳 있어(accelerators_test.go 등) 상수로 뺀다.
+	const vendorFuriosa = "furiosa"
+	node := nodeWithAllocatable(map[string]string{"furiosa.ai/rngd": "4"})
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", Vendor: "rngd", Model: "rngd",
+		NodeAdvertised: map[string]int32{"furiosa.ai/rngd": 4}}}
+	attachVendorID(items, []corev1.Node{node})
+	if items[0].VendorID != vendorFuriosa || items[0].Model != "rngd" {
+		t.Fatalf("vendorId=%q model=%q", items[0].VendorID, items[0].Model)
+	}
+}
+
+func TestAttachVendorID_ResourceNamesKeepZeroValuedLegacyEntries(t *testing.T) {
+	node := nodeWithAllocatable(map[string]string{"rebellions.ai/ATOM": "2", "rebellions/atom": "0", "nvidia.com/gpu": "1"})
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", Vendor: "rebellions",
+		NodeAdvertised: map[string]int32{"rebellions.ai/ATOM": 2, "rebellions/atom": 0, "nvidia.com/gpu": 1}}}
+	attachVendorID(items, []corev1.Node{node})
+	want := []string{"rebellions.ai/ATOM", "rebellions/atom"}
+	if items[0].VendorID != "rebellions" || !reflect.DeepEqual(items[0].ResourceNames, want) {
+		t.Fatalf("vendorId=%q resourceNames=%v (want %v)", items[0].VendorID, items[0].ResourceNames, want)
+	}
+}
+
+func TestAttachVendorID_UnknownVendorStaysEmpty(t *testing.T) {
+	node := nodeWithAllocatable(map[string]string{"nvidia.com/gpu": "1"})
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", Vendor: ""}}
+	attachVendorID(items, []corev1.Node{node})
+	if items[0].VendorID != "" || items[0].ResourceNames != nil {
+		t.Fatalf("벤더를 모르면 비워야 한다: %q %v", items[0].VendorID, items[0].ResourceNames)
+	}
+}
+
+// 증명: 카탈로그 밖 옛 등록(rebellions/atom, 값 0)이 NodeAdvertised 에는 없어도 ResourceNames 에는 온다 —
+// 화면이 잔재를 판단할 수 있다는 필드 주석의 약속을 실제 입력(노드 allocatable)으로 확인한다.
+func TestAttachVendorID_LegacyNameAbsentFromAdvertisedStillListed(t *testing.T) {
+	node := nodeWithAllocatable(map[string]string{"rebellions.ai/ATOM": "2", "rebellions/atom": "0", "nvidia.com/gpu": "1"})
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", Vendor: "rebellions", NodeAdvertised: map[string]int32{"rebellions.ai/ATOM": 2}}}
+	attachVendorID(items, []corev1.Node{node})
+	want := []string{"rebellions.ai/ATOM", "rebellions/atom"}
+	if !reflect.DeepEqual(items[0].ResourceNames, want) {
+		t.Fatalf("resourceNames=%v want %v", items[0].ResourceNames, want)
+	}
+}
+
+// TestAttachVendorID_ThroughBuildInventory_CatalogFilteredNameStillListed: loadInventory 와
+// 같은 경로(BuildInventory → attachVendorID)를 실제로 돌려 intent.BuildSnapshot 의 fail-closed
+// 필터(카탈로그 밖 이름은 NodeAdvertised 에 올리지 않음, snapshot.go)를 재확인한다. rebellions/atom
+// 은 그 필터로 NodeAdvertised 에선 빠지지만, attachVendorID 가 노드 allocatable 을 직접 보므로
+// ResourceNames 에는 여전히 잡혀야 한다(TestBuildInventory_UnmanagedNodeUsesSyntheticID 의 노드·NDR
+// 픽스처 패턴을 재사용, 벤더만 rebellions 로 바꿈 — furiosa 로는 접두 판정이 걸리지 않는다).
+func TestAttachVendorID_ThroughBuildInventory_CatalogFilteredNameStillListed(t *testing.T) {
+	nodes := []corev1.Node{node("rngd-1", false, map[string]string{"rebellions.ai/ATOM": "2", "rebellions/atom": "0"})}
+	ndrs := []v1alpha1.NodeDeviceReport{ndr("rngd-1",
+		v1alpha1.DeviceEntry{Vendor: "rebellions", Model: "ATOM", Count: 2})}
+
+	items := BuildInventory(nodes, nil, ndrs, intent.DRACapability{})
+	attachVendorID(items, nodes)
+
+	for i := range items {
+		if _, ok := items[i].NodeAdvertised["rebellions/atom"]; ok {
+			t.Fatalf("카탈로그 밖 이름은 BuildSnapshot 필터로 NodeAdvertised 에 없어야 함: %v", items[i].NodeAdvertised)
+		}
+		found := false
+		for _, n := range items[i].ResourceNames {
+			if n == "rebellions/atom" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("노드 allocatable 에 있는 옛 등록은 ResourceNames 에는 있어야 함: %v", items[i].ResourceNames)
 		}
 	}
 }

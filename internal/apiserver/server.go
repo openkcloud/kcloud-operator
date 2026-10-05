@@ -105,7 +105,11 @@ func (s *Server) Handler() http.Handler {
 	acppGate := npuPair("list", "acceleratorpartitionpolicies")
 	ndrGate := npuPair("list", "nodedevicereports")
 	classGate := npuPair("list", "acceleratorclasses")
-	invGates := []authzPair{nodeGate, acppGate, ndrGate}
+	podsGate := authzPair{Group: "", Verb: "list", Resource: "pods"}
+	// 인벤토리 라우트 셋은 건강 판정(acceleratorhealths)·할당량(pods)까지 읽는다. capabilities 는 그것을 읽지
+	// 않으므로 게이트를 나눈다 — 게이트는 라우트가 실제로 읽는 것만 요구한다.
+	capGates := []authzPair{nodeGate, acppGate, ndrGate}
+	invGates := append(append([]authzPair{}, capGates...), npuPair("list", "acceleratorhealths"), podsGate)
 	// read: npu.ai 리소스 list 권한 + core 그룹 nodes 권한. CollectStatus 가 corev1.NodeList 를
 	// 읽어 node.status.allocatable 전량을 응답에 싣기 때문이다(pkg/npuctl/types.go 의 Allocatable
 	// 주석 — 벤더 리소스명이 설정마다 달라 의도적으로 필터하지 않는다). 필터링이 아니라 인가로
@@ -128,7 +132,7 @@ func (s *Server) Handler() http.Handler {
 	// track ③ capability 조회: memoryMiB/sharingReplicas 는 NDR 로 되짚은 값이라(§ intent.applyObservedSharing)
 	// accelerators 와 같은 이유로 nodedevicereports 인가도, node 파생 필드(schedulable/advertised) 때문에
 	// nodes 인가도 함께 요구한다.
-	mux.HandleFunc("GET /api/v1/capabilities", s.authzAll(invGates, s.handleCapabilities))
+	mux.HandleFunc("GET /api/v1/capabilities", s.authzAll(capGates, s.handleCapabilities))
 	// 벤더×능력 선언·검증 뷰: evidence·ACPP·NDR·검증 정책·nodes 를 읽으므로 다섯 다 인가한다
 	// (검증 정책은 evidence 신선도 판정의 감시축을 정한다 — CollectVendorCapabilitiesWith).
 	mux.HandleFunc("GET /api/v1/vendors/capabilities", s.authzAll([]authzPair{
@@ -146,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 	// 소비자 목록은 Pod 와 ResourceClaim 두 core/DRA 리소스를 읽으므로 두 게이트를 모두 요구한다.
 	// resourceclaims 는 클러스터에 없을 수도 있지만(1.28 라인) SAR 은 RBAC 만 보므로 게이트는 선다.
 	mux.HandleFunc("GET /api/v1/consumers", s.authzAll([]authzPair{
-		{Group: "", Verb: "list", Resource: "pods"},
+		podsGate,
 		{Group: "resource.k8s.io", Verb: "list", Resource: "resourceclaims"},
 	}, s.handleConsumers))
 	// core 그룹 리소스이므로 그룹을 명시한다 — npu.ai 로 물으면 SAR 이 항상 거부한다.

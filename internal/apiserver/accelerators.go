@@ -2,7 +2,7 @@
 // accelerators.go: 가속기 인벤토리 조회 엔드포인트(/accelerators, /nodes/{node}/accelerators)
 // 상세: 읽기 전용. Reader 로 노드·ACPP·NDR 을 직접 읽어 BuildInventory 로 접은 뒤 페이지네이션
 //       봉투로 낸다. UID 경로는 "/" 를 포함하는 합성 ID 를 받기 위해 {uid...} 와일드카드를 쓴다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-06
 // ============================================================
 
 package apiserver
@@ -35,6 +35,14 @@ func (s *Server) loadInventory(ctx context.Context) ([]AcceleratorView, error) {
 	if err := s.Reader.List(ctx, &ndrs); err != nil {
 		return nil, fmt.Errorf("list nodedevicereports: %w", err)
 	}
+	var healths v1alpha1.AcceleratorHealthList
+	if err := s.Reader.List(ctx, &healths); err != nil {
+		return nil, fmt.Errorf("list acceleratorhealths: %w", err)
+	}
+	var pods corev1.PodList
+	if err := s.Reader.List(ctx, &pods); err != nil {
+		return nil, fmt.Errorf("list pods: %w", err)
+	}
 	// DRA 가용성은 intent.Load 가 판정한 것을 그대로 받는다(preview 와 같은 경로) — 빈
 	// DRACapability 를 넘기면 DRA 로만 광고하는 노드가 스냅샷에서 통째로 빠져 그 노드의
 	// stale/공유 상태가 이 목록에서 조용히 사라진다.
@@ -42,7 +50,11 @@ func (s *Server) loadInventory(ctx context.Context) ([]AcceleratorView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildInventory(nodes.Items, acpps.Items, ndrs.Items, dra), nil
+	items := BuildInventory(nodes.Items, acpps.Items, ndrs.Items, dra)
+	attachHealth(items, healths.Items)
+	attachAllocation(items, pods.Items)
+	attachVendorID(items, nodes.Items)
+	return items, nil
 }
 
 // handleAccelerators 는 전체 물리 장치 목록이다. ?vendor= ?node= 로 거르고 ?limit= ?offset= 로 자른다.
