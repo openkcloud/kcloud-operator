@@ -6,12 +6,18 @@
 package controller
 
 import (
+	"context"
 	"errors"
+	"os"
+	"strings"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/operation"
@@ -204,3 +210,78 @@ var _ = Describe("revalidate participant", func() {
 		Expect(ok).To(BeFalse())
 	})
 })
+
+// TestPublishMigObservationTo_UpdatesMigFieldThroughPatch: Update → Patch 전환(images 리뷰
+// m-4) 뒤에도 정상 경로(관측값이 실제로 바뀌는 경우)가 여전히 기록되는지 fake client 로
+// 확인한다. consumers 보존 자체는 아래 바이트 단언이 증명한다 — 이 fake client(controller-
+// runtime v0.22)는 내부적으로 unstructured 왕복을 거쳐 빈 슬라이스(omitempty)를 seed 시점에
+// 이미 nil 로 바꿔 버리므로(사전 확인), "저장된 값이 [] 로 남는가" 는 이 하네스로는 못 본다.
+func TestPublishMigObservationTo_UpdatesMigFieldThroughPatch(t *testing.T) {
+	ndr := &npuv1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: npuv1alpha1.NodeDeviceReportStatus{
+			Devices: []npuv1alpha1.DeviceEntry{{PCIeAddress: "0000:18:00.0", MigModeCurrent: "Unknown"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(sharingScheme()).
+		WithObjects(ndr).
+		WithStatusSubresource(&npuv1alpha1.NodeDeviceReport{}).Build()
+
+	obs := []nvidia.Observation{{PCI: "0000:18:00.0", ModeCurrent: migModeDisabled, Geometry: "disabled"}}
+	if err := publishMigObservationTo(context.Background(), c, "n1", obs); err != nil {
+		t.Fatalf("publishMigObservationTo: %v", err)
+	}
+
+	var got npuv1alpha1.NodeDeviceReport
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "n1"}, &got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.Devices[0].MigModeCurrent != migModeDisabled || got.Status.Devices[0].MigCurrentGeometry != "disabled" {
+		t.Fatalf("MIG 필드가 patch 로 갱신되지 않았다: %+v", got.Status.Devices[0])
+	}
+}
+
+// TestPublishMigObservationToPatch_LeavesUnchangedConsumersOutOfPatchBytes: images 리뷰
+// m-4 의 핵심 — detector 가 쓴 consumers: []("쥔 컨테이너 없음")는 MIG 필드만 바뀌는 patch
+// 에 실리면 안 된다. publishMigObservationTo 와 같은 순서(base 를 변경 전에 뜨고, 바뀐
+// 필드만 적용)로 patch 바이트를 직접 계산해 "consumers" 키 부재·"migModeCurrent" 존재를
+// 고정한다(envtest·fake client 모두 불필요 — client.MergeFrom 의 순수 바이트 계산만 쓴다).
+func TestPublishMigObservationToPatch_LeavesUnchangedConsumersOutOfPatchBytes(t *testing.T) {
+	ndr := &npuv1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1"},
+		Status: npuv1alpha1.NodeDeviceReportStatus{
+			Consumers: []npuv1alpha1.DeviceConsumer{},
+			Devices:   []npuv1alpha1.DeviceEntry{{PCIeAddress: "0000:18:00.0", MigModeCurrent: "Unknown"}},
+		},
+	}
+	base := ndr.DeepCopy()
+	modified := ndr.DeepCopy()
+	modified.Status.Devices[0].MigModeCurrent = migModeDisabled
+	modified.Status.Devices[0].MigCurrentGeometry = "disabled"
+
+	b, err := client.MergeFrom(base).Data(modified)
+	if err != nil {
+		t.Fatalf("패치 바이트 계산: %v", err)
+	}
+	if strings.Contains(string(b), "consumers") {
+		t.Fatalf("패치가 안 바뀐 consumers 를 실어 보냈다: %s", b)
+	}
+	if !strings.Contains(string(b), "migModeCurrent") {
+		t.Fatalf("패치에 바뀐 MIG 필드가 없다: %s", b)
+	}
+}
+
+// TestPublishMigObservationTo_UsesPatchNotUpdate: 위 두 시험은 호출부가 Update() 로 되돌려져도
+// 계속 통과한다 — fake client 가 seed 시점에 이미 빈 슬라이스를 nil 로 바꿔 버려(사전 확인) MIG
+// 필드 갱신은 Update 로도 똑같이 성공하고, 패치 바이트 시험은 publishMigObservationTo 를 아예
+// 부르지 않는다. 그래서 호출부 문자열 자체를 고정한다 — policywrite_test.go 의
+// policyWriteSource 와 같은 가드(images 리뷰 m-4 회귀 전용).
+func TestPublishMigObservationTo_UsesPatchNotUpdate(t *testing.T) {
+	b, err := os.ReadFile("operation_participants.go")
+	if err != nil {
+		t.Fatalf("operation_participants.go 읽기 실패: %v", err)
+	}
+	if src := string(b); !strings.Contains(src, "c.Status().Patch(ctx, &ndr, client.MergeFrom(base))") {
+		t.Fatal("publishMigObservationTo 가 더 이상 MergeFrom patch 를 쓰지 않는다(images 리뷰 m-4 회귀)")
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -23,14 +24,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"kcloud-operator/api/v1alpha1"
 )
 
-// fakeReader 는 List 만 채운 client.Reader 다. 핸들러가 Pod 와 ResourceClaim
-// 두 목록을 읽으므로 둘 다 돌려준다.
+// fakeReader 는 List 만 채운 client.Reader 다. 핸들러가 Pod·ResourceClaim·
+// NodeDeviceReport 세 목록을 읽으므로 셋 다 돌려준다.
 type fakeReader struct {
 	pods      *corev1.PodList
 	claims    *resourcev1.ResourceClaimList
 	claimsErr error
+	ndrs      *v1alpha1.NodeDeviceReportList
 }
 
 func (f fakeReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
@@ -46,6 +50,8 @@ func (f fakeReader) List(_ context.Context, list client.ObjectList, _ ...client.
 			return f.claimsErr
 		}
 		*v = *f.claims
+	case *v1alpha1.NodeDeviceReportList:
+		*v = *f.ndrs
 	default:
 		return fmt.Errorf("예상 못한 목록 타입 %T", list)
 	}
@@ -70,7 +76,7 @@ func podWithLimits(ns, name, node string, limits map[string]string) corev1.Pod {
 func TestDevicePluginPodIsNodeAttributed(t *testing.T) {
 	pod := podWithLimits("infer", "gpu-0", "k8s-worker1", map[string]string{"nvidia.com/gpu": "2"})
 
-	got, ok := toConsumerView(pod, nil)
+	got, ok := toConsumerView(pod, nil, nil)
 	if !ok {
 		t.Fatal("가속기 요청 Pod 가 걸러졌다")
 	}
@@ -90,7 +96,7 @@ func TestDevicePluginPodIsNodeAttributed(t *testing.T) {
 
 func TestNonAcceleratorPodIsFilteredOut(t *testing.T) {
 	pod := podWithLimits("default", "nginx", "k8s-worker1", map[string]string{"cpu": "1"})
-	if _, ok := toConsumerView(pod, nil); ok {
+	if _, ok := toConsumerView(pod, nil, nil); ok {
 		t.Error("가속기를 요청하지 않은 Pod 가 목록에 들어갔다")
 	}
 }
@@ -121,7 +127,7 @@ func TestAllocatedDRAClaimIsDeviceAttributed(t *testing.T) {
 		},
 	}
 
-	got, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim})
+	got, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim}, nil)
 	if !ok {
 		t.Fatal("DRA Pod 가 걸러졌다")
 	}
@@ -150,7 +156,7 @@ func TestUnallocatedDRAClaimIsPending(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "infer", Name: "vllm-1-npu"},
 	}
 
-	got, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim})
+	got, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim}, nil)
 	if !ok {
 		t.Fatal("미할당 DRA Pod 가 걸러졌다")
 	}
@@ -188,7 +194,7 @@ func getConsumers(t *testing.T, s *Server, query string) []ConsumerView {
 
 func TestHandleConsumersFiltersByNode(t *testing.T) {
 	s := &Server{
-		Reader: fakeReader{pods: consumerFixture(), claims: &resourcev1.ResourceClaimList{}},
+		Reader: fakeReader{pods: consumerFixture(), claims: &resourcev1.ResourceClaimList{}, ndrs: &v1alpha1.NodeDeviceReportList{}},
 		Log:    logr.Discard(),
 	}
 
@@ -201,7 +207,7 @@ func TestHandleConsumersFiltersByNode(t *testing.T) {
 // 비가속기 Pod 는 필터 없이도 목록에 들어가지 않는다.
 func TestHandleConsumersExcludesNonAccelerator(t *testing.T) {
 	s := &Server{
-		Reader: fakeReader{pods: consumerFixture(), claims: &resourcev1.ResourceClaimList{}},
+		Reader: fakeReader{pods: consumerFixture(), claims: &resourcev1.ResourceClaimList{}, ndrs: &v1alpha1.NodeDeviceReportList{}},
 		Log:    logr.Discard(),
 	}
 
@@ -220,7 +226,7 @@ func TestHandleConsumersExcludesNonAccelerator(t *testing.T) {
 // 죽이지 말고 device-plugin 축만 내야 한다.
 func TestHandleConsumersSurvivesMissingResourceClaims(t *testing.T) {
 	s := &Server{
-		Reader: fakeReader{pods: consumerFixture(), claimsErr: fmt.Errorf("no matches for kind ResourceClaim")},
+		Reader: fakeReader{pods: consumerFixture(), claimsErr: fmt.Errorf("no matches for kind ResourceClaim"), ndrs: &v1alpha1.NodeDeviceReportList{}},
 		Log:    logr.Discard(),
 	}
 
@@ -230,5 +236,91 @@ func TestHandleConsumersSurvivesMissingResourceClaims(t *testing.T) {
 	}
 	if items[0].Attribution != AttributionNode {
 		t.Errorf("Attribution = %q, 기대 node", items[0].Attribution)
+	}
+}
+
+func TestDevicePluginPodIsDeviceAttributedWhenNDRReportsConsumer(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"})
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.NodeDeviceReportStatus{
+		Consumers: []v1alpha1.DeviceConsumer{{DeviceID: "npu0", ResourceName: "furiosa.ai/rngd", Namespace: "a", Pod: "p1", Container: "c"}}}}
+	v, ok := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if !ok || v.Attribution != AttributionDevice || !reflect.DeepEqual(v.DeviceUIDs, []string{"npu0"}) || v.DeviceIDSource != DeviceIDSourcePodResources {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestDevicePluginPodStaysNodeAttributedWhenConsumersUnknown(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"})
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.NodeDeviceReportStatus{ConsumersError: "소켓 없음"}}
+	v, _ := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if v.Attribution != AttributionNode || len(v.DeviceUIDs) != 0 || v.DeviceIDSource != "" {
+		t.Fatalf("consumers 가 nil 이면 node 등급·DeviceUIDs 비움: %+v", v)
+	}
+}
+
+func TestDevicePluginPodNotInConsumersListStaysNode(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"})
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.NodeDeviceReportStatus{Consumers: []v1alpha1.DeviceConsumer{}}}
+	v, _ := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if v.Attribution != AttributionNode || len(v.DeviceUIDs) != 0 {
+		t.Fatalf("빈 목록은 '쥔 컨테이너 없음' — 이 파드는 매칭되지 않는다: %+v", v)
+	}
+}
+
+func TestDRAAttributionUnchangedByNDRConsumers(t *testing.T) {
+	claimName := "c1"
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
+		Spec: corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "gpu", ResourceClaimName: &claimName}}}}
+	claim := resourcev1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: claimName},
+		Status: resourcev1.ResourceClaimStatus{Allocation: &resourcev1.AllocationResult{Devices: resourcev1.DeviceAllocationResult{
+			Results: []resourcev1.DeviceRequestAllocationResult{{Request: "gpu", Driver: "gpu.nvidia.com", Pool: "n1", Device: "gpu-0"}}}}}}
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.NodeDeviceReportStatus{
+		Consumers: []v1alpha1.DeviceConsumer{{DeviceID: "GPU-uuid", ResourceName: "nvidia.com/gpu", Namespace: "a", Pod: "p1", Container: "c"}}}}
+	v, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim}, []v1alpha1.NodeDeviceReport{ndr})
+	if !ok || v.Attribution != AttributionDevice || !reflect.DeepEqual(v.DeviceUIDs, []string{"gpu-0"}) || v.DeviceIDSource != DeviceIDSourceDRA {
+		t.Fatalf("DRA 경로는 NDR consumers 와 무관하게 할당 결과를 쓴다: %+v", v)
+	}
+}
+
+// spec.nodeName 으로 되짚는다(비어 있으면 metadata.name) — 다른 노드의 NDR 에 같은
+// namespace/pod 소비자가 있어도 귀속하지 않는다(재스케줄 뒤 구 노드 NDR 이 최대
+// 2분간 같은 이름을 들고 있는 창이 있다 — node-device-detector 의 PodResources
+// 수집 신선도 창).
+func TestDevicePluginPodIgnoresOtherNodesNDR(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"}) // 기존 헬퍼 시그니처에 맞춘다
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n2"}, Status: v1alpha1.NodeDeviceReportStatus{
+		Consumers: []v1alpha1.DeviceConsumer{{DeviceID: "npu0", ResourceName: "furiosa.ai/rngd", Namespace: "a", Pod: "p1", Container: "c"}}}}
+	v, _ := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if v.Attribution != AttributionNode || len(v.DeviceUIDs) != 0 || v.DeviceIDSource != "" {
+		t.Fatalf("다른 노드의 NDR 로는 귀속하지 않는다: %+v", v)
+	}
+}
+
+// spec.nodeName 이 metadata.name 과 다른 NDR(재스케줄·수동 생성 등)에서도 device 등급으로
+// 귀속해야 한다 — ndrs[i].Name 만 보던 옛 키는 이 사례에서 조용히 node 등급에 머문다(review I-1).
+func TestDevicePluginPodAttributesBySpecNodeNameNotMetadataName(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"})
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "report-x"}, Spec: v1alpha1.NodeDeviceReportSpec{NodeName: "n1"},
+		Status: v1alpha1.NodeDeviceReportStatus{
+			Consumers: []v1alpha1.DeviceConsumer{{DeviceID: "npu0", ResourceName: "furiosa.ai/rngd", Namespace: "a", Pod: "p1", Container: "c"}}}}
+	v, _ := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if v.Attribution != AttributionDevice || !reflect.DeepEqual(v.DeviceUIDs, []string{"npu0"}) || v.DeviceIDSource != DeviceIDSourcePodResources {
+		t.Fatalf("metadata.name 이 달라도 spec.nodeName 으로 귀속해야 한다: %+v", v)
+	}
+}
+
+// 파드가 컨테이너 둘로 서로 다른 가속기 자원을 쥐면, 그 노드 NDR 의 consumers
+// 가 (컨테이너, resourceName, deviceID) 마다 한 항목씩 내므로 전부 모여야 한다.
+func TestDevicePluginPodCollectsDeviceIDsAcrossContainersAndResources(t *testing.T) {
+	pod := podWithLimits("a", "p1", "n1", map[string]string{"furiosa.ai/rngd": "1"})
+	ndr := v1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n1"}, Status: v1alpha1.NodeDeviceReportStatus{
+		Consumers: []v1alpha1.DeviceConsumer{
+			{DeviceID: "npu0", ResourceName: "furiosa.ai/rngd", Namespace: "a", Pod: "p1", Container: "c1"},
+			{DeviceID: "GPU-abc", ResourceName: "nvidia.com/gpu", Namespace: "a", Pod: "p1", Container: "c2"},
+		}}}
+	v, ok := toConsumerView(pod, nil, []v1alpha1.NodeDeviceReport{ndr})
+	if !ok || v.Attribution != AttributionDevice || v.DeviceIDSource != DeviceIDSourcePodResources ||
+		!reflect.DeepEqual(v.DeviceUIDs, []string{"GPU-abc", "npu0"}) {
+		t.Fatalf("컨테이너·자원이 여럿이어도 그 파드의 deviceID 는 전부 모인다: %+v", v)
 	}
 }

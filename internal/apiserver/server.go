@@ -9,6 +9,7 @@
 package apiserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -149,11 +150,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/classes", s.authz("list", "acceleratorclasses", s.handleClasses))
 	mux.HandleFunc("GET /api/v1/policies", s.authz("list", "acceleratorpartitionpolicies", s.handlePolicies))
 	mux.HandleFunc("GET /api/v1/workloads", s.authz("list", "acceleratorworkloads", s.handleWorkloads))
-	// 소비자 목록은 Pod 와 ResourceClaim 두 core/DRA 리소스를 읽으므로 두 게이트를 모두 요구한다.
+	// 소비자 목록은 Pod·ResourceClaim·NodeDeviceReport 세 리소스를 읽으므로 세 게이트를 모두 요구한다.
 	// resourceclaims 는 클러스터에 없을 수도 있지만(1.28 라인) SAR 은 RBAC 만 보므로 게이트는 선다.
 	mux.HandleFunc("GET /api/v1/consumers", s.authzAll([]authzPair{
 		podsGate,
 		{Group: "resource.k8s.io", Verb: "list", Resource: "resourceclaims"},
+		ndrGate,
 	}, s.handleConsumers))
 	// core 그룹 리소스이므로 그룹을 명시한다 — npu.ai 로 물으면 SAR 이 항상 거부한다.
 	mux.HandleFunc("GET /api/v1/events", s.authzGroup("", "list", "events", s.handleEvents))
@@ -170,8 +172,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/policies/{name}",
 		s.authz("delete", "acceleratorpartitionpolicies", s.handleDeletePolicy))
 	// 배포 화면: AcceleratorWorkload 생성·삭제. 거절은 정책 라우트와 같은 200+rejection 계약.
-	mux.HandleFunc("POST /api/v1/workloads", s.authz("create", "acceleratorworkloads", s.handleCreateWorkload))
-	mux.HandleFunc("DELETE /api/v1/workloads/{namespace}/{name}", s.authz("delete", "acceleratorworkloads", s.handleDeleteWorkload))
+	mux.HandleFunc("POST /api/v1/workloads", s.authzNamespaced("create", "acceleratorworkloads", postBodyNamespace, s.handleCreateWorkload))
+	mux.HandleFunc("DELETE /api/v1/workloads/{namespace}/{name}", s.authzNamespaced("delete", "acceleratorworkloads", deleteWorkloadNamespace, s.handleDeleteWorkload))
 	// 정적 대시보드. "{$}" 는 정확히 그 경로만 매칭하므로 /api/* 를 가리지 않는다.
 	mux.HandleFunc("GET /ui/{$}", s.handleUI)
 	mux.HandleFunc("GET /{$}", s.handleUI)
@@ -295,6 +297,89 @@ func (s *Server) authzGroup(group, verb, resource string, next http.HandlerFunc)
 
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUserKey{}, user.Username)))
 	}
+}
+
+// authzNamespaced 는 namespaced 리소스의 쓰기 인가다 — SubjectAccessReview 에 요청 네임스페이스를 실어
+// RoleBinding 으로 한 네임스페이스만 받은 호출자도 허용되고, 그 밖 네임스페이스는 거부된다.
+// nsOf 가 빈 문자열을 돌려주면 400 으로 끝낸다(네임스페이스 없는 SAR 은 "모든 네임스페이스" 라 쓰지 않는다).
+func (s *Server) authzNamespaced(verb, resource string, nsOf func(*http.Request) (string, error), next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := bearerToken(r)
+		if token == "" {
+			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		tr, err := s.Authn.AuthenticationV1().TokenReviews().Create(r.Context(),
+			&authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}, metav1.CreateOptions{})
+		if err != nil {
+			s.Log.Error(err, "TokenReview 실패")
+			writeError(w, http.StatusInternalServerError, "token review failed")
+			return
+		}
+		if !tr.Status.Authenticated {
+			writeError(w, http.StatusUnauthorized, "token not authenticated")
+			return
+		}
+		user := tr.Status.User
+
+		ns, err := nsOf(r)
+		if err != nil || ns == "" {
+			msg := "namespace is required"
+			if err != nil {
+				msg = err.Error()
+			}
+			writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: reasonBadRequest, Message: msg}})
+			return
+		}
+
+		sar, err := s.Authn.AuthorizationV1().SubjectAccessReviews().Create(r.Context(),
+			&authzv1.SubjectAccessReview{Spec: authzv1.SubjectAccessReviewSpec{
+				User:   user.Username,
+				UID:    user.UID,
+				Groups: user.Groups,
+				ResourceAttributes: &authzv1.ResourceAttributes{
+					Group: apiGroup, Resource: resource, Verb: verb, Namespace: ns,
+				},
+			}}, metav1.CreateOptions{})
+		if err != nil {
+			s.Log.Error(err, "SubjectAccessReview 실패")
+			writeError(w, http.StatusInternalServerError, "authorization review failed")
+			return
+		}
+		if !sar.Status.Allowed {
+			writeError(w, http.StatusForbidden,
+				fmt.Sprintf("user %q not allowed to %s %s in namespace %q", user.Username, verb, qualifiedResource(apiGroup, resource), ns))
+			return
+		}
+
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxUserKey{}, user.Username)))
+	}
+}
+
+// postBodyNamespace 는 workloads 생성 요청 본문에서 namespace 만 먼저 디코드해 인가에 쓴다.
+// 본문을 1MiB 상한으로 전부 읽은 뒤 되돌려 놓아(io.NopCloser) handleCreateWorkload 가 다시
+// 전체를 디코드할 수 있게 한다.
+func postBodyNamespace(r *http.Request) (string, error) {
+	b, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	var body struct {
+		Namespace string `json:"namespace"`
+	}
+	if err := json.Unmarshal(b, &body); err != nil {
+		return "", err
+	}
+	if body.Namespace == "" {
+		return "", errors.New("namespace is required")
+	}
+	return body.Namespace, nil
+}
+
+// deleteWorkloadNamespace 는 삭제 라우트의 경로 세그먼트에서 namespace 를 읽는다.
+func deleteWorkloadNamespace(r *http.Request) (string, error) {
+	return r.PathValue("namespace"), nil
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

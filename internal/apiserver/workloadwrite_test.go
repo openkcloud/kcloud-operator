@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -123,4 +124,25 @@ func TestDeleteWorkload_RemovesAndReportsNotFound(t *testing.T) {
 	if w.Code != http.StatusOK || resp.Rejection == nil || resp.Rejection.Reason != "NotFound" {
 		t.Fatalf("없는 대상 삭제는 200 + rejection NotFound: code=%d body=%s", w.Code, w.Body.String())
 	}
+}
+
+// 상태를 바꾸는 라우트는 누가 눌렀는지 남겨야 한다 — policywrite_test.go 와 같은 가드
+// (최종 리뷰 Minor m-5: 배포 생성·삭제에는 이 가드가 없었다).
+func TestWorkloadWrite_상태_변경은_감사_기록을_남긴다(t *testing.T) {
+	for _, name := range []string{"createWorkload", "deleteWorkload"} {
+		if !strings.Contains(workloadWriteSource(t), `s.audit(r, "`+name+`"`) {
+			t.Errorf("%s 경로에 감사 기록 호출이 없다", name)
+		}
+	}
+}
+
+// workloadWriteSource 는 핸들러 원본을 읽는다 — 감사 기록은 로그로만 나가 응답에 흔적이
+// 없어 httptest 로는 확인할 수 없다.
+func workloadWriteSource(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("workloadwrite.go")
+	if err != nil {
+		t.Fatalf("workloadwrite.go 읽기 실패: %v", err)
+	}
+	return string(b)
 }

@@ -324,3 +324,84 @@ func TestAuthzAllReportsFirstGateInOrder(t *testing.T) {
 		t.Errorf("두 번째 게이트가 먼저 보고됐다 — pairs 순서가 뒤집혔다: %s", body)
 	}
 }
+
+// sarResourceName 은 SubjectAccessReview 의 group-resource 명이다(goconst: 이 파일에
+// 이미 2곳에서 리터럴로 쓰여 3번째부터 상수를 요구한다).
+const sarResourceName = "subjectaccessreviews"
+
+// lastSAR 는 fake clientset 이 기록한, 지정 리소스에 대한 마지막 SubjectAccessReview 요청이다.
+func lastSAR(t *testing.T, fake *k8sfake.Clientset, resource string) *authzv1.SubjectAccessReview {
+	t.Helper()
+	for _, a := range fake.Actions() {
+		if a.GetResource().Resource != sarResourceName {
+			continue
+		}
+		ca, ok := a.(k8stesting.CreateAction)
+		if !ok {
+			continue
+		}
+		if sar, ok := ca.GetObject().(*authzv1.SubjectAccessReview); ok && sar.Spec.ResourceAttributes.Resource == resource {
+			return sar
+		}
+	}
+	t.Fatalf("%s 에 대한 SubjectAccessReview 가 기록되지 않았다", resource)
+	return nil
+}
+
+// I-2: AcceleratorWorkload 는 namespaced 라 쓰기 인가의 SubjectAccessReview 에도 네임스페이스를
+// 실어야 한다 — 비우면 쿠버네티스가 "모든 네임스페이스" 로 읽는다(최종 리뷰 Important #2).
+func TestWorkloadWriteAuthzNamespace(t *testing.T) {
+	t.Run("create 는 본문 네임스페이스를 SAR 에 싣는다", func(t *testing.T) {
+		s, _ := newServer(t, okAuth())
+		fake := s.Authn.(*k8sfake.Clientset)
+		fake.ClearActions()
+		if w := do(t, s, "POST", "/api/v1/workloads", `{"namespace":"team-a","name":"w1","spec":{}}`, "tok"); w.Code != http.StatusOK {
+			t.Fatalf("200 이어야 함: got %d (%s)", w.Code, w.Body.String())
+		}
+		sar := lastSAR(t, fake, "acceleratorworkloads")
+		if sar.Spec.ResourceAttributes.Namespace != "team-a" || sar.Spec.ResourceAttributes.Verb != "create" {
+			t.Fatalf("네임스페이스·verb 불일치: %+v", sar.Spec.ResourceAttributes)
+		}
+	})
+
+	t.Run("delete 는 경로 네임스페이스를 SAR 에 싣는다", func(t *testing.T) {
+		s, _ := newServer(t, okAuth())
+		fake := s.Authn.(*k8sfake.Clientset)
+		fake.ClearActions()
+		if w := do(t, s, "DELETE", "/api/v1/workloads/team-b/w1", "", "tok"); w.Code != http.StatusOK {
+			t.Fatalf("200 이어야 함: got %d (%s)", w.Code, w.Body.String())
+		}
+		sar := lastSAR(t, fake, "acceleratorworkloads")
+		if sar.Spec.ResourceAttributes.Namespace != "team-b" || sar.Spec.ResourceAttributes.Verb != "delete" {
+			t.Fatalf("네임스페이스·verb 불일치: %+v", sar.Spec.ResourceAttributes)
+		}
+	})
+
+	t.Run("SAR 거부는 403 이고 핸들러를 부르지 않는다", func(t *testing.T) {
+		opts := authnOpts{authenticated: true, username: "sa:viewer", allowed: true,
+			denyResources: map[string]bool{"acceleratorworkloads": true}}
+		s, crc := newServer(t, opts)
+		if w := do(t, s, "POST", "/api/v1/workloads", `{"namespace":"team-a","name":"w1","spec":{}}`, "tok"); w.Code != http.StatusForbidden {
+			t.Fatalf("403 이어야 함: got %d (%s)", w.Code, w.Body.String())
+		}
+		var got npuv1alpha1.AcceleratorWorkload
+		if err := crc.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "w1"}, &got); err == nil {
+			t.Fatal("인가 거부인데 CR 이 만들어졌다 — 핸들러가 호출된 것이다")
+		}
+	})
+
+	t.Run("네임스페이스 없는 생성 요청은 400 이고 SAR 을 부르지 않는다", func(t *testing.T) {
+		s, _ := newServer(t, okAuth())
+		fake := s.Authn.(*k8sfake.Clientset)
+		fake.ClearActions()
+		w := do(t, s, "POST", "/api/v1/workloads", `{"name":"w1","spec":{}}`, "tok")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("400 이어야 함: got %d (%s)", w.Code, w.Body.String())
+		}
+		for _, a := range fake.Actions() {
+			if a.GetResource().Resource == sarResourceName {
+				t.Fatalf("네임스페이스가 없으면 SAR 을 부르지 않아야 함: %+v", a)
+			}
+		}
+	})
+}

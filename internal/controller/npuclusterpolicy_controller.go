@@ -1828,6 +1828,7 @@ func (r *NPUClusterPolicyReconciler) ensureDetector(ctx context.Context, pol *np
 
 func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *appsv1.DaemonSet {
 	labels := map[string]string{"app.kubernetes.io/name": "kcloud-node-manager"}
+	hostPathDirOrCreate := corev1.HostPathDirectoryOrCreate
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "kcloud-node-manager",
@@ -1849,46 +1850,89 @@ func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "kcloud-node-manager",
 					Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
-					Containers: []corev1.Container{{
-						Name:            "detector",
-						Image:           image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						// node-agent Metrics 능력: /metrics 포트(비특권 로컬 서버).
-						Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9100}},
-						Env: []corev1.EnvVar{
-							{
-								Name:      "NODE_NAME",
-								ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}},
+					Containers: []corev1.Container{
+						{
+							Name:            "detector",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							// node-agent Metrics 능력: /metrics 포트(비특권 로컬 서버).
+							Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9100}},
+							Env: []corev1.EnvVar{
+								{
+									Name:      "NODE_NAME",
+									ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}},
+								},
+								// NFD/GFD 라벨링 능력 활성화(node patch RBAC 는 kcloud-node-manager-role 에 부여됨).
+								{Name: "NODEAGENT_ENABLE_LABELS", Value: "true"},
 							},
-							// NFD/GFD 라벨링 능력 활성화(node patch RBAC 는 kcloud-node-manager-role 에 부여됨).
-							{Name: "NODEAGENT_ENABLE_LABELS", Value: "true"},
+							// P6(S4-5) Pod Security: 비특권 설계 확정. detector 이미지는 distroless/static:nonroot
+							// (USER 65532)이며 드라이버 버전은 host /proc·/sys 읽기로 감지(root·device 불필요),
+							// nvidia-smi 등 host CLI exec 은 best-effort(실패 무해)라 restricted 프로파일과 양립.
+							SecurityContext: &corev1.SecurityContext{
+								RunAsNonRoot:             boolPtr(true),
+								AllowPrivilegeEscalation: boolPtr(false),
+								ReadOnlyRootFilesystem:   boolPtr(true),
+								Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+								SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "host-proc", MountPath: "/host/proc", ReadOnly: true},
+								{Name: "host-dev", MountPath: "/host/dev", ReadOnly: true},
+								{Name: "host-var", MountPath: "/host/var", ReadOnly: true},
+								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: true},
+								// detector binary 가 /usr/bin/nvidia-smi 검사로 nvidia userland 존재 판단.
+								// /host/usr mount 없으면 nvidiaUserlandPresent()=false → driverVersion="" 보고.
+								{Name: "host-usr", MountPath: "/host/usr", ReadOnly: true},
+								// podresources sidecar 가 쓴 결과를 읽기 전용으로 받는다. detector 에는 kubelet
+								// 소켓 자체를 마운트하지 않는다 — 읽을 수도 없고(root 전용) 권한 범위만 넓어진다.
+								{Name: "podresources-share", MountPath: "/run/podresources", ReadOnly: true},
+							},
 						},
-						// P6(S4-5) Pod Security: 비특권 설계 확정. detector 이미지는 distroless/static:nonroot
-						// (USER 65532)이며 드라이버 버전은 host /proc·/sys 읽기로 감지(root·device 불필요),
-						// nvidia-smi 등 host CLI exec 은 best-effort(실패 무해)라 restricted 프로파일과 양립.
-						SecurityContext: &corev1.SecurityContext{
-							RunAsNonRoot:             boolPtr(true),
-							AllowPrivilegeEscalation: boolPtr(false),
-							ReadOnlyRootFilesystem:   boolPtr(true),
-							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						{
+							Name:            "podresources",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							// Command 를 새 이미지에만 있는 실행 파일로 고정한다(node-manager 0.6.19 이상=
+							// Task 11, /podresources-writer → /detector 심볼릭 링크). 구 이미지는 이 경로가
+							// 없어 이 컨테이너만 시작 실패로 남고 detector 본체는 영향받지 않는다 — 구 이미지가
+							// --podresources-writer 인자를 몰라 detector 보고 루프를 uid 0 으로 한 번 더 돌리는
+							// 이중 보고를 막는다.
+							Command: []string{"/podresources-writer"},
+							Args:    []string{"--podresources-writer"},
+							// writer 모드는 NODE_NAME 을 읽지 않는다 — env 를 주지 않는다(images 리뷰 m-2).
+							// kubelet pod-resources 디렉터리는 root:root 0750, 소켓은 root 소유라 연결에 소켓 쓰기 권한이
+							// 필요하다 — root 가 아니면 못 읽는다(2026-10-05 노드 측정). 그래서 이 컨테이너만 uid 0 으로
+							// 돌리고, 능력은 전부 버리고 rootfs 는 읽기 전용으로 둔다. 할 수 있는 일은 소켓 읽기와
+							// /run/podresources 쓰기뿐이다. detector 본체의 비특권 설계는 그대로다.
+							SecurityContext: &corev1.SecurityContext{
+								RunAsUser:                int64Ptr(0),
+								RunAsNonRoot:             boolPtr(false),
+								Privileged:               boolPtr(false),
+								AllowPrivilegeEscalation: boolPtr(false),
+								ReadOnlyRootFilesystem:   boolPtr(true),
+								Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+								SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "kubelet-podresources", MountPath: hostPodResourcesDir, ReadOnly: true},
+								{Name: "podresources-share", MountPath: "/run/podresources"},
+							},
 						},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "host-proc", MountPath: "/host/proc", ReadOnly: true},
-							{Name: "host-dev", MountPath: "/host/dev", ReadOnly: true},
-							{Name: "host-var", MountPath: "/host/var", ReadOnly: true},
-							{Name: "host-sys", MountPath: "/host/sys", ReadOnly: true},
-							// detector binary 가 /usr/bin/nvidia-smi 검사로 nvidia userland 존재 판단.
-							// /host/usr mount 없으면 nvidiaUserlandPresent()=false → driverVersion="" 보고.
-							{Name: "host-usr", MountPath: "/host/usr", ReadOnly: true},
-						},
-					}},
+					},
 					Volumes: []corev1.Volume{
 						{Name: "host-proc", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/proc"}}},
 						{Name: "host-dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev"}}},
 						{Name: "host-var", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var"}}},
 						{Name: "host-sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
 						{Name: "host-usr", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr"}}},
+						// kubelet-podresources 는 사이드카 전용(root 만 연결 가능한 소켓). Type 을
+						// DirectoryOrCreate 로 둬 디렉터리가 없는 노드(kubelet root 를 옮긴 호스트 등)
+						// 에서도 파드가 뜬다 — 소켓 부재는 writer 가 공유 파일에 사유를 남겨 detector 가
+						// consumersError 로 보고한다(파드 전체가 Pending 이 되어 detector 본체까지
+						// 멈추는 것을 피한다). podresources-share 는 사이드카↔detector 전달용 메모리
+						// emptyDir — 디스크에 닿지 않고 노드 재부팅/파드 재시작마다 비워진다.
+						{Name: "kubelet-podresources", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: hostPodResourcesDir, Type: &hostPathDirOrCreate}}},
+						{Name: "podresources-share", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: resource.NewQuantity(1<<20, resource.BinarySI)}}},
 					},
 				},
 			},

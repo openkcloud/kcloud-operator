@@ -8,7 +8,7 @@
 //	없던 동안은 그 값을 소비하는 템플릿이 없어 helm 이 --set detector.image=<값>
 //	을 조용히 버렸다.
 //
-// 생성일: 2026-10-04
+// 생성일: 2026-10-04 | 수정일: 2026-10-06 (기본 태그 0.6.19)
 // ============================================================
 package controller
 
@@ -26,7 +26,7 @@ func TestChartDetectorImageOverride(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"기본값 조립", nil, `image: "ghcr.io/openkcloud/kcloud-node-manager:0.6.17"`},
+		{"기본값 조립", nil, `image: "ghcr.io/openkcloud/kcloud-node-manager:0.6.19"`},
 		{
 			"전체 경로 덮어쓰기",
 			[]string{"--set", "detector.image=registry.example.com/mirror/npu-detector:v9.9.9"},

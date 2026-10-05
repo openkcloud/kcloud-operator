@@ -171,6 +171,7 @@ func publishMigObservationTo(ctx context.Context, c client.Client,
 	if err := c.Get(ctx, types.NamespacedName{Name: node}, &ndr); err != nil {
 		return client.IgnoreNotFound(err)
 	}
+	base := ndr.DeepCopy()
 	changed := false
 	for i := range ndr.Status.Devices {
 		d := &ndr.Status.Devices[i]
@@ -192,7 +193,9 @@ func publishMigObservationTo(ctx context.Context, c client.Client,
 	if !changed {
 		return nil
 	}
-	return c.Status().Update(ctx, &ndr)
+	// base 이후로 안 바뀐 필드(예: detector 가 쓴 빈 consumers 목록)는 patch 에 실리지 않는다 —
+	// 전체 교체(Update)였다면 그 "쥔 컨테이너 없음" 사실이 지워져 "모름"으로 퇴행했다(images 리뷰 m-4).
+	return c.Status().Patch(ctx, &ndr, client.MergeFrom(base))
 }
 
 // publishMigObservation 은 ACPP 적용 경로의 호출부다 — 규칙 본체는 publishMigObservationTo 하나뿐이다.

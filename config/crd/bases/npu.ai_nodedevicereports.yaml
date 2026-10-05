@@ -60,6 +60,43 @@ spec:
                       type: string
                   type: object
                 type: array
+              consumers:
+                description: |-
+                  Consumers 는 이 노드에서 장치를 쥔 컨테이너 목록이다(kubelet PodResources). nil 은 "모른다"
+                  (수집 실패·미보고), 빈 목록은 "쥔 컨테이너가 없다" — 둘을 구분한다.
+                items:
+                  description: DeviceConsumer 는 kubelet PodResources API 가 낸, 장치 하나를
+                    쥔 컨테이너 하나다. 추측하지 않는다.
+                  properties:
+                    container:
+                      type: string
+                    deviceID:
+                      description: DeviceID 는 kubelet 이 낸 device_ids 원문이다(벤더 device-plugin
+                        이 정한 문자열, PCI 가 아니다).
+                      type: string
+                    namespace:
+                      type: string
+                    pod:
+                      type: string
+                    resourceName:
+                      type: string
+                  required:
+                  - container
+                  - deviceID
+                  - namespace
+                  - pod
+                  - resourceName
+                  type: object
+                type: array
+              consumersError:
+                description: ConsumersError 는 소켓을 읽지 못한 사유다. 채워져 있으면 Consumers 는 nil
+                  이다.
+                type: string
+              consumersObservedAt:
+                description: ConsumersObservedAt 은 Consumers 를 읽은 시각이다. Consumers
+                  가 nil 이 아니면 채운다.
+                format: date-time
+                type: string
               devices:
                 items:
                   properties:

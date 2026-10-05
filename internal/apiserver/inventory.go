@@ -119,9 +119,11 @@ type AcceleratorView struct {
 	PartitionInstances []PartitionInstanceView `json:"partitionInstances,omitempty"`
 	// NodeAdvertised 는 노드 범위 값이다(장치 범위가 아니다). 이름에 Node 를 넣어 오해를 막는다.
 	NodeAdvertised map[string]int32 `json:"nodeAdvertised,omitempty"`
-	// NodeAllocated 는 이 노드의 Running·Pending 파드가 요청한 가속기 리소스 합이다(requests, 없으면
-	// limits). Succeeded·Failed 파드는 장치를 쥐고 있지 않아 빼고, 비가속기 리소스는 세지 않는다.
-	// NodeAdvertised 와 같은 키를 쓴다. 노드 범위 값이다.
+	// NodeAllocated 는 Running·Pending 파드의 일반 컨테이너와 재시작형(사이드카) 초기화
+	// 컨테이너가 요청한 가속기 리소스 합이다(requests, 없으면 limits) — 재시작하지 않는
+	// 초기화 컨테이너는 도는 동안만 쥐므로 세지 않는다. Succeeded·Failed 파드는 장치를 쥐고
+	// 있지 않아 빼고, 비가속기 리소스는 세지 않는다. NodeAdvertised 와 같은 키를 쓴다. 노드
+	// 범위 값이다.
 	NodeAllocated map[string]int32 `json:"nodeAllocated,omitempty"`
 	// NodeFree 는 NodeAdvertised - NodeAllocated 다. 음수는 0 으로 깎지 않는다 — 광고보다 많이
 	// 할당된 상태는 화면이 알아야 하는 이상 신호다.
@@ -380,11 +382,20 @@ func vendorForNode(nc intent.NodeCapability, ndrs []v1alpha1.NodeDeviceReport, n
 // (Unknown|Healthy|Degraded|Unhealthy|Quarantined|Recovering)을 그대로 쓴다 — 두 번째 정의를
 // 만들지 않는다. Scope 는 device(status.devices 에 이 행의 PCI 가 있음) 또는 node(노드 판정만).
 type HealthView struct {
-	State      string `json:"state"`
-	Reason     string `json:"reason,omitempty"`
-	Scope      string `json:"scope"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	Scope  string `json:"scope"`
+	// DetectedAt 은 노드 판정이 현재 상태로 바뀐 시각이다. scope 가 device 면 비어 있다
+	// (장치 판정에는 시각이 없다 — DeviceHealth 에 그 필드 자체가 없다).
 	DetectedAt string `json:"detectedAt,omitempty"`
 }
+
+// HealthView.Scope 값. 이 둘 외의 값을 만들지 않는다 — goconst: "node"/"device" 리터럴을
+// 비교마다 새로 쓰지 않고 이 상수로 모은다(review I-4 가드 추가로 리터럴이 3회를 넘었다).
+const (
+	healthScopeNode   = "node"
+	healthScopeDevice = "device"
+)
 
 // attachHealth 는 노드 이름으로 AcceleratorHealth 를 찾아 각 행에 붙인다. CR 부재와 판정 불능은
 // 다르다 — 부재는 nil, CR 이 있는데 State 가 비면 Unknown.
@@ -406,11 +417,11 @@ func attachHealth(items []AcceleratorView, healths []v1alpha1.AcceleratorHealth)
 		if h == nil {
 			continue
 		}
-		view := &HealthView{State: h.Status.State, Reason: h.Status.Reason, Scope: "node"}
+		view := &HealthView{State: h.Status.State, Reason: h.Status.Reason, Scope: healthScopeNode}
 		if it.PCIAddress != "" {
 			for _, d := range h.Status.Devices {
 				if d.PCIAddress == it.PCIAddress && d.State != "" {
-					view = &HealthView{State: d.State, Reason: d.Reason, Scope: "device"}
+					view = &HealthView{State: d.State, Reason: d.Reason, Scope: healthScopeDevice}
 					break
 				}
 			}
@@ -418,11 +429,26 @@ func attachHealth(items []AcceleratorView, healths []v1alpha1.AcceleratorHealth)
 		if view.State == "" {
 			view.State = "Unknown"
 		}
-		if !h.Status.DetectedAt.IsZero() {
+		// device 범위에는 시각이 없다(DeviceHealth 에 필드 자체가 없다) — 노드 전이 시각을
+		// 장치 판정 옆에 사실처럼 보이면 안 된다(review I-4).
+		if view.Scope == healthScopeNode && !h.Status.DetectedAt.IsZero() {
 			view.DetectedAt = h.Status.DetectedAt.UTC().Format(time.RFC3339)
 		}
 		it.Health = view
 	}
+}
+
+// allocatableContainers 는 파드가 가속기를 쥐고 있는 동안 차지하는 컨테이너 목록이다 — 일반
+// 컨테이너와 재시작형(사이드카) 초기화 컨테이너(RestartPolicy=Always, K8s 1.28+)를 더한다.
+// 재시작하지 않는 초기화 컨테이너는 시작 단계를 지나면 반환하므로 세지 않는다(review I-3).
+func allocatableContainers(p *corev1.Pod) []corev1.Container {
+	out := append([]corev1.Container{}, p.Spec.Containers...)
+	for _, c := range p.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // attachAllocation 은 노드별 요청 합을 세어 각 행에 NodeAllocated·NodeFree 를 붙인다.
@@ -433,7 +459,7 @@ func attachAllocation(items []AcceleratorView, pods []corev1.Pod) {
 		if p.Spec.NodeName == "" || (p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending) {
 			continue
 		}
-		for _, c := range p.Spec.Containers {
+		for _, c := range allocatableContainers(p) {
 			for name, q := range c.Resources.Requests {
 				if intent.VendorForResource(string(name)) == "" {
 					continue

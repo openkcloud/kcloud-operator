@@ -450,8 +450,8 @@ func TestAttachHealth_DeviceRowWinsOverNode(t *testing.T) {
 			DetectedAt: metav1.NewTime(time.Date(2026, 10, 5, 1, 2, 3, 0, time.UTC)),
 			Devices:    []v1alpha1.DeviceHealth{{PCIAddress: "0000:18:00.0", State: "Unhealthy", Reason: "xid-79"}}}}
 	attachHealth(items, []v1alpha1.AcceleratorHealth{h})
-	if got := items[0].Health; got == nil || got.State != "Unhealthy" || got.Reason != "xid-79" || got.Scope != "device" {
-		t.Fatalf("PCI 매칭 행: %+v", got)
+	if got := items[0].Health; got == nil || got.State != "Unhealthy" || got.Reason != "xid-79" || got.Scope != "device" || got.DetectedAt != "" {
+		t.Fatalf("PCI 매칭 행(device 범위는 시각이 없어야 한다): %+v", got)
 	}
 	if got := items[1].Health; got == nil || got.State != "Degraded" || got.Scope != "node" || got.DetectedAt != "2026-10-05T01:02:03Z" {
 		t.Fatalf("노드 폴백 행: %+v", got)
@@ -547,6 +547,30 @@ func TestAttachAllocation_FinishedPodsAndOtherNodesDoNotCount(t *testing.T) {
 	}
 	if _, ok := items[0].NodeAllocated["cpu"]; ok {
 		t.Fatal("cpu 는 가속기 리소스가 아니다")
+	}
+}
+
+// TestAttachAllocation_RestartableInitContainerCountsPlainDoesNot: K8s 1.28+ 사이드카
+// 초기화 컨테이너(restartPolicy: Always)는 파드가 도는 동안 내내 가속기를 쥐므로 더해야
+// 하고, 재시작하지 않는 일반 초기화 컨테이너는 시작 단계에만 쥐므로 빼야 한다(review I-3).
+func TestAttachAllocation_RestartableInitContainerCountsPlainDoesNot(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	req := corev1.ResourceList{"furiosa.ai/rngd": resource.MustParse("1")}
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
+		Spec: corev1.PodSpec{
+			NodeName: "n1",
+			InitContainers: []corev1.Container{
+				{Name: "sidecar", RestartPolicy: &always, Resources: corev1.ResourceRequirements{Requests: req}},
+				{Name: "init", Resources: corev1.ResourceRequirements{Requests: req}},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	items := []AcceleratorView{{UID: "u1", NodeName: "n1", NodeAdvertised: map[string]int32{"furiosa.ai/rngd": 4}}}
+	attachAllocation(items, []corev1.Pod{pod})
+	if items[0].NodeAllocated["furiosa.ai/rngd"] != 1 {
+		t.Fatalf("사이드카 초기화 컨테이너 요청만 세어야 한다(일반 초기화 컨테이너는 제외): %v", items[0].NodeAllocated)
 	}
 }
 

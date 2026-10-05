@@ -1,4 +1,4 @@
-<!-- index.html: kcloud accelerator console — 관리 REST API(:9444) 단일 파일 대시보드 | 생성일: 2026-07-30 | 수정일: 2026-08-12 -->
+<!-- index.html: kcloud accelerator console — 관리 REST API(:9444) 단일 파일 대시보드 | 생성일: 2026-07-30 | 수정일: 2026-10-06 -->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -464,6 +464,7 @@ async function loadUse() {
       esc((c.requests || []).map(q => q.resource + " ×" + q.quantity).join(", ")),
       esc(c.allocationAPI), esc(c.attribution),
       c.attribution === "device" ? esc((c.deviceUIDs || []).join(", "))
+          + (c.deviceIDSource === "kubelet-podresources" ? " (kubelet)" : "")
         : '<span class="muted">장치 단위로 귀속되지 않음 — 모름</span>']));
 }
 

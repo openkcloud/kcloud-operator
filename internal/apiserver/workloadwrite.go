@@ -25,6 +25,10 @@ import (
 // goconst 중복 경고는 이 파일 쪽 호출부 하나를 상수로 좁혀 해소한다.
 const reasonRejected = "Rejected"
 
+// reasonBadRequest 는 입력 자체가 말이 안 될 때의 RejectionView.Reason 값이다(본문 파싱
+// 실패·필수 필드 누락 등). authzNamespaced(server.go)의 네임스페이스 파싱 실패도 이 상수를 쓴다.
+const reasonBadRequest = "BadRequest"
+
 // CreateWorkloadRequest 는 배포 화면이 보내는 생성 요청이다.
 type CreateWorkloadRequest struct {
 	Namespace string                              `json:"namespace"`
@@ -49,16 +53,16 @@ type CreateWorkloadResponse struct {
 func (s *Server) handleCreateWorkload(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: "BadRequest", Message: err.Error()}})
+		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: reasonBadRequest, Message: err.Error()}})
 		return
 	}
 	var req CreateWorkloadRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: "BadRequest", Axis: "요청 본문", Message: err.Error()}})
+		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: reasonBadRequest, Axis: "요청 본문", Message: err.Error()}})
 		return
 	}
 	if req.Namespace == "" || req.Name == "" {
-		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: "BadRequest", Axis: "요청 본문", Message: "namespace 와 name 이 필요하다"}})
+		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: reasonBadRequest, Axis: "요청 본문", Message: "namespace 와 name 이 필요하다"}})
 		return
 	}
 	aw := &npuv1alpha1.AcceleratorWorkload{ObjectMeta: metav1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}, Spec: req.Spec}
@@ -82,7 +86,7 @@ func (s *Server) handleCreateWorkload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	if ns == "" || name == "" {
-		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: "BadRequest", Message: "namespace 와 name 이 필요하다"}})
+		writeJSON(w, http.StatusBadRequest, CreateWorkloadResponse{Rejection: &RejectionView{Reason: reasonBadRequest, Message: "namespace 와 name 이 필요하다"}})
 		return
 	}
 	if err := s.Ctl.DeleteAcceleratorWorkload(r.Context(), ns, name); err != nil {

@@ -3,7 +3,7 @@
 # 상세: 미러(air-gap)와 감사용. condition 은 어떤 상황에서 실제로 pull 되는지다.
 #       digest 는 ghcr.io/openkcloud 발행본(2026-09-10)의 매니페스트 digest 다. 벤더 이미지는 upstream 그대로이며
 #       global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10 | 수정일: 2026-10-05 (통합 Furiosa device-plugin 등재)
+# 생성일: 2026-09-10 | 수정일: 2026-10-06 (node-manager 기본 태그 0.6.19)
 # ============================================================
 release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
@@ -12,8 +12,8 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: sha256:2d88fd1df11232c22bd30f0bfd0741e6c995ef59d9e051d9a3ce244793ed2471  # 발행 뒤 갱신
     condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (digest sha256:2797159760b85c49ab391bc8edf9f891033e43c8a36081f01962f5c6250e9148, 나머지 이미지는 동일)
   - image: kcloud-node-manager
-    tag: "0.6.17"
-    digest: sha256:96238fd7d8bc487dd46b39f56d307077e3e31914bc5ffd71a0343d904b09140f
+    tag: "0.6.19"
+    digest: sha256:96238fd7d8bc487dd46b39f56d307077e3e31914bc5ffd71a0343d904b09140f  # 발행 뒤 갱신
     condition: 항상(전 노드 DaemonSet)
   - image: kcloud-host-exec
     tag: v0.1.0

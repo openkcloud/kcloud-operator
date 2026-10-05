@@ -88,6 +88,26 @@ type NodeDeviceReportStatus struct {
 	// 다루지 않는다 — R&D base v0.1 §10.3).
 	// +optional
 	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+	// Consumers 는 이 노드에서 장치를 쥔 컨테이너 목록이다(kubelet PodResources). nil 은 "모른다"
+	// (수집 실패·미보고), 빈 목록은 "쥔 컨테이너가 없다" — 둘을 구분한다.
+	// +optional
+	Consumers []DeviceConsumer `json:"consumers,omitempty"`
+	// ConsumersObservedAt 은 Consumers 를 읽은 시각이다. Consumers 가 nil 이 아니면 채운다.
+	// +optional
+	ConsumersObservedAt *metav1.Time `json:"consumersObservedAt,omitempty"`
+	// ConsumersError 는 소켓을 읽지 못한 사유다. 채워져 있으면 Consumers 는 nil 이다.
+	// +optional
+	ConsumersError string `json:"consumersError,omitempty"`
+}
+
+// DeviceConsumer 는 kubelet PodResources API 가 낸, 장치 하나를 쥔 컨테이너 하나다. 추측하지 않는다.
+type DeviceConsumer struct {
+	// DeviceID 는 kubelet 이 낸 device_ids 원문이다(벤더 device-plugin 이 정한 문자열, PCI 가 아니다).
+	DeviceID     string `json:"deviceID"`
+	ResourceName string `json:"resourceName"`
+	Namespace    string `json:"namespace"`
+	Pod          string `json:"pod"`
+	Container    string `json:"container"`
 }
 
 // ValidationStatus 는 node-agent Validation 능력의 노드 검증 결과입니다(S2-3).
