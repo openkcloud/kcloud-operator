@@ -163,6 +163,20 @@ func deleteACPPAndWait(name string) {
 	}, "5s", "200ms").Should(BeTrue(), fmt.Sprintf("ACPP %s 가 finalizer 정리 후에도 삭제되지 않았다", name))
 }
 
+// terminatingACPPs 는 DeletionTimestamp 가 찍힌 채 남은 AcceleratorPartitionPolicy 이름 목록이다.
+// AfterSuite 가 이것으로 맨 Delete 누수를 스펙 이름 대신 객체 이름으로 드러낸다.
+func terminatingACPPs() []string {
+	var list npuv1alpha1.AcceleratorPartitionPolicyList
+	Expect(k8sClient.List(ctx, &list)).To(Succeed())
+	var out []string
+	for i := range list.Items {
+		if !list.Items[i].DeletionTimestamp.IsZero() {
+			out = append(out, list.Items[i].Name)
+		}
+	}
+	return out
+}
+
 // wipeACPPs 는 남은 ACPP 를 모두 finalizer 제거 후 완전히 삭제한다(충돌 테스트 간 contender 목록 격리).
 func wipeACPPs() {
 	var list npuv1alpha1.AcceleratorPartitionPolicyList

@@ -97,8 +97,16 @@ var _ = AfterSuite(func() {
 		Expect(testEnv.Stop()).To(Succeed())
 	})
 
-	By("맨 Delete 로 남은 Terminating NPUClusterPolicy 검사")
-	Expect(terminatingNCPs()).To(BeEmpty(), "Reconcile 을 부른 스펙은 cleanup 에서 deleteNCPAndWait 을 써야 한다")
+	By("맨 Delete 로 남은 Terminating NPUClusterPolicy·AcceleratorPartitionPolicy 검사")
+	leaks := map[string][]string{}
+	if v := terminatingNCPs(); len(v) > 0 {
+		leaks["NPUClusterPolicy"] = v
+	}
+	if v := terminatingACPPs(); len(v) > 0 {
+		leaks["AcceleratorPartitionPolicy"] = v
+	}
+	Expect(leaks).To(BeEmpty(),
+		"Reconcile 을 부른 스펙은 cleanup 에서 deleteNCPAndWait·deleteACPPAndWait 을 써야 한다")
 })
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
