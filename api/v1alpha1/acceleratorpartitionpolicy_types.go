@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_types.go: AcceleratorPartitionPolicy CRD 타입
 // 상세: 이기종 가속기(RNGD/NVIDIA) 파티션 통합 인터페이스. spec + status 4축.
-// 생성일: 2026-07-23 | 수정일: 2026-09-19
+// 생성일: 2026-07-23 | 수정일: 2026-10-05
 // ============================================================
 package v1alpha1
 
@@ -17,13 +17,6 @@ type PartitionLayout struct {
 	CountPerDevice int32 `json:"countPerDevice,omitempty"`
 }
 
-// QuiescePolicy 는 apply 전 workload drain 정책이다.
-type QuiescePolicy struct {
-	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
-	// +kubebuilder:validation:Enum=Fail
-	OnTimeout string `json:"onTimeout,omitempty"`
-}
-
 // AcceleratorPartitionPolicySpec 는 원하는 파티션 상태다.
 // layout 과 sharing 둘 다 비면 정책이 아무것도 요청하지 않으므로 admission 에서 거부한다(D-3).
 // +kubebuilder:validation:XValidation:rule="(has(self.layout) && self.layout.size() > 0) || has(self.sharing)",message="spec.layout and spec.sharing cannot both be empty"
@@ -34,8 +27,7 @@ type AcceleratorPartitionPolicySpec struct {
 	// Layout 은 파티션 레이아웃 요청이다. 비우면 파티션 없음 — sharing 만 단독으로 쓸 수 있다
 	// (순수 시분할 등, 라이브 결함 D-3). 이때 파티션 apply 경로(cordon·MIG mode·GI)는 타지 않는다.
 	// +optional
-	Layout        []PartitionLayout `json:"layout,omitempty"`
-	QuiescePolicy QuiescePolicy     `json:"quiescePolicy,omitempty"`
+	Layout []PartitionLayout `json:"layout,omitempty"`
 	// DeletionPolicy 는 삭제 시 하드웨어 상태를 어디까지 되돌릴지 정한다. RestoreMode 는 vendor nvidia
 	// (MIG mode 복원)에서만 유효하고 다른 벤더는 webhook 이 거절한다 — 그 벤더의 삭제는 항상 Retain 이다.
 	// +kubebuilder:validation:Enum=Retain;RestoreMode

@@ -453,15 +453,11 @@
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
-            "method": {},
             "image": {},
-            "version": {},
             "env": {
               "description": "항목 내부는 열어 둔다: 상위 Kubernetes EnvVar 목록을 그대로 통과시키는 자리다.",
               "type": "array"
-            },
-            "secrets": {},
-            "extraHostMounts": {}
+            }
           }
         },
         "upgradePolicy": {

@@ -25,10 +25,7 @@ import (
 // helmTemplate 과 달리 실패를 t.Fatalf 로 끝내지 않는다 — 거절 자체가 기대값인 시험이 있다.
 func helmRenderWithSet(t *testing.T, set string) (bool, string) {
 	t.Helper()
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 스키마 렌더 시험 건너뜀")
-	}
+	bin := helmBinary(t)
 	out, err := exec.Command(bin, "template", "t", "../../deploy/helm", "--set", set).CombinedOutput()
 	return err == nil, string(out)
 }
@@ -162,10 +159,7 @@ func TestChartValuesSchemaRejectsScalarForStructuredBlocks(t *testing.T) {
 // 그 벤더는 조립 경로를 켤 수 없다(이 차트가 detector.image 로 겪은 결함과 같은 모양).
 // 벤더마다 다른 값을 줘서 어느 블록이 빠졌는지 출력으로 드러나게 한다.
 func TestChartRendersKernelImageAssemblyKeys(t *testing.T) {
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 렌더 시험 건너뜀")
-	}
+	bin := helmBinary(t)
 	revisions := map[string]string{
 		"furiosa": "v11", "nvidia": "v12", "rngd": "v13", "tenstorrent": "v14",
 	}

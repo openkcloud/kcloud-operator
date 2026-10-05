@@ -35,7 +35,6 @@ func toolkitTestPolicy(image string) *v1alpha1.DriverInstallPolicy {
 			Driver: v1alpha1.DriverSpec{Image: "registry.example/driver:1.0.0", Mode: "daemonset"},
 			Toolkit: &v1alpha1.ToolkitSpec{
 				Enabled: true,
-				Method:  "apt",
 				Image:   image,
 			},
 		},

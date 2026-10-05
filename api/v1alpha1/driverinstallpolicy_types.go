@@ -237,13 +237,6 @@ type DriverSpec struct {
 	// (선택) 인스톨러 환경변수
 	Env []KV `json:"env,omitempty"`
 
-	// (선택) 시크릿 마운트(예: Furiosa APT 인증)
-	// 기본 MountPath는 "/secrets"로 두고 필요시 개별 지정
-	Secrets []SecretMount `json:"secrets,omitempty"`
-
-	// (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc, /var/lib/kcloud-operator 외)
-	ExtraHostMounts []HostPathMount `json:"extraHostMounts,omitempty"`
-
 	// AllowDowngrade (b) 는 호스트에 이미 설치된 드라이버가 desired 보다 상위 버전일 때
 	// 하위 버전으로의 다운그레이드 설치를 허용할지 결정합니다.
 	// 기본 false = 다운그레이드 금지(기존 상위 버전 유지, 설치 보류). true 여야 하위 버전 설치 허용.
@@ -276,22 +269,11 @@ type ToolkitSpec struct {
 	// 설치 여부
 	Enabled bool `json:"enabled"`
 
-	// 설치 방법
-	// apt : NVIDIA 공식 APT 저장소/패키지 사용
-	// ctk : nvidia-ctk 기반 구성만 수행(패키지는 사전 설치 가정)
-	// +kubebuilder:validation:Enum=apt;ctk
-	Method string `json:"method,omitempty"`
-
-	// 원하는 툴킷 버전(예: "1.17.8-1"). 비우면 최신(또는 스크립트 내 권장)으로
-	Version string `json:"version,omitempty"`
-
 	// (선택) 전용 인스톨러 이미지 (미지정 시 Driver.Image 재사용 가능)
 	Image string `json:"image,omitempty"`
 
-	// (선택) 환경변수/시크릿/호스트마운트
-	Env             []KV            `json:"env,omitempty"`
-	Secrets         []SecretMount   `json:"secrets,omitempty"`
-	ExtraHostMounts []HostPathMount `json:"extraHostMounts,omitempty"`
+	// (선택) 환경변수
+	Env []KV `json:"env,omitempty"`
 }
 
 // JobOverrides 는 잡 스펙의 일부를 정책에서 제어하기 위한 필드입니다.
@@ -313,30 +295,6 @@ type JobOverrides struct {
 type KV struct {
 	Name  string `json:"name"`
 	Value string `json:"value,omitempty"`
-}
-
-// SecretMount는 시크릿을 파드에 마운트하기 위한 간단한 스펙입니다.
-type SecretMount struct {
-	// 시크릿 이름
-	Name string `json:"name"`
-
-	// 마운트 경로 (기본: "/secrets")
-	MountPath string `json:"mountPath,omitempty"`
-
-	// 선택적 여부
-	Optional *bool `json:"optional,omitempty"`
-}
-
-// HostPathMount는 호스트 디렉터리를 파드에 마운트하기 위한 간단한 스펙입니다.
-type HostPathMount struct {
-	// /etc, /lib/modules 등의 호스트 경로
-	HostPath string `json:"hostPath"`
-
-	// 파드 내 마운트 경로
-	MountPath string `json:"mountPath"`
-
-	// 읽기전용 여부
-	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // +kubebuilder:object:root=true

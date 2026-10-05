@@ -20,7 +20,6 @@ driverInstallPolicies:
       # driver 설치(Mode=job 포함)와 무관하게 항상 상주하여, drain/containerd 재구성 후에도
       # nvidia-ctk 로 runtime 을 idempotent 재등록한다(device-plugin runtimeClass=nvidia 보장).
       enabled: true
-      method: apt
       # 벤더 이미지지만 전체 경로 필드라 vendorRegistry 조립 대상이 아니다. 이 dev
       # 클러스터는 Harbor 미러 경로를 사이트 값 파일에서 덮어쓴다. 여기 기본값은
       # 미러가 없어도 뜨도록 upstream 경로를 둔다(nvcr.io 는 k8s/ 가 경로에 들어간다).

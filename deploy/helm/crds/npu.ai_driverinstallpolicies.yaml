@@ -66,26 +66,6 @@ spec:
                       - name
                       type: object
                     type: array
-                  extraHostMounts:
-                    description: (선택) 추가 호스트 마운트(기본 /lib/modules, /usr/src, /etc,
-                      /var/lib/kcloud-operator 외)
-                    items:
-                      description: HostPathMount는 호스트 디렉터리를 파드에 마운트하기 위한 간단한 스펙입니다.
-                      properties:
-                        hostPath:
-                          description: /etc, /lib/modules 등의 호스트 경로
-                          type: string
-                        mountPath:
-                          description: 파드 내 마운트 경로
-                          type: string
-                        readOnly:
-                          description: 읽기전용 여부
-                          type: boolean
-                      required:
-                      - hostPath
-                      - mountPath
-                      type: object
-                    type: array
                   image:
                     description: |-
                       인스톨러 컨테이너 이미지
@@ -185,26 +165,6 @@ spec:
                     - daemonset
                     - job
                     type: string
-                  secrets:
-                    description: |-
-                      (선택) 시크릿 마운트(예: Furiosa APT 인증)
-                      기본 MountPath는 "/secrets"로 두고 필요시 개별 지정
-                    items:
-                      description: SecretMount는 시크릿을 파드에 마운트하기 위한 간단한 스펙입니다.
-                      properties:
-                        mountPath:
-                          description: '마운트 경로 (기본: "/secrets")'
-                          type: string
-                        name:
-                          description: 시크릿 이름
-                          type: string
-                        optional:
-                          description: 선택적 여부
-                          type: boolean
-                      required:
-                      - name
-                      type: object
-                    type: array
                   skipOnPassthrough:
                     default: true
                     description: |-
@@ -331,7 +291,7 @@ spec:
                     description: 설치 여부
                     type: boolean
                   env:
-                    description: (선택) 환경변수/시크릿/호스트마운트
+                    description: (선택) 환경변수
                     items:
                       description: KV는 단순 키-값 환경변수 표현입니다.
                       properties:
@@ -343,55 +303,8 @@ spec:
                       - name
                       type: object
                     type: array
-                  extraHostMounts:
-                    items:
-                      description: HostPathMount는 호스트 디렉터리를 파드에 마운트하기 위한 간단한 스펙입니다.
-                      properties:
-                        hostPath:
-                          description: /etc, /lib/modules 등의 호스트 경로
-                          type: string
-                        mountPath:
-                          description: 파드 내 마운트 경로
-                          type: string
-                        readOnly:
-                          description: 읽기전용 여부
-                          type: boolean
-                      required:
-                      - hostPath
-                      - mountPath
-                      type: object
-                    type: array
                   image:
                     description: (선택) 전용 인스톨러 이미지 (미지정 시 Driver.Image 재사용 가능)
-                    type: string
-                  method:
-                    description: |-
-                      설치 방법
-                      apt : NVIDIA 공식 APT 저장소/패키지 사용
-                      ctk : nvidia-ctk 기반 구성만 수행(패키지는 사전 설치 가정)
-                    enum:
-                    - apt
-                    - ctk
-                    type: string
-                  secrets:
-                    items:
-                      description: SecretMount는 시크릿을 파드에 마운트하기 위한 간단한 스펙입니다.
-                      properties:
-                        mountPath:
-                          description: '마운트 경로 (기본: "/secrets")'
-                          type: string
-                        name:
-                          description: 시크릿 이름
-                          type: string
-                        optional:
-                          description: 선택적 여부
-                          type: boolean
-                      required:
-                      - name
-                      type: object
-                    type: array
-                  version:
-                    description: '원하는 툴킷 버전(예: "1.17.8-1"). 비우면 최신(또는 스크립트 내 권장)으로'
                     type: string
                 required:
                 - enabled

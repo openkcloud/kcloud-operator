@@ -433,8 +433,8 @@ func TestRunSharingFirstApplyCountsEvenWhenTargetWasAlreadyReady(t *testing.T) {
 
 // D-7(라이브 결함): 준비 게이트가 DaemonSet 전체(NumberReady == DesiredNumberScheduled)를 보면,
 // MPS 를 요청하지도 않은 무관한 노드의 daemon pod 이 영구히 못 뜰 때 대상 노드의 daemon 이 Ready
-// 여도 정책이 영원히 Applying 에 갇힌다(quiescePolicy.timeoutSeconds 는 drain/quiesce 단계용이라
-// Failed 전이도 없다 — 자동 복구 경로 없는 hang).
+// 여도 정책이 영원히 Applying 에 갇힌다(drain/quiesce 단계에 시한이 없고 Failed 전이도 없다 —
+// 자동 복구 경로 없는 hang).
 // 라이브 재현: DS 셀렉터(kcloud.ai/nvidia.present=true)가 k8s-master 도 매칭했는데 그 노드는
 // nvidia RuntimeClass 미구성으로 FailedCreatePodSandBox 를 영구 반복했다 —
 // numberReady=1 desiredNumberScheduled=2 고정, 대상 노드(worker1)의 daemon 은 Running/Ready.

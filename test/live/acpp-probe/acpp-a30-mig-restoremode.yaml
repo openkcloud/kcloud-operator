@@ -10,7 +10,4 @@ spec:
   layout:
     - profile: 1g.6gb
       countPerDevice: 4
-  quiescePolicy:
-    timeoutSeconds: 600
-    onTimeout: Fail
   deletionPolicy: RestoreMode

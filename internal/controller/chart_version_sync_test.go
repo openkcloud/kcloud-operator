@@ -196,10 +196,7 @@ func TestChartCarriesNoOutOfRangePreset(t *testing.T) {
 // 주의: os/exec 로 helm 을 부르므로 손으로 돌릴 때는 -count=1 을 붙일 것(캐시가 차트
 // 변경을 보지 못한다). make test 는 -coverprofile 이 캐시를 끈다.
 func TestChartKubeVersionRejectsOtherLine(t *testing.T) {
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 렌더 시험 건너뜀")
-	}
+	bin := helmBinary(t)
 	for _, c := range []struct {
 		kube   string
 		reject bool
@@ -234,10 +231,7 @@ func TestChartKubeVersionRejectsOtherLine(t *testing.T) {
 //
 // 주의: os/exec 로 helm 을 부르므로 손으로 돌릴 때는 -count=1 을 붙일 것.
 func TestChartRejectsOtherLineImageTag(t *testing.T) {
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 렌더 시험 건너뜀")
-	}
+	bin := helmBinary(t)
 	render := func(args ...string) (string, error) {
 		out, err := exec.Command(bin, append([]string{"template", "t", "../../deploy/helm"}, args...)...).
 			CombinedOutput()

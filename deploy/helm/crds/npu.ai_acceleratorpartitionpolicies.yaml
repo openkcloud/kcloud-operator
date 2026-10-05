@@ -86,17 +86,6 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
-              quiescePolicy:
-                description: QuiescePolicy 는 apply 전 workload drain 정책이다.
-                properties:
-                  onTimeout:
-                    enum:
-                    - Fail
-                    type: string
-                  timeoutSeconds:
-                    format: int32
-                    type: integer
-                type: object
               sharing:
                 description: Sharing 은 공유 요청이다(nil = exclusive). layout 과 조합하면 partitioned-shared
                   가 된다.

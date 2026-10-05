@@ -17,6 +17,4 @@ spec:
         value: "recommended"   # 또는 "nvidia-driver-575-server"
   toolkit:
     enabled: true
-    method: apt
-    version: ""        # 비워도 됨(엔트리포인트의 최신)
     image: registry.example.com:5000/nvidia-driver-installer:2.1

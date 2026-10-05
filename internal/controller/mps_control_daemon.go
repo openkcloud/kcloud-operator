@@ -122,7 +122,7 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureMpsControlDaemon(ctx contex
 	// DesiredNumberScheduled 를 요구하면, MPS 를 요청하지도 않은 다른 노드의 daemon pod 이 영구히
 	// 못 뜨는 순간(라이브: nvidia RuntimeClass 미구성 노드가 셀렉터에 매칭돼 FailedCreatePodSandBox
 	// 무한 반복) 대상 노드의 daemon 이 Ready 여도 이 정책이 영원히 Applying 에 갇힌다 —
-	// quiescePolicy 타임아웃은 drain/quiesce 단계용이라 Failed 전이도 없어 복구 경로가 없다.
+	// drain/quiesce 단계에 시한이 없고 Failed 전이도 없어 복구 경로가 없다.
 	// DS 는 여전히 클러스터 전역 singleton 이고(참조 카운트 설계 불변), 좁히는 것은 판정 범위뿐이다.
 	// 갓 Create 한 경우 그 노드에 pod 이 아직 없어 여기서 자연히 걸린다(그게 맞다 — 아직 안 떴다).
 	ready, err := r.mpsDaemonReadyOnNode(ctx, node, desired)

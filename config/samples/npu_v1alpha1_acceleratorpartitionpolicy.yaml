@@ -10,7 +10,4 @@ spec:
   layout:
     - profile: 2core.12gb
       countPerDevice: 4
-  quiescePolicy:
-    timeoutSeconds: 600
-    onTimeout: Fail
   deletionPolicy: Retain

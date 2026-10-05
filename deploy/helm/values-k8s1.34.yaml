@@ -57,4 +57,3 @@ driverInstallPolicies:
     # 꺼짐이고, 이 세트는 그 등록까지 포함한 상태를 안전 검증 범위로 삼는다.
     toolkit:
       enabled: true
-      method: apt

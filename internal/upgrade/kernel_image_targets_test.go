@@ -287,14 +287,32 @@ func TestKernelImageBundleDriftIsCaught(t *testing.T) {
 	}
 }
 
+// upgradeHelmBinary 는 helm 실행 파일 경로를 돌려준다. 없으면 CI 에서는 하드 실패하고
+// 로컬에서는 건너뛴다. CI 에서 건너뛰는 것은 "환경이 없어 건너뜀" 이 아니라 "있어야 할 것이
+// 없음" 이고, 그 상태로 워크플로가 초록이면 차트 대조가 아무 신호 없이 사라진다.
+//
+// internal/controller 의 helm_presence_test.go 에 같은 판정의 원본(helmBinary)이 있다.
+// 패키지가 달라 공유할 수 없어 사본으로 둔다 — **한쪽을 고치면 다른 쪽도 고칠 것.**
+func upgradeHelmBinary(t *testing.T) string {
+	t.Helper()
+	bin, err := exec.LookPath("helm")
+	if err == nil {
+		return bin
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatalf("CI 인데 helm 이 PATH 에 없다 — 차트 렌더 대조가 건너뛰면 그 검사는 " +
+			"신호를 내지 않는다. 워크플로가 helm 을 깔아야 한다(.github/workflows/test.yml 의 " +
+			"설치 단계). 다른 CI 를 붙일 때도 그쪽에 같은 설치 단계가 필요하다")
+	}
+	t.Skip("helm 이 PATH 에 없다 — 차트 렌더 대조 건너뜀(CI 에서는 하드 실패한다)")
+	return ""
+}
+
 // renderedDriverImages 는 차트가 렌더한 DriverInstallPolicy 의 spec.driver.image 모음이다.
 // 런타임이 조립의 밑으로 받는 것이 이 문자열이다.
 func renderedDriverImages(t *testing.T) map[string]bool {
 	t.Helper()
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 차트 렌더 대조 건너뜀")
-	}
+	bin := upgradeHelmBinary(t)
 	out, err := exec.Command(bin, "template", "t", filepath.Join(repoRoot, "deploy/helm")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("차트 렌더 실패: %v\n%s", err, out)

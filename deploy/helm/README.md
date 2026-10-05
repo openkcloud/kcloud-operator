@@ -411,6 +411,21 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
   namespace 로 고정이며, 이 값으로 바꿀 수 있던 적이 없다. 위와 같은 이유로, 그 전에 자기
   values 파일에 `detector.namespace` 를 들고 있던 사이트는 `helm upgrade` 가 거절된다 —
   그 줄을 지운다.
+- **읽는 코드가 없던 CRD 필드 제거**(2026-10-05): `DriverInstallPolicy` 에서 `driver.secrets`·
+  `driver.extraHostMounts`·`toolkit.method`·`toolkit.version`·`toolkit.secrets`·
+  `toolkit.extraHostMounts` 를, `AcceleratorPartitionPolicy` 에서 `quiescePolicy` 블록 전체
+  (`quiescePolicy` 자신과 그 안의 `timeoutSeconds`·`onTimeout`)를 없앴다. 전부 컨트롤러가
+  한 번도 읽지 않은 필드다 — 값을 적어도 동작이 달라진 적이 없다. `toolkit` 에서 남는 키는
+  `enabled`·`image`·`env` 셋뿐이다. 위 두 항목과 같은 이유로, 이 필드를 든 손으로 쓴
+  매니페스트는 kubectl 1.25+ 의 strict 서버 측 필드 검증에서 조용히 무시되지 않고 거절된다.
+  오류 메시지가 필드 이름을 알려주므로 그 줄만 지우면 된다. **이 차트 자신의
+  values·`values.schema.json`·샘플에서는 이미 지웠다**(`values.yaml`·`values-dev.yaml`·
+  `values-k8s1.34.yaml` 세 곳이 `toolkit.method: apt` 를 주고 있었다). 그 전에 설치한
+  **사이트**가 자기 `-f` values 파일에 `driverInstallPolicies.<vendor>.toolkit.method`
+  (또는 `.version`·`.secrets`·`.extraHostMounts`)를 들고 있으면 `values.schema.json` 이
+  kubectl 과 무관하게 `helm upgrade`/`template` 자체를 거절한다 — 그 줄을 지우고 다시 올린다.
+  `quiescePolicy` 는 차트 값이 아니라 손으로 쓰는 ACPP 자원에만 있으므로 kubectl 쪽만
+  해당한다 — `quiescePolicy: {}` 처럼 빈 객체로 들고 있어도 거절된다.
 - **values.schema.json**(2026-10-04 추가): 이 차트는 선언되지 않은 값 키를 `helm
   template`/`install`/`upgrade` 단계에서 거절한다. 이전에는 helm 이 모르는 키를 조용히
   버렸다 — 오타 키나 죽은 키가 몇 달째 아무 효과 없이 values 파일에 쌓이는 사고가 반복돼

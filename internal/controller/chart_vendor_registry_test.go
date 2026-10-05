@@ -26,13 +26,11 @@ import (
 // 차트만 고치고 손으로 `go test` 를 돌리면 직전 결과가 재사용돼 초록이 나온다 — 차트가
 // 깨져 있어도 그렇다. 손으로 돌릴 때는 `-count=1` 을 붙일 것. `make test` 는
 // `-coverprofile` 을 쓰고 그 플래그가 캐시를 끄므로 영향이 없다(2026-09-16 실측).
-// helmTemplate 는 deploy/helm 을 렌더한다. helm 이 없는 환경에서는 건너뛴다.
+// helmTemplate 는 deploy/helm 을 렌더한다. helm 부재 판정은 helm_presence_test.go 의
+// helmBinary 하나다 — 로컬에서는 건너뛰고 CI 에서는 하드 실패한다.
 func helmTemplate(t *testing.T, args ...string) string {
 	t.Helper()
-	bin, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm 이 PATH 에 없다 — 렌더 시험 건너뜀")
-	}
+	bin := helmBinary(t)
 	out, err := exec.Command(bin, append([]string{"template", "t", "../../deploy/helm"}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template 실패: %v\n%s", err, out)
