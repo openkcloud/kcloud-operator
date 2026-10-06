@@ -179,3 +179,36 @@ func TestListNodeNames_노드없으면빈슬라이스(t *testing.T) {
 		t.Errorf("빈 클러스터인데 %v 를 돌려줬다", got)
 	}
 }
+
+// NodeDeviceReport status.consumers(kubelet PodResources 수집)가 NodeDetail 로 옮겨지는지,
+// 수집 실패 사유와 관측 시각도 함께 오는지 본다.
+func TestCollectNodeDetail_소비자목록과오류를옮긴다(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 6, 1, 2, 3, 0, time.UTC))
+	ndr := &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "rngd-1"},
+		Status: npuv1alpha1.NodeDeviceReportStatus{ConsumersObservedAt: &at,
+			Consumers: []npuv1alpha1.DeviceConsumer{{
+				DeviceID: "89413086", ResourceName: "furiosa.ai/rngd",
+				Namespace: "default", Pod: "rngd-pod", Container: "rngd-pod",
+			}}}}
+	c := newTestClient(t, ndr)
+	d, err := c.CollectNodeDetail(context.Background(), "rngd-1")
+	if err != nil {
+		t.Fatalf("오류: %v", err)
+	}
+	want := []ConsumerView{{
+		Namespace: "default", Pod: "rngd-pod", Container: "rngd-pod",
+		ResourceName: "furiosa.ai/rngd", DeviceID: "89413086",
+	}}
+	if !slices.Equal(d.Consumers, want) || d.ConsumersObservedAt != "2026-10-06T01:02:03Z" || d.ConsumersError != "" {
+		t.Fatalf("consumers=%+v at=%q err=%q", d.Consumers, d.ConsumersObservedAt, d.ConsumersError)
+	}
+	bad := &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "n2"},
+		Status: npuv1alpha1.NodeDeviceReportStatus{ConsumersError: "podresources 결과 파일 없음"}}
+	d2, err := newTestClient(t, bad).CollectNodeDetail(context.Background(), "n2")
+	if err != nil {
+		t.Fatalf("오류: %v", err)
+	}
+	if d2.Consumers != nil || d2.ConsumersObservedAt != "" || d2.ConsumersError != "podresources 결과 파일 없음" {
+		t.Fatalf("실패 사유만 옮겨야 한다: %+v", d2)
+	}
+}

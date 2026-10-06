@@ -1422,3 +1422,29 @@ func TestPrintDriverStatusText_관측목록표기(t *testing.T) {
 		t.Errorf("MODEL 칸에 관측 목록이 안 보인다: %q", out)
 	}
 }
+
+// CONSUMERS 절은 세 상태를 구분한다 — 모름(—), 없음, 목록. 지어내지 않는다.
+func TestRenderNodeDetail_소비자절(t *testing.T) {
+	unknown := renderNodeDetail(&npuctl.NodeDetail{Name: "n1"})
+	if !strings.Contains(unknown, "CONSUMERS:  —") {
+		t.Errorf("모름은 대시여야 한다:\n%s", unknown)
+	}
+	failed := renderNodeDetail(&npuctl.NodeDetail{Name: "n1", ConsumersError: "podresources 결과 파일 없음"})
+	if !strings.Contains(failed, "CONSUMERS:  — (podresources 결과 파일 없음)") {
+		t.Errorf("실패 사유가 붙어야 한다:\n%s", failed)
+	}
+	none := renderNodeDetail(&npuctl.NodeDetail{Name: "n1", ConsumersObservedAt: "2026-10-06T01:02:03Z"})
+	if !strings.Contains(none, "CONSUMERS:  없음") {
+		t.Errorf("관측했는데 비면 없음이어야 한다:\n%s", none)
+	}
+	some := renderNodeDetail(&npuctl.NodeDetail{Name: "rngd-1", ConsumersObservedAt: "2026-10-06T01:02:03Z",
+		Consumers: []npuctl.ConsumerView{{
+			Namespace: "default", Pod: "rngd-pod", Container: "rngd-pod",
+			ResourceName: "furiosa.ai/rngd", DeviceID: "89413086",
+		}}})
+	for _, want := range []string{"CONSUMERS:", "default/rngd-pod", "furiosa.ai/rngd", "89413086", "NAMESPACE/POD"} {
+		if !strings.Contains(some, want) {
+			t.Errorf("출력에 %q 가 없다:\n%s", want, some)
+		}
+	}
+}

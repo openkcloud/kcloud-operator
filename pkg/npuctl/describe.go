@@ -4,7 +4,7 @@
 //	노드 이름 하나로 모아 NodeDetail 로 옮긴다. 여기서는 값을 다시 판정하지 않는다 —
 //	다른 컨트롤러가 CRD 에 적어 둔 결과를 그대로 옮기기만 한다.
 //
-// 생성일: 2026-08-24 | 수정일: 2026-08-24
+// 생성일: 2026-08-24 | 수정일: 2026-10-06
 package npuctl
 
 import (
@@ -46,6 +46,19 @@ func (c *Client) CollectNodeDetail(ctx context.Context, name string) (*NodeDetai
 		for _, dev := range ndr.Status.Devices {
 			d.Devices = append(d.Devices, deviceStatusFrom(dev))
 		}
+		if ndr.Status.Consumers != nil {
+			d.Consumers = make([]ConsumerView, 0, len(ndr.Status.Consumers))
+			for _, c := range ndr.Status.Consumers {
+				d.Consumers = append(d.Consumers, ConsumerView{
+					Namespace: c.Namespace, Pod: c.Pod, Container: c.Container,
+					ResourceName: c.ResourceName, DeviceID: c.DeviceID,
+				})
+			}
+		}
+		if ndr.Status.ConsumersObservedAt != nil {
+			d.ConsumersObservedAt = ndr.Status.ConsumersObservedAt.UTC().Format(time.RFC3339)
+		}
+		d.ConsumersError = ndr.Status.ConsumersError
 	}
 	// 아래 셋은 없어도 정상이다 — 오류를 삼키되 값을 지어내지 않는다.
 	var ah npuv1alpha1.AcceleratorHealth

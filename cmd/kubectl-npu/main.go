@@ -4,7 +4,7 @@
 //	조회·제어 로직은 pkg/npuctl(kcloud-operator 모듈, replace로 로컬 참조)에 위임하고,
 //	이 파일은 CLI 파싱 + 사람용/JSON 출력 포맷팅만 담당한다(S5-3-① 관리 API 1단계).
 //
-// 생성일: 2026-03-25 | 수정일: 2026-09-30
+// 생성일: 2026-03-25 | 수정일: 2026-10-06
 package main
 
 import (
@@ -160,7 +160,7 @@ Usage:
   kubectl npu toggle <vendor> --enabled true|false [--yes]
                                                     NPUClusterPolicy.spec.<vendor>.enabled patch
   kubectl npu policy create|delete                 AcceleratorPartitionPolicy 정책 생성·삭제
-  kubectl npu describe node [<노드>]                노드 하나(또는 전체)의 장치·광고량·health·evidence·정책
+  kubectl npu describe node [<노드>]                노드 하나(또는 전체)의 장치·광고량·소비자·health·evidence·정책
   kubectl npu describe node [<노드>] --json         위와 동일한 내용을 JSON 으로
   kubectl npu capabilities [--vendor furiosa|nvidia|rebellions|tenstorrent] [--json]
                                                     벤더×능력 선언·검증 상태(furiosa 는 warboy·rngd 두 product 를 포함)
@@ -617,7 +617,7 @@ func isAcceleratorResource(key string) bool {
 }
 
 // renderNodeDetail 은 노드 하나의 상세를 사람이 읽는 텍스트로 낸다. 다른 컨트롤러가
-// 아직 안 적어 없는 값(health·evidence·policy 등)은 추측해 채우지 않고 "—" 로 낸다.
+// 아직 안 적어 없는 값(consumers·health·evidence·policy 등)은 추측해 채우지 않고 "—" 로 낸다.
 // 장치 표는 printTable(다른 명령이 공유)을 건드리지 않고 이 함수 안에서 직접 구성한다.
 func renderNodeDetail(d *npuctl.NodeDetail) string {
 	var b strings.Builder
@@ -660,6 +660,22 @@ func renderNodeDetail(d *npuctl.NodeDetail) string {
 			rows[i] = []string{k, d.Allocatable[k]}
 		}
 		b.WriteString(renderTable([]string{"RESOURCE", "QTY"}, rows))
+	}
+
+	switch {
+	case d.ConsumersError != "":
+		fmt.Fprintf(&b, "CONSUMERS:  — (%s)\n", d.ConsumersError)
+	case d.ConsumersObservedAt == "":
+		fmt.Fprintf(&b, "CONSUMERS:  —\n")
+	case len(d.Consumers) == 0:
+		fmt.Fprintf(&b, "CONSUMERS:  없음\n")
+	default:
+		fmt.Fprintf(&b, "CONSUMERS:\n")
+		rows := make([][]string, len(d.Consumers))
+		for i, c := range d.Consumers {
+			rows[i] = []string{c.Namespace + "/" + c.Pod, c.Container, c.ResourceName, c.DeviceID}
+		}
+		b.WriteString(renderTable([]string{"NAMESPACE/POD", "CONTAINER", "RESOURCE", "DEVICE"}, rows))
 	}
 
 	if d.Health == nil {

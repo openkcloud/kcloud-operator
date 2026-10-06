@@ -3,7 +3,7 @@
 //
 //	안정 필드명의 JSON 계약. 필드는 모두 omitempty로 두어 벤더/리소스가 없을 때 생략된다.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-08-24
+// 생성일: 2026-07-16 | 수정일: 2026-10-06
 package npuctl
 
 import "kcloud-operator/internal/health"
@@ -140,6 +140,20 @@ type NodeDetail struct {
 	Health         *HealthView       `json:"health,omitempty"`
 	Evidence       []EvidenceView    `json:"evidence,omitempty"`
 	Policies       []PolicyView      `json:"policies,omitempty"`
+	// Consumers 는 NodeDeviceReport status.consumers(kubelet PodResources 수집)의 사본이다.
+	// nil 은 모름(수집 없음·실패), 빈 목록은 쥔 컨테이너 없음 — ConsumersObservedAt 유무로 구분한다.
+	Consumers           []ConsumerView `json:"consumers,omitempty"`
+	ConsumersObservedAt string         `json:"consumersObservedAt,omitempty"`
+	ConsumersError      string         `json:"consumersError,omitempty"`
+}
+
+// ConsumerView 는 NodeDeviceReport status.consumers 의 한 항목이다 — 장치 하나를 쥔 컨테이너 하나.
+type ConsumerView struct {
+	Namespace    string `json:"namespace"`
+	Pod          string `json:"pod"`
+	Container    string `json:"container"`
+	ResourceName string `json:"resourceName"`
+	DeviceID     string `json:"deviceID"`
 }
 
 // HealthView 는 AcceleratorHealth.status 의 표시용 사본이다.
