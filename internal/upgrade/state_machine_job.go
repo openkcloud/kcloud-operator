@@ -535,10 +535,12 @@ func jobFailed(job *batchv1.Job) bool {
 // validationTimeoutFailedMessage 는 검증 예산이 끝나 Failed 로 갈 때의 메시지다. 상태 전이는
 // cordon 을 그대로 두므로(벤더 광고가 0 일 때만 해제) 사람이 무엇을 해야 하는지를 적는다 —
 // 설치된 버전이 목표와 달라 검증이 안 끝나는 경우(계열 최신이 깔린 첫 설치)가 대표 사례다.
+// Failed 는 정책 변경을 다시 읽지 않으므로 재생성 단계를 적는다.
 func validationTimeoutFailedMessage(state *v1alpha1.DriverUpgradeState) string {
 	msg := fmt.Sprintf("검증 타임아웃(job): 수동 조치 필요 — 노드 드라이버가 목표 %s 와 다르면 "+
 		"kubectl uncordon %s 뒤 DriverInstallPolicy spec.driver.version 을 설치된 버전으로 맞추거나 "+
-		"allowDowngrade=true 로 재설치", state.Status.DesiredVersion, state.Spec.NodeName)
+		"allowDowngrade=true 로 두고, kubectl delete dus %s 로 DriverUpgradeState 를 재생성한다(Failed 상태는 정책을 "+
+		"다시 읽지 않는다)", state.Status.DesiredVersion, state.Spec.NodeName, state.Name)
 	if state.Status.Message != "" {
 		msg += ". 마지막 검증: " + state.Status.Message
 	}

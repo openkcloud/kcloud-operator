@@ -148,6 +148,7 @@ type NodeDetail struct {
 }
 
 // ConsumerView 는 NodeDeviceReport status.consumers 의 한 항목이다 — 장치 하나를 쥔 컨테이너 하나.
+// internal/apiserver.ConsumerView(파드 하나, /api/v1/consumers)와 이름만 같고 단위가 다르다.
 type ConsumerView struct {
 	Namespace    string `json:"namespace"`
 	Pod          string `json:"pod"`

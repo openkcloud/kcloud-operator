@@ -592,7 +592,8 @@ driverInstallPolicies:
       version: "580.178.04"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "nvidia-driver-ds"
-      # v4 부터 DKMS 경로가 정책 version 의 패키지를 고정해 설치한다(이전 태그는 계열 최신을 설치).
+      # v4 부터 설치기가 정책 version 의 패키지를 apt-cache madison 으로 찾아 고정 설치한다
+      # (host 설치 경로와 containerized 경로 모두, 이전 태그는 계열 최신을 설치).
       tag: "v4"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)

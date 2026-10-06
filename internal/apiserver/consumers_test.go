@@ -4,7 +4,7 @@
 //
 //	없는 조합으로 시험하면 그 시험은 무효다.
 //
-// 생성일: 2026-08-07
+// 생성일: 2026-08-07 | 수정일: 2026-10-06 (템플릿 claim 귀속 시험 추가)
 // ============================================================
 package apiserver
 
@@ -325,7 +325,7 @@ func TestDevicePluginPodCollectsDeviceIDsAcrossContainersAndResources(t *testing
 	}
 }
 
-// 템플릿(resourceClaimTemplateName)으로 받은 claim 은 spec 에 이름이 없고 kubelet 이 만든 이름이
+// 템플릿(resourceClaimTemplateName)으로 받은 claim 은 spec 에 이름이 없고 kube-controller-manager(ResourceClaim 컨트롤러)가 만든 이름이
 // status.resourceClaimStatuses 에 실린다 — 그 경로로 되짚어야 할당 결과가 보인다(라이브
 // Tenstorrent·RNGD 왕복에서 pending 으로 남던 결함).
 func TestDRATemplateClaimIsResolvedFromPodStatus(t *testing.T) {

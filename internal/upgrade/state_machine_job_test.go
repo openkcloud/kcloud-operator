@@ -705,7 +705,7 @@ func TestHandleValidatingJob_TimeoutFailedMessageHasRecovery(t *testing.T) {
 	if dus.Status.State != v1alpha1.UpgradeStateFailed {
 		t.Fatalf("state=%q, want Failed", dus.Status.State)
 	}
-	for _, want := range []string{"kubectl uncordon " + dus.Spec.NodeName, "spec.driver.version", "allowDowngrade=true", "580.178.04"} {
+	for _, want := range []string{"kubectl uncordon " + dus.Spec.NodeName, "spec.driver.version", "allowDowngrade=true", "580.178.04", "목표 " + verNew, "kubectl delete dus " + dus.Name, "DriverUpgradeState 를 재생성"} {
 		if !strings.Contains(dus.Status.Message, want) {
 			t.Errorf("메시지에 %q 가 없다: %q", want, dus.Status.Message)
 		}

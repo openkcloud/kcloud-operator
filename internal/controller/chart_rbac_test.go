@@ -5,9 +5,10 @@
 // server 에서 대신 검사, roles/rolebindings 는 코드에 대상이 없다. 이 넷이 operator ClusterRole
 // 에 다시 실리면 최소권한이 소리 없이 되돌아가므로 렌더 결과로 부재를 고정한다.
 // clusterroles/clusterrolebindings 는 descriptor auto-apply 가 실제로 만들므로 남는다.
+// 배포 생성·삭제 라우트가 쓰는 acceleratorworkloads create·delete 는 반대로 존재를 고정한다.
 // 범위: helm 렌더 결과 문자열만 본다(helm 이 없으면 helmTemplate 이 건너뛴다). rbacRule·
 // verbsByResource 는 rbac_sync_test.go 것을 그대로 쓴다.
-// 생성일: 2026-09-22
+// 생성일: 2026-09-22 | 수정일: 2026-10-06 (acceleratorworkloads 쓰기 권한 존재 시험)
 // ============================================================
 package controller
 
@@ -145,5 +146,8 @@ func TestOperatorClusterRoleGrantsWorkloadWrite(t *testing.T) {
 		if contains(byResource["acceleratorworkloads/status"], verb) {
 			t.Errorf("main ClusterRole %q 의 acceleratorworkloads/status 에 %q 가 있다 — status 는 갱신만", roleName, verb)
 		}
+	}
+	if !contains(byResource["acceleratorworkloads/status"], "update") {
+		t.Errorf("main ClusterRole %q 의 acceleratorworkloads/status 에 update 가 없다(verbs %v)", roleName, byResource["acceleratorworkloads/status"])
 	}
 }

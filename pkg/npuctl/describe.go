@@ -54,6 +54,21 @@ func (c *Client) CollectNodeDetail(ctx context.Context, name string) (*NodeDetai
 					ResourceName: c.ResourceName, DeviceID: c.DeviceID,
 				})
 			}
+			// kubelet PodResources 응답 순서는 고정되지 않으므로 네임스페이스·파드·
+			// 컨테이너·장치 순으로 정렬해 관측마다 행 순서가 흔들리지 않게 한다.
+			sort.Slice(d.Consumers, func(i, j int) bool {
+				a, b := d.Consumers[i], d.Consumers[j]
+				if a.Namespace != b.Namespace {
+					return a.Namespace < b.Namespace
+				}
+				if a.Pod != b.Pod {
+					return a.Pod < b.Pod
+				}
+				if a.Container != b.Container {
+					return a.Container < b.Container
+				}
+				return a.DeviceID < b.DeviceID
+			})
 		}
 		if ndr.Status.ConsumersObservedAt != nil {
 			d.ConsumersObservedAt = ndr.Status.ConsumersObservedAt.UTC().Format(time.RFC3339)

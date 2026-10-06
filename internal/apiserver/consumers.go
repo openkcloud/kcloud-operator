@@ -53,6 +53,7 @@ type ClaimRef struct {
 }
 
 // ConsumerView 는 가속기를 요청한 Pod 하나다.
+// pkg/npuctl.ConsumerView(장치를 쥔 컨테이너 하나, describe node CONSUMERS)와 이름만 같고 단위가 다르다.
 type ConsumerView struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -174,7 +175,7 @@ func podResourcesDeviceIDs(ndrs []npuv1alpha1.NodeDeviceReport, pod corev1.Pod) 
 }
 
 // claimNameOf 는 파드가 참조하는 ResourceClaim 의 실제 이름을 돌려준다. spec 에 직접 적은
-// 이름이 있으면 그것이고, 템플릿(resourceClaimTemplateName)으로 받았으면 kubelet 이 만든
+// 이름이 있으면 그것이고, 템플릿(resourceClaimTemplateName)으로 받았으면 kube-controller-manager(ResourceClaim 컨트롤러)가 만든
 // 이름이 status.resourceClaimStatuses 에만 있으므로 같은 항목 이름으로 되짚는다. 둘 다 없으면
 // 빈 문자열 — 호출자는 missing 으로 둔다(아직 만들어지지 않은 claim 을 지어내지 않는다).
 func claimNameOf(pod corev1.Pod, prc corev1.PodResourceClaim) string {

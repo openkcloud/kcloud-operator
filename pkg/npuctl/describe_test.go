@@ -3,7 +3,7 @@
 //
 //	노드 이름으로 걸러지는지 검증한다. status_test.go 의 fake client 헬퍼를 재사용한다.
 //
-// 생성일: 2026-08-24 | 수정일: 2026-08-24
+// 생성일: 2026-08-24 | 수정일: 2026-10-06 (소비자 목록 시험 추가)
 package npuctl
 
 import (
@@ -187,8 +187,12 @@ func TestCollectNodeDetail_소비자목록과오류를옮긴다(t *testing.T) {
 	ndr := &npuv1alpha1.NodeDeviceReport{ObjectMeta: metav1.ObjectMeta{Name: "rngd-1"},
 		Status: npuv1alpha1.NodeDeviceReportStatus{ConsumersObservedAt: &at,
 			Consumers: []npuv1alpha1.DeviceConsumer{{
+				// 역순 픽스처: 수집기가 네임스페이스·파드 순으로 정렬해 돌려줘야 한다.
 				DeviceID: "89413086", ResourceName: "furiosa.ai/rngd",
 				Namespace: "default", Pod: "rngd-pod", Container: "rngd-pod",
+			}, {
+				DeviceID: "11111111", ResourceName: "furiosa.ai/rngd",
+				Namespace: "default", Pod: "a-pod", Container: "a-pod",
 			}}}}
 	c := newTestClient(t, ndr)
 	d, err := c.CollectNodeDetail(context.Background(), "rngd-1")
@@ -196,6 +200,9 @@ func TestCollectNodeDetail_소비자목록과오류를옮긴다(t *testing.T) {
 		t.Fatalf("오류: %v", err)
 	}
 	want := []ConsumerView{{
+		Namespace: "default", Pod: "a-pod", Container: "a-pod",
+		ResourceName: "furiosa.ai/rngd", DeviceID: "11111111",
+	}, {
 		Namespace: "default", Pod: "rngd-pod", Container: "rngd-pod",
 		ResourceName: "furiosa.ai/rngd", DeviceID: "89413086",
 	}}
