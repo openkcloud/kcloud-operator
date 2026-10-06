@@ -5,7 +5,7 @@
 // 그 차이를 attribution 으로 노출하고, 모르는 것은 추측해 채우지 않는다(fail-closed).
 // AcceleratorView 에 consumers 를 달지 않는 이유도 같다 — 장치 행에 소비자를 달면
 // device-plugin 경로에서 거짓 신호가 된다.
-// 생성일: 2026-08-07
+// 생성일: 2026-08-07 | 수정일: 2026-10-06
 // ============================================================
 package apiserver
 
@@ -105,7 +105,8 @@ func toConsumerView(pod corev1.Pod, claims []resourcev1.ResourceClaim, ndrs []np
 		})
 	}
 
-	// DRA 축: pod 가 참조하는 claim 을 찾아 할당 결과를 읽는다.
+	// DRA 축: pod 가 참조하는 claim 을 찾아 할당 결과를 읽는다. 템플릿 claim 은
+	// status 의 생성 이름으로 찾는다.
 	byName := map[string]*resourcev1.ResourceClaim{}
 	for i := range claims {
 		if claims[i].Namespace == pod.Namespace {
@@ -114,10 +115,7 @@ func toConsumerView(pod corev1.Pod, claims []resourcev1.ResourceClaim, ndrs []np
 	}
 	allocated := false
 	for _, prc := range pod.Spec.ResourceClaims {
-		name := ""
-		if prc.ResourceClaimName != nil {
-			name = *prc.ResourceClaimName
-		}
+		name := claimNameOf(pod, prc)
 		ref := ClaimRef{Name: name, Status: "missing"}
 		if c := byName[name]; c != nil {
 			ref.DeviceClass = deviceClassOf(c)
@@ -173,6 +171,22 @@ func podResourcesDeviceIDs(ndrs []npuv1alpha1.NodeDeviceReport, pod corev1.Pod) 
 		return ids // 파드가 목록에 없으면 nil → node 유지
 	}
 	return nil
+}
+
+// claimNameOf 는 파드가 참조하는 ResourceClaim 의 실제 이름을 돌려준다. spec 에 직접 적은
+// 이름이 있으면 그것이고, 템플릿(resourceClaimTemplateName)으로 받았으면 kubelet 이 만든
+// 이름이 status.resourceClaimStatuses 에만 있으므로 같은 항목 이름으로 되짚는다. 둘 다 없으면
+// 빈 문자열 — 호출자는 missing 으로 둔다(아직 만들어지지 않은 claim 을 지어내지 않는다).
+func claimNameOf(pod corev1.Pod, prc corev1.PodResourceClaim) string {
+	if prc.ResourceClaimName != nil && *prc.ResourceClaimName != "" {
+		return *prc.ResourceClaimName
+	}
+	for _, st := range pod.Status.ResourceClaimStatuses {
+		if st.Name == prc.Name && st.ResourceClaimName != nil {
+			return *st.ResourceClaimName
+		}
+	}
+	return ""
 }
 
 // deviceClassOf 는 claim 의 첫 요청에서 DeviceClass 이름을 꺼낸다. 요청이

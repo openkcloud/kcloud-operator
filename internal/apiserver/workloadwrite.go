@@ -1,9 +1,9 @@
 // ============================================================
 // workloadwrite.go: 배포 생성·삭제 요청 처리 — 거절은 200+rejection, 기존 정책 라우트와 같은 계약
 // 상세: 요청을 파싱해 npuctl 에 넘기고 결과를 응답으로 옮기기만 한다. 조립·검증은
-//       CRD 스키마와 webhook(AcceleratorWorkload 자체에는 아직 없다)·AW 컨트롤러 몫이고
-//       여기서 복제하지 않는다.
-// 생성일: 2026-10-06
+//       CRD 스키마와 webhook(internal/webhook/acceleratorworkload.go, 차트의
+//       vacceleratorworkload.npu.ai)·AW 컨트롤러 몫이고 여기서 복제하지 않는다.
+// 생성일: 2026-10-06 | 수정일: 2026-10-06 (주석 정정)
 // ============================================================
 
 package apiserver

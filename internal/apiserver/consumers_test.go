@@ -324,3 +324,35 @@ func TestDevicePluginPodCollectsDeviceIDsAcrossContainersAndResources(t *testing
 		t.Fatalf("컨테이너·자원이 여럿이어도 그 파드의 deviceID 는 전부 모인다: %+v", v)
 	}
 }
+
+// 템플릿(resourceClaimTemplateName)으로 받은 claim 은 spec 에 이름이 없고 kubelet 이 만든 이름이
+// status.resourceClaimStatuses 에 실린다 — 그 경로로 되짚어야 할당 결과가 보인다(라이브
+// Tenstorrent·RNGD 왕복에서 pending 으로 남던 결함).
+func TestDRATemplateClaimIsResolvedFromPodStatus(t *testing.T) {
+	tmpl, generated := "doc-dra-claim", "doc-dra-probe-accel-j9szt"
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
+		Spec:   corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}},
+		Status: corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "accel", ResourceClaimName: &generated}}}}
+	claim := resourcev1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: generated},
+		Status: resourcev1.ResourceClaimStatus{Allocation: &resourcev1.AllocationResult{Devices: resourcev1.DeviceAllocationResult{
+			Results: []resourcev1.DeviceRequestAllocationResult{{Request: "accel", Driver: "tenstorrent.com", Pool: "n1", Device: "tt-0"}}}}}}
+	v, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim}, nil)
+	if !ok || v.Attribution != AttributionDevice || v.DeviceIDSource != DeviceIDSourceDRA || !reflect.DeepEqual(v.DeviceUIDs, []string{"tt-0"}) {
+		t.Fatalf("템플릿 claim 의 할당 결과로 device 등급이어야 한다: %+v", v)
+	}
+	if len(v.Claims) != 1 || v.Claims[0].Name != generated || v.Claims[0].Status != "allocated" {
+		t.Fatalf("claims 에 생성된 이름과 allocated 가 실려야 한다: %+v", v.Claims)
+	}
+}
+
+// status 에 아직 생성 이름이 없으면(claim 미생성) 이름 없는 missing 으로 두고 pending 을 유지한다 —
+// 지어내지 않는다.
+func TestDRATemplateClaimWithoutStatusStaysPending(t *testing.T) {
+	tmpl := "doc-dra-claim"
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
+		Spec: corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}}}
+	v, ok := toConsumerView(pod, nil, nil)
+	if !ok || v.Attribution != AttributionPending || len(v.Claims) != 1 || v.Claims[0].Name != "" || v.Claims[0].Status != "missing" {
+		t.Fatalf("미생성 claim 은 pending·missing: %+v", v)
+	}
+}
