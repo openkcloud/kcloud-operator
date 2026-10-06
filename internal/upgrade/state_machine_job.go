@@ -7,7 +7,7 @@
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
 //       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-09-22
+// 생성일: 2026-07-16 | 수정일: 2026-10-06
 // ============================================================
 
 package upgrade
@@ -190,7 +190,7 @@ func (m *UpgradeStateMachine) handleValidatingJob(
 		if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.RollbackOnFailure {
 			return m.transitionTo(state, v1alpha1.UpgradeStateRollback, "검증 타임아웃(job): 롤백 시작", 0)
 		}
-		return m.jobTransitionToFailed(ctx, state, "검증 타임아웃(job): 수동 조치 필요")
+		return m.jobTransitionToFailed(ctx, state, validationTimeoutFailedMessage(state))
 	}
 
 	if !jobFound {
@@ -530,4 +530,17 @@ func jobFailed(job *batchv1.Job) bool {
 		}
 	}
 	return false
+}
+
+// validationTimeoutFailedMessage 는 검증 예산이 끝나 Failed 로 갈 때의 메시지다. 상태 전이는
+// cordon 을 그대로 두므로(벤더 광고가 0 일 때만 해제) 사람이 무엇을 해야 하는지를 적는다 —
+// 설치된 버전이 목표와 달라 검증이 안 끝나는 경우(계열 최신이 깔린 첫 설치)가 대표 사례다.
+func validationTimeoutFailedMessage(state *v1alpha1.DriverUpgradeState) string {
+	msg := fmt.Sprintf("검증 타임아웃(job): 수동 조치 필요 — 노드 드라이버가 목표 %s 와 다르면 "+
+		"kubectl uncordon %s 뒤 DriverInstallPolicy spec.driver.version 을 설치된 버전으로 맞추거나 "+
+		"allowDowngrade=true 로 재설치", state.Status.DesiredVersion, state.Spec.NodeName)
+	if state.Status.Message != "" {
+		msg += ". 마지막 검증: " + state.Status.Message
+	}
+	return msg
 }

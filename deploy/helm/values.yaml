@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-06 (node-manager 기본 태그 0.6.19, PodResources 사이드카 요구)
+# 생성일: 2026-03-25 | 수정일: 2026-10-06 (node-manager 기본 태그 0.6.19, PodResources 사이드카 요구, nvidia-driver-ds v4)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -592,7 +592,8 @@ driverInstallPolicies:
       version: "580.178.04"
       # registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
       repository: "nvidia-driver-ds"
-      tag: "v1"
+      # v4 부터 DKMS 경로가 정책 version 의 패키지를 고정해 설치한다(이전 태그는 계열 최신을 설치).
+      tag: "v4"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false

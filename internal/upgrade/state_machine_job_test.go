@@ -4,13 +4,14 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-04
+// 생성일: 2026-07-16 | 수정일: 2026-10-06
 // ============================================================
 
 package upgrade
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ const (
 	imgNew  = "reg/nv:590.48.01-v16"
 	verOld  = "580.126.09"
 	verNew  = "590.48.01"
+	val10m  = "10m"
 )
 
 // ── 헬퍼 ─────────────────────────────────────────
@@ -648,7 +650,7 @@ func TestHandleValidatingJob_RunningJobDoesNotConsumeBudget(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
 	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
 	dip := makeJobDIP(verNew, imgNew, true, true)
-	dip.Spec.UpgradePolicy.ValidationTimeout = "10m"
+	dip.Spec.UpgradePolicy.ValidationTimeout = val10m
 	running := makeInstallJob(false, false)
 	sm := newUpgradeSMWithRecorder(dus, dip, running)
 
@@ -670,7 +672,7 @@ func TestHandleValidatingJob_BudgetStartsAfterJobCompletion(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
 	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
 	dip := makeJobDIP(verNew, imgNew, true, true)
-	dip.Spec.UpgradePolicy.ValidationTimeout = "10m"
+	dip.Spec.UpgradePolicy.ValidationTimeout = val10m
 	done := makeInstallJob(true, false)
 	now := metav1.NewTime(time.Now())
 	done.Status.CompletionTime = &now
@@ -681,6 +683,32 @@ func TestHandleValidatingJob_BudgetStartsAfterJobCompletion(t *testing.T) {
 	}
 	if dus.Status.State == v1alpha1.UpgradeStateRollback {
 		t.Error("완료 직후인데 검증 타임아웃으로 롤백됐다")
+	}
+}
+
+// 검증 예산이 끝나 Failed 로 갈 때 메시지에 복구 절차(uncordon·정책 version 정렬·allowDowngrade)
+// 가 있어야 한다 — "수동 조치 필요" 만으로는 무엇을 할지 알 수 없다(외부 보고 재현).
+func TestHandleValidatingJob_TimeoutFailedMessageHasRecovery(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
+	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	dus.Status.Message = "validator DriverModule 미통과: host kernel module=580.178.04 ≠ desired=" + verNew
+	dip := makeJobDIP(verNew, imgNew, true, false)
+	dip.Spec.UpgradePolicy.ValidationTimeout = val10m
+	done := makeInstallJob(true, false)
+	past := metav1.NewTime(time.Now().Add(-20 * time.Minute))
+	done.Status.CompletionTime = &past
+	sm := newUpgradeSMWithRecorder(dus, dip, done)
+
+	if _, _, err := sm.handleValidatingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleValidatingJob 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed {
+		t.Fatalf("state=%q, want Failed", dus.Status.State)
+	}
+	for _, want := range []string{"kubectl uncordon " + dus.Spec.NodeName, "spec.driver.version", "allowDowngrade=true", "580.178.04"} {
+		if !strings.Contains(dus.Status.Message, want) {
+			t.Errorf("메시지에 %q 가 없다: %q", want, dus.Status.Message)
+		}
 	}
 }
 
