@@ -42,6 +42,36 @@ type rbacDoc struct {
 // 깨는 뮤테이션: deploy/helm/templates/rbac.yaml 의 operator role 에 secrets 규칙을 되살리면
 // 실패한다.
 func TestOperatorClusterRoleOmitsUnusedGrants(t *testing.T) {
+	roleName, rules := mainClusterRoleRules(t)
+	byResource := verbsByResource(rules)
+
+	// 코드가 client 로 쓰지 않는 권한: 다시 실리면 안 된다. 리소스 이름은 파싱된 map 키로 정확히
+	// 대조하므로 clusterroles 가 roles 로 오검되지 않는다.
+	for _, res := range []string{"secrets", "poddisruptionbudgets", "roles", "rolebindings"} {
+		if verbs, ok := byResource[res]; ok {
+			t.Errorf("main ClusterRole %q 에 %q 권한이 있다(verbs %v) — 코드가 client 로 쓰지 "+
+				"않는다. secrets 는 pod 볼륨(SecretVolumeSource)으로만, PDB 는 Eviction API 가 "+
+				"API server 에서 대신 검사, roles/rolebindings 는 코드에 대상이 없다",
+				roleName, res, verbs)
+		}
+	}
+
+	// 인접 grant clusterroles/clusterrolebindings 는 descriptor auto-apply 가 실제로 만든다 —
+	// 위 제거가 이쪽까지 지우지 않았는지 함께 고정한다(bind/escalate 포함 grant 유지).
+	for _, res := range []string{"clusterroles", "clusterrolebindings"} {
+		if _, ok := byResource[res]; !ok {
+			t.Errorf("main ClusterRole %q 에서 %q 권한이 사라졌다 — descriptor auto-apply 가 "+
+				"생성 DRA 드라이버 ClusterRole 을 만들려면 필요하다", roleName, res)
+		}
+	}
+}
+
+// mainClusterRoleRules 는 operator ServiceAccount 에 바인딩된 main ClusterRole 을
+// SA→ClusterRoleBinding→roleRef 사슬로 찾아 그 규칙을 반환한다(이름의 위치가 아니라 사슬로
+// 특정하는 이유는 TestOperatorClusterRoleOmitsUnusedGrants 설명 참조 — 렌더에는 다른
+// ClusterRole(node-manager 등)도 있어 통째로 문자열을 훑으면 판정이 흐려진다).
+func mainClusterRoleRules(t *testing.T) (string, []rbacRule) {
+	t.Helper()
 	render := helmTemplate(t, "--show-only", "templates/rbac.yaml")
 
 	var docs []rbacDoc
@@ -99,26 +129,21 @@ func TestOperatorClusterRoleOmitsUnusedGrants(t *testing.T) {
 	if !found {
 		t.Fatalf("main ClusterRole %q 을 렌더에서 못 찾았다", roleName)
 	}
+	return roleName, rules
+}
 
+// TestOperatorClusterRoleGrantsWorkloadWrite 는 관리 API 의 배포 생성·삭제 라우트가 operator SA
+// 로 CR 을 만들고 지우므로 main ClusterRole 에 그 동사가 있어야 함을 고정한다(라이브 rev 83 에서
+// create 부재로 403 이 난 결함의 회귀 가드). status 하위 자원에는 create·delete 를 주지 않는다.
+func TestOperatorClusterRoleGrantsWorkloadWrite(t *testing.T) {
+	roleName, rules := mainClusterRoleRules(t)
 	byResource := verbsByResource(rules)
-
-	// 코드가 client 로 쓰지 않는 권한: 다시 실리면 안 된다. 리소스 이름은 파싱된 map 키로 정확히
-	// 대조하므로 clusterroles 가 roles 로 오검되지 않는다.
-	for _, res := range []string{"secrets", "poddisruptionbudgets", "roles", "rolebindings"} {
-		if verbs, ok := byResource[res]; ok {
-			t.Errorf("main ClusterRole %q 에 %q 권한이 있다(verbs %v) — 코드가 client 로 쓰지 "+
-				"않는다. secrets 는 pod 볼륨(SecretVolumeSource)으로만, PDB 는 Eviction API 가 "+
-				"API server 에서 대신 검사, roles/rolebindings 는 코드에 대상이 없다",
-				roleName, res, verbs)
+	for _, verb := range []string{"create", "delete"} {
+		if !contains(byResource["acceleratorworkloads"], verb) {
+			t.Errorf("main ClusterRole %q 의 acceleratorworkloads 에 %q 가 없다(verbs %v)", roleName, verb, byResource["acceleratorworkloads"])
 		}
-	}
-
-	// 인접 grant clusterroles/clusterrolebindings 는 descriptor auto-apply 가 실제로 만든다 —
-	// 위 제거가 이쪽까지 지우지 않았는지 함께 고정한다(bind/escalate 포함 grant 유지).
-	for _, res := range []string{"clusterroles", "clusterrolebindings"} {
-		if _, ok := byResource[res]; !ok {
-			t.Errorf("main ClusterRole %q 에서 %q 권한이 사라졌다 — descriptor auto-apply 가 "+
-				"생성 DRA 드라이버 ClusterRole 을 만들려면 필요하다", roleName, res)
+		if contains(byResource["acceleratorworkloads/status"], verb) {
+			t.Errorf("main ClusterRole %q 의 acceleratorworkloads/status 에 %q 가 있다 — status 는 갱신만", roleName, verb)
 		}
 	}
 }

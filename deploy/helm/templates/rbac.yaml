@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25 | 수정일: 2026-10-04 (serviceAccount.create·rbac.create 가드 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-06 (acceleratorworkloads create·delete 추가)
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -31,13 +31,17 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["acceleratorpartitionpolicies/status", "acceleratorpartitionpolicies/finalizers"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # 추상 사용자 API: AcceleratorClass 는 read-only(사용자/관리자가 만든다), AcceleratorWorkload 는
-  # 컨트롤러가 status 를 쓴다. Deployment 는 워크로드 렌더용으로 아래 apps 규칙에서 create 를 받는다.
   - apiGroups: ["npu.ai"]
     resources: ["acceleratorclasses"]
     verbs: ["get", "list", "watch"]
+  # AcceleratorWorkload: 컨트롤러는 status 를 쓰고, 관리 API 의 배포 생성·삭제 라우트
+  # (POST/DELETE /api/v1/workloads)는 이 SA 의 클라이언트로 CR 을 만들고 지운다 —
+  # 호출자 인가(SubjectAccessReview)도 같은 verb 를 본다(정책 라우트와 같은 규약).
   - apiGroups: ["npu.ai"]
-    resources: ["acceleratorworkloads", "acceleratorworkloads/status"]
+    resources: ["acceleratorworkloads"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["npu.ai"]
+    resources: ["acceleratorworkloads/status"]
     verbs: ["get", "list", "watch", "update", "patch"]
   # 검증 근거: operator 가 생성·갱신하는 CR — evidence 는 컨트롤러만 쓴다(사용자는 읽기만).
   - apiGroups: ["npu.ai"]

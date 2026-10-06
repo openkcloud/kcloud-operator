@@ -154,6 +154,7 @@ rules:
   - acceleratorhealths
   - acceleratoroperations
   - acceleratorpartitionpolicies
+  - acceleratorworkloads
   - driverupgradestates
   - npuclusterpolicies
   verbs:
@@ -174,7 +175,6 @@ rules:
 - apiGroups:
   - npu.ai
   resources:
-  - acceleratorworkloads
   - nodedevicereports
   verbs:
   - get

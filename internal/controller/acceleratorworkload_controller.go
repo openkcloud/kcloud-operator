@@ -5,7 +5,7 @@
 // 돌려 결과를 status 에 남긴다. 성공하면 Deployment 하나를 소유하고, 거절되면 Deployment 를
 // 만들지 않고 Condition=False 로 사유를 남긴다(실행 중인 것을 강제로 죽이지는 않는다 —
 // 광고가 사라지면 Pod 은 자연히 Pending 이 되고, 그 판단은 운영자 몫이다).
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-06
 // ============================================================
 package controller
 
@@ -73,7 +73,7 @@ type AcceleratorWorkloadReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=npu.ai,resources=acceleratorclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=npu.ai,resources=acceleratorworkloads,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=npu.ai,resources=acceleratorworkloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=npu.ai,resources=acceleratorworkloads/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses;resourceslices;resourceclaims,verbs=get;list;watch
