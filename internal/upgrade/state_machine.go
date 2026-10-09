@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (defaultValidators 를 validatorsFor 정책 opt-in 체인으로 교체)
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (UnverifiedVersion 터미널에서 정책 복귀 시 Idle 로 전이)
 // ============================================================
 
 package upgrade
@@ -217,8 +217,14 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateFailed:
 		return m.handleFailed(ctx, state)
 	case v1alpha1.UpgradeStateUnverifiedVersion:
-		// terminal: verifiedVersions 화이트리스트에 없는 버전 — DS image patch 없이 대기.
-		// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구한다.
+		// 터미널이지만 정책이 바뀌면 나간다 — desired 가 verifiedVersions 안으로 들어오거나(목록 추가·버전 되돌림)
+		// 목록이 비면 Idle 로 돌아가 정상 판정을 다시 받는다. 전에는 DUS 삭제·재생성만이 출구였고 그 재생성은
+		// currentVersion 이 비어 install Job 을 돌렸다.
+		desired := policy.Spec.Driver.Version
+		if len(policy.Spec.VerifiedVersions) == 0 || containsString(policy.Spec.VerifiedVersions, desired) {
+			return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
+				fmt.Sprintf("정책 버전 %s 가 verifiedVersions 안으로 들어와 Idle 복귀", desired), 0)
+		}
 		logger.Info("UnverifiedVersion 터미널 상태 — DIP.spec.verifiedVersions 수정 필요 (수동 조치)",
 			"node", state.Spec.NodeName, "desiredVersion", state.Status.DesiredVersion)
 		return true, 60 * time.Second, nil

@@ -4,7 +4,7 @@
 //       Rollback exhaustion → Failed 터미널 정지 검증
 //       소비된 rollback 요청 어노테이션 재소비 차단 검증(A9)
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-28 | 수정일: 2026-10-09 (validatorsFor 정책 opt-in 체인 테스트 추가)
+// 생성일: 2026-04-28 | 수정일: 2026-10-09 (UnverifiedVersion Idle 복귀 테스트 추가)
 // ============================================================
 
 package upgrade
@@ -12,6 +12,7 @@ package upgrade
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -549,5 +550,39 @@ func TestValidatorsFor_WorkloadOnlyWhenEnabled(t *testing.T) {
 	p.Spec.WorkloadProbe.Enabled = true
 	if n := len(validatorsFor(p)); n != 3 {
 		t.Fatalf("켜면 3개: %d", n)
+	}
+}
+
+// ─────────────────────────────────────────────
+// UnverifiedVersion 자동 복귀 테스트 (Task 14)
+// ─────────────────────────────────────────────
+
+// TestUnverifiedVersion_ReturnsToIdleWhenDesiredBecomesVerified 는 DUS 가
+// UnverifiedVersion 터미널 상태인 동안 DIP.spec.verifiedVersions 가 정책 버전을
+// 다시 포함하도록 바뀌면(화이트리스트 추가·버전 되돌림) 삭제·재생성 없이 Idle 로
+// 복귀함을 검증한다.
+func TestUnverifiedVersion_ReturnsToIdleWhenDesiredBecomesVerified(t *testing.T) {
+	dus := makeIdleDUSWithCurrentVersion("w3-tenstorrent", "w3", "tenstorrent", "2.11.0")
+	dus.Status.State, dus.Status.DesiredVersion = v1alpha1.UpgradeStateUnverifiedVersion, "2.12.0"
+	dip := makeDIPWithVerifiedVersions("tt-generic", "tenstorrent", "2.11.0", []string{"2.8.0", "2.11.0"}) // 정책이 되돌아감
+	sm := newUpgradeSMWithRecorder(dus, dip)
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Fatalf("정책이 검증된 버전으로 돌아왔는데 터미널에 남아 있다: %s", dus.Status.State)
+	}
+}
+
+// TestUnverifiedVersion_StaysWhileDesiredUnverified 는 정책 버전이 여전히
+// verifiedVersions 밖이면 터미널 상태를 유지하고 60초 뒤 재확인함을 검증한다.
+func TestUnverifiedVersion_StaysWhileDesiredUnverified(t *testing.T) {
+	dus := makeIdleDUSWithCurrentVersion("w3-tenstorrent", "w3", "tenstorrent", "2.11.0")
+	dus.Status.State, dus.Status.DesiredVersion = v1alpha1.UpgradeStateUnverifiedVersion, "2.12.0"
+	dip := makeDIPWithVerifiedVersions("tt-generic", "tenstorrent", "2.12.0", []string{"2.8.0", "2.11.0"})
+	sm := newUpgradeSMWithRecorder(dus, dip)
+	requeue, after, err := sm.TransitionState(context.Background(), dus, dip)
+	if err != nil || dus.Status.State != v1alpha1.UpgradeStateUnverifiedVersion || !requeue || after != 60*time.Second {
+		t.Fatalf("미검증 버전이 그대로면 터미널 유지·60초 requeue: state=%s requeue=%v after=%v err=%v", dus.Status.State, requeue, after, err)
 	}
 }

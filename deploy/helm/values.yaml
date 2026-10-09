@@ -1,5 +1,6 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가,
+#   v4 설치기 버전 고정 이후 죽은 NVIDIA_DRIVER_CHOICE 기본 env 제거)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -605,6 +606,9 @@ driverInstallPolicies:
       repository: "nvidia-driver-ds"
       # v4 부터 설치기가 정책 version 의 패키지를 apt-cache madison 으로 찾아 고정 설치한다
       # (host 설치 경로와 containerized 경로 모두, 이전 태그는 계열 최신을 설치).
+      # 설치 버전은 `version` 하나로 정한다 — v4 설치기는 정책 version 을 1순위로 고정
+      # 설치하고 실패해도 다른 후보로 대체하지 않으므로 이 env 는 쓰이지 않는다.
+      # 필요하면 env 로 직접 줄 수 있다.
       tag: "v4"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
@@ -613,9 +617,6 @@ driverInstallPolicies:
       versionSource: "Policy"
       # Passthrough 모드 노드에서 드라이버 설치 건너뜀
       skipOnPassthrough: true
-      env:
-        - name: NVIDIA_DRIVER_CHOICE
-          value: "recommended"
       # 커널별 사전 컴파일 이미지. 키는 노드의 uname -r, 값은 이미지 참조다.
       # 태그의 버전 토큰이 위 version 과 같아야 한다 — 다르면 operator 가 이 이미지를
       # 쓰지 않고 기본 image 로 되돌아가며 KernelImageRejected 경고를 낸다.
