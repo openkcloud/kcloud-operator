@@ -4,7 +4,7 @@
 //
 //	없는 조합으로 시험하면 그 시험은 무효다.
 //
-// 생성일: 2026-08-07 | 수정일: 2026-10-06 (템플릿 claim 귀속 시험 추가)
+// 생성일: 2026-08-07 | 수정일: 2026-10-09 (reserved-elsewhere 시험 추가)
 // ============================================================
 package apiserver
 
@@ -354,5 +354,30 @@ func TestDRATemplateClaimWithoutStatusStaysPending(t *testing.T) {
 	v, ok := toConsumerView(pod, nil, nil)
 	if !ok || v.Attribution != AttributionPending || len(v.Claims) != 1 || v.Claims[0].Name != "" || v.Claims[0].Status != "missing" {
 		t.Fatalf("미생성 claim 은 pending·missing: %+v", v)
+	}
+}
+
+// claim 의 status.reservedFor 가 이 파드를 담지 않으면(다른 파드가 이미 예약) 할당 결과가 있어도
+// 이 파드에 귀속하지 않는다 — 같은 generation 의 템플릿 claim 을 다른 파드가 이미 쥐고 있을 수 있다.
+func TestDRATemplateClaimReservedForOtherPodIsNotAttributed(t *testing.T) {
+	tmpl, generated := "doc-dra-claim", "doc-dra-probe-accel-j9szt"
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1", UID: "uid-p1"},
+		Spec:   corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}},
+		Status: corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "accel", ResourceClaimName: &generated}}}}
+	claim := resourcev1.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: generated},
+		Status: resourcev1.ResourceClaimStatus{
+			Allocation: &resourcev1.AllocationResult{Devices: resourcev1.DeviceAllocationResult{
+				Results: []resourcev1.DeviceRequestAllocationResult{{Request: "accel", Driver: "tenstorrent.com", Pool: "n1", Device: "tt-0"}}}},
+			ReservedFor: []resourcev1.ResourceClaimConsumerReference{{Resource: "pods", Name: "other", UID: "uid-other"}},
+		}}
+	v, ok := toConsumerView(pod, []resourcev1.ResourceClaim{claim}, nil)
+	if !ok {
+		t.Fatal("가속기를 요청한 파드이므로 ok 여야 한다")
+	}
+	if len(v.Claims) != 1 || v.Claims[0].Status != ClaimStatusReservedElsewhere {
+		t.Fatalf("claim status=%+v, 기대 %q", v.Claims, ClaimStatusReservedElsewhere)
+	}
+	if v.Attribution != AttributionPending || len(v.DeviceUIDs) != 0 {
+		t.Fatalf("다른 파드에 예약된 claim 의 장치를 이 파드에 귀속했다: attribution=%s uids=%v", v.Attribution, v.DeviceUIDs)
 	}
 }

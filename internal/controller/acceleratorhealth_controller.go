@@ -7,7 +7,7 @@
 //	internal/partition 을 필요로 하는데, internal/health 는 그 패키지를 import 할 수 없기
 //	때문이다(직접 mutation 금지 계약을 컴파일 그래프로 강제한다).
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-09
 // ============================================================
 package controller
 
@@ -163,8 +163,8 @@ func quarantineWorthy(state string) bool {
 // "kcloud.ai/warboy.present" 는 detector 어디에서도 쓰지 않는다.
 func acceleratorPresentLabels() map[string]bool {
 	m := map[string]bool{
-		"kcloud.ai/gpu.present":            true,
-		"kcloud.ai/furiosa-family.present": true,
+		"kcloud.ai/gpu.present":               true,
+		npuv1alpha1.FuriosaFamilyPresentLabel: true,
 	}
 	for _, v := range vendorcap.Vendors() {
 		m[vendorPresentLabel(v)] = true

@@ -4,7 +4,7 @@
 //
 //	seam 으로 typed CommandStep 실행, Verify 는 verifier seam 으로 위임(stateless).
 //
-// 생성일: 2026-07-23 | 수정일: 2026-07-31
+// 생성일: 2026-07-23 | 수정일: 2026-10-09
 // ============================================================
 package nvidia
 
@@ -20,9 +20,6 @@ import (
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/partition"
 )
-
-// nvidiaProfileRe 는 MIG profile 표기 <digit>g.<digit>gb 를 앵커 검증한다(느슨한 substring 금지).
-var nvidiaProfileRe = regexp.MustCompile(`^\d+g\.\d+gb$`)
 
 // migCapableRe 는 MIG 지원 모델(A30/A100/H100)을 토큰 경계로 매칭한다.
 // substring 매칭은 RTX A3000(비-MIG)을 A30 으로 오분류하므로 \b 경계 필수.
@@ -385,7 +382,7 @@ func (b *Backend) Validate(layout []partition.Layout) error {
 		return ErrMixedPlacementUnsupported
 	}
 	l := layout[0]
-	if !nvidiaProfileRe.MatchString(l.Profile) {
+	if !partition.IsNvidiaMIGProfile(l.Profile) {
 		return partition.ErrUnsupported
 	}
 	if l.CountPerDevice <= 0 {

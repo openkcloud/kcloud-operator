@@ -108,7 +108,7 @@ const (
 	furiosaUnifiedImgDefault   = "furiosa-unified-device-plugin:0.1.0"
 	// 양 Furiosa 노드(Warboy/RNGD)가 공통으로 갖는 자립 라벨(node-manager 부여, PCI 0x1ed2).
 	// NFD 비의존 — 통합 DS 공통 셀렉터.
-	furiosaFamilyNodeLabel = "kcloud.ai/furiosa-family.present"
+	furiosaFamilyNodeLabel = npuv1alpha1.FuriosaFamilyPresentLabel
 )
 
 // furiosaPerModelDSRefs 는 모델별 Furiosa device-plugin DS 가 있을 수 있는 자리 전부다.

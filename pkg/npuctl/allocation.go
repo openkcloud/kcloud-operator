@@ -8,7 +8,7 @@
 //	AcceleratorPartitionPolicy.status.targets[].devices[].allocationAPIs 는 "이 장치를
 //	노출할 수 있는 API"(MVP 는 항상 devicePlugin 값 하나)라 이 물음과 다르다 — 쓰지 않는다.
 //
-// 생성일: 2026-09-28
+// 생성일: 2026-09-28 | 수정일: 2026-10-09 (Furiosa 혼재 노드 present 판정 수정)
 package npuctl
 
 import (
@@ -162,48 +162,47 @@ func CollectAllocationStatusWith(ctx context.Context, r client.Reader) ([]Alloca
 
 // vendorPresent 는 이 노드에 그 벤더 장치가 있는지를 본다(review I-1). furiosa(Warboy)·rngd 는
 // 자립 라벨 하나로 못 끝난다 — 통합 DaemonSet 노드가 kcloud.ai/furiosa-family.present 만 가질
-// 때는 NodeDeviceReport 의 장치 모델(warboy|rngd)로 한 번 더 가른다. 그래도 못 가르면(관측이
-// 없거나 두 제품이 한 노드에 섞임) present=false·ambiguous=true 다 — 호출부가 어느 API 로도
-// 단정하지 않고 AmbiguousProductNodes 에 담는다.
+// 때는 NodeDeviceReport 의 장치 모델(warboy|rngd)로 한 번 더 가른다. 두 제품이 한 노드에 섞여도
+// 모호가 아니라 둘 다 present 다 — 관측이 전혀 없을 때만(product 라벨도 모델도 없음)
+// present=false·ambiguous=true 다 — 호출부가 어느 API 로도 단정하지 않고 AmbiguousProductNodes 에
+// 담는다.
 func vendorPresent(n corev1.Node, vendor string, furiosaModels []string) (present, ambiguous bool) {
 	if vendor != VendorFuriosa && vendor != VendorRngd {
 		return n.Labels[npuv1alpha1.PresentNodeLabel(vendor)] == labelValueTrue, false
 	}
-	familyOnly := n.Labels["kcloud.ai/furiosa-family.present"] == labelValueTrue
-	product := furiosaProduct(n)
-	if product == "" && familyOnly {
-		product = furiosaProductFromModels(furiosaModels)
+	familyOnly := n.Labels[npuv1alpha1.FuriosaFamilyPresentLabel] == labelValueTrue
+	products := furiosaProductsFromModels(furiosaModels)
+	if p := furiosaProduct(n); p != "" {
+		products[p] = true
 	}
-	switch product {
-	case VendorRngd:
-		return vendor == VendorRngd, false
-	case productWarboy:
-		return vendor == VendorFuriosa, false
+	want := productWarboy
+	if vendor == VendorRngd {
+		want = VendorRngd
+	}
+	switch {
+	case products[want]:
+		return true, false
+	case len(products) > 0:
+		return false, false // 다른 제품만 있다 — 모호가 아니라 부재
 	default:
 		return false, familyOnly
 	}
 }
 
-// furiosaProductFromModels 는 NodeDeviceReport 의 furiosa 장치 모델이 한 제품으로 모이면 그
-// 제품(rngd|warboy)을, 비었거나 섞였으면 "" 를 돌려준다(모델 슬러그는 rngd·warboy 접두).
-func furiosaProductFromModels(models []string) string {
-	product := ""
+// furiosaProductsFromModels 는 NodeDeviceReport 의 furiosa 장치 모델이 가리키는 제품 집합이다
+// (모델 슬러그는 rngd·warboy 접두). 혼재 노드는 둘 다 담긴다 — 전에는 섞이면 "" 를 돌려 두 벤더 모두
+// 모호로 빠졌는데, 두 제품이 다 있다는 사실은 모호가 아니라 둘 다 present 다.
+func furiosaProductsFromModels(models []string) map[string]bool {
+	out := map[string]bool{}
 	for _, m := range models {
-		var p string
 		switch {
 		case strings.HasPrefix(m, VendorRngd):
-			p = VendorRngd
+			out[VendorRngd] = true
 		case strings.HasPrefix(m, productWarboy):
-			p = productWarboy
-		default:
-			continue
+			out[productWarboy] = true
 		}
-		if product != "" && product != p {
-			return ""
-		}
-		product = p
 	}
-	return product
+	return out
 }
 
 // declare 는 정책의 벤더 블록 하나를 행에 반영한다. 꺼진 벤더는 Declared 를 비워 둔다 —

@@ -5,7 +5,7 @@
 //	노드 관측(nvidia-smi mig -lgip)이 있어야 알 수 있어 여기서는 단정하지 않는다
 //	(internal/partition/nvidia/backend.go 의 Validate 참조).
 //
-// 생성일: 2026-08-24 | 수정일: 2026-08-24
+// 생성일: 2026-08-24 | 수정일: 2026-10-09
 // ============================================================
 package partition
 
@@ -17,10 +17,12 @@ import (
 	"kcloud-operator/internal/upgrade"
 )
 
-// nvidiaProfileRe 는 MIG profile 표기 <digit>g.<digit>gb 를 앵커 검증한다. 출처:
-// internal/partition/nvidia/backend.go:25 의 nvidiaProfileRe 와 같은 패턴 문자열이다 — 그
-// 변수는 다른 패키지의 비공개 값이라 여기서 참조할 수 없어 리터럴을 복제했다.
+// nvidiaProfileRe 는 MIG profile 표기 <digit>g.<digit>gb 를 앵커 검증한다(느슨한 substring 금지).
 var nvidiaProfileRe = regexp.MustCompile(`^\d+g\.\d+gb$`)
+
+// IsNvidiaMIGProfile 은 MIG 프로파일 표기(<digit>g.<digit>gb)인지 본다. webhook 과 nvidia backend 가
+// 같은 판정을 쓰도록 여기 하나만 둔다 — 두 벌이면 한쪽만 고쳐 admission 과 컨트롤러가 갈린다.
+func IsNvidiaMIGProfile(profile string) bool { return nvidiaProfileRe.MatchString(profile) }
 
 // ValidateLayoutShape 는 노드를 보지 않고 판정할 수 있는 것만 본다 — 형식·단일성·개수 경계다.
 // 프로파일이 그 제품에서 실제로 지원되는지는 노드에서 관측해야 알 수 있고(nvidia/backend.go 의

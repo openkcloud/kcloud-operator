@@ -3,7 +3,7 @@
 //
 //	각각 옮겨지는지, 둘이 어긋나는 경우와 벤더가 꺼진/정책이 없는 경우를 검증한다.
 //
-// 생성일: 2026-09-28
+// 생성일: 2026-09-28 | 수정일: 2026-10-09 (혼재 Furiosa 노드 vendorPresent 시험 추가)
 package npuctl
 
 import (
@@ -394,21 +394,53 @@ func TestCollectAllocationStatusFamilyLabelResolvedByNodeDeviceReport(t *testing
 	}
 }
 
-// furiosaProductFromModels 는 모델 목록이 한 제품으로 모이면 그 제품을, 비었거나 섞였으면
-// 빈 값을 돌려준다.
-func TestFuriosaProductFromModels(t *testing.T) {
-	cases := map[string][]string{
-		VendorRngd:    {"rngd"},
-		productWarboy: {"warboy"},
-		"":            {"rngd", "warboy"},
-	}
-	for want, models := range cases {
-		if got := furiosaProductFromModels(models); got != want {
-			t.Errorf("furiosaProductFromModels(%v) = %q, want %q", models, got, want)
+// Warboy·RNGD 가 한 노드에 섞여도(통합 DaemonSet) 둘 다 present 여야 한다 — 모호가 아니다.
+func TestVendorPresent_MixedFuriosaNodeIsNotAmbiguous(t *testing.T) {
+	n := labeledNode("n1", map[string]string{npuv1alpha1.FuriosaFamilyPresentLabel: labelValueTrue})
+	models := []string{"rngd-ca22", "warboy"}
+	for vendor, want := range map[string]bool{VendorRngd: true, VendorFuriosa: true} {
+		present, ambiguous := vendorPresent(n, vendor, models)
+		if present != want || ambiguous {
+			t.Errorf("%s: present=%v ambiguous=%v, 기대 present=%v ambiguous=false", vendor, present, ambiguous, want)
 		}
 	}
-	if got := furiosaProductFromModels(nil); got != "" {
-		t.Errorf("빈 목록은 %q 가 아니라 빈 값이어야 한다", got)
+}
+
+// family 라벨만 있고 NodeDeviceReport 모델 관측도 없으면(둘 다 없음) 그제서야 모호다.
+func TestVendorPresent_FamilyOnlyWithoutModelsIsAmbiguous(t *testing.T) {
+	n := labeledNode("n1", map[string]string{npuv1alpha1.FuriosaFamilyPresentLabel: labelValueTrue})
+	present, ambiguous := vendorPresent(n, VendorRngd, nil)
+	if present || !ambiguous {
+		t.Fatalf("관측 없는 family-only 노드는 모호여야 한다: present=%v ambiguous=%v", present, ambiguous)
+	}
+}
+
+// Warboy 만 있는 노드에서 rngd 를 물으면 부재지 모호가 아니다 — 다른 제품 관측이 있으므로.
+func TestVendorPresent_OtherProductOnlyIsAbsentNotAmbiguous(t *testing.T) {
+	n := labeledNode("n1", map[string]string{npuv1alpha1.FuriosaFamilyPresentLabel: labelValueTrue})
+	present, ambiguous := vendorPresent(n, VendorRngd, []string{"warboy"})
+	if present || ambiguous {
+		t.Fatalf("Warboy 만 있는 노드에서 rngd 는 부재(모호 아님)여야 한다: present=%v ambiguous=%v", present, ambiguous)
+	}
+}
+
+// furiosaProductsFromModels 는 모델 목록이 가리키는 제품 집합을 돌려준다 — 혼재 시 둘 다 담긴다.
+func TestFuriosaProductsFromModels(t *testing.T) {
+	single := map[string][]string{
+		VendorRngd:    {"rngd"},
+		productWarboy: {"warboy"},
+	}
+	for want, models := range single {
+		got := furiosaProductsFromModels(models)
+		if len(got) != 1 || !got[want] {
+			t.Errorf("furiosaProductsFromModels(%v) = %v, want {%q: true}", models, got, want)
+		}
+	}
+	if got := furiosaProductsFromModels([]string{"rngd", "warboy"}); !got[VendorRngd] || !got[productWarboy] || len(got) != 2 {
+		t.Errorf("혼재 입력은 두 제품 모두 담겨야 한다: %v", got)
+	}
+	if got := furiosaProductsFromModels(nil); len(got) != 0 {
+		t.Errorf("빈 목록은 빈 집합이어야 한다: %v", got)
 	}
 }
 

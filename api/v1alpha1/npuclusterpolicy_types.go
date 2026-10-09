@@ -17,7 +17,7 @@ limitations under the License.
 // ============================================================
 // npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
 // 상세: Detector/Nvidia/Furiosa/Rebellions/Tenstorrent vendor spec 포함
-// 생성일: 2025-01-01 | 수정일: 2026-09-28
+// 생성일: 2025-01-01 | 수정일: 2026-10-09
 // ============================================================
 
 package v1alpha1
@@ -390,3 +390,7 @@ func DRARetiredNodeLabel(vendor string) string {
 func PresentNodeLabel(vendor string) string {
 	return "kcloud.ai/" + vendor + ".present"
 }
+
+// FuriosaFamilyPresentLabel 은 Warboy·RNGD 공통 자립 라벨이다. node-manager 가 PCI 0x1ed2 장치에
+// 붙이고 통합 Furiosa DaemonSet 의 셀렉터가 된다(제품 라벨 furiosa.present·rngd.present 와 함께 붙는다).
+const FuriosaFamilyPresentLabel = "kcloud.ai/furiosa-family.present"

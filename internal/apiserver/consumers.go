@@ -5,7 +5,7 @@
 // 그 차이를 attribution 으로 노출하고, 모르는 것은 추측해 채우지 않는다(fail-closed).
 // AcceleratorView 에 consumers 를 달지 않는 이유도 같다 — 장치 행에 소비자를 달면
 // device-plugin 경로에서 거짓 신호가 된다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-06
+// 생성일: 2026-08-07 | 수정일: 2026-10-09 (claim reservedFor 검사 추가)
 // ============================================================
 package apiserver
 
@@ -49,8 +49,12 @@ type ResourceRequest struct {
 type ClaimRef struct {
 	Name        string `json:"name"`
 	DeviceClass string `json:"deviceClass,omitempty"`
-	Status      string `json:"status"` // allocated | pending | missing
+	Status      string `json:"status"` // allocated | pending | missing | reserved-elsewhere
 }
+
+// ClaimStatusReservedElsewhere: claim 은 있고 할당도 됐지만 status.reservedFor 가 이 파드를
+// 담지 않는다 — 같은 이름의 claim 을 다른 파드가 이미 쥐고 있으면 그 장치는 이 파드의 것이 아니다.
+const ClaimStatusReservedElsewhere = "reserved-elsewhere"
 
 // ConsumerView 는 가속기를 요청한 Pod 하나다.
 // pkg/npuctl.ConsumerView(장치를 쥔 컨테이너 하나, describe node CONSUMERS)와 이름만 같고 단위가 다르다.
@@ -120,13 +124,16 @@ func toConsumerView(pod corev1.Pod, claims []resourcev1.ResourceClaim, ndrs []np
 		ref := ClaimRef{Name: name, Status: "missing"}
 		if c := byName[name]; c != nil {
 			ref.DeviceClass = deviceClassOf(c)
-			if c.Status.Allocation != nil {
+			switch {
+			case !reservedForPod(c, pod):
+				ref.Status = ClaimStatusReservedElsewhere
+			case c.Status.Allocation != nil:
 				ref.Status = "allocated"
 				allocated = true
 				for _, res := range c.Status.Allocation.Devices.Results {
 					v.DeviceUIDs = append(v.DeviceUIDs, res.Device)
 				}
-			} else {
+			default:
 				ref.Status = "pending"
 			}
 		}
@@ -199,6 +206,20 @@ func deviceClassOf(c *resourcev1.ResourceClaim) string {
 		}
 	}
 	return ""
+}
+
+// reservedForPod 는 claim 의 reservedFor 가 비었거나(아직 예약 전) 이 파드를 담으면 true 다.
+// 담았어도 다른 파드면 false — 같은 이름의 claim 을 다른 파드가 쥐고 있을 수 있다.
+func reservedForPod(c *resourcev1.ResourceClaim, pod corev1.Pod) bool {
+	if len(c.Status.ReservedFor) == 0 {
+		return true
+	}
+	for _, r := range c.Status.ReservedFor {
+		if r.Resource == "pods" && r.UID == pod.UID {
+			return true
+		}
+	}
+	return false
 }
 
 // handleConsumers 는 가속기를 요청한 Pod 목록을 낸다.

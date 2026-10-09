@@ -61,7 +61,7 @@
 // 하나라도 Degraded 면 그 벤더 능력은 Degraded, 그 외 하나라도 조건에 맞게 Verified 면
 // Verified — evidence 루프와 같은 "여러 소스를 같은 버킷에 합산, 조회 시 Degraded 우선" 방식.
 //
-// 생성일: 2026-09-19 | 수정일: 2026-09-19(review round 1·2, 최종 리뷰: 검증 정책 해석)
+// 생성일: 2026-09-19 | 수정일: 2026-10-09
 // ============================================================
 package npuctl
 
@@ -126,7 +126,7 @@ func furiosaProduct(n corev1.Node) string {
 // 떨어지는 모호함이 있다 — 그래서 evidence 는 이 폴백보다 Spec.Vendor 를 우선한다.
 func nodeVendorProduct(n corev1.Node) (vendor, product string) {
 	has := func(v string) bool { return n.Labels[v1alpha1.PresentNodeLabel(v)] == labelValueTrue }
-	familyOnly := n.Labels["kcloud.ai/furiosa-family.present"] == labelValueTrue
+	familyOnly := n.Labels[v1alpha1.FuriosaFamilyPresentLabel] == labelValueTrue
 	switch {
 	case has(VendorNvidia):
 		return VendorNvidia, ""

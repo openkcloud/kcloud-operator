@@ -1,11 +1,15 @@
 // ============================================================
 // profiles_test.go: ValidateLayoutShape/KnownMIGProfiles 시험
 // 상세: 삭제 실험으로 CountPerDevice 경계를 실제로 잡는지 확인(TestValidateLayoutShape 참조).
-// 생성일: 2026-08-24 | 수정일: 2026-08-24
+// 생성일: 2026-08-24 | 수정일: 2026-10-09
 // ============================================================
 package partition
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestValidateLayoutShape(t *testing.T) {
 	cases := []struct {
@@ -60,6 +64,24 @@ func TestKnownMIGProfiles_generic은판정하지않음(t *testing.T) {
 	for _, product := range []string{"generic", "Generic", ""} {
 		if _, ok := KnownMIGProfiles(product); ok {
 			t.Errorf("product=%q: generic/빈 문자열이 표에 걸렸다 — 제품 미판정은 fail-open 이어야 한다", product)
+		}
+	}
+}
+
+func TestNvidiaProfileRegexDefinedOnce(t *testing.T) {
+	src, err := os.ReadFile("nvidia/backend.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "regexp.MustCompile(`^\\d+g\\.\\d+gb$`)") {
+		t.Fatalf("nvidia/backend.go 가 MIG 프로파일 정규식을 따로 정의한다 — profiles.go 의 IsNvidiaMIGProfile 을 써야 한다")
+	}
+}
+
+func TestIsNvidiaMIGProfile(t *testing.T) {
+	for p, want := range map[string]bool{"1g.6gb": true, "2g.12gb": true, "1g": false, "x1g.6gb": false, "1g.6gbx": false} {
+		if got := IsNvidiaMIGProfile(p); got != want {
+			t.Errorf("%q: got %v want %v", p, got, want)
 		}
 	}
 }
