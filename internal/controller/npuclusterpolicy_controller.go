@@ -206,6 +206,11 @@ func (r *NPUClusterPolicyReconciler) createOrUpdateCM(ctx context.Context, desir
 // 타 벤더 operator 감지 재확인(vendoroperator_detect.go 의 vendorOperatorCRDConfirmed)이
 // CustomResourceDefinition 자체를 캐시 없는 APIReader 로 get 한다.
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
+// 벤더 operator 상태 보고(vendoroperator_status.go 의 readVendorOperatorState)가 그 벤더의
+// ClusterPolicy 류 CR 을 캐시 없는 APIReader 로 get·list 한다. 이 규칙이 빠지면 Forbidden 이
+// Unknown(StatusProbeUnavailable)으로 보고되므로 조용히 "조회 불가" 상태로만 남는다.
+// +kubebuilder:rbac:groups=nvidia.com,resources=clusterpolicies,verbs=get;list
+// +kubebuilder:rbac:groups=rebellions.ai,resources=rblnclusterpolicies,verbs=get;list
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

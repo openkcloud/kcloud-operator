@@ -21,7 +21,7 @@
 //	  근거 없는 감지 규칙을 만들지 않는다. NFD 라벨(feature.node.kubernetes.io/pci-*)은 범용이라
 //	  벤더 operator 시그니처로 쓰지 않는다.
 //
-// 생성일: 2026-09-20 | 수정일: 2026-09-28
+// 생성일: 2026-09-20 | 수정일: 2026-10-09 (present 면 managed 무관하게 Ready 조건 보고 호출 추가)
 // ============================================================
 package controller
 
@@ -248,6 +248,10 @@ func (r *NPUClusterPolicyReconciler) detectVendorOperator(ctx context.Context, p
 			crdRemoved = true
 		}
 	}
+
+	// Ready 조건(보고만, vendoroperator_status.go)은 managed 여부와 무관하게 present 면 세운다
+	// — delegated(비관리) 상태에서 벤더 operator 가 실제로 Ready 인지가 가장 쓸모 있는 신호다.
+	r.setVendorOperatorReadyCondition(ctx, policy, vendor, present)
 
 	if !managed || !present {
 		reason, message := "NotDetected", sig.absentMessage

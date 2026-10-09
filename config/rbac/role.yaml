@@ -183,6 +183,13 @@ rules:
   - update
   - watch
 - apiGroups:
+  - nvidia.com
+  resources:
+  - clusterpolicies
+  verbs:
+  - get
+  - list
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
@@ -197,6 +204,13 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rebellions.ai
+  resources:
+  - rblnclusterpolicies
+  verbs:
+  - get
+  - list
 - apiGroups:
   - resource.k8s.io
   resources:

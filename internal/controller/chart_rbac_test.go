@@ -8,7 +8,7 @@
 // 배포 생성·삭제 라우트가 쓰는 acceleratorworkloads create·delete 는 반대로 존재를 고정한다.
 // 범위: helm 렌더 결과 문자열만 본다(helm 이 없으면 helmTemplate 이 건너뛴다). rbacRule·
 // verbsByResource 는 rbac_sync_test.go 것을 그대로 쓴다.
-// 생성일: 2026-09-22 | 수정일: 2026-10-06 (acceleratorworkloads 쓰기 권한 존재 시험)
+// 생성일: 2026-09-22 | 수정일: 2026-10-09 (벤더 operator 상태 읽기 권한 존재 시험)
 // ============================================================
 package controller
 
@@ -149,5 +149,26 @@ func TestOperatorClusterRoleGrantsWorkloadWrite(t *testing.T) {
 	}
 	if !contains(byResource["acceleratorworkloads/status"], "update") {
 		t.Errorf("main ClusterRole %q 의 acceleratorworkloads/status 에 update 가 없다(verbs %v)", roleName, byResource["acceleratorworkloads/status"])
+	}
+}
+
+// TestOperatorClusterRoleGrantsVendorOperatorStatusRead 는 벤더 operator 상태 보고
+// (vendoroperator_status.go 의 readVendorOperatorState)가 쓰는 get·list 권한이 main
+// ClusterRole 에 있는지 고정한다. 이 규칙이 빠지면 List 가 Forbidden 이 되어 조건이 항상
+// Unknown(StatusProbeUnavailable)으로만 보고된다(겉보기엔 조용히 실패).
+// 깨는 뮤테이션: deploy/helm/templates/rbac.yaml 에서 nvidia.com/clusterpolicies 또는
+// rebellions.ai/rblnclusterpolicies 규칙을 지우면 실패한다.
+func TestOperatorClusterRoleGrantsVendorOperatorStatusRead(t *testing.T) {
+	roleName, rules := mainClusterRoleRules(t)
+	byResource := verbsByResource(rules)
+	for _, tc := range []struct{ resource string }{
+		{"clusterpolicies"},
+		{"rblnclusterpolicies"},
+	} {
+		for _, verb := range []string{"get", "list"} {
+			if !contains(byResource[tc.resource], verb) {
+				t.Errorf("main ClusterRole %q 의 %s 에 %q 가 없다(verbs %v)", roleName, tc.resource, verb, byResource[tc.resource])
+			}
+		}
 	}
 }

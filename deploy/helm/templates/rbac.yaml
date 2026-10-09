@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25 | 수정일: 2026-10-06 (acceleratorworkloads create·delete 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 operator ClusterPolicy 류 CR get·list 추가)
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -186,6 +186,15 @@ rules:
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     verbs: ["get"]
+  # 벤더 operator 상태 보고(vendoroperator_status.go 의 readVendorOperatorState)가 그 벤더의
+  # ClusterPolicy 류 CR 을 캐시 없는 APIReader 로 get·list 한다. 이 규칙이 빠지면 Forbidden 이
+  # Unknown(StatusProbeUnavailable)으로 보고되므로 조용히 "조회 불가" 상태로만 남는다.
+  - apiGroups: ["nvidia.com"]
+    resources: ["clusterpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["rebellions.ai"]
+    resources: ["rblnclusterpolicies"]
+    verbs: ["get", "list"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
