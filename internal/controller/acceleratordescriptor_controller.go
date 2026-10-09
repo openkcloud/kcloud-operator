@@ -2,7 +2,7 @@
 // acceleratordescriptor_controller.go: AcceleratorDescriptor 감시 컨트롤러
 // 상세: 검증기·판정기를 돌려 status.feasibleBackends 와 refusals 를 채운다. 배포물
 //       적용은 D4b — resolve 는 NDR 카드별 entry(count=1, pcieAddress — report.go fan-out)에서 한다.
-// 생성일: 2026-09-15 | 수정일: 2026-09-20
+// 생성일: 2026-09-15 | 수정일: 2026-10-09
 // ============================================================
 
 package controller
@@ -119,9 +119,9 @@ func (r *AcceleratorDescriptorReconciler) Reconcile(
 			})
 			applyOK = false
 		default:
-			if err := discoverableForAutoApply(desc.Spec); err != nil {
+			if reason := autoApplyDiscoveryRefusal(desc.Spec, ndrs.Items); reason != "" {
 				refusals = append(refusals, npuv1alpha1.DescriptorRefusal{
-					Backend: "*", Reason: "auto-apply 발견 불가: " + err.Error(),
+					Backend: "*", Reason: reason,
 				})
 				applyOK = false
 			}

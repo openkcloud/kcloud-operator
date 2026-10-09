@@ -3,7 +3,7 @@
 // 상세: backend-source 중재(NPUClusterPolicy 관리 벤더 거절)·발견가능 preflight·
 //       SSA apply(ownerRef+라벨)·라벨 기반 능동 prune 을 한곳에 모은다. descriptor 는
 //       cluster-scoped 라 namespaced·cluster-scoped 생성물 모두를 소유할 수 있다.
-// 생성일: 2026-09-18
+// 생성일: 2026-09-18 | 수정일: 2026-10-09
 // ============================================================
 
 package controller
@@ -11,6 +11,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -25,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/descriptor"
 )
 
 // descriptorOwnerLabel 은 이 descriptor 가 만든 생성물을 되짚는 라벨이다. prune 이 이 값으로
@@ -101,6 +103,86 @@ func discoverableForAutoApply(spec npuv1alpha1.AcceleratorDescriptorSpec) error 
 		}
 	}
 	return nil
+}
+
+// autoApplyDiscoveryRefusal 은 "런타임이 장치 ID 를 가를 수 있는가" 를 묻는 거절 둘을
+// 한 사유로 모은다 — 템플릿 형태(discoverableForAutoApply)와 혼재 모델 노드
+// (mixedModelRefusal). 거절할 것이 없으면 빈 문자열.
+func autoApplyDiscoveryRefusal(
+	spec npuv1alpha1.AcceleratorDescriptorSpec, ndrs []npuv1alpha1.NodeDeviceReport,
+) string {
+	if err := discoverableForAutoApply(spec); err != nil {
+		return "auto-apply 발견 불가: " + err.Error()
+	}
+	if reason := mixedModelRefusal(spec, ndrs); reason != "" {
+		return "auto-apply 발견 불가: " + reason
+	}
+	return ""
+}
+
+// mixedModelRefusal 은 혼재 모델 노드 때문에 auto-apply 를 거절할 사유를 낸다. 거절할
+// 것이 없으면 빈 문자열.
+//
+// {{id}} 열거는 파일명 글롭 하나뿐이다(generic-device-plugin 의 discoverIDs, 같은 함수를
+// generic-dra-driver 도 쓴다) - 제품을 가르는 조건이 없어, 한 노드에 같은 벤더의 다른
+// 모델이 있으면 그 노드의 광고에 다른 제품이 섞인다. 런타임에 PCI vendor:device 필터를
+// 넣는 길은 NVIDIA 가 char 장치를 커널 장치 모델에 등록하지 않아(k8s-worker1 실측:
+// /sys/dev/char 에 major 195 항목 없음) 벤더 중립 기전이 없다는 이유로 거절됐다 -
+// docs/impl/descriptor-mixed-model-spike-20261009.md.
+//
+// 판정은 discoverableForAutoApply 와 같은 질문("런타임이 ID 를 가를 수 있는가")이라 호출부도
+// 같다. NodeDeviceReport 를 인자로 받아 이 함수 자체는 클러스터를 보지 않는다.
+func mixedModelRefusal(
+	spec npuv1alpha1.AcceleratorDescriptorSpec, ndrs []npuv1alpha1.NodeDeviceReport,
+) string {
+	// {{id}} 가 없으면 고정 장치 하나라 다른 제품이 섞일 자리가 없다.
+	enumerates := false
+	for _, tmpl := range spec.DeviceNodes {
+		if strings.Contains(tmpl, idPlaceholder) {
+			enumerates = true
+			break
+		}
+	}
+	if !enumerates {
+		return ""
+	}
+
+	// 노드 하나의 사유만 낸다. 노드·모델 모두 정렬해 입력 순서로 사유가 갈리지 않게 한다.
+	var nodes []string
+	others := map[string][]string{}
+	for _, ndr := range ndrs {
+		node := ndr.Spec.NodeName
+		if node == "" {
+			node = ndr.Name
+		}
+		matched := false
+		seen := map[string]bool{}
+		var models []string
+		for _, d := range ndr.Status.Devices {
+			switch {
+			case matchesDescriptor(d, spec):
+				matched = true
+			// 벤더 정규화는 resolveDevices 와 같은 것을 쓴다(rngd 특례 포함) - 기준이
+			// 갈리면 한쪽이 혼재로 보는 노드를 다른 쪽이 아니라고 본다.
+			case strings.EqualFold(normalizeVendor(d.Vendor, d.Model), spec.Vendor) && !seen[d.Model]:
+				seen[d.Model] = true
+				models = append(models, d.Model)
+			}
+		}
+		if matched && len(models) > 0 {
+			sort.Strings(models)
+			nodes = append(nodes, node)
+			others[node] = models
+		}
+	}
+	if len(nodes) == 0 {
+		return ""
+	}
+	sort.Strings(nodes)
+	node := nodes[0]
+	return fmt.Sprintf("노드 %s 에 같은 벤더의 다른 모델(%s)이 있다 — %s 열거는 파일명 글롭뿐이라 "+
+		"제품을 가르지 못해 %s 광고에 다른 제품이 섞인다",
+		node, strings.Join(others[node], ","), idPlaceholder, descriptor.ResourceNameFor(spec))
 }
 
 // applyGeneratedBackends 는 렌더된 객체를 SSA 로 적용하고 descriptor 를 ownerRef 로 건다.

@@ -4,7 +4,7 @@
 //       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
 //       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
 //       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18
+// 생성일: 2026-09-18 | 수정일: 2026-10-09
 // ============================================================
 
 package controller
@@ -526,6 +526,154 @@ func TestDiscoverableForAutoApply(t *testing.T) {
 		if (err != nil) != c.wantErr {
 			t.Errorf("%s: discoverableForAutoApply(%v) err=%v, wantErr=%v", c.name, c.nodes, err, c.wantErr)
 		}
+	}
+}
+
+// ndrWith 는 노드 하나의 NodeDeviceReport 를 vendor/model 쌍 목록으로 만든다.
+func ndrWith(node string, vendorModel ...[2]string) npuv1alpha1.NodeDeviceReport {
+	devs := make([]npuv1alpha1.DeviceEntry, 0, len(vendorModel))
+	for _, vm := range vendorModel {
+		devs = append(devs, npuv1alpha1.DeviceEntry{Vendor: vm[0], Model: vm[1], Count: 1})
+	}
+	return npuv1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: node},
+		Spec:       npuv1alpha1.NodeDeviceReportSpec{NodeName: node},
+		Status:     npuv1alpha1.NodeDeviceReportStatus{Devices: devs},
+	}
+}
+
+// mixedModelRefusal 은 같은 벤더의 다른 모델이 한 노드에 있고 템플릿이 {{id}} 로 열거할
+// 때만 거절해야 한다 — {{id}} 열거는 파일명 글롭뿐이라 제품을 가르지 못한다.
+func TestMixedModelRefusal(t *testing.T) {
+	nvidiaMixed := ndrWith("k8s-worker1",
+		[2]string{"nvidia", "a30"}, [2]string{"nvidia", "a2"}, [2]string{"furiosa", "warboy"})
+	cases := []struct {
+		name       string
+		vendor     string
+		product    string
+		nodes      []string
+		ndrs       []npuv1alpha1.NodeDeviceReport
+		wantRefuse bool
+		wantSub    string
+	}{
+		{
+			name: "혼재 노드 + 열거 템플릿 → 거절", vendor: "nvidia", product: "a30",
+			nodes: []string{"/dev/nvidia/{{id}}"}, ndrs: []npuv1alpha1.NodeDeviceReport{nvidiaMixed},
+			wantRefuse: true, wantSub: "a2",
+		},
+		{
+			name: "혼재 노드지만 고정 장치 → 거절 없음", vendor: "nvidia", product: "a30",
+			nodes: []string{"/dev/nvidia0", "/dev/nvidiactl"},
+			ndrs:  []npuv1alpha1.NodeDeviceReport{nvidiaMixed},
+		},
+		{
+			name: "같은 모델 여러 장 → 거절 없음", vendor: "rebellions", product: "atom",
+			nodes: []string{"/dev/rbln/{{id}}"},
+			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("node5",
+				[2]string{"rebellions", "atom"}, [2]string{"rebellions", "atom"})},
+		},
+		{
+			name: "다른 벤더만 섞임 → 거절 없음", vendor: "tenstorrent", product: "blackhole-p150",
+			nodes: []string{"/dev/tenstorrent/{{id}}"},
+			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("k8s-worker3",
+				[2]string{"tenstorrent", "blackhole-p150"}, [2]string{"nvidia", "a2"})},
+		},
+		{
+			// normalizeVendor 의 rngd 특례: furiosa/rngd 는 벤더가 rngd 로 갈려
+			// warboy 와 다른 /dev 트리다 — 혼재가 아니다.
+			name: "furiosa warboy + rngd → 거절 없음", vendor: "furiosa", product: "warboy",
+			nodes: []string{"/dev/furiosa/{{id}}"},
+			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("rngd-1",
+				[2]string{"furiosa", "warboy"}, [2]string{"furiosa", "rngd"})},
+		},
+		{
+			name: "제품이 그 노드에 없음 → 거절 없음", vendor: "nvidia", product: "h100",
+			nodes: []string{"/dev/nvidia/{{id}}"}, ndrs: []npuv1alpha1.NodeDeviceReport{nvidiaMixed},
+		},
+		{
+			name: "NDR 없음 → 거절 없음", vendor: "nvidia", product: "a30",
+			nodes: []string{"/dev/nvidia/{{id}}"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec := npuv1alpha1.AcceleratorDescriptorSpec{
+				Vendor: c.vendor, Product: c.product, DeviceNodes: c.nodes,
+			}
+			got := mixedModelRefusal(spec, c.ndrs)
+			if (got != "") != c.wantRefuse {
+				t.Fatalf("mixedModelRefusal = %q, wantRefuse=%v", got, c.wantRefuse)
+			}
+			if c.wantSub != "" && !strings.Contains(got, c.wantSub) {
+				t.Fatalf("사유 = %q, want substring %q", got, c.wantSub)
+			}
+		})
+	}
+}
+
+// 혼재 노드 descriptor 는 auto-apply 되지 않고 사유가 status.refusals 에 남아야 한다.
+func TestMixedModelRefusalIsDeterministic(t *testing.T) {
+	spec := npuv1alpha1.AcceleratorDescriptorSpec{
+		Vendor: "tenstorrent", Product: "blackhole-p150",
+		DeviceNodes: []string{"/dev/tenstorrent/{{id}}"},
+	}
+	// 노드 둘이 모두 혼재면 사유는 노드 이름 사전순 먼저인 쪽을 가리켜야 한다.
+	a := ndrWith("tt-a", [2]string{"tenstorrent", "blackhole-p150"}, [2]string{"tenstorrent", "wormhole-n300"})
+	b := ndrWith("tt-b", [2]string{"tenstorrent", "blackhole-p150"}, [2]string{"tenstorrent", "grayskull-e150"})
+	first := mixedModelRefusal(spec, []npuv1alpha1.NodeDeviceReport{a, b})
+	second := mixedModelRefusal(spec, []npuv1alpha1.NodeDeviceReport{b, a})
+	if first != second {
+		t.Fatalf("입력 순서로 사유가 갈린다:\n%q\n%q", first, second)
+	}
+	if !strings.Contains(first, "tt-a") {
+		t.Fatalf("사전순 먼저인 노드를 가리켜야 한다: %q", first)
+	}
+}
+
+// 혼재 모델 노드의 descriptor 는 Reconcile 이 거절하고 생성물을 만들지 않아야 한다 —
+// 순수 판정(mixedModelRefusal)이 호출부에 실제로 걸려 있는지를 본다.
+func TestAutoApplyRefusesMixedModelNode(t *testing.T) {
+	ctx := context.Background()
+	ndr := &npuv1alpha1.NodeDeviceReport{
+		ObjectMeta: metav1.ObjectMeta{Name: "aa-mixed-node"},
+		Spec:       npuv1alpha1.NodeDeviceReportSpec{NodeName: "aa-mixed-node"},
+	}
+	if err := aaClient.Create(ctx, ndr); err != nil {
+		t.Fatalf("NDR 생성 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = aaClient.Delete(ctx, ndr) })
+	ndr.Status.Devices = []npuv1alpha1.DeviceEntry{
+		{Vendor: "tenstorrent", Model: "mixtest", Count: 1, PCIeAddress: "0000:af:00.0"},
+		{Vendor: "tenstorrent", Model: "othermodel", Count: 1, PCIeAddress: "0000:b0:00.0"},
+	}
+	if err := aaClient.Status().Update(ctx, ndr); err != nil {
+		t.Fatalf("NDR status 갱신 실패: %v", err)
+	}
+
+	spec := uniqSpec()
+	spec.Product = "mixtest"
+	desc := &npuv1alpha1.AcceleratorDescriptor{
+		ObjectMeta: metav1.ObjectMeta{Name: "aa-mixed"}, Spec: spec,
+	}
+	if err := aaClient.Create(ctx, desc); err != nil {
+		t.Fatalf("descriptor 생성 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = aaClient.Delete(ctx, desc) })
+
+	reconcileOnce(t, autoApplyReconciler(), desc.Name)
+
+	var got npuv1alpha1.AcceleratorDescriptor
+	if err := aaClient.Get(ctx, types.NamespacedName{Name: desc.Name}, &got); err != nil {
+		t.Fatalf("descriptor 조회 실패: %v", err)
+	}
+	if !hasRefusalContaining(got.Status.Refusals, "othermodel") {
+		t.Fatalf("혼재 모델 거절 사유가 없다: %+v", got.Status.Refusals)
+	}
+	err := aaClient.Get(ctx,
+		types.NamespacedName{Namespace: "default", Name: generatedDevicePluginNameFor(desc)},
+		&appsv1.DaemonSet{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("거절된 descriptor 의 DaemonSet 이 있다(err=%v)", err)
 	}
 }
 
