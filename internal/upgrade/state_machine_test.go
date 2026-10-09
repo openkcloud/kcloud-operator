@@ -4,7 +4,7 @@
 //       Rollback exhaustion → Failed 터미널 정지 검증
 //       소비된 rollback 요청 어노테이션 재소비 차단 검증(A9)
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-28 | 수정일: 2026-10-09 (소비된 rollback 요청 재소비 차단 테스트 추가)
+// 생성일: 2026-04-28 | 수정일: 2026-10-09 (validatorsFor 정책 opt-in 체인 테스트 추가)
 // ============================================================
 
 package upgrade
@@ -494,11 +494,11 @@ func TestPodUsesDevice_RecognizesEveryVendorResource(t *testing.T) {
 // (제거 patch 실패 등으로) 남아 있을 때, 같은 값을 다시 Rollback 으로 받아들이지 않고
 // 어노테이션 정리만 재시도함을 검증한다.
 func TestRollbackRequest_StaleAnnotationNotReconsumed(t *testing.T) {
-	dus := makeIdleDUSWithCurrentVersion("w1-nvidia", "w1", "nvidia", "580.126.09")
-	dus.Status.PreviousVersion, dus.Status.PreviousImage = "580.100.00", "reg/nvidia-driver-ds:v3" // 롤백 가능한 형상
+	dus := makeIdleDUSWithCurrentVersion("w1-tenstorrent", "w1", "tenstorrent", "580.126.09")
+	dus.Status.PreviousVersion, dus.Status.PreviousImage = "580.100.00", "reg/tenstorrent-driver-ds:v3" // 롤백 가능한 형상
 	dus.Annotations = map[string]string{v1alpha1.RollbackRequestedAnnotation: "2026-10-08T01:02:03Z"}
 	dus.Status.ConsumedRollbackRequest = "2026-10-08T01:02:03Z" // 이미 한 번 소비됨
-	dip := makeIdleDIP("nvidia-generic", "nvidia", "580.126.09")
+	dip := makeIdleDIP("tenstorrent-generic", "tenstorrent", "580.126.09")
 	sm := newUpgradeSMWithRecorder(dus, dip)
 	ctx := context.Background()
 	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
@@ -529,5 +529,25 @@ func TestRollbackRequest_RecordsConsumedValue(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateRollback || dus.Status.ConsumedRollbackRequest != "2026-10-08T02:00:00Z" {
 		t.Fatalf("state=%s consumedRollbackRequest=%q", dus.Status.State, dus.Status.ConsumedRollbackRequest)
+	}
+}
+
+// TestValidatorsFor_WorkloadOnlyWhenEnabled 는 validatorsFor 가 기본 체인(DriverModule·
+// DevicePlugin) 둘만 반환하고, 정책이 workloadProbe 를 켜면 Workload 를 끝에 더하는 것을
+// 검증한다(A1, 정책 opt-in).
+func TestValidatorsFor_WorkloadOnlyWhenEnabled(t *testing.T) {
+	p := &v1alpha1.DriverInstallPolicy{}
+	if n := len(validatorsFor(p)); n != 2 {
+		t.Fatalf("기본 체인은 2개: %d", n)
+	}
+	// WorkloadProbe 가 설정돼 있어도 Enabled:false 면 체인에 들지 않는다 — nil 가드만으론
+	// 통과하는 변이를 잡기 위한 케이스(Enabled 가드 자체를 고정).
+	p.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{Enabled: false, Image: "img", ResourceName: "nvidia.com/gpu"}
+	if n := len(validatorsFor(p)); n != 2 {
+		t.Fatalf("WorkloadProbe 가 있어도 Enabled:false 면 2개: %d", n)
+	}
+	p.Spec.WorkloadProbe.Enabled = true
+	if n := len(validatorsFor(p)); n != 3 {
+		t.Fatalf("켜면 3개: %d", n)
 	}
 }

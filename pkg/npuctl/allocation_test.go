@@ -436,7 +436,8 @@ func TestFuriosaProductsFromModels(t *testing.T) {
 			t.Errorf("furiosaProductsFromModels(%v) = %v, want {%q: true}", models, got, want)
 		}
 	}
-	if got := furiosaProductsFromModels([]string{"rngd", "warboy"}); !got[VendorRngd] || !got[productWarboy] || len(got) != 2 {
+	got := furiosaProductsFromModels([]string{"rngd", "warboy"})
+	if !got[VendorRngd] || !got[productWarboy] || len(got) != 2 {
 		t.Errorf("혼재 입력은 두 제품 모두 담겨야 한다: %v", got)
 	}
 	if got := furiosaProductsFromModels(nil); len(got) != 0 {

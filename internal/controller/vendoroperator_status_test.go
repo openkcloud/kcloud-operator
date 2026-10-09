@@ -120,7 +120,7 @@ func TestSetVendorOperatorReadyCondition_NoClusterPolicy(t *testing.T) {
 	r.setVendorOperatorReadyCondition(context.Background(), p, "nvidia", true)
 
 	cond := meta.FindStatusCondition(p.Status.Conditions, "NvidiaOperatorReady")
-	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != "NoClusterPolicy" {
+	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != reasonNoClusterPolicy {
 		t.Fatalf("조건이 Unknown/NoClusterPolicy 여야 한다: %+v", cond)
 	}
 }
@@ -132,7 +132,7 @@ func TestSetVendorOperatorReadyCondition_StatusProbeUnavailable(t *testing.T) {
 	r.setVendorOperatorReadyCondition(context.Background(), p, "nvidia", true)
 
 	cond := meta.FindStatusCondition(p.Status.Conditions, "NvidiaOperatorReady")
-	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != "StatusProbeUnavailable" {
+	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != reasonStatusProbeUnavailable {
 		t.Fatalf("조건이 Unknown/StatusProbeUnavailable 이어야 한다: %+v", cond)
 	}
 }

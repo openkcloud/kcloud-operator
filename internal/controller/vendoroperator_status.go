@@ -26,6 +26,13 @@ import (
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
 
+// reasonStatusProbeUnavailable 은 상태 조회 자체가 안 돼(표에 없음·CRD/RBAC 로 막힘·조회 오류)
+// Unknown 으로 남길 때의 사유다.
+const reasonStatusProbeUnavailable = "StatusProbeUnavailable"
+
+// reasonNoClusterPolicy 는 조회는 됐으나 CR 이 하나도 없을 때의 사유다.
+const reasonNoClusterPolicy = "NoClusterPolicy"
+
 // vendorOperatorStatusProbe 는 벤더의 ClusterPolicy 류 CR 에서 Ready 상태를 읽는 방법이다.
 type vendorOperatorStatusProbe struct {
 	gvr         schema.GroupVersionResource
@@ -144,16 +151,16 @@ func (r *NPUClusterPolicyReconciler) setVendorOperatorReadyCondition(ctx context
 		switch {
 		case err != nil:
 			logf.FromContext(ctx).Error(err, "벤더 operator 상태 조회 실패 — Unknown 으로 보고", "vendor", vendor)
-			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, "StatusProbeUnavailable",
+			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, reasonStatusProbeUnavailable,
 				fmt.Sprintf("%s 상태 조회 오류: %v", vendor, err)
 		case !st.probe:
-			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, "StatusProbeUnavailable",
+			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, reasonStatusProbeUnavailable,
 				fmt.Sprintf("%s 는 상태 조회 표에 없음", vendor)
 		case st.blocked:
-			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, "StatusProbeUnavailable",
+			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, reasonStatusProbeUnavailable,
 				fmt.Sprintf("%s CR 조회가 막힘(CRD 또는 RBAC 확인 필요)", kind)
 		case !st.found:
-			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, "NoClusterPolicy",
+			cond.Status, cond.Reason, cond.Message = metav1.ConditionUnknown, reasonNoClusterPolicy,
 				fmt.Sprintf("%s CR 이 없음", kind)
 		case st.ready:
 			cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, "Ready",

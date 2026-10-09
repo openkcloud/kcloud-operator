@@ -404,6 +404,35 @@ spec:
                 items:
                   type: string
                 type: array
+              workloadProbe:
+                description: |-
+                  WorkloadProbe 는 검증 체인의 마지막 단계다. 켜면 드라이버 교체 검증 때 노드마다 장치 1개를 요청하는
+                  파드를 하나 띄워 명령을 실행하고 지운다(Succeeded 면 통과). 노드는 그 시점에 cordon 돼 있어 사용자
+                  워크로드를 밀어내지 않는다. 기본 꺼짐 — 이미지가 air-gap 미러에 있어야 한다.
+                properties:
+                  command:
+                    description: Command 는 종료 코드 0 이면 통과로 보는 명령이다. 비면 이미지 ENTRYPOINT.
+                    items:
+                      type: string
+                    type: array
+                  enabled:
+                    type: boolean
+                  image:
+                    description: 'Image 는 벤더 CLI 가 든 이미지다(예: acpp.probeImages 와 같은
+                      것).'
+                    type: string
+                  resourceName:
+                    description: 'ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu). 비면
+                      벤더 기본 리소스명.'
+                    type: string
+                  timeoutSeconds:
+                    description: TimeoutSeconds 는 파드 완료 대기 상한(기본 120).
+                    format: int32
+                    minimum: 10
+                    type: integer
+                required:
+                - enabled
+                type: object
             required:
             - driver
             - vendor

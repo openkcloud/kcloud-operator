@@ -7,7 +7,7 @@
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
 //       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-10-06
+// 생성일: 2026-07-16 | 수정일: 2026-10-09 (validator 체인 호출을 validatorsFor(policy) 로 교체)
 // ============================================================
 
 package upgrade
@@ -216,7 +216,7 @@ func (m *UpgradeStateMachine) handleValidatingJob(
 
 	// ─── 3. Job Complete → validator 체인 순차 실행(완전 재사용) ───
 	desiredVersion := state.Status.DesiredVersion
-	for _, v := range defaultValidators {
+	for _, v := range validatorsFor(policy) {
 		m.Recorder.Eventf(state, corev1.EventTypeNormal,
 			fmt.Sprintf("UpgradeValidator-%s-Started", v.Name()),
 			"validator 실행(job): %s (node=%s)", v.Name(), state.Spec.NodeName)

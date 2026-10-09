@@ -4,7 +4,7 @@
 #       Furiosa (warboy) / NVIDIA (generic) 두 벤더 모두 mode=daemonset 기본.
 #       2026-09-24: helm hook 에서 릴리스 자원으로 전환. hook 은 업그레이드마다 삭제·재생성되어
 #       uid 가 바뀌고 소유 DaemonSet 이 연쇄로 다시 만들어졌다.
-# 생성일: 2026-04-10 | 수정일: 2026-10-04
+# 생성일: 2026-04-10 | 수정일: 2026-10-09 (벤더 4종에 workloadProbe 블록 통과 추가)
 # ============================================================
 {{- if .Values.driverInstallPolicies.furiosa.enabled }}
 apiVersion: npu.ai/v1alpha1
@@ -60,6 +60,10 @@ spec:
   {{- end }}
   {{- with .Values.driverInstallPolicies.furiosa.jobOverrides }}
   jobOverrides:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.furiosa.workloadProbe }}
+  workloadProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
@@ -124,6 +128,10 @@ spec:
   jobOverrides:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.driverInstallPolicies.nvidia.workloadProbe }}
+  workloadProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 {{- if .Values.driverInstallPolicies.rngd.enabled }}
 ---
@@ -180,6 +188,10 @@ spec:
   {{- end }}
   {{- with .Values.driverInstallPolicies.rngd.jobOverrides }}
   jobOverrides:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.rngd.workloadProbe }}
+  workloadProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
@@ -240,6 +252,10 @@ spec:
   {{- end }}
   {{- with .Values.driverInstallPolicies.tenstorrent.jobOverrides }}
   jobOverrides:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.driverInstallPolicies.tenstorrent.workloadProbe }}
+  workloadProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}

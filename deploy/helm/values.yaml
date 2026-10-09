@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-06 (node-manager 기본 태그 0.6.19, PodResources 사이드카 요구, nvidia-driver-ds v4)
+# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -543,6 +543,17 @@ driverInstallPolicies:
       # 발행이 시작되기 전에 이 값을 켜면 install Job 이 그 태그를 당기지 못한다.
       kernelImageBuildRevision: ""
       kernelImageVariant: "warboy"
+    # workloadProbe: 검증 체인의 마지막 단계(opt-in). 켜면 노드가 cordon 된 상태에서 장치 1개를
+    # 요청하는 probe 파드를 띄워 벤더 CLI 종료 코드로 판정한다(Succeeded=통과). 기본 꺼짐 — image
+    # 가 비어 있으면 파드 생성이 거절된다. `furiosa-smi info` 1회 실행(acpp.probeImages.furiosa 와
+    # 같은 CLI). 단, docker.io/furiosaai/furiosa-smi:2026.1.0 은 라이브러리만 담고 CLI 가 없다
+    # (2026-09-20 확인) — 켜기 전에 CLI 가 든 이미지를 image 에 지정해야 한다.
+    workloadProbe:
+      enabled: false
+      image: ""
+      command: ["furiosa-smi", "info"]
+      resourceName: "beta.furiosa.ai/npu"
+      timeoutSeconds: 120
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -631,6 +642,17 @@ driverInstallPolicies:
       #    또는 불필요한 containerd 재시작 위험. runtime 미등록 fresh 노드에서만 true 로.
       enabled: false
       # image: "<your-registry>/nvidia/container-toolkit:v1.17.8-ubuntu20.04"
+    # workloadProbe: 검증 체인의 마지막 단계(opt-in). 켜면 노드가 cordon 된 상태에서 장치 1개를
+    # 요청하는 probe 파드를 띄워 벤더 CLI 종료 코드로 판정한다(Succeeded=통과). 기본 꺼짐 — image
+    # 가 비어 있으면 파드 생성이 거절된다. `nvidia-smi -L` 1회 실행(acpp.probeImages.nvidia 와 같은
+    # 전제) — nvidia-container-runtime 이 주입하므로 image 는 CUDA 베이스면 된다. 예:
+    # nvidia/cuda:12.9.1-base-ubuntu22.04(Harbor 미러: kcloud/nvidia/cuda:동일 태그).
+    workloadProbe:
+      enabled: false
+      image: ""
+      command: ["nvidia-smi", "-L"]
+      resourceName: "nvidia.com/gpu"
+      timeoutSeconds: 120
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -696,6 +718,17 @@ driverInstallPolicies:
       # 레지스트리에서 빌드 개정을 켜면 같은 실패가 나므로 기본은 비움이다.
       kernelImageBuildRevision: ""
       kernelImageVariant: "rngd"
+    # workloadProbe: 검증 체인의 마지막 단계(opt-in). 켜면 노드가 cordon 된 상태에서 장치 1개를
+    # 요청하는 probe 파드를 띄워 벤더 CLI 종료 코드로 판정한다(Succeeded=통과). 기본 꺼짐 — image
+    # 가 비어 있으면 파드 생성이 거절된다. `furiosa-smi info` 1회 실행(acpp.probeImages.furiosa 와
+    # 같은 CLI). 단, docker.io/furiosaai/furiosa-smi:2026.1.0 은 라이브러리만 담고 CLI 가 없다
+    # (2026-09-20 확인) — 켜기 전에 CLI 가 든 이미지를 image 에 지정해야 한다.
+    workloadProbe:
+      enabled: false
+      image: ""
+      command: ["furiosa-smi", "info"]
+      resourceName: "furiosa.ai/rngd"
+      timeoutSeconds: 120
     upgradePolicy:
       autoUpgrade: true
       drainEnabled: true
@@ -753,6 +786,16 @@ driverInstallPolicies:
       # 빈 값(기본)이면 조립하지 않고 image(baked tt-kmd 소스를 DKMS 로 빌드)를 쓴다.
       # 발행된 커널 이미지가 없는 레지스트리에서 켜면 install Job 이 그 태그를 당기지 못한다.
       kernelImageBuildRevision: ""
+    # workloadProbe: 검증 체인의 마지막 단계(opt-in). 켜면 노드가 cordon 된 상태에서 장치 1개를
+    # 요청하는 probe 파드를 띄워 벤더 CLI 종료 코드로 판정한다(Succeeded=통과). 기본 꺼짐 — image
+    # 가 비어 있으면 파드 생성이 거절된다. `tt-smi -s` 1회 실행(acpp.probeImages.tenstorrent 와
+    # 같은 CLI, images 저장소 probe-tenstorrent 빌드).
+    workloadProbe:
+      enabled: false
+      image: ""
+      command: ["tt-smi", "-s"]
+      resourceName: "tenstorrent.com/blackhole"
+      timeoutSeconds: 120
     upgradePolicy:
       autoUpgrade: false
       drainEnabled: true

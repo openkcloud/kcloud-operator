@@ -2,7 +2,7 @@
 // driverinstallpolicy_types.go: DriverInstallPolicy CRD 타입
 // 상세: 벤더 하나의 드라이버를 어떤 이미지·버전·방식으로 깔지 선언한다.
 // 노드별 전이는 DriverUpgradeState 가 맡고 이 타입은 그 전이가 따를 정책이다.
-// 생성일: 2026-04-10 | 수정일: 2026-10-05
+// 생성일: 2026-04-10 | 수정일: 2026-10-09 (workloadProbe 검증 단계 opt-in 필드 추가)
 // ============================================================
 package v1alpha1
 
@@ -131,6 +131,12 @@ type DriverInstallPolicySpec struct {
 	// 미지정 시 빈 목록 — 노드레벨 인증 경로를 유지하는 하위호환 동작입니다.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// WorkloadProbe 는 검증 체인의 마지막 단계다. 켜면 드라이버 교체 검증 때 노드마다 장치 1개를 요청하는
+	// 파드를 하나 띄워 명령을 실행하고 지운다(Succeeded 면 통과). 노드는 그 시점에 cordon 돼 있어 사용자
+	// 워크로드를 밀어내지 않는다. 기본 꺼짐 — 이미지가 air-gap 미러에 있어야 한다.
+	// +optional
+	WorkloadProbe *WorkloadProbeSpec `json:"workloadProbe,omitempty"`
 }
 
 // KernelImageRef 는 kernelImages 맵의 값이다. image 와 같은 image reference 형식이며, 길이
@@ -274,6 +280,20 @@ type ToolkitSpec struct {
 
 	// (선택) 환경변수
 	Env []KV `json:"env,omitempty"`
+}
+
+// WorkloadProbeSpec 은 샘플 워크로드 검증 설정이다.
+type WorkloadProbeSpec struct {
+	Enabled bool `json:"enabled"`
+	// Image 는 벤더 CLI 가 든 이미지다(예: acpp.probeImages 와 같은 것).
+	Image string `json:"image,omitempty"`
+	// Command 는 종료 코드 0 이면 통과로 보는 명령이다. 비면 이미지 ENTRYPOINT.
+	Command []string `json:"command,omitempty"`
+	// ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu). 비면 벤더 기본 리소스명.
+	ResourceName string `json:"resourceName,omitempty"`
+	// TimeoutSeconds 는 파드 완료 대기 상한(기본 120).
+	// +kubebuilder:validation:Minimum=10
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
 // JobOverrides 는 잡 스펙의 일부를 정책에서 제어하기 위한 필드입니다.

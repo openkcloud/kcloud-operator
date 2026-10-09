@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (kernelImages 맵 미스·DIP 공동 소유 경고 이벤트 추가)
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (defaultValidators 를 validatorsFor 정책 opt-in 체인으로 교체)
 // ============================================================
 
 package upgrade
@@ -642,17 +642,18 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	return m.transitionTo(state, v1alpha1.UpgradeStateValidating, "DaemonSet 이미지 업데이트 완료", 20*time.Second)
 }
 
-// validators 는 handleValidating 이 순차 실행할 Validator 체인이다.
-// architectural plan §4.4.3 에 따라 단일 NDR 대기였던 단계를 단계별 책임으로 분리:
+// validatorsFor 는 정책에 맞는 검증 체인이다. 기본은 DriverModule·DevicePlugin 둘이고, 정책이
+// workloadProbe 를 켜면 Workload 를 끝에 더한다(A1, 정책 opt-in). 두 실행 경로(DS·Job, 아래
+// handleValidating·state_machine_job.go 의 handleValidatingJob)가 같은 체인을 쓴다.
 //  1. DriverModule  : 노드의 드라이버 커널 모듈 로드 (NDR.driverVersion 매칭)
 //  2. DevicePlugin  : kube-system 의 device-plugin Pod ContainersReady
-//  3. Workload      : sample 워크로드 ResourceAllocated (skeleton — 후속 PR 에서 활성)
-//
-// 변수로 두어 테스트에서 주입 가능 — 단, 본 작업에서는 stub 미사용.
-var defaultValidators = []validator.Validator{
-	&validator.DriverModuleValidator{},
-	&validator.DevicePluginValidator{},
-	// &validator.WorkloadValidator{}, // 후속 PR 에서 활성
+//  3. Workload      : (opt-in) 샘플 워크로드 probe 파드의 종료 코드
+func validatorsFor(policy *v1alpha1.DriverInstallPolicy) []validator.Validator {
+	chain := []validator.Validator{&validator.DriverModuleValidator{}, &validator.DevicePluginValidator{}}
+	if policy != nil && policy.Spec.WorkloadProbe != nil && policy.Spec.WorkloadProbe.Enabled {
+		chain = append(chain, &validator.WorkloadValidator{Probe: *policy.Spec.WorkloadProbe, Namespace: naming.OperatorNamespace()})
+	}
+	return chain
 }
 
 // handleValidating 은 validator 체인을 순차 실행해 새 드라이버가 정상 동작하는지 검증한다.
@@ -742,7 +743,7 @@ func (m *UpgradeStateMachine) handleValidating(
 
 	// ─── 3. validator 체인 순차 실행 ─────────────────────────
 	desiredVersion := state.Status.DesiredVersion
-	for _, v := range defaultValidators {
+	for _, v := range validatorsFor(policy) {
 		// validator 시작 Event (재시도마다 발행되지 않도록 "처음" 진입 시점만 emit 하기 어렵기에
 		// per-attempt event 로 발행 — 운영자에 진행 상황 가시성 우선).
 		m.Recorder.Eventf(state, corev1.EventTypeNormal,

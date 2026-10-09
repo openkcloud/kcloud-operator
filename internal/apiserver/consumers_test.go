@@ -28,6 +28,9 @@ import (
 	"kcloud-operator/api/v1alpha1"
 )
 
+// docDRAClaimName 은 템플릿(resourceClaimTemplateName) claim 시험에서 공유하는 템플릿 이름이다.
+const docDRAClaimName = "doc-dra-claim"
+
 // fakeReader 는 List 만 채운 client.Reader 다. 핸들러가 Pod·ResourceClaim·
 // NodeDeviceReport 세 목록을 읽으므로 셋 다 돌려준다.
 type fakeReader struct {
@@ -329,7 +332,7 @@ func TestDevicePluginPodCollectsDeviceIDsAcrossContainersAndResources(t *testing
 // status.resourceClaimStatuses 에 실린다 — 그 경로로 되짚어야 할당 결과가 보인다(라이브
 // Tenstorrent·RNGD 왕복에서 pending 으로 남던 결함).
 func TestDRATemplateClaimIsResolvedFromPodStatus(t *testing.T) {
-	tmpl, generated := "doc-dra-claim", "doc-dra-probe-accel-j9szt"
+	tmpl, generated := docDRAClaimName, "doc-dra-probe-accel-j9szt"
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
 		Spec:   corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}},
 		Status: corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "accel", ResourceClaimName: &generated}}}}
@@ -348,7 +351,7 @@ func TestDRATemplateClaimIsResolvedFromPodStatus(t *testing.T) {
 // status 에 아직 생성 이름이 없으면(claim 미생성) 이름 없는 missing 으로 두고 pending 을 유지한다 —
 // 지어내지 않는다.
 func TestDRATemplateClaimWithoutStatusStaysPending(t *testing.T) {
-	tmpl := "doc-dra-claim"
+	tmpl := docDRAClaimName
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1"},
 		Spec: corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}}}
 	v, ok := toConsumerView(pod, nil, nil)
@@ -360,7 +363,7 @@ func TestDRATemplateClaimWithoutStatusStaysPending(t *testing.T) {
 // claim 의 status.reservedFor 가 이 파드를 담지 않으면(다른 파드가 이미 예약) 할당 결과가 있어도
 // 이 파드에 귀속하지 않는다 — 같은 generation 의 템플릿 claim 을 다른 파드가 이미 쥐고 있을 수 있다.
 func TestDRATemplateClaimReservedForOtherPodIsNotAttributed(t *testing.T) {
-	tmpl, generated := "doc-dra-claim", "doc-dra-probe-accel-j9szt"
+	tmpl, generated := docDRAClaimName, "doc-dra-probe-accel-j9szt"
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "p1", UID: "uid-p1"},
 		Spec:   corev1.PodSpec{NodeName: "n1", ResourceClaims: []corev1.PodResourceClaim{{Name: "accel", ResourceClaimTemplateName: &tmpl}}},
 		Status: corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "accel", ResourceClaimName: &generated}}}}

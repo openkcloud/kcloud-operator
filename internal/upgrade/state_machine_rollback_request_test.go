@@ -4,7 +4,7 @@
 //
 //	요청을 보류한다.
 //
-// 생성일: 2026-09-30
+// 생성일: 2026-09-30 | 수정일: 2026-10-09 (리터럴 버전 문자열을 기존 verOld 상수 참조로 정리)
 // ============================================================
 package upgrade
 
@@ -42,7 +42,7 @@ func TestTransitionStateHonorsRollbackRequestInIdle(t *testing.T) {
 	m := &UpgradeStateMachine{Client: fc, Recorder: record.NewFakeRecorder(4)}
 	policy := &v1alpha1.DriverInstallPolicy{}
 	policy.Spec.Vendor = rollbackRequestTestVendor
-	policy.Spec.Driver.Version = "580.126.09"
+	policy.Spec.Driver.Version = verOld
 	if _, _, err := m.TransitionState(context.Background(), state, policy); err != nil {
 		t.Fatalf("TransitionState: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestTransitionStateRollbackRequestRetriesAfterStatusPersistFailure(t *testi
 	m := &UpgradeStateMachine{Client: fc, Recorder: record.NewFakeRecorder(4)}
 	policy := &v1alpha1.DriverInstallPolicy{}
 	policy.Spec.Vendor = rollbackRequestTestVendor
-	policy.Spec.Driver.Version = "580.126.09"
+	policy.Spec.Driver.Version = verOld
 	ctx := context.Background()
 
 	// 1차 reconcile: 상태 영속(Status().Update)이 실패한다.

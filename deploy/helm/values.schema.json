@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "values.schema.json: 차트 값의 허용 키 목록. 상세: helm 은 모르는 키를 조용히 버린다 — 오타 키나 소비 코드가 없는 키가 쌓이지 않도록 블록마다 허용 키를 적는다. 키 이름만 고정하고 타입은 bool 자리에만 건다(값 범위 검사는 CRD 와 컨트롤러의 몫). JSON 은 주석을 쓸 수 없어 파일 머리 설명을 이 $comment 로 적는다. 생성일: 2026-10-04",
+  "$comment": "values.schema.json: 차트 값의 허용 키 목록. 상세: helm 은 모르는 키를 조용히 버린다 — 오타 키나 소비 코드가 없는 키가 쌓이지 않도록 블록마다 허용 키를 적는다. 키 이름만 고정하고 타입은 bool 자리에만 건다(값 범위 검사는 CRD 와 컨트롤러의 몫). JSON 은 주석을 쓸 수 없어 파일 머리 설명을 이 $comment 로 적는다. 생성일: 2026-10-04 | 수정일: 2026-10-09 (workloadProbe 스키마 추가)",
   "title": "kcloud-operator chart values",
   "type": "object",
   "additionalProperties": false,
@@ -501,6 +501,21 @@
             "priorityClassName": {},
             "serviceAccountName": {},
             "ttlSecondsAfterFinished": {}
+          }
+        },
+        "workloadProbe": {
+          "$comment": "키 목록은 DriverInstallPolicy CRD 의 workloadProbe 스키마와 같다.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": {},
+            "command": {
+              "description": "항목 내부는 열어 둔다: 상위 벤더 CLI 명령 배열을 그대로 통과시키는 자리다.",
+              "type": "array"
+            },
+            "resourceName": {},
+            "timeoutSeconds": {}
           }
         }
       }

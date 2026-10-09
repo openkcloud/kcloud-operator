@@ -2,15 +2,17 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27 | 수정일: 2026-08-07
+// 생성일: 2026-04-27 | 수정일: 2026-10-09 (WorkloadValidator 뼈대 시험 삭제, 실제 probe 시험 추가)
 // ============================================================
 
 package validator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
 )
@@ -224,16 +227,124 @@ func TestDevicePluginValidator_PassWhenTTPodInKcloudNS(t *testing.T) {
 	}
 }
 
-// TestWorkloadValidator_SkeletonAlwaysPass 는 skeleton 구현이 항상 PASS 를
-// 반환하는지 확인 (후속 PR 에서 실제 워크로드 spawn).
-func TestWorkloadValidator_SkeletonAlwaysPass(t *testing.T) {
-	v := &WorkloadValidator{}
-	res, err := v.Run(context.Background(), nil, "worker-1", "nvidia", "575.64.03")
-	if err != nil {
-		t.Fatalf("예상치 못한 에러: %v", err)
+// TestWorkloadValidator_CreatesProbeThenPassesOnSucceeded 는 첫 Run 이 probe 파드를
+// 노드에 고정해 생성하고 대기(Passed=false), 파드가 Succeeded 가 되면 다음 Run 이 통과하고
+// 파드를 지우는 것을 검증한다.
+func TestWorkloadValidator_CreatesProbeThenPassesOnSucceeded(t *testing.T) {
+	c := newFakeClient(t)
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{Enabled: true, Image: "img", Command: []string{"nvidia-smi"}, ResourceName: "nvidia.com/gpu", TimeoutSeconds: 120}}
+	res, err := v.Run(context.Background(), c, "worker-1", "nvidia", "580.126.09")
+	if err != nil || res.Passed {
+		t.Fatalf("첫 호출은 probe 를 만들고 대기해야 한다: res=%+v err=%v", res, err)
 	}
-	if !res.Passed {
-		t.Fatalf("skeleton 은 항상 PASS 여야 함: %s", res.Message)
+	var pods corev1.PodList
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 1 || pods.Items[0].Spec.NodeName != "worker-1" {
+		t.Fatalf("probe 파드가 노드에 고정돼 만들어져야 한다: %+v", pods.Items)
+	}
+	if q := pods.Items[0].Spec.Containers[0].Resources.Limits[corev1.ResourceName("nvidia.com/gpu")]; q.Value() != 1 {
+		t.Fatalf("장치 1개를 요청해야 한다: %v", pods.Items[0].Spec.Containers[0].Resources.Limits)
+	}
+	pods.Items[0].Status.Phase = corev1.PodSucceeded
+	_ = c.Status().Update(context.Background(), &pods.Items[0])
+	res, err = v.Run(context.Background(), c, "worker-1", "nvidia", "580.126.09")
+	if err != nil || !res.Passed {
+		t.Fatalf("Succeeded 면 통과: res=%+v err=%v", res, err)
+	}
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 0 {
+		t.Fatal("통과 뒤 probe 파드를 지워야 한다")
+	}
+}
+
+// TestWorkloadValidator_FailedProbeDoesNotPass 는 probe 파드가 Failed 면 통과가 아니고,
+// 그 파드를 지워 다음 Run 이 새로 만들 수 있게 하는 것을 검증한다.
+func TestWorkloadValidator_FailedProbeDoesNotPass(t *testing.T) {
+	const desired = "580.126.09"
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kcloud", Name: probePodName("nvidia", "worker-1", desired),
+		Labels: map[string]string{probeVersionLabel: sanitizeLabelValue(desired)}},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed}}
+	c := newFakeClient(t, pod)
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{Enabled: true, Image: "img", ResourceName: "nvidia.com/gpu"}}
+	res, err := v.Run(context.Background(), c, "worker-1", "nvidia", desired)
+	if err != nil || res.Passed || !strings.Contains(res.Message, "probe 실패") {
+		t.Fatalf("Failed 는 통과가 아니다: res=%+v err=%v", res, err)
+	}
+	var pods corev1.PodList
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 0 {
+		t.Fatal("실패한 probe 파드는 지워야 다음 Run 이 새로 만든다")
+	}
+}
+
+// TestWorkloadValidator_PendingPastTimeoutDoesNotPass 는 Pending 파드가 TimeoutSeconds 를
+// 넘기면 통과가 아니고, 그 파드를 지우는 것을 검증한다.
+func TestWorkloadValidator_PendingPastTimeoutDoesNotPass(t *testing.T) {
+	const (
+		nodeName, vendor, desired = "worker-1", "nvidia", "580.126.09"
+	)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "kcloud", Name: probePodName(vendor, nodeName, desired),
+		Labels:            map[string]string{probeVersionLabel: sanitizeLabelValue(desired)},
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+	}, Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	c := newFakeClient(t, pod)
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{Enabled: true, Image: "img", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 10}}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil || res.Passed || !strings.Contains(res.Message, "제한 시간") {
+		t.Fatalf("제한 시간 초과는 통과가 아니다: res=%+v err=%v", res, err)
+	}
+	var pods corev1.PodList
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 0 {
+		t.Fatal("제한 시간 초과 probe 파드는 지워야 한다")
+	}
+}
+
+// TestWorkloadValidator_StaleVersionProbeIsReplaced 는 같은 이름의 파드가 다른
+// desiredVersion 라벨을 달고 있으면(해시 충돌·수동 생성 등 방어적 케이스) 통과로 보지 않고
+// 지우는 것을 검증한다.
+func TestWorkloadValidator_StaleVersionProbeIsReplaced(t *testing.T) {
+	const (
+		nodeName, vendor, desired = "worker-1", "nvidia", "580.126.09"
+	)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "kcloud", Name: probePodName(vendor, nodeName, desired),
+		Labels: map[string]string{probeVersionLabel: sanitizeLabelValue("575.64.03")}, // 다른 버전
+	}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	c := newFakeClient(t, pod)
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{Enabled: true, Image: "img", ResourceName: "nvidia.com/gpu"}}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil || res.Passed {
+		t.Fatalf("라벨 버전이 다르면 통과가 아니다: res=%+v err=%v", res, err)
+	}
+	var pods corev1.PodList
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 0 {
+		t.Fatal("다른 버전의 probe 파드는 지워야 한다")
+	}
+}
+
+// TestWorkloadValidator_DeleteFailureDoesNotPass 는 Succeeded 파드의 삭제(cleanup)가
+// 실패하면 통과시키지 않는 것을 검증한다 — 지워지지 않는 파드를 "통과" 로 잘못 보고하지 않기 위함.
+func TestWorkloadValidator_DeleteFailureDoesNotPass(t *testing.T) {
+	const (
+		nodeName, vendor, desired = "worker-1", "nvidia", "580.126.09"
+	)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "kcloud", Name: probePodName(vendor, nodeName, desired),
+		Labels: map[string]string{probeVersionLabel: sanitizeLabelValue(desired)},
+	}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return errors.New("simulated delete failure")
+			},
+		}).Build()
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{Enabled: true, Image: "img", ResourceName: "nvidia.com/gpu"}}
+	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
+	if err != nil || res.Passed || !strings.Contains(res.Message, "정리 실패") {
+		t.Fatalf("정리 실패 시 통과하지 않아야 한다: res=%+v err=%v", res, err)
 	}
 }
 
