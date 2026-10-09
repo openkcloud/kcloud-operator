@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-04
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (kernelImages 맵 미스·DIP 공동 소유 경고 이벤트 추가)
 // ============================================================
 
 package upgrade
@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -141,31 +142,40 @@ func (m *UpgradeStateMachine) TransitionState(
 	// 위 broken-PreviousImage 정리와 같은 패턴이며, 호출자(controller)가 뒤이어 하는
 	// Status().Update 는 이미 영속된 값을 다시 쓰는 멱등 호출이 된다.
 	if requestedAt, ok := state.Annotations[v1alpha1.RollbackRequestedAnnotation]; ok {
-		switch {
-		case v1alpha1.RollbackRequestAccepted(state.Status.State):
-			requeue, requeueAfter, _ := m.transitionTo(state, v1alpha1.UpgradeStateRollback,
-				"관리자 요청 롤백("+requestedAt+")", 0)
-			if err := m.Status().Update(ctx, state); err != nil {
-				return false, 0, err
-			}
-			m.Recorder.Eventf(state, corev1.EventTypeNormal, "RollbackRequested",
-				"관리자 요청(%s)으로 Rollback 전이 (node=%s)", requestedAt, state.Spec.NodeName)
+		if requestedAt == state.Status.ConsumedRollbackRequest {
+			// 이미 소비한 요청이 제거 실패로 남은 것이다(Idle·Failed 재진입 이후까지 미뤄져도) —
+			// 다시 받아들이지 않고 어노테이션 정리만 재시도한다.
 			if err := m.clearRollbackRequest(ctx, state); err != nil {
-				// 상태는 이미 Rollback 으로 영속됐다 — 아래 case(state==Rollback)가 다음
-				// reconcile 에서 어노테이션 제거만 재시도한다(재전이는 하지 않는다).
-				logger.Error(err, "롤백 요청 어노테이션 제거 실패 — 다음 reconcile 에서 재시도")
+				logger.Error(err, "소비된 롤백 요청 어노테이션 제거 재시도 실패")
 			}
-			return requeue, requeueAfter, nil
-		case state.Status.State == v1alpha1.UpgradeStateRollback:
-			// 이 요청으로 이미 Rollback 에 들어간 뒤, 어노테이션 제거만 실패해 남은 경우다.
-			// 위 case 조건이 이미 거짓이라 재전이는 없다 — 제거만 재시도한다. 그러지 않으면
-			// 상태가 나중에 Idle·Failed 로 돌아왔을 때 같은 요청이 새 요청으로 오인돼
-			// 다시 전이한다.
-			if err := m.clearRollbackRequest(ctx, state); err != nil {
-				logger.Error(err, "롤백 요청 어노테이션 제거 재시도 실패")
+		} else {
+			switch {
+			case v1alpha1.RollbackRequestAccepted(state.Status.State):
+				state.Status.ConsumedRollbackRequest = requestedAt
+				requeue, requeueAfter, _ := m.transitionTo(state, v1alpha1.UpgradeStateRollback,
+					"관리자 요청 롤백("+requestedAt+")", 0)
+				if err := m.Status().Update(ctx, state); err != nil {
+					return false, 0, err
+				}
+				m.Recorder.Eventf(state, corev1.EventTypeNormal, "RollbackRequested",
+					"관리자 요청(%s)으로 Rollback 전이 (node=%s)", requestedAt, state.Spec.NodeName)
+				if err := m.clearRollbackRequest(ctx, state); err != nil {
+					// 상태는 이미 Rollback 으로 영속됐다 — 아래 case(state==Rollback)가 다음
+					// reconcile 에서 어노테이션 제거만 재시도한다(재전이는 하지 않는다).
+					logger.Error(err, "롤백 요청 어노테이션 제거 실패 — 다음 reconcile 에서 재시도")
+				}
+				return requeue, requeueAfter, nil
+			case state.Status.State == v1alpha1.UpgradeStateRollback:
+				// 이 요청으로 이미 Rollback 에 들어간 뒤, 어노테이션 제거만 실패해 남은 경우다.
+				// 위 case 조건이 이미 거짓이라 재전이는 없다 — 제거만 재시도한다. 그러지 않으면
+				// 상태가 나중에 Idle·Failed 로 돌아왔을 때 같은 요청이 새 요청으로 오인돼
+				// 다시 전이한다.
+				if err := m.clearRollbackRequest(ctx, state); err != nil {
+					logger.Error(err, "롤백 요청 어노테이션 제거 재시도 실패")
+				}
+			default:
+				logger.Info("롤백 요청 보류 — 전이 중", "requestedAt", requestedAt)
 			}
-		default:
-			logger.Info("롤백 요청 보류 — 전이 중", "requestedAt", requestedAt)
 		}
 	}
 
@@ -423,6 +433,14 @@ func (m *UpgradeStateMachine) handlePreFlight(
 		logf.FromContext(ctx).Info("사전 컴파일 커널 이미지를 쓰지 않고 기본 이미지로 되돌아감",
 			"kernel", kernelVersion, "reason", imageSkipReason)
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, imageSkipEvent, "%s", imageSkipReason)
+	}
+	// DIP spec 을 helm 외 관리자(kubectl patch/edit 등)가 함께 쥐고 있으면 다음 helm upgrade 가
+	// Server-Side Apply 충돌로 멈출 수 있다 — PreFlight 마다 드러내 운영자가 helm 값으로만
+	// 바꾸도록 유도한다. 기존 imageSkipReason 경고와 같은 자리·같은 빈도.
+	if foreign := foreignSpecManagers(policy.ManagedFields); len(foreign) > 0 {
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, eventPolicySharedOwnership,
+			"DriverInstallPolicy %s 의 spec 을 helm 외 관리자 %v 가 함께 소유한다 — 값은 helm 값 파일로만 바꿀 것(다음 helm upgrade 의 SSA 충돌 예방)",
+			policy.Name, foreign)
 	}
 	allowlist := policy.Spec.KernelAllowlist
 
@@ -1760,6 +1778,12 @@ func isNodeReady(node *corev1.Node) bool {
 const (
 	eventKernelImageRejected     = "KernelImageRejected"
 	eventKernelImageNotAssembled = "KernelImageNotAssembled"
+	// eventKernelImageMissing 은 정책이 kernelImages 를 선언했는데 노드 커널 항목이 없어 기본
+	// 이미지(DKMS)로 되돌아갈 때 낸다. 커널이 OS 업데이트로 바뀐 뒤 조용히 느린 경로로 가는 것을 드러낸다.
+	eventKernelImageMissing = "KernelImageMissing"
+	// eventPolicySharedOwnership 은 DIP spec 을 helm 외 관리자가 함께 소유할 때 낸다 — 다음 helm upgrade 가
+	// Server-Side Apply 충돌로 멈출 수 있다.
+	eventPolicySharedOwnership = "PolicySharedOwnership"
 )
 
 // assembleKernelImage 는 태그 규약으로 노드 커널용 사전 컴파일 이미지 참조를 조립한다.
@@ -1845,7 +1869,17 @@ func resolveDriverImage(
 		assembled, assembleSkip := assembleKernelImage(policy, kernelVersion)
 		if assembled == "" {
 			if assembleSkip == "" {
-				return policy.Spec.Driver.Image, "", ""
+				if len(policy.Spec.Driver.KernelImages) == 0 {
+					return policy.Spec.Driver.Image, "", ""
+				}
+				keys := make([]string, 0, len(policy.Spec.Driver.KernelImages))
+				for k := range policy.Spec.Driver.KernelImages {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				return policy.Spec.Driver.Image, fmt.Sprintf(
+					"커널 %s 의 사전 컴파일 이미지가 kernelImages 에 없어 기본 이미지(DKMS 컴파일)로 되돌아간다 — 선언된 커널: %s",
+					kernelVersion, strings.Join(keys, ", ")), eventKernelImageMissing
 			}
 			return policy.Spec.Driver.Image, assembleSkip, eventKernelImageNotAssembled
 		}
@@ -1864,6 +1898,28 @@ func resolveDriverImage(
 		}
 	}
 	return ref, "", ""
+}
+
+// foreignSpecManagers 는 spec 을 Update 로 건드린 helm 외 field manager 목록이다(정렬·중복 제거).
+// helm 은 Apply 로 소유하고, kubectl patch/edit 는 Update 로 소유한다 — 둘이 같은 spec 필드를 쥐면
+// helm 이 값을 바꾸는 다음 upgrade 가 충돌한다. kubectl-label·kubectl-annotate 처럼 metadata 만 쥔
+// 관리자는 세지 않는다.
+func foreignSpecManagers(entries []metav1.ManagedFieldsEntry) []string {
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if e.Manager == "helm" || e.Operation != metav1.ManagedFieldsOperationUpdate || e.FieldsV1 == nil {
+			continue
+		}
+		if strings.Contains(string(e.FieldsV1.Raw), `"f:spec"`) {
+			seen[e.Manager] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for m := range seen {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // refreshResolvedImage 는 status.ResolvedImage 를 지금 정책 기준으로 다시 계산한다.

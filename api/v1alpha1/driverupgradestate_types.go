@@ -1,6 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-09-22
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (ConsumedRollbackRequest 필드 추가 — 소비된 rollback 요청 재소비 차단)
 
 package v1alpha1
 
@@ -140,6 +140,11 @@ type DriverUpgradeStateStatus struct {
 	// 어떤 제품이 섞여 있는지 여기서 읽는다 — 값을 지어내지 않고 관측만 옮긴다.
 	// +optional
 	ObservedModels []string `json:"observedModels,omitempty"`
+	// ConsumedRollbackRequest 는 마지막으로 받아들인 관리자 롤백 요청(어노테이션 값, RFC3339)이다.
+	// 어노테이션 제거가 실패해 남아 있어도 같은 값은 다시 받아들이지 않는다 — 제거 재시도가 Idle·Failed 로
+	// 돌아간 뒤까지 미뤄지면 오래된 요청이 새 롤백을 시작하던 결함을 막는다.
+	// +optional
+	ConsumedRollbackRequest string `json:"consumedRollbackRequest,omitempty"`
 }
 
 // QuiescedDeployment 는 driver upgrade cycle 동안 일시적으로 scale=0 으로 quiesce 된

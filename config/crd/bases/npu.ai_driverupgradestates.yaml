@@ -76,6 +76,12 @@ spec:
           status:
             description: DriverUpgradeStateStatus는 업그레이드 진행 상태를 나타냅니다.
             properties:
+              consumedRollbackRequest:
+                description: |-
+                  ConsumedRollbackRequest 는 마지막으로 받아들인 관리자 롤백 요청(어노테이션 값, RFC3339)이다.
+                  어노테이션 제거가 실패해 남아 있어도 같은 값은 다시 받아들이지 않는다 — 제거 재시도가 Idle·Failed 로
+                  돌아간 뒤까지 미뤄지면 오래된 요청이 새 롤백을 시작하던 결함을 막는다.
+                type: string
               currentVersion:
                 description: CurrentVersion은 현재 설치된 드라이버 버전입니다.
                 type: string

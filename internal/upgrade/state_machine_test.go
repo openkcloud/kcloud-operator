@@ -2,8 +2,9 @@
 // state_machine_test.go: UpgradeStateMachine 단위 테스트
 // 상세: PreviousImage broken tag sanitization 검증
 //       Rollback exhaustion → Failed 터미널 정지 검증
+//       소비된 rollback 요청 어노테이션 재소비 차단 검증(A9)
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-28 | 수정일: 2026-04-29
+// 생성일: 2026-04-28 | 수정일: 2026-10-09 (소비된 rollback 요청 재소비 차단 테스트 추가)
 // ============================================================
 
 package upgrade
@@ -482,5 +483,51 @@ func TestPodUsesDevice_RecognizesEveryVendorResource(t *testing.T) {
 		if got := podUsesDevice(podWithResource(c.resource)); got != c.want {
 			t.Errorf("%s: podUsesDevice(%q) = %v, want %v", c.name, c.resource, got, c.want)
 		}
+	}
+}
+
+// ─────────────────────────────────────────────
+// 소비된 rollback 요청 재소비 차단 테스트 (A9)
+// ─────────────────────────────────────────────
+
+// TestRollbackRequest_StaleAnnotationNotReconsumed 는 이미 소비한 롤백 요청 어노테이션이
+// (제거 patch 실패 등으로) 남아 있을 때, 같은 값을 다시 Rollback 으로 받아들이지 않고
+// 어노테이션 정리만 재시도함을 검증한다.
+func TestRollbackRequest_StaleAnnotationNotReconsumed(t *testing.T) {
+	dus := makeIdleDUSWithCurrentVersion("w1-nvidia", "w1", "nvidia", "580.126.09")
+	dus.Status.PreviousVersion, dus.Status.PreviousImage = "580.100.00", "reg/nvidia-driver-ds:v3" // 롤백 가능한 형상
+	dus.Annotations = map[string]string{v1alpha1.RollbackRequestedAnnotation: "2026-10-08T01:02:03Z"}
+	dus.Status.ConsumedRollbackRequest = "2026-10-08T01:02:03Z" // 이미 한 번 소비됨
+	dip := makeIdleDIP("nvidia-generic", "nvidia", "580.126.09")
+	sm := newUpgradeSMWithRecorder(dus, dip)
+	ctx := context.Background()
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State == v1alpha1.UpgradeStateRollback {
+		t.Fatal("소비된 요청으로 다시 Rollback 에 들어갔다")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := sm.Get(ctx, client.ObjectKeyFromObject(dus), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, still := got.Annotations[v1alpha1.RollbackRequestedAnnotation]; still {
+		t.Fatal("stale 어노테이션이 정리되지 않았다")
+	}
+}
+
+// TestRollbackRequest_RecordsConsumedValue 는 새 롤백 요청이 받아들여질 때 요청 값이
+// status.consumedRollbackRequest 에 기록됨을 검증한다(다음 reconcile 부터 재소비 차단 근거).
+func TestRollbackRequest_RecordsConsumedValue(t *testing.T) {
+	dus := makeIdleDUSWithCurrentVersion("w1-nvidia", "w1", "nvidia", "580.126.09")
+	dus.Status.PreviousVersion, dus.Status.PreviousImage = "580.100.00", "reg/nvidia-driver-ds:v3"
+	dus.Annotations = map[string]string{v1alpha1.RollbackRequestedAnnotation: "2026-10-08T02:00:00Z"}
+	dip := makeIdleDIP("nvidia-generic", "nvidia", "580.126.09")
+	sm := newUpgradeSMWithRecorder(dus, dip)
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRollback || dus.Status.ConsumedRollbackRequest != "2026-10-08T02:00:00Z" {
+		t.Fatalf("state=%s consumedRollbackRequest=%q", dus.Status.State, dus.Status.ConsumedRollbackRequest)
 	}
 }

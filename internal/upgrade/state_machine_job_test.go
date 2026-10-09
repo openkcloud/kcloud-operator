@@ -4,13 +4,14 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-06
+// 생성일: 2026-07-16 | 수정일: 2026-10-09 (kernelImages 맵 미스·DIP 공동 소유 경고 시험 추가)
 // ============================================================
 
 package upgrade
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1288,5 +1289,50 @@ func TestCaptureJobPreviousImage_UsesPolicyImageNotResolved(t *testing.T) {
 				t.Errorf("개정이 같은 조합인데 결과가 갈렸다: %q != %q", fromResolved, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveDriverImage_MapMissForDeclaredKernelsWarns 는 정책이 kernelImages 를 선언했는데
+// 노드 커널 항목이 없으면(조립도 켜지지 않은 경우) 기본 이미지로 조용히 되돌아가지 않고
+// KernelImageMissing 경고와 선언된 커널 목록을 담은 사유를 내는지 본다. 커널이 OS 업데이트로
+// 바뀐 뒤 아무도 모르게 느린 DKMS 경로로 떨어지는 것을 드러내기 위한 가드다.
+func TestResolveDriverImage_MapMissForDeclaredKernelsWarns(t *testing.T) {
+	policy := &v1alpha1.DriverInstallPolicy{}
+	policy.Spec.Driver.Image = "reg/nvidia-driver-ds:v4"
+	policy.Spec.Driver.Version = "580.126.09"
+	policy.Spec.Driver.KernelImages = map[string]v1alpha1.KernelImageRef{
+		"5.15.0-171-generic": "reg/nvidia-driver-ds:580.126.09-k5.15.0-171-generic-v4",
+	}
+	img, reason, event := resolveDriverImage(policy, "5.15.0-191-generic")
+	if img != policy.Spec.Driver.Image || reason == "" || event != eventKernelImageMissing {
+		t.Fatalf("맵 미스가 조용히 지나간다: img=%s reason=%q event=%q", img, reason, event)
+	}
+	if !strings.Contains(reason, "5.15.0-171-generic") {
+		t.Fatalf("사유에 선언된 커널 목록이 없다: %q", reason)
+	}
+}
+
+// TestResolveDriverImage_NoKernelImagesStaysSilent 는 kernelImages 를 선언하지 않은 정책(맵이
+// 비어 하위호환 경로를 타는 경우)은 경고를 내지 않는지 본다 — 선언한 적 없는 맵에 경고를 내면
+// kernelImages 를 쓰지 않는 모든 정책이 PreFlight 마다 뜻 없는 이벤트를 쌓는다.
+func TestResolveDriverImage_NoKernelImagesStaysSilent(t *testing.T) {
+	policy := &v1alpha1.DriverInstallPolicy{}
+	policy.Spec.Driver.Image = "reg/nvidia-driver-ds:v4"
+	_, reason, event := resolveDriverImage(policy, "5.15.0-191-generic")
+	if reason != "" || event != "" {
+		t.Fatalf("kernelImages 를 선언하지 않은 정책에 경고가 난다: %q/%q", reason, event)
+	}
+}
+
+// TestForeignSpecManagers 는 helm 외 관리자가 Update 로 spec 필드를 쥔 경우만 골라내는지 본다 —
+// helm 자신(Apply)과 metadata 만 쥔 관리자(kubectl-label)는 제외해야 한다.
+func TestForeignSpecManagers(t *testing.T) {
+	mf := []metav1.ManagedFieldsEntry{
+		{Manager: "helm", Operation: metav1.ManagedFieldsOperationApply, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`)}},
+		{Manager: "kubectl-patch", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`)}},
+		{Manager: "kubectl-label", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:labels":{}}}`)}},
+	}
+	if got := foreignSpecManagers(mf); !reflect.DeepEqual(got, []string{"kubectl-patch"}) {
+		t.Fatalf("got %v", got)
 	}
 }
