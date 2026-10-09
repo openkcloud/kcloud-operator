@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-08-05
+// 생성일: 2026-07-23 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
 // ============================================================
 package controller
 
@@ -479,7 +479,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 	// 일치하는 경우 수렴도 실패도 없이 WaitingForDrain 을 반복한다(노드는 cordon 된 채).
 	rec := getApplyRecord(acpp, t.NodeName)
 
-	// (3) Resolve + Diff + 소유 no-diff 술어(§14.2).
+	// (3) Resolve + Diff + 소유 no-diff 술어(spec §14.2).
 	resolved, resolvedStatus := resolveNvidia(acpp.Spec.Layout)
 	ts.ResolvedLayout = resolvedStatus
 	t.Generation = acpp.Generation
@@ -635,7 +635,7 @@ func isApplyInFlightPhase(phase string) bool {
 	return false
 }
 
-// routeNvidiaNoDiff 는 geometry 일치(no-diff) 상태의 세 갈래를 라우팅한다(§14.2 소유 술어).
+// routeNvidiaNoDiff 는 geometry 일치(no-diff) 상태의 세 갈래를 라우팅한다(spec §14.2 소유 술어).
 // handled=false 면 호출자가 정상 apply 경로를 계속한다.
 func (r *AcceleratorPartitionPolicyReconciler) routeNvidiaNoDiff(acpp *npuv1alpha1.AcceleratorPartitionPolicy, backend partition.Backend, nvb *nvidia.Backend, t partition.Target, ts npuv1alpha1.TargetStatus, rec npuv1alpha1.ApplyRecord, resolved []partition.ResolvedEntry, changed bool) (bool, npuv1alpha1.TargetStatus, error) {
 	if changed {
@@ -971,7 +971,7 @@ func (r *AcceleratorPartitionPolicyReconciler) resumeNvidiaRecovery(acpp *npuv1a
 	return ts, nil
 }
 
-// resolveNvidia 는 nvidia layout 을 resolve 한다 — profile 은 그대로, BackendPolicy 는 없음(§4.2 ProfileNamed).
+// resolveNvidia 는 nvidia layout 을 resolve 한다 — profile 은 그대로, BackendPolicy 는 없음(spec §4.2 ProfileNamed).
 func resolveNvidia(ls []npuv1alpha1.PartitionLayout) ([]partition.ResolvedEntry, []npuv1alpha1.ResolvedLayoutEntry) {
 	re := make([]partition.ResolvedEntry, 0, len(ls))
 	rs := make([]npuv1alpha1.ResolvedLayoutEntry, 0, len(ls))
@@ -1046,7 +1046,7 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureNodeOwnerLockUID(ctx contex
 	return false, fmt.Errorf("owner lock: conflict retries exhausted for node %s", node)
 }
 
-// restartNvidiaDevicePlugin 은 대상 노드의 nvidia-device-plugin pod 를 삭제해 재-스캔을 유도한다(§15.2).
+// restartNvidiaDevicePlugin 은 대상 노드의 nvidia-device-plugin pod 를 삭제해 재-스캔을 유도한다(spec §15.2).
 func (r *AcceleratorPartitionPolicyReconciler) restartNvidiaDevicePlugin(ctx context.Context, node string) error {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
@@ -1062,7 +1062,7 @@ func (r *AcceleratorPartitionPolicyReconciler) restartNvidiaDevicePlugin(ctx con
 	return nil
 }
 
-// computeBaseline 은 apply 전 노드 상태에서 baseline·기대 allocatable 을 계산해 ApplyRecord 를 만든다(§15.2).
+// computeBaseline 은 apply 전 노드 상태에서 baseline·기대 allocatable 을 계산해 ApplyRecord 를 만든다(spec §15.2).
 //
 // ExpectedFullGPUCount 는 **apply 후** mixed device-plugin 이 광고할 온전한 GPU 수다 —
 // 물리 GPU 수에서 이 정책이 조각낼 대상 수를 뺀 값. apply 직전 allocatable(BaselineGPUCount)을
@@ -1525,7 +1525,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 	return ctrl.Result{}, nil
 }
 
-// handleNvidiaDeletion 은 저장된 ApplyRecords(snapshot only — nodeSelector 재평가 금지, §14.3) 만 보고
+// handleNvidiaDeletion 은 저장된 ApplyRecords(snapshot only — nodeSelector 재평가 금지, spec §14.3) 만 보고
 // 노드별 MIG 복원을 수행한다. 하드웨어를 바꾼(phase≥Applying) 노드는 소유권을 잃었으면 CleanupBlocked
 // (finalizer 유지, 운영자 개입). 소유 중이면 quiesce→snapshot PCI rollback→DP 재시작→fresh NDR 로
 // MIG Disabled + baseline gpu 복원 확인→lock 해제. 어느 단계든 err 면 finalizer 유지(requeue).
@@ -1692,7 +1692,7 @@ func (r *AcceleratorPartitionPolicyReconciler) releaseDeletionLeases(ctx context
 }
 
 // releaseOrphanOwnerLocks 는 이 ACPP UID 로 잠긴 노드 중 ApplyRecord 로 정리되지 않은 lock 을 스캔·해제한다
-// (finding #2). nodeSelector 재평가가 아니라 UID annotation 매칭이므로 §14.3(snapshot only)을 위반하지 않고,
+// (finding #2). nodeSelector 재평가가 아니라 UID annotation 매칭이므로 spec §14.3(snapshot only)을 위반하지 않고,
 // releaseNodeOwnerLockUID 가 값 일치 시에만 지우므로 타 소유자 노드는 건드리지 않는다. 이미 해제된 노드는 no-op.
 func (r *AcceleratorPartitionPolicyReconciler) releaseOrphanOwnerLocks(ctx context.Context, uid string) error {
 	var nodes corev1.NodeList
@@ -1846,7 +1846,7 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx contex
 	return false, nil
 }
 
-// assertNodeQuiesced 는 rollback 안전(노드 cordon + 장치 점유 워크로드 없음)을 검증한다(§15.3).
+// assertNodeQuiesced 는 rollback 안전(노드 cordon + 장치 점유 워크로드 없음)을 검증한다(spec §15.3).
 // 판정은 전적으로 partition.Quiescer 에 있다 — 배출 대상 규칙과 완료 판정 규칙이 갈라지면
 // "배출은 안 하면서 정지했다고 보는" 구멍이 생기므로(DRA pod 이 실제로 그랬다) 한 곳에 둔다.
 func (r *AcceleratorPartitionPolicyReconciler) assertNodeQuiesced(ctx context.Context, node string) error {
@@ -1941,7 +1941,7 @@ func migGeometryEmpty(g string) bool {
 }
 
 // setDeletionBlocked 는 cleanup 차단 상태를 영속한다: 대상 rec.MigPhase=CleanupBlocked + target
-// OwnershipConflict condition. finalizer 는 유지되므로 운영자가 수동 복원 후 개입해야 한다(§15.5).
+// OwnershipConflict condition. finalizer 는 유지되므로 운영자가 수동 복원 후 개입해야 한다(spec §15.5).
 func (r *AcceleratorPartitionPolicyReconciler) setDeletionBlocked(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy, node, msg string) {
 	base := acpp.DeepCopy()
 	for i := range acpp.Status.ApplyRecords {

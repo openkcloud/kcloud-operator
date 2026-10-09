@@ -5,7 +5,7 @@
 // 무엇을 할 수 있는가), NDR(장치 메모리), DRA(DeviceClass·ResourceSlice 로 무엇을 줄 수
 // 있는가). ACPP 가 수렴하지 않았으면 그 노드는 stale 로 표시해 모든 모드에서 탈락시킨다
 // (fail closed).
-// 생성일: 2026-07-29 | 수정일: 2026-08-05
+// 생성일: 2026-07-29 | 수정일: 2026-10-09
 // ============================================================
 package intent
 
@@ -169,14 +169,14 @@ func applyACPPStatus(nc *NodeCapability, acpps []v1alpha1.AcceleratorPartitionPo
 // applyObservedSharing 은 ACPP 저널이 아니라 실제 광고량으로 "광고 수 > 물리 장치 수" 를
 // 검출한다. SharingMode 를 ACPP ApplyRecord 에서만 읽으면, 누가 device-plugin 의 sharing
 // ConfigMap 을 손으로 고쳤거나 ACPP 가 소유권을 주장하지 않는 기존 설정이 남아 있을 때 저널은
-// exclusive 라고 말하고 exclusive 워크로드가 복제된 장치 위에 떨어진다(§19.3 이 절대 일어나면
+// exclusive 라고 말하고 exclusive 워크로드가 복제된 장치 위에 떨어진다(정직성 §19.3 이 절대 일어나면
 // 안 된다고 한 것) — 그래서 저널만 믿지 않고 이 관측도 함께 본다.
 //
 // 다만 이 관측(광고 수가 물리 장치 수보다 많다)은 "광고가 관측된 물리 장치 수를 넘는다" 는 것만
 // 증명한다 — 원인은 증명하지 않는다. device-plugin 복제(격리 없음)와 벤더의 하드웨어 서브유닛
 // 광고(격리 있음 — 예: Furiosa RNGD 카드 1대가 PE 4개로 광고됨)가 똑같은 이 관측을 만든다.
 // 그래서 SharingModeTimeSliced 를 단정하지 않고 SharingModeOversubscribed 로만 표시한다.
-// CheckMode 는 여전히 fail-closed 로 exclusive 를 거절하지만(§19.3 이 지키려던 안전 속성은
+// CheckMode 는 여전히 fail-closed 로 exclusive 를 거절하지만(정직성 §19.3 이 지키려던 안전 속성은
 // 그대로 보존된다), 근거 없이 "복제 중이라 격리 없음" 이라고 주장하지는 않는다.
 // timeSliced 는 저널(ApplyRecord.SharingMode, applyACPPStatus 가 읽는 실측 증거)이 있을 때만
 // 성립한다 — 여기서는 절대 선언하지 않는다.

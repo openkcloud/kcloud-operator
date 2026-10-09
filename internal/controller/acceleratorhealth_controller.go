@@ -3,7 +3,7 @@
 // 상세: 노드마다 신호를 모아 상태를 판정하고 AcceleratorHealth 에 기록한다. 이 컨트롤러의 부작용은
 //
 //	셋뿐이다 — ① 자기 CR status ② 격리 라벨 ③ AcceleratorOperation 생성. 장치·DaemonSet·
-//	ConfigMap·재부팅은 절대 건드리지 않는다(§9.6). 수집이 이 파일에 있는 이유는 롤아웃 판정이
+//	ConfigMap·재부팅은 절대 건드리지 않는다(계약 §9.6). 수집이 이 파일에 있는 이유는 롤아웃 판정이
 //	internal/partition 을 필요로 하는데, internal/health 는 그 패키지를 import 할 수 없기
 //	때문이다(직접 mutation 금지 계약을 컴파일 그래프로 강제한다).
 //

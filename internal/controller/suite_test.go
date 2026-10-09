@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -89,6 +90,16 @@ var _ = BeforeSuite(func() {
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
+
+	// envtest 가 띄운 API 서버가 Makefile 의 ENVTEST_K8S_VERSION 과 같은 선상인지 실측한다 — 자산 선택이
+	// 조용히 다른 버전을 쓰면 시험이 다른 서버를 상대로 초록이 된다.
+	if want := os.Getenv("KCLOUD_EXPECT_K8S_MINOR"); want != "" {
+		dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		v, err := dc.ServerVersion()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(v.Major+"."+v.Minor).To(Equal(want), "envtest 서버 버전이 기대와 다르다")
+	}
 })
 
 var _ = AfterSuite(func() {

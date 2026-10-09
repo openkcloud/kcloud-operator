@@ -4,7 +4,7 @@
 //
 //	seam 으로 typed CommandStep 실행, Verify 는 verifier seam 으로 위임(stateless).
 //
-// 생성일: 2026-07-23 | 수정일: 2026-10-09
+// 생성일: 2026-07-23 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
 // ============================================================
 package nvidia
 
@@ -367,7 +367,7 @@ func (b *Backend) deviceStatusFor(d MigDevice, model string) v1alpha1.DeviceStat
 	}
 }
 
-// maxTimeSlicingReplicas 는 정책적 상한이다(하드웨어 상한 아님 — replica 는 성능 비율이 아니다, §4.2).
+// maxTimeSlicingReplicas 는 정책적 상한이다(하드웨어 상한 아님 — replica 는 성능 비율이 아니다, spec §4.2).
 const maxTimeSlicingReplicas = 16
 
 // Validate 는 형식·단일성·count 경계·profile 지원을 검증한다(spec §4.2, §13.8).

@@ -5,7 +5,7 @@
 //	Job 이름은 (uid,generation,node,action,cmdHash) 로 결정론적 — 동일 의도 재실행은 재사용(idempotent),
 //	동일 이름·다른 cmdHash 는 충돌로 하드 에러 처리한다.
 //
-// 생성일: 2026-07-24
+// 생성일: 2026-07-24 | 수정일: 2026-10-09
 // ============================================================
 package nvidia
 
@@ -49,7 +49,7 @@ const (
 var Namespace = naming.OperatorNamespace()
 
 const (
-	migJobTTLSeconds    int32         = 600 // 완료 후 로그 보존 window(§14.4)
+	migJobTTLSeconds    int32         = 600 // 완료 후 로그 보존 window(spec §14.4)
 	migJobBackoffLimit  int32         = 0   // 재시도는 상태기계 재조정(requeue) 몫 — Job 자체 재시도 없음
 	defaultPollInterval time.Duration = 2 * time.Second
 	defaultWaitTimeout  time.Duration = 10 * time.Minute

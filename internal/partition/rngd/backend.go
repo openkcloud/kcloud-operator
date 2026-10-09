@@ -1,7 +1,7 @@
 // ============================================================
 // backend.go: RNGD 파티션 backend — DS env(RNGD_PARTITION_POLICY) 기반 apply (spec §2.3, §4.1)
 // 상세: discover/validate/diff/apply/rollback/verify. 적용 범위 = DaemonSet 전역(DaemonSetGlobal).
-// 생성일: 2026-07-23 | 수정일: 2026-08-05
+// 생성일: 2026-07-23 | 수정일: 2026-10-09
 // ============================================================
 package rngd
 
@@ -191,7 +191,7 @@ func capabilityProfiles() []v1alpha1.ProfileSupport {
 // 그렇다고 none 으로 낮춰 적지도 않는다 — none 은 rank 0 인 "주장" 이라
 // minimumIsolation=none 요구를 통과시킨다. 공유 인터페이스의 존재는 subdevice 라는 주장을
 // 무너뜨릴 뿐, 실제 등급을 잰 것이 아니다. 실측 전까지는 어느 등급도 적지 않는 것이
-// 이 프로젝트의 규율이다(§19.3, AcceleratorClass.MinimumIsolation 주석).
+// 이 프로젝트의 규율이다(정직성 §19.3, AcceleratorClass.MinimumIsolation 주석).
 // 격상은 PE 간 간섭 실측(테넌트 A 의 mgmt/DMA 접근이 테넌트 B 에 닿는지)이 선행 조건이다.
 func deviceStatusFor(_, model string) v1alpha1.DeviceStatus {
 	return v1alpha1.DeviceStatus{

@@ -3,7 +3,7 @@
 // 상세: 이 계획의 유일한 번역 함수다. admission webhook 과 컨트롤러가 같은 함수를 부른다.
 // 순수 함수이므로 클러스터 조회는 호출부(Load)가 미리 해 둔다. 실패하면 항상 *Reject 를
 // 돌려주며, 절대 다른 모드·다른 벤더로 조용히 갈아끼우지 않는다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-10-09
 // ============================================================
 package intent
 
@@ -207,7 +207,7 @@ func orderMappings(mappings []v1alpha1.AcceleratorMapping, preference []string) 
 	return out
 }
 
-// explain 은 사람이 읽는 근거다. 공유 결과는 격리가 없다는 사실을 반드시 말한다(§19.3).
+// explain 은 사람이 읽는 근거다. 공유 결과는 격리가 없다는 사실을 반드시 말한다(정직성 §19.3).
 // shared 분기가 "time-sliced" 라고 단정할 수 있는 것은 checkSharing 이 SharingMode 를
 // timeSliced 로 못박아 통과시키기 때문이다(mode.go:132). 그 게이트가 multiProcess/brokered 로
 // 넓어지는 날 이 문구도 access.Implementation 기준으로 좁혀야 한다.

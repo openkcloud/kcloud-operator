@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (UnverifiedVersion 터미널에서 정책 복귀 시 Idle 로 전이)
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (UnverifiedVersion 터미널에서 정책 복귀 시 Idle 로 전이; § 인용 문서명 보강)
 // ============================================================
 
 package upgrade
@@ -740,7 +740,7 @@ func (m *UpgradeStateMachine) handleValidating(
 	}
 
 	// 새 Pod 이 아직 준비되지 않은 경우 (wrong-image 캐시 / NotReady 등) 단순 requeue.
-	// ValidationTimeout 안에 안정되지 않으면 §1 의 timeout 가드가 Rollback / Failed 로 전이한다.
+	// ValidationTimeout 안에 안정되지 않으면 architectural plan §1 의 timeout 가드가 Rollback / Failed 로 전이한다.
 	if !ready {
 		logger.Info("Validating: 새 Pod 미준비 (이미지 불일치 또는 NotReady)",
 			"node", state.Spec.NodeName)
@@ -899,7 +899,7 @@ func (m *UpgradeStateMachine) handleFailed(
 	if !decidable || stillAdvertised != "" {
 		// 유지. 보류이지 포기가 아니므로 다시 볼 기회를 남긴다 — 광고는 device-plugin 이
 		// 뒤늦게 재시작하며 떨어질 수 있다. 여기서 반환하는 requeue 는 상태 전이도 DS 패치도
-		// Job 생성도 하지 않으므로 §R1 의 무한 롤백 방지와 충돌하지 않는다(같은 switch 의
+		// Job 생성도 하지 않으므로 plan §R1 의 무한 롤백 방지와 충돌하지 않는다(같은 switch 의
 		// UnverifiedVersion 이 이미 같은 방식으로 터미널 상태를 재확인한다).
 		logger.Info("Failed 터미널 상태 — cordon 유지(벤더 광고 0 미확인)",
 			"advertisedResource", stillAdvertised, "vendorKnown", decidable)

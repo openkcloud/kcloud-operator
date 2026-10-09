@@ -3,9 +3,9 @@
 // 상세: detector 가 host nvidia-smi 실행 불가라, operator 가 kcloud-host-exec Job(nsenter)으로 MIG
 //
 //	mode/geometry/lgip 를 per-PCI 관측한다. 관측 결과는 Backend.WithObservations 로 in-memory
-//	주입(NDR 미patch). parse 규칙은 detector 와 동일 fail-closed(§15.3).
+//	주입(NDR 미patch). parse 규칙은 detector 와 동일 fail-closed(spec §15.3).
 //
-// 생성일: 2026-07-27
+// 생성일: 2026-07-27 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
 // ============================================================
 package nvidia
 
@@ -65,7 +65,7 @@ func normalizeMigMode(s string) string {
 	}
 }
 
-// parseObservation 은 fail-closed 로 관측을 판정한다(§15.3): mode csv 파싱 실패, current/pending
+// parseObservation 은 fail-closed 로 관측을 판정한다(spec §15.3): mode csv 파싱 실패, current/pending
 // Unknown, 또는 Enabled 인데 -lgi 를 파싱 못하면 전부 Unknown+Err 를 반환하고 절대 조용히
 // "disabled" 로 보고하지 않는다(detector parseMigObservation 포팅).
 func parseObservation(pci, modeCsv, lgi, lgip string) Observation {
@@ -181,7 +181,7 @@ func observeJobName(stream, nodeName string) string {
 const observePCIsPerJob = 1
 
 // Observe 는 nodeName 의 각 pci 에 대해 mode/-lgi/-lgip 를 privileged Job 으로 조회하고
-// fail-closed 로 parse 한 Observation 을 pci 당 하나씩 반환한다(§16.2). Job 실패·pod 소실·빈
+// fail-closed 로 parse 한 Observation 을 pci 당 하나씩 반환한다(spec §16.2). Job 실패·pod 소실·빈
 // 메시지·section 누락은 조용히 드롭하지 않고 Err 를 채운 Observation 으로 표면화한다(apply 차단용).
 //
 // PCI 는 observePCIsPerJob 단위로 나눠 Job 을 돌린다. 반환 순서는 입력 pcis 순서와 같다.
@@ -314,7 +314,7 @@ func failClosed(pcis []string, reason string) []Observation {
 }
 
 // parseDelimitedMessage 는 Job 이 termination-log 에 쓴 구분자 포맷을 pci 별 Observation 으로 파싱한다.
-// pci 마다 하나씩 반환하며, section 이 없으면 Err 를 채운다(조용히 드롭 금지, §16.3 fail-closed).
+// pci 마다 하나씩 반환하며, section 이 없으면 Err 를 채운다(조용히 드롭 금지, spec §16.3 fail-closed).
 func parseDelimitedMessage(msg string, pcis []string) []Observation {
 	sections := map[string]string{}
 	var curPCI string

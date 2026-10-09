@@ -6,7 +6,7 @@
 // 강제하는 것이 실측돼 status 에 process 를 적는다. 게이트가 그 값을 따라가지 않는 것은
 // 의도이며(배치는 fail closed 쪽이 안전하다), 그래서 거절 메시지는 장치의 등급이 아니라
 // 이 게이트가 쓰는 값을 밝힌다.
-// 생성일: 2026-07-29 | 수정일: 2026-09-17
+// 생성일: 2026-07-29 | 수정일: 2026-10-09
 // ============================================================
 package intent
 
@@ -118,7 +118,7 @@ func checkIsolation(nc NodeCapability, req v1alpha1.AcceleratorRequirements, acc
 	for _, dev := range nc.Devices {
 		iso := dev.IsolationCapability
 		// Fault 는 일부러 뺀다 — 이 축이 재는 것은 장애 격리(고장전파 반경)지
-		// minimumIsolation(§19.1, 테넌트 간 compute/memory 분리)이 묻는 것이 아니다.
+		// minimumIsolation(R&D v1.0 §19.1, 테넌트 간 compute/memory 분리)이 묻는 것이 아니다.
 		// map 이 아니라 슬라이스로 돈다 — map 순회는 무작위라 두 축이 모두 실패하면 거절 메시지가
 		// 조정마다 바뀌고, 2분 주기 재조정이 그때마다 status condition 을 다시 쓴다.
 		for _, axis := range []struct{ name, level string }{{"compute", iso.Compute}, {"memory", iso.Memory}} {

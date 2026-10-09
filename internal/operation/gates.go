@@ -4,7 +4,7 @@
 //
 //	어땠는가" 를 옛 코드를 되살리지 않고 같은 하네스로 답하기 위한 것이다.
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
 // ============================================================
 package operation
 
@@ -28,7 +28,7 @@ type Gates struct {
 	DisableVerify bool
 }
 
-// Baseline 은 §16.4 의 비교군 이름과 그 구성이다.
+// Baseline 은 R&D base v0.1 §16.4 의 비교군 이름과 그 구성이다.
 type Baseline struct {
 	Name  string
 	Desc  string
