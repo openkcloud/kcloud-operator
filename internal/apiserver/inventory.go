@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-06
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 로 DRA 드라이버별 발행·할당·여유 수 추가)
 // ============================================================
 
 package apiserver
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 
 	"kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/intent"
@@ -118,6 +119,9 @@ type AcceleratorView struct {
 	// +optional
 	PartitionInstances []PartitionInstanceView `json:"partitionInstances,omitempty"`
 	// NodeAdvertised 는 노드 범위 값이다(장치 범위가 아니다). 이름에 Node 를 넣어 오해를 막는다.
+	// 확장 자원 축은 리소스명을 키로 쓰고(예: nvidia.com/gpu), attachDRAAllocation 이 더하는
+	// DRA 축은 접두 dra: 를 붙인 키(예: dra:gpu.nvidia.com)를 쓴다 — 두 축은 독립이라 한 노드가
+	// 동시에 가질 수 있다.
 	NodeAdvertised map[string]int32 `json:"nodeAdvertised,omitempty"`
 	// NodeAllocated 는 Running·Pending 파드의 일반 컨테이너와 재시작형(사이드카) 초기화
 	// 컨테이너가 요청한 가속기 리소스 합이다(requests, 없으면 limits) — 재시작하지 않는
@@ -497,6 +501,53 @@ func attachAllocation(items []AcceleratorView, pods []corev1.Pod) {
 				it.NodeAllocated[name] = a
 				it.NodeFree[name] = -a
 			}
+		}
+	}
+}
+
+// draKeyPrefix 는 NodeAdvertised·NodeAllocated·NodeFree 에서 DRA 드라이버 축을 확장 자원과 구분한다.
+const draKeyPrefix = "dra:"
+
+// attachDRAAllocation 은 노드가 ResourceSlice 로 발행한 장치 수와 그 노드 풀에 할당된 claim 결과 수를
+// 행에 더한다. 확장 자원 축(attachAllocation)과 독립이다 — DRA 로만 광고하는 노드는 allocatable 에
+// 키가 없어 attachAllocation 만으로는 nodeFree 가 비어 있었다. 풀 이름이 노드명인 드라이버(nvidia·
+// furiosa 벤더 드라이버, kcloud generic 드라이버)만 센다 — 다른 풀 규약을 쓰는 드라이버는 0 으로
+// 세지 않고 키 자체를 만들지 않는다(세면 광고 없는 할당이 음수 free 로 둔갑한다).
+func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, claims []resourcev1.ResourceClaim) {
+	allocated := map[string]map[string]int32{} // node → driver → 할당 결과 수
+	for i := range claims {
+		a := claims[i].Status.Allocation
+		if a == nil {
+			continue
+		}
+		for _, res := range a.Devices.Results {
+			if allocated[res.Pool] == nil {
+				allocated[res.Pool] = map[string]int32{}
+			}
+			allocated[res.Pool][res.Driver]++
+		}
+	}
+	for i := range items {
+		it := &items[i]
+		drivers := dra.SlicesByNodeDriver[it.NodeName]
+		if len(drivers) == 0 {
+			continue
+		}
+		if it.NodeAdvertised == nil {
+			it.NodeAdvertised = map[string]int32{}
+		}
+		if it.NodeAllocated == nil {
+			it.NodeAllocated = map[string]int32{}
+		}
+		if it.NodeFree == nil {
+			it.NodeFree = map[string]int32{}
+		}
+		for driver, adv := range drivers {
+			key := draKeyPrefix + driver
+			alloc := allocated[it.NodeName][driver]
+			it.NodeAdvertised[key] = adv
+			it.NodeAllocated[key] = alloc
+			it.NodeFree[key] = adv - alloc
 		}
 	}
 }

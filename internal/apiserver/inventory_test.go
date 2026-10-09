@@ -5,7 +5,7 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-06
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 시험 추가)
 // ============================================================
 
 package apiserver
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -571,6 +572,38 @@ func TestAttachAllocation_RestartableInitContainerCountsPlainDoesNot(t *testing.
 	attachAllocation(items, []corev1.Pod{pod})
 	if items[0].NodeAllocated["furiosa.ai/rngd"] != 1 {
 		t.Fatalf("사이드카 초기화 컨테이너 요청만 세어야 한다(일반 초기화 컨테이너는 제외): %v", items[0].NodeAllocated)
+	}
+}
+
+// allocatedClaimOn 은 node 풀에서 driver 로 device 하나를 할당받은 ResourceClaim 이다.
+func allocatedClaimOn(node, driver, device string) resourcev1.ResourceClaim {
+	return resourcev1.ResourceClaim{
+		Status: resourcev1.ResourceClaimStatus{
+			Allocation: &resourcev1.AllocationResult{
+				Devices: resourcev1.DeviceAllocationResult{
+					Results: []resourcev1.DeviceRequestAllocationResult{{Driver: driver, Pool: node, Device: device, Request: "req"}},
+				},
+			},
+		},
+	}
+}
+
+func TestAttachDRAAllocation_CountsSlicesAndClaims(t *testing.T) {
+	items := []AcceleratorView{{NodeName: "w1", NodeAdvertised: map[string]int32{"nvidia.com/gpu": 0}}}
+	dra := intent.DRACapability{APIServed: true, SlicesByNodeDriver: map[string]map[string]int32{"w1": {"gpu.nvidia.com": 2}}}
+	claims := []resourcev1.ResourceClaim{allocatedClaimOn("w1", "gpu.nvidia.com", "gpu-0")} // Pool=노드명, Driver, Device
+	attachDRAAllocation(items, dra, claims)
+	it := items[0]
+	if it.NodeAdvertised["dra:gpu.nvidia.com"] != 2 || it.NodeAllocated["dra:gpu.nvidia.com"] != 1 || it.NodeFree["dra:gpu.nvidia.com"] != 1 {
+		t.Fatalf("adv=%v alloc=%v free=%v", it.NodeAdvertised, it.NodeAllocated, it.NodeFree)
+	}
+}
+
+func TestAttachDRAAllocation_NoSlicesLeavesRowUntouched(t *testing.T) {
+	items := []AcceleratorView{{NodeName: "w1", NodeAdvertised: map[string]int32{"nvidia.com/gpu": 2}}}
+	attachDRAAllocation(items, intent.DRACapability{}, nil)
+	if _, ok := items[0].NodeAdvertised["dra:gpu.nvidia.com"]; ok || len(items[0].NodeAdvertised) != 1 {
+		t.Fatalf("슬라이스가 없는 노드에 dra 키가 생겼다: %v", items[0].NodeAdvertised)
 	}
 }
 

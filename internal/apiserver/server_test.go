@@ -2,7 +2,7 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20
+// 생성일: 2026-07-20 | 수정일: 2026-10-09 (accelerators 의 resourceclaims 게이트 시험 추가)
 // ============================================================
 
 package apiserver
@@ -251,6 +251,28 @@ func TestCapabilitiesDoesNotRequireHealthList(t *testing.T) {
 	}
 	if body := w.Body.String(); !strings.Contains(body, "acceleratorhealths") {
 		t.Errorf("403 은 막힌 리소스(acceleratorhealths)를 이름으로 알려야 함: %s", body)
+	}
+}
+
+// TestAcceleratorsRequireResourceClaimsAuthz: loadInventory 가 attachDRAAllocation 용
+// ResourceClaim 을 읽으므로(Task 7 리뷰) accelerators 는 resourceclaims list 인가도 요구해야
+// 한다. capabilities 는 ResourceClaim 을 읽지 않으므로 그 권한이 없어도 403 이면 안 된다 —
+// 위 TestCapabilitiesDoesNotRequireHealthList 와 같은 capGates/invGates 분리 회귀 가드다.
+func TestAcceleratorsRequireResourceClaimsAuthz(t *testing.T) {
+	opts := authnOpts{
+		authenticated: true, username: "sa:no-claims", allowed: true,
+		denyResources: map[string]bool{"resourceclaims": true},
+	}
+	s, _ := newServer(t, opts, previewObjects()...)
+	if w := do(t, s, "GET", "/api/v1/capabilities", "", "tok"); w.Code == http.StatusForbidden {
+		t.Fatalf("capabilities 는 resourceclaims 권한이 없어도 403 이면 안 됨: got %d (%s)", w.Code, w.Body.String())
+	}
+	w := do(t, s, "GET", "/api/v1/accelerators", "", "tok")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("accelerators 는 resourceclaims 권한이 없으면 403 이어야 함: got %d (%s)", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "resourceclaims") {
+		t.Errorf("403 은 막힌 리소스(resourceclaims)를 이름으로 알려야 함: %s", body)
 	}
 }
 

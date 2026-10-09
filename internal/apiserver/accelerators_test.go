@@ -2,7 +2,7 @@
 // accelerators_test.go: /accelerators 3종 엔드포인트 핸들러 테스트
 // 상세: fake reader 로 200/404/필터/페이지네이션을 본다. 인증·인가는 Task 1 에서 이미
 //       덮었으므로 여기서는 okAuth 로 통과시키고 응답 형태만 검증한다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (DRA ResourceSlice 광고 dra: 키 단언 추가)
 // ============================================================
 
 package apiserver
@@ -13,8 +13,10 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"kcloud-operator/api/v1alpha1"
@@ -81,7 +83,17 @@ func invObjects() []client.Object {
 }
 
 func TestAccelerators_ListsAllPhysicalDevices(t *testing.T) {
-	s, _ := newServer(t, okAuth(), invObjects()...)
+	// worker1 에 DRA ResourceSlice 1장을 더한다 — attachDRAAllocation 호출이 핸들러에서
+	// 지워지면 아래 dra: 키 단언이 깨진다(Task 7 변이 요구).
+	objs := append(invObjects(), &resourcev1.ResourceSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker1-gpu"},
+		Spec: resourcev1.ResourceSliceSpec{
+			Driver:   "gpu.nvidia.com",
+			NodeName: ptr.To("worker1"),
+			Devices:  []resourcev1.Device{{Name: "gpu-0"}},
+		},
+	})
+	s, _ := newServer(t, okAuth(), objs...)
 	w := do(t, s, "GET", "/api/v1/accelerators", "", "tok")
 	if w.Code != http.StatusOK {
 		t.Fatalf("200 이어야 함: got %d (%s)", w.Code, w.Body.String())
@@ -92,6 +104,19 @@ func TestAccelerators_ListsAllPhysicalDevices(t *testing.T) {
 	}
 	if limit != defaultLimit || offset != 0 {
 		t.Fatalf("기본 페이지여야 함: limit=%d offset=%d", limit, offset)
+	}
+	found := false
+	for _, it := range items {
+		if it.NodeName != "worker1" {
+			continue
+		}
+		found = true
+		if it.NodeAdvertised["dra:gpu.nvidia.com"] != 1 {
+			t.Fatalf("worker1 은 ResourceSlice 로 gpu.nvidia.com 1장을 광고해야 함: %v", it.NodeAdvertised)
+		}
+	}
+	if !found {
+		t.Fatal("worker1 행을 찾지 못함")
 	}
 }
 

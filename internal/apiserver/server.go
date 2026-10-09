@@ -3,7 +3,7 @@
 // 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read(GET /status,
 //       /nodes/{node})/control(POST /vendors/{vendor}/upgrade|rollback|toggle)을 노출.
 //       control 은 전부 CR patch 로 귀결(1단계 계약 유지). 인증=TokenReview, 인가=SubjectAccessReview.
-// 생성일: 2026-07-20
+// 생성일: 2026-07-20 | 수정일: 2026-10-09 (invGates 에 resourceclaims list 게이트 추가)
 // ============================================================
 
 package apiserver
@@ -109,10 +109,12 @@ func (s *Server) Handler() http.Handler {
 	ndrGate := npuPair("list", "nodedevicereports")
 	classGate := npuPair("list", "acceleratorclasses")
 	podsGate := authzPair{Group: "", Verb: "list", Resource: "pods"}
-	// 인벤토리 라우트 셋은 건강 판정(acceleratorhealths)·할당량(pods)까지 읽는다. capabilities 는 그것을 읽지
-	// 않으므로 게이트를 나눈다 — 게이트는 라우트가 실제로 읽는 것만 요구한다.
+	// 인벤토리 라우트 셋은 건강 판정(acceleratorhealths)·할당량(pods)·DRA 집계(resourceclaims)까지
+	// 읽는다(loadInventory 의 attachDRAAllocation, Task 7). capabilities 는 그것들을 읽지 않으므로
+	// 게이트를 나눈다 — 게이트는 라우트가 실제로 읽는 것만 요구한다.
 	capGates := []authzPair{nodeGate, acppGate, ndrGate}
-	invGates := append(append([]authzPair{}, capGates...), npuPair("list", "acceleratorhealths"), podsGate)
+	invGates := append(append([]authzPair{}, capGates...), npuPair("list", "acceleratorhealths"), podsGate,
+		authzPair{Group: "resource.k8s.io", Verb: "list", Resource: "resourceclaims"})
 	// read: npu.ai 리소스 list 권한 + core 그룹 nodes 권한. CollectStatus 가 corev1.NodeList 를
 	// 읽어 node.status.allocatable 전량을 응답에 싣기 때문이다(pkg/npuctl/types.go 의 Allocatable
 	// 주석 — 벤더 리소스명이 설정마다 달라 의도적으로 필터하지 않는다). 필터링이 아니라 인가로
@@ -129,6 +131,8 @@ func (s *Server) Handler() http.Handler {
 	// (기존 authz 를 중첩 호출해 둘 다 통과해야 next 가 실행되게 한다). 응답은 node 이름·cordon
 	// 상태·advertised 수량도 함께 낸다(loadInventory/handleNodeAccelerators 가 corev1.Node 를
 	// 직접 읽는다) — core 그룹 nodes list 인가도 함께 요구한다(리뷰 Important #4, 5라우트 전부).
+	// loadInventory 가 attachDRAAllocation 용 ResourceClaim 도 읽으므로(Task 7)
+	// resourceclaims 인가도 invGates 에 포함한다 — consumers 라우트와 같은 요구.
 	mux.HandleFunc("GET /api/v1/accelerators", s.authzAll(invGates, s.handleAccelerators))
 	mux.HandleFunc("GET /api/v1/accelerators/{uid...}", s.authzAll(invGates, s.handleAcceleratorByUID))
 	mux.HandleFunc("GET /api/v1/nodes/{node}/accelerators", s.authzAll(invGates, s.handleNodeAccelerators))

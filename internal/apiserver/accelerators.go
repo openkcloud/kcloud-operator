@@ -1,8 +1,9 @@
 // ============================================================
 // accelerators.go: 가속기 인벤토리 조회 엔드포인트(/accelerators, /nodes/{node}/accelerators)
-// 상세: 읽기 전용. Reader 로 노드·ACPP·NDR 을 직접 읽어 BuildInventory 로 접은 뒤 페이지네이션
-//       봉투로 낸다. UID 경로는 "/" 를 포함하는 합성 ID 를 받기 위해 {uid...} 와일드카드를 쓴다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-06
+// 상세: 읽기 전용. Reader 로 노드·ACPP·NDR·ResourceClaim 을 직접 읽어 BuildInventory 로 접은 뒤
+//       페이지네이션 봉투로 낸다. UID 경로는 "/" 를 포함하는 합성 ID 를 받기 위해 {uid...}
+//       와일드카드를 쓴다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 용 ResourceClaim 조회 추가)
 // ============================================================
 
 package apiserver
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -45,14 +47,22 @@ func (s *Server) loadInventory(ctx context.Context) ([]AcceleratorView, error) {
 	}
 	// DRA 가용성은 intent.Load 가 판정한 것을 그대로 받는다(preview 와 같은 경로) — 빈
 	// DRACapability 를 넘기면 DRA 로만 광고하는 노드가 스냅샷에서 통째로 빠져 그 노드의
-	// stale/공유 상태가 이 목록에서 조용히 사라진다.
+	// stale/공유 상태가 이 목록에서 조용히 사라진다. 같은 dra 값을 attachDRAAllocation 에도
+	// 재사용한다 — DeviceClass·ResourceSlice List 를 다시 하면 이중 조회다.
 	_, dra, err := intent.Load(ctx, s.Reader)
 	if err != nil {
 		return nil, err
 	}
+	var claims resourcev1.ResourceClaimList
+	// ResourceClaim 은 클러스터에 없을 수 있다(K8s 1.28 라인) — 그때는 DRA 집계 축만 비우고
+	// device-plugin 축은 그대로 낸다(handleConsumers 와 같은 완화).
+	if err := s.Reader.List(ctx, &claims); err != nil {
+		s.Log.V(1).Info("resourceclaims 조회 실패 — DRA 집계 없이 진행", "error", err.Error())
+	}
 	items := BuildInventory(nodes.Items, acpps.Items, ndrs.Items, dra)
 	attachHealth(items, healths.Items)
 	attachAllocation(items, pods.Items)
+	attachDRAAllocation(items, dra, claims.Items)
 	attachVendorID(items, nodes.Items)
 	return items, nil
 }
