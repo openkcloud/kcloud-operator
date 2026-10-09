@@ -4,7 +4,7 @@
 //       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
 //       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
 //       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18 | 수정일: 2026-10-09
+// 생성일: 2026-09-18 | 수정일: 2026-10-09 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기)
 // ============================================================
 
 package controller
@@ -579,12 +579,33 @@ func TestMixedModelRefusal(t *testing.T) {
 				[2]string{"tenstorrent", "blackhole-p150"}, [2]string{"nvidia", "a2"})},
 		},
 		{
-			// normalizeVendor 의 rngd 특례: furiosa/rngd 는 벤더가 rngd 로 갈려
-			// warboy 와 다른 /dev 트리다 — 혼재가 아니다.
-			name: "furiosa warboy + rngd → 거절 없음", vendor: "furiosa", product: "warboy",
+			// 물리 벤더(d.Vendor)로 모으므로 normalizeVendor 의 rngd 특례가 거절을 가리지
+			// 않는다 — 두 제품 모두 furiosa 카드라 /dev/furiosa/{{id}} 글롭이 제품을 가르지
+			// 못한다. 오늘 출하 archetype 은 다른 글롭(/dev/rngd/{{id}}*)이라 피해가 없지만,
+			// 판정은 글롭 모양이 아니라 같은 벤더 다른 제품 여부여야 한다.
+			name: "furiosa warboy + rngd → 거절", vendor: "furiosa", product: "warboy",
 			nodes: []string{"/dev/furiosa/{{id}}"},
 			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("rngd-1",
 				[2]string{"furiosa", "warboy"}, [2]string{"furiosa", "rngd"})},
+			wantRefuse: true, wantSub: "rngd",
+		},
+		{
+			// 반대 방향: descriptor 가 rngd(벤더 키가 rngd)여도 물리 벤더는 furiosa 라
+			// 같은 노드의 warboy 를 다른 제품으로 센다.
+			name: "rngd descriptor + warboy 혼재 → 거절", vendor: "rngd", product: "rngd",
+			nodes: []string{"/dev/rngd/{{id}}"},
+			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("rngd-1",
+				[2]string{"furiosa", "rngd"}, [2]string{"furiosa", "warboy"})},
+			wantRefuse: true, wantSub: "warboy",
+		},
+		{
+			// 모델 미판정 카드(빈 Model)도 거절은 유지한다 — 글롭이 그 장치를 descriptor
+			// 제품으로 광고하기 때문이다. 사유 문자열에서만 사람이 읽을 수 있게 바꾼다.
+			name: "빈 모델 카드 → 거절, 사유에 모델 미보고", vendor: "nvidia", product: "a30",
+			nodes: []string{"/dev/nvidia/{{id}}"},
+			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("k8s-worker1",
+				[2]string{"nvidia", "a30"}, [2]string{"nvidia", ""})},
+			wantRefuse: true, wantSub: "(모델 미보고)",
 		},
 		{
 			name: "제품이 그 노드에 없음 → 거절 없음", vendor: "nvidia", product: "h100",
@@ -611,7 +632,9 @@ func TestMixedModelRefusal(t *testing.T) {
 	}
 }
 
-// 혼재 노드 descriptor 는 auto-apply 되지 않고 사유가 status.refusals 에 남아야 한다.
+// TestMixedModelRefusalIsDeterministic 은 노드 둘이 모두 혼재일 때 사유가 입력 순서로 갈리지
+// 않는지 본다 — 사유가 reconcile 마다 바뀌면 status.refusals 가 떨리고 apiserver 가 같은
+// reason+message 로 접는 이벤트도 매번 새 항목이 된다.
 func TestMixedModelRefusalIsDeterministic(t *testing.T) {
 	spec := npuv1alpha1.AcceleratorDescriptorSpec{
 		Vendor: "tenstorrent", Product: "blackhole-p150",

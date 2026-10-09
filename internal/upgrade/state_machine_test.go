@@ -2,9 +2,9 @@
 // state_machine_test.go: UpgradeStateMachine 단위 테스트
 // 상세: PreviousImage broken tag sanitization 검증
 //       Rollback exhaustion → Failed 터미널 정지 검증
-//       소비된 rollback 요청 어노테이션 재소비 차단 검증(A9)
+//       소비된 rollback 요청 어노테이션 재소비 차단 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-28 | 수정일: 2026-10-09 (UnverifiedVersion Idle 복귀 테스트 추가)
+// 생성일: 2026-04-28 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
 // ============================================================
 
 package upgrade
@@ -488,7 +488,7 @@ func TestPodUsesDevice_RecognizesEveryVendorResource(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// 소비된 rollback 요청 재소비 차단 테스트 (A9)
+// 소비된 rollback 요청 재소비 차단 테스트
 // ─────────────────────────────────────────────
 
 // TestRollbackRequest_StaleAnnotationNotReconsumed 는 이미 소비한 롤백 요청 어노테이션이
@@ -535,7 +535,7 @@ func TestRollbackRequest_RecordsConsumedValue(t *testing.T) {
 
 // TestValidatorsFor_WorkloadOnlyWhenEnabled 는 validatorsFor 가 기본 체인(DriverModule·
 // DevicePlugin) 둘만 반환하고, 정책이 workloadProbe 를 켜면 Workload 를 끝에 더하는 것을
-// 검증한다(A1, 정책 opt-in).
+// 검증한다(정책 opt-in).
 func TestValidatorsFor_WorkloadOnlyWhenEnabled(t *testing.T) {
 	p := &v1alpha1.DriverInstallPolicy{}
 	if n := len(validatorsFor(p)); n != 2 {
@@ -554,7 +554,7 @@ func TestValidatorsFor_WorkloadOnlyWhenEnabled(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// UnverifiedVersion 자동 복귀 테스트 (Task 14)
+// UnverifiedVersion 자동 복귀 테스트
 // ─────────────────────────────────────────────
 
 // TestUnverifiedVersion_ReturnsToIdleWhenDesiredBecomesVerified 는 DUS 가

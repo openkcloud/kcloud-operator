@@ -5,7 +5,7 @@
 //	노드 관측(nvidia-smi mig -lgip)이 있어야 알 수 있어 여기서는 단정하지 않는다
 //	(internal/partition/nvidia/backend.go 의 Validate 참조).
 //
-// 생성일: 2026-08-24 | 수정일: 2026-10-09
+// 생성일: 2026-08-24 | 수정일: 2026-10-09 (MIG 정규식 판정을 IsNvidiaMIGProfile 로 일원화)
 // ============================================================
 package partition
 
@@ -42,7 +42,7 @@ func ValidateLayoutShape(vendor string, layout []Layout) error {
 	if l.CountPerDevice <= 0 {
 		return fmt.Errorf("partition: countPerDevice must be positive, got %d", l.CountPerDevice)
 	}
-	if vendor == "nvidia" && !nvidiaProfileRe.MatchString(l.Profile) {
+	if vendor == "nvidia" && !IsNvidiaMIGProfile(l.Profile) {
 		return fmt.Errorf("partition: invalid nvidia MIG profile format %q", l.Profile)
 	}
 	return nil

@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 로 DRA 드라이버별 발행·할당·여유 수 추가)
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 의 풀 이름 전제를 주석에 명시)
 // ============================================================
 
 package apiserver
@@ -509,10 +509,15 @@ func attachAllocation(items []AcceleratorView, pods []corev1.Pod) {
 const draKeyPrefix = "dra:"
 
 // attachDRAAllocation 은 노드가 ResourceSlice 로 발행한 장치 수와 그 노드 풀에 할당된 claim 결과 수를
-// 행에 더한다. 확장 자원 축(attachAllocation)과 독립이다 — DRA 로만 광고하는 노드는 allocatable 에
-// 키가 없어 attachAllocation 만으로는 nodeFree 가 비어 있었다. 풀 이름이 노드명인 드라이버(nvidia·
-// furiosa 벤더 드라이버, kcloud generic 드라이버)만 센다 — 다른 풀 규약을 쓰는 드라이버는 0 으로
-// 세지 않고 키 자체를 만들지 않는다(세면 광고 없는 할당이 음수 free 로 둔갑한다).
+// 행에 더한다. 확장 자원 구분(attachAllocation)과 독립이다 — DRA 로만 광고하는 노드는 allocatable 에
+// 키가 없어 attachAllocation 만으로는 nodeFree 가 비어 있었다.
+//
+// 키는 ResourceSlice 쪽(SlicesByNodeDriver)에서만 만든다 — 슬라이스가 있는 드라이버면 키를 만들고,
+// 할당 쪽은 키를 만들지 않는다(광고 없는 할당이 음수 free 로 둔갑하지 않게). 다만 할당 조회가
+// `res.Pool` 을 노드명으로 찾으므로 풀 이름 = 노드명 규약을 전제한다. 지원 드라이버(nvidia·furiosa
+// 벤더 드라이버, kcloud generic 드라이버)는 그 규약을 쓰지만, 다른 규약을 쓰는 드라이버가 들어오면
+// 할당이 0 으로 집계돼 free 가 광고 수와 같아진다(화면이 여유를 과대 보고). 근본 수정은
+// DRACapability 에 노드·드라이버별 풀 이름을 담아 그 이름으로 조회하는 것이다.
 func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, claims []resourcev1.ResourceClaim) {
 	allocated := map[string]map[string]int32{} // node → driver → 할당 결과 수
 	for i := range claims {

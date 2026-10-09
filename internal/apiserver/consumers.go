@@ -5,7 +5,7 @@
 // 그 차이를 attribution 으로 노출하고, 모르는 것은 추측해 채우지 않는다(fail-closed).
 // AcceleratorView 에 consumers 를 달지 않는 이유도 같다 — 장치 행에 소비자를 달면
 // device-plugin 경로에서 거짓 신호가 된다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-09 (claim reservedFor 검사 추가)
+// 생성일: 2026-08-07 | 수정일: 2026-10-09 (claim 분기 순서 근거 주석 추가)
 // ============================================================
 package apiserver
 
@@ -124,6 +124,9 @@ func toConsumerView(pod corev1.Pod, claims []resourcev1.ResourceClaim, ndrs []np
 		ref := ClaimRef{Name: name, Status: "missing"}
 		if c := byName[name]; c != nil {
 			ref.DeviceClass = deviceClassOf(c)
+			// 분기 순서는 fail-closed 다. 예약 주인을 먼저 보는 이유: 다른 파드에 예약된 claim 도
+			// status.allocation 이 채워져 있어, 할당 분기를 먼저 두면 남의 장치를 이 파드 소유로
+			// 귀속한다. 예약이 이 파드면 그다음에 할당 유무로 allocated/pending 을 가른다.
 			switch {
 			case !reservedForPod(c, pod):
 				ref.Status = ClaimStatusReservedElsewhere

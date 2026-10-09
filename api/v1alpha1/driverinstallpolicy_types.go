@@ -2,7 +2,7 @@
 // driverinstallpolicy_types.go: DriverInstallPolicy CRD 타입
 // 상세: 벤더 하나의 드라이버를 어떤 이미지·버전·방식으로 깔지 선언한다.
 // 노드별 전이는 DriverUpgradeState 가 맡고 이 타입은 그 전이가 따를 정책이다.
-// 생성일: 2026-04-10 | 수정일: 2026-10-09 (workloadProbe 검증 단계 opt-in 필드 추가)
+// 생성일: 2026-04-10 | 수정일: 2026-10-09 (workloadProbe image·resourceName 필수 주석 정정)
 // ============================================================
 package v1alpha1
 
@@ -286,10 +286,13 @@ type ToolkitSpec struct {
 type WorkloadProbeSpec struct {
 	Enabled bool `json:"enabled"`
 	// Image 는 벤더 CLI 가 든 이미지다(예: acpp.probeImages 와 같은 것).
+	// 필수. 비면 probe 는 파드를 만들지 않고 비통과(벤더 기본 이미지 없음).
 	Image string `json:"image,omitempty"`
 	// Command 는 종료 코드 0 이면 통과로 보는 명령이다. 비면 이미지 ENTRYPOINT.
 	Command []string `json:"command,omitempty"`
-	// ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu). 비면 벤더 기본 리소스명.
+	// ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu).
+	// 필수. 비면 probe 는 파드를 만들지 않고 비통과(벤더 기본 리소스명 없음 —
+	// furiosa 는 product 가 있어야 리소스명이 정해진다).
 	ResourceName string `json:"resourceName,omitempty"`
 	// TimeoutSeconds 는 파드 완료 대기 상한(기본 120).
 	// +kubebuilder:validation:Minimum=10

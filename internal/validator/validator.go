@@ -5,7 +5,7 @@
 //       각 Validator 는 controller-runtime client 와 기본 식별자만 받아
 //       단일 검증 시도(Run)를 수행한다. caller 는 timeout 내에서 재시도하고
 //       Event/Metric 을 발행한다.
-// 생성일: 2026-04-27 | 수정일: 2026-10-09 (WorkloadValidator 를 정책 opt-in 샘플 워크로드 probe 로 활성화)
+// 생성일: 2026-04-27 | 수정일: 2026-10-09 (빈 image 비통과 사유, stale 정리 오류 표기 통일)
 // ============================================================
 
 package validator
@@ -22,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
@@ -271,15 +272,21 @@ func probePodName(vendor, nodeName, desiredVersion string) string {
 
 // Run 은 probe 파드 1개의 상태를 1회 관찰한다. vendor 별 리소스명 기본값은 두지 않는다 —
 // furiosa 는 product(warboy/rngd)가 있어야 리소스명이 정해지는데 이 함수에는 그 정보가 없다
-// (internal/intent.WholeDeviceResource 는 product 를 요구). 그래서 Probe.ResourceName 은 필수이고
-// 비면 정책 설정 오류로 미통과 처리한다 — CRD 에 MinLength 를 두지 않는 이유는 CR 생성 자체를
-// 막기보다 사람이 읽을 수 있는 사유를 Event/상태로 남기기 위해서다.
+// (internal/intent.WholeDeviceResource 는 product 를 요구). 그래서 Probe.ResourceName 과 Probe.Image 는
+// 둘 다 필수이고, 비면 정책 설정 오류로 미통과 처리한다 — CRD 에 MinLength 를 두지 않는 이유는
+// CR 생성 자체를 막기보다 사람이 읽을 수 있는 사유를 Event/상태로 남기기 위해서다.
 func (v *WorkloadValidator) Run(ctx context.Context, c client.Client, nodeName, vendor, desiredVersion string) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
 	if v.Probe.ResourceName == "" {
 		return Result{Passed: false, Message: "workloadProbe.resourceName 이 비어 있다"}, nil
+	}
+	// 이미지도 기본값을 두지 않는다 — 벤더 CLI 가 든 이미지는 레지스트리마다 다르다. 가드가 없으면
+	// c.Create 가 거절되고 Run 이 오류를 반환해 사유가 DUS·Event 가 아니라 로그에만 남는다(차트
+	// 기본값이 `enabled:false, image:""` 라 켜기만 하고 이미지를 안 넣는 실수가 이 경로다).
+	if v.Probe.Image == "" {
+		return Result{Passed: false, Message: "workloadProbe.image 가 비어 있다"}, nil
 	}
 	key := client.ObjectKey{Namespace: v.Namespace, Name: probePodName(vendor, nodeName, desiredVersion)}
 	var pod corev1.Pod
@@ -296,8 +303,11 @@ func (v *WorkloadValidator) Run(ctx context.Context, c client.Client, nodeName, 
 	// 이름이 이미 (노드, desiredVersion) 에 묶여 있어 정상 경로로는 못 일어나지만, 해시 충돌이나
 	// 수동 생성 같은 예외를 방어적으로 잡는다 — 이름만 믿지 않고 라벨로 한 번 더 확인한다.
 	if pod.Labels[probeVersionLabel] != sanitizeLabelValue(desiredVersion) {
-		_ = c.Delete(ctx, &pod)
-		return Result{Passed: false, Message: "이전 버전의 probe 파드 정리 — 재생성 대기"}, nil
+		msg := "이전 버전의 probe 파드 정리 — 재생성 대기"
+		if err := c.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
+			msg = fmt.Sprintf("%s (정리 실패: %v)", msg, err)
+		}
+		return Result{Passed: false, Message: msg}, nil
 	}
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
@@ -328,6 +338,14 @@ func (v *WorkloadValidator) Run(ctx context.Context, c client.Client, nodeName, 
 // probePod 은 노드에 고정(NodeName)된, 장치 1개를 요청하는 1회성 파드다. driver-upgrading 라벨의
 // cordon 상태에서도 뜰 수 있게 모든 taint 를 허용한다(cordon=NoSchedule 은 scheduler 가 아니라
 // unschedulable 플래그라 toleration 과 무관하지만, 벤더 노드에 흔한 수동 taint 대비 방어적으로 둔다).
+//
+// ActiveDeadlineSeconds 를 Timeout() 초로 거는 이유: Run 안의 삭제 경로(Succeeded·Failed·제한시간)는
+// Run 이 다시 불려야 돈다. 검증 체인은 첫 미통과에서 끊기므로 Workload 앞 단계가 실패로 돌아서면
+// 그 pass 에서 Run 이 호출되지 않고, 그 사이 상위 제한시간(upgradePolicy.validationTimeout)이 지나
+// Rollback·Failed 로 전이하면 Run 은 다시 불리지 않는다. 그렇게 남은 Pending 파드를
+// internal/partition/quiesce.go 의 holdsDevice 가 장치 점유자로 계속 세어 그 노드의 ACPP apply 와
+// CapReset quiesce 가 사람이 파드를 지울 때까지 막힌다. kubelet 이 스스로 Failed(터미널)로 끝내면
+// 그 영향이 사라진다 — 터미널 파드는 holdsDevice 와 인벤토리 합산에서 모두 빠진다.
 func (v *WorkloadValidator) probePod(key client.ObjectKey, nodeName, vendor, desiredVersion string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name,
@@ -338,7 +356,8 @@ func (v *WorkloadValidator) probePod(key client.ObjectKey, nodeName, vendor, des
 			}},
 		Spec: corev1.PodSpec{
 			NodeName: nodeName, RestartPolicy: corev1.RestartPolicyNever,
-			Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+			ActiveDeadlineSeconds: ptr.To(int64(v.Timeout() / time.Second)),
+			Tolerations:           []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 			Containers: []corev1.Container{{Name: "probe", Image: v.Probe.Image, Command: v.Probe.Command,
 				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
 					corev1.ResourceName(v.Probe.ResourceName): resource.MustParse("1"),

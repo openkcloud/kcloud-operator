@@ -1,8 +1,8 @@
 // ============================================================
 // accelerators_test.go: /accelerators 3종 엔드포인트 핸들러 테스트
-// 상세: fake reader 로 200/404/필터/페이지네이션을 본다. 인증·인가는 Task 1 에서 이미
+// 상세: fake reader 로 200/404/필터/페이지네이션을 본다. 인증·인가는 미들웨어 시험에서 이미
 //       덮었으므로 여기서는 okAuth 로 통과시키고 응답 형태만 검증한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09 (DRA ResourceSlice 광고 dra: 키 단언 추가)
+// 생성일: 2026-07-30 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
 // ============================================================
 
 package apiserver
@@ -84,7 +84,7 @@ func invObjects() []client.Object {
 
 func TestAccelerators_ListsAllPhysicalDevices(t *testing.T) {
 	// worker1 에 DRA ResourceSlice 1장을 더한다 — attachDRAAllocation 호출이 핸들러에서
-	// 지워지면 아래 dra: 키 단언이 깨진다(Task 7 변이 요구).
+	// 지워지면 아래 dra: 키 단언이 깨진다(변이로 확인한 결속).
 	objs := append(invObjects(), &resourcev1.ResourceSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker1-gpu"},
 		Spec: resourcev1.ResourceSliceSpec{

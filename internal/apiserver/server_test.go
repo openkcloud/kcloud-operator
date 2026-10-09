@@ -2,7 +2,7 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20 | 수정일: 2026-10-09 (accelerators 의 resourceclaims 게이트 시험 추가)
+// 생성일: 2026-07-20 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
 // ============================================================
 
 package apiserver
@@ -255,7 +255,7 @@ func TestCapabilitiesDoesNotRequireHealthList(t *testing.T) {
 }
 
 // TestAcceleratorsRequireResourceClaimsAuthz: loadInventory 가 attachDRAAllocation 용
-// ResourceClaim 을 읽으므로(Task 7 리뷰) accelerators 는 resourceclaims list 인가도 요구해야
+// ResourceClaim 을 읽으므로 accelerators 는 resourceclaims list 인가도 요구해야
 // 한다. capabilities 는 ResourceClaim 을 읽지 않으므로 그 권한이 없어도 403 이면 안 된다 —
 // 위 TestCapabilitiesDoesNotRequireHealthList 와 같은 capGates/invGates 분리 회귀 가드다.
 func TestAcceleratorsRequireResourceClaimsAuthz(t *testing.T) {
@@ -325,7 +325,7 @@ func TestStatusRoutesRequireNodeAuthz(t *testing.T) {
 }
 
 // 두 게이트가 동시에 막혀 있을 때 403 이 이름을 남기는 리소스는 authzAll 의 pairs 순서로
-// 결정된다. 순서를 고정하는 테스트가 없으면 pairs 를 뒤집어도 스위트가 green 이라(Task 2
+// 결정된다. 순서를 고정하는 테스트가 없으면 pairs 를 뒤집어도 스위트가 green 이라(소비자 귀속
 // 리뷰가 실험으로 확인) 사용자가 받는 사유가 조용히 바뀐다. nodes 가 첫 게이트임을 고정한다.
 // 거부를 하나만 걸면 순서와 무관하게 그 하나가 이름에 나오므로 반드시 둘을 막아야 한다.
 func TestAuthzAllReportsFirstGateInOrder(t *testing.T) {

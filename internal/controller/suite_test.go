@@ -14,6 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// ============================================================
+// suite_test.go: internal/controller envtest 스위트 부트스트랩
+// 상세: envtest 로 API 서버를 띄워 CRD 를 적재하고, 패키지 전체가 공유하는
+//       client·config·컨텍스트를 준비한다(BeforeSuite/AfterSuite). 서버 버전을 실측해
+//       ENVTEST_K8S_VERSION 과 다른 자산이 조용히 쓰이는 것을 막는다.
+//       개별 컨트롤러 시험은 같은 패키지의 *_test.go 에 있다.
+// 생성일: 2025-07-04 | 수정일: 2026-10-09 (파일 머리 주석 추가)
+// ============================================================
+
 package controller
 
 import (

@@ -4,7 +4,7 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (UnverifiedVersion 터미널에서 정책 복귀 시 Idle 로 전이; § 인용 문서명 보강)
+// 생성일: 2026-04-13 | 수정일: 2026-10-09 (resolveDriverImage 사유 경로 수 정정, 작업 항목 토큰 제거)
 // ============================================================
 
 package upgrade
@@ -440,12 +440,15 @@ func (m *UpgradeStateMachine) handlePreFlight(
 			"kernel", kernelVersion, "reason", imageSkipReason)
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, imageSkipEvent, "%s", imageSkipReason)
 	}
-	// DIP spec 을 helm 외 관리자(kubectl patch/edit 등)가 함께 쥐고 있으면 다음 helm upgrade 가
-	// Server-Side Apply 충돌로 멈출 수 있다 — PreFlight 마다 드러내 운영자가 helm 값으로만
-	// 바꾸도록 유도한다. 기존 imageSkipReason 경고와 같은 자리·같은 빈도.
+	// DIP spec 을 제3 관리자(kubectl patch/edit, ArgoCD·Flux 등)가 함께 쥐고 있으면 다음 helm
+	// upgrade 가 Server-Side Apply 충돌로 멈출 수 있다 — PreFlight 마다 드러내 운영자가 helm
+	// 값으로만 바꾸도록 유도한다. 기존 imageSkipReason 경고와 같은 자리·같은 빈도.
+	// 제품 자신의 제어 경로(CLI·관리 REST·helm)는 foreignSpecManagers 가 이름으로 제외한다.
+	// 문구는 지목된 관리자에 대한 조치만 적는다 — 제외된 이름은 %v 에 나오지 않으므로 그쪽 안내를
+	// 섞으면 경고와 조치가 어긋난다. 소유 회수까지 적는 이유는 재발 방지만으로는 선 경고가 지워지지 않기 때문이다.
 	if foreign := foreignSpecManagers(policy.ManagedFields); len(foreign) > 0 {
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, eventPolicySharedOwnership,
-			"DriverInstallPolicy %s 의 spec 을 helm 외 관리자 %v 가 함께 소유한다 — 값은 helm 값 파일로만 바꿀 것(다음 helm upgrade 의 SSA 충돌 예방)",
+			"DriverInstallPolicy %s 의 spec 을 제3 관리자 %v 가 함께 소유한다 — 값은 helm 값 파일로만 바꿀 것(다음 helm upgrade 의 SSA 충돌 예방). 이미 생긴 소유 항목은 helm 이 같은 필드를 같은 값으로 다시 적용해 소유를 회수할 때까지 남고, 그동안 이 경고도 PreFlight 마다 선다",
 			policy.Name, foreign)
 	}
 	allowlist := policy.Spec.KernelAllowlist
@@ -649,7 +652,7 @@ func (m *UpgradeStateMachine) handleUpgrading(
 }
 
 // validatorsFor 는 정책에 맞는 검증 체인이다. 기본은 DriverModule·DevicePlugin 둘이고, 정책이
-// workloadProbe 를 켜면 Workload 를 끝에 더한다(A1, 정책 opt-in). 두 실행 경로(DS·Job, 아래
+// workloadProbe 를 켜면 Workload 를 끝에 더한다(정책 opt-in). 두 실행 경로(DS·Job, 아래
 // handleValidating·state_machine_job.go 의 handleValidatingJob)가 같은 체인을 쓴다.
 //  1. DriverModule  : 노드의 드라이버 커널 모듈 로드 (NDR.driverVersion 매칭)
 //  2. DevicePlugin  : kube-system 의 device-plugin Pod ContainersReady
@@ -1788,7 +1791,7 @@ const (
 	// eventKernelImageMissing 은 정책이 kernelImages 를 선언했는데 노드 커널 항목이 없어 기본
 	// 이미지(DKMS)로 되돌아갈 때 낸다. 커널이 OS 업데이트로 바뀐 뒤 조용히 느린 경로로 가는 것을 드러낸다.
 	eventKernelImageMissing = "KernelImageMissing"
-	// eventPolicySharedOwnership 은 DIP spec 을 helm 외 관리자가 함께 소유할 때 낸다 — 다음 helm upgrade 가
+	// eventPolicySharedOwnership 은 DIP spec 을 제3 관리자가 함께 소유할 때 낸다 — 다음 helm upgrade 가
 	// Server-Side Apply 충돌로 멈출 수 있다.
 	eventPolicySharedOwnership = "PolicySharedOwnership"
 )
@@ -1841,7 +1844,8 @@ var tagSafeTokenRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지가 정책에 선언돼 있거나 태그 규약으로
 // 조립되면 그것을, 아니면 기본 설치 이미지를 돌려준다. 두 번째 반환값은 그 커널 이미지를 쓰지 않은
 // 이유이며, 이미지를 썼거나 애초에 커널 이미지가 없으면 빈 문자열이다. 호출부가 이 이유를 경고로
-// 드러낸다. 커널 이미지를 무시하는 경우는 두 가지다.
+// 드러낸다. 비어 있지 않은 사유를 내는 경로는 셋이다 — 찾은 이미지를 무시하는 둘과, 선언한 맵에서
+// 그 커널을 아예 찾지 못하는 하나(아래 "맵에 노드 커널 항목이 없으면" 단락). 무시하는 둘은 이렇다.
 //   - 태그가 검증 빌드 태그(…-vN)가 아니다. 존재하지 않는 이미지를 Job 에 싣지 않기 위해서다.
 //   - 태그의 버전 토큰이 spec.driver.version 과 다르다. 사전 컴파일 이미지는 자기가 구운 사용자
 //     공간과 모듈을 함께 설치하므로 그 둘이 어긋날 수는 없다. 그래도 이 검사를 두는 이유는 정책이
@@ -1907,14 +1911,36 @@ func resolveDriverImage(
 	return ref, "", ""
 }
 
-// foreignSpecManagers 는 spec 을 Update 로 건드린 helm 외 field manager 목록이다(정렬·중복 제거).
-// helm 은 Apply 로 소유하고, kubectl patch/edit 는 Update 로 소유한다 — 둘이 같은 spec 필드를 쥐면
-// helm 이 값을 바꾸는 다음 upgrade 가 충돌한다. kubectl-label·kubectl-annotate 처럼 metadata 만 쥔
-// 관리자는 세지 않는다.
+// ownSpecManagerPrefixes 는 경고에서 제외하는 관리자 이름 접두 목록이다 — helm 과 제품 자신의
+// 제어 경로. pkg/npuctl.UpgradeVendor 가 DIP spec 을 FieldManager 없이 patch 하므로 API 서버가
+// User-Agent(= 바이너리 파일명)에서 이름을 유도한다. 라이브 .91 조회로 확인한 실제 이름:
+// operator 바이너리는 `manager`(Dockerfile 산출물 이름, DriverUpgradeState 항목이 그 이름),
+// CLI 는 `kubectl-npu`. 접두로 비교하는 이유는 버전 접미가 붙는 변형을 함께 거르기 위해서다.
+// `manager` 는 kubebuilder 기본 바이너리 이름이라 같은 이름의 제3 컨트롤러도 함께 빠진다 —
+// 자기 제어 경로를 "외부 개입" 으로 지목하는 쪽이 보고된 결함이라 그 방향을 택했다.
+// `kubectl` 전체를 넣지 않는다: 사람이 돌린 kubectl patch/edit 는 그대로 경고 대상이다.
+var ownSpecManagerPrefixes = []string{"helm", "kubectl-npu", "kcloud-operator", "manager"}
+
+// isOwnSpecManager 는 관리자 이름이 제외 접두 중 하나로 시작하는지 본다.
+func isOwnSpecManager(name string) bool {
+	for _, p := range ownSpecManagerPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// foreignSpecManagers 는 spec 을 쥔 제3 field manager 목록이다(정렬·중복 제거). 둘이 같은 spec
+// 필드를 쥐면 helm 이 값을 바꾸는 다음 upgrade 가 충돌한다. kubectl-label·kubectl-annotate 처럼
+// metadata 만 쥔 관리자는 세지 않는다.
+// Operation 은 가리지 않는다: helm 은 라이브 .91 에서 Apply 로, 세방향 병합 경로에서는 Update 로
+// 남고 둘 다 이름으로 빠진다. 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Apply 라
+// Update 한정이 있으면 전부 빠졌다 — 다음 helm upgrade 를 실제로 멈추는 쪽이 이들이다.
 func foreignSpecManagers(entries []metav1.ManagedFieldsEntry) []string {
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if e.Manager == "helm" || e.Operation != metav1.ManagedFieldsOperationUpdate || e.FieldsV1 == nil {
+		if isOwnSpecManager(e.Manager) || e.FieldsV1 == nil {
 			continue
 		}
 		if strings.Contains(string(e.FieldsV1.Raw), `"f:spec"`) {

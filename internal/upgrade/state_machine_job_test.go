@@ -4,7 +4,7 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-09 (kernelImages 맵 미스·DIP 공동 소유 경고 시험 추가)
+// 생성일: 2026-07-16 | 수정일: 2026-10-09 (공동 소유 경고 제외 대상·Apply 소유 픽스처 보강)
 // ============================================================
 
 package upgrade
@@ -1324,15 +1324,24 @@ func TestResolveDriverImage_NoKernelImagesStaysSilent(t *testing.T) {
 	}
 }
 
-// TestForeignSpecManagers 는 helm 외 관리자가 Update 로 spec 필드를 쥔 경우만 골라내는지 본다 —
-// helm 자신(Apply)과 metadata 만 쥔 관리자(kubectl-label)는 제외해야 한다.
+// TestForeignSpecManagers 는 제3 관리자가 spec 필드를 쥔 경우만 골라내는지 본다. 제외 대상 셋:
+// helm 자신(라이브 .91 은 Apply, 세방향 병합 경로는 Update — 둘 다 이름으로 제외), 제품 내부
+// 관리자(CLI `kubectl-npu`, operator 바이너리 `manager`), metadata 만 쥔 관리자(kubectl-label).
+// 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Operation=Apply 라, operation 한정이
+// 남아 있으면 전부 빠진다 — 다음 helm upgrade 를 실제로 멈추는 쪽이 이들이다.
 func TestForeignSpecManagers(t *testing.T) {
+	const specFields = `{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`
 	mf := []metav1.ManagedFieldsEntry{
-		{Manager: "helm", Operation: metav1.ManagedFieldsOperationApply, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`)}},
-		{Manager: "kubectl-patch", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`)}},
+		{Manager: "helm", Operation: metav1.ManagedFieldsOperationApply, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "helm", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "kubectl-npu", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "manager", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "argocd-controller", Operation: metav1.ManagedFieldsOperationApply, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "kubectl-patch", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "kubectl-label", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:labels":{}}}`)}},
 	}
-	if got := foreignSpecManagers(mf); !reflect.DeepEqual(got, []string{"kubectl-patch"}) {
-		t.Fatalf("got %v", got)
+	want := []string{"argocd-controller", "kubectl-patch"}
+	if got := foreignSpecManagers(mf); !reflect.DeepEqual(got, want) {
+		t.Fatalf("want %v, got %v", want, got)
 	}
 }

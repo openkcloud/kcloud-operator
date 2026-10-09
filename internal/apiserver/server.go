@@ -3,7 +3,7 @@
 // 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read(GET /status,
 //       /nodes/{node})/control(POST /vendors/{vendor}/upgrade|rollback|toggle)을 노출.
 //       control 은 전부 CR patch 로 귀결(1단계 계약 유지). 인증=TokenReview, 인가=SubjectAccessReview.
-// 생성일: 2026-07-20 | 수정일: 2026-10-09 (invGates 에 resourceclaims list 게이트 추가)
+// 생성일: 2026-07-20 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
 // ============================================================
 
 package apiserver
@@ -110,7 +110,7 @@ func (s *Server) Handler() http.Handler {
 	classGate := npuPair("list", "acceleratorclasses")
 	podsGate := authzPair{Group: "", Verb: "list", Resource: "pods"}
 	// 인벤토리 라우트 셋은 건강 판정(acceleratorhealths)·할당량(pods)·DRA 집계(resourceclaims)까지
-	// 읽는다(loadInventory 의 attachDRAAllocation, Task 7). capabilities 는 그것들을 읽지 않으므로
+	// 읽는다(loadInventory 의 attachDRAAllocation). capabilities 는 그것들을 읽지 않으므로
 	// 게이트를 나눈다 — 게이트는 라우트가 실제로 읽는 것만 요구한다.
 	capGates := []authzPair{nodeGate, acppGate, ndrGate}
 	invGates := append(append([]authzPair{}, capGates...), npuPair("list", "acceleratorhealths"), podsGate,
@@ -131,7 +131,7 @@ func (s *Server) Handler() http.Handler {
 	// (기존 authz 를 중첩 호출해 둘 다 통과해야 next 가 실행되게 한다). 응답은 node 이름·cordon
 	// 상태·advertised 수량도 함께 낸다(loadInventory/handleNodeAccelerators 가 corev1.Node 를
 	// 직접 읽는다) — core 그룹 nodes list 인가도 함께 요구한다(리뷰 Important #4, 5라우트 전부).
-	// loadInventory 가 attachDRAAllocation 용 ResourceClaim 도 읽으므로(Task 7)
+	// loadInventory 가 attachDRAAllocation 용 ResourceClaim 도 읽으므로
 	// resourceclaims 인가도 invGates 에 포함한다 — consumers 라우트와 같은 요구.
 	mux.HandleFunc("GET /api/v1/accelerators", s.authzAll(invGates, s.handleAccelerators))
 	mux.HandleFunc("GET /api/v1/accelerators/{uid...}", s.authzAll(invGates, s.handleAcceleratorByUID))
@@ -165,7 +165,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.authzGroup("", "list", "events", s.handleEvents))
 	// preview 는 POST 지만 아무것도 쓰지 않는다 — 그래서 읽기 등급(list) 권한을 요구한다.
 	// intent.Load(ACPP+NDR+Node)와 클래스 조회를 그대로 수행하므로, 응답이 실제로 읽는 네 리소스
-	// 전부를 인가한다(Task 3/4 의 "읽는 리소스는 전부 인가한다" 규칙 — acceleratorworkloads
+	// 전부를 인가한다("읽는 리소스는 전부 인가한다" 규칙 — acceleratorworkloads
 	// 자체는 읽지 않으므로 요구하지 않는다. nodes 는 core 그룹이라 별도 게이트가 필요하다).
 	mux.HandleFunc("POST /api/v1/preview", s.authzAll([]authzPair{nodeGate, acppGate, ndrGate, classGate}, s.handlePreview))
 	// 정책 쓰기: 생성은 create, 삭제는 delete 인가를 요구한다. 수정(PUT)은 만들지 않는다 —
@@ -200,7 +200,7 @@ type authzPair struct {
 }
 
 // npuPair 는 npu.ai 그룹 인가 한 건을 만드는 축약이다. verb 는 오늘 모든 호출에서 "list" 다 —
-// 정본 helper 라 향후 patch 게이트를 authzAll 로 옮길 때(Task 6/7 대상 밖) 그대로 재사용하도록
+// 정본 helper 라 향후 patch 게이트를 authzAll 로 옮길 때 그대로 재사용하도록
 // verb 를 고정하지 않는다.
 //
 //nolint:unparam

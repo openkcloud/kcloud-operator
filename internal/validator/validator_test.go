@@ -2,7 +2,7 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27 | 수정일: 2026-10-09 (WorkloadValidator 뼈대 시험 삭제, 실제 probe 시험 추가)
+// 생성일: 2026-04-27 | 수정일: 2026-10-09 (빈 workloadProbe.image 비통과 시험 추가)
 // ============================================================
 
 package validator
@@ -345,6 +345,67 @@ func TestWorkloadValidator_DeleteFailureDoesNotPass(t *testing.T) {
 	res, err := v.Run(context.Background(), c, nodeName, vendor, desired)
 	if err != nil || res.Passed || !strings.Contains(res.Message, "정리 실패") {
 		t.Fatalf("정리 실패 시 통과하지 않아야 한다: res=%+v err=%v", res, err)
+	}
+}
+
+// TestWorkloadValidator_EmptyImageDoesNotPass 는 workloadProbe.image 가 비면 파드를 만들지 않고
+// 사람이 읽을 수 있는 사유로 비통과하는지 고정한다. 가드가 없으면 c.Create 가 거절되고 Run 이
+// 오류를 반환해 handleValidating 이 reconcile 오류로 올린다 — 사유가 DUS·Event 가 아니라 로그에만
+// 남고 제한시간까지 오류 재시도가 돈다. 차트 기본값이 `enabled:false, image:""` 라 켜기만 하고
+// 이미지를 안 넣는 실수가 바로 이 경로다. ResourceName 빈 값과 같은 형식으로 끝낸다.
+func TestWorkloadValidator_EmptyImageDoesNotPass(t *testing.T) {
+	c := newFakeClient(t)
+	v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{
+		Enabled: true, ResourceName: "nvidia.com/gpu"}}
+	res, err := v.Run(context.Background(), c, "worker-1", "nvidia", "580.126.09")
+	if err != nil {
+		t.Fatalf("빈 image 는 오류가 아니라 비통과여야 한다: %v", err)
+	}
+	if res.Passed || !strings.Contains(res.Message, "workloadProbe.image") {
+		t.Fatalf("사유에 빈 필드 이름이 있어야 한다: %+v", res)
+	}
+	var pods corev1.PodList
+	_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+	if len(pods.Items) != 0 {
+		t.Fatalf("파드를 만들지 않아야 한다: %+v", pods.Items)
+	}
+}
+
+// TestWorkloadValidator_ProbePodHasActiveDeadline 은 생성되는 probe 파드가
+// activeDeadlineSeconds 를 Timeout() 초로 들고 나오는지 고정한다. 이 필드가 없으면
+// 검증 사이클이 Workload 단계 앞에서 끊겨 Run 이 다시 불리지 않을 때 Pending probe 파드가
+// 영구히 남아 internal/partition/quiesce.go 의 holdsDevice 가 그 노드를 장치 점유 상태로
+// 계속 보고한다(ACPP apply·CapReset quiesce 가 사람이 지울 때까지 막힌다).
+// TimeoutSeconds 미지정 기본값(120s)도 같은 식으로 실린다.
+func TestWorkloadValidator_ProbePodHasActiveDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		timeoutSeconds int32
+		wantDeadline   int64
+	}{
+		{name: "명시한 TimeoutSeconds", timeoutSeconds: 45, wantDeadline: 45},
+		{name: "미지정 기본값", timeoutSeconds: 0, wantDeadline: 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFakeClient(t)
+			v := &WorkloadValidator{Namespace: "kcloud", Probe: v1alpha1.WorkloadProbeSpec{
+				Enabled: true, Image: "img", ResourceName: "nvidia.com/gpu", TimeoutSeconds: tc.timeoutSeconds}}
+			if _, err := v.Run(context.Background(), c, "worker-1", "nvidia", "580.126.09"); err != nil {
+				t.Fatalf("예상치 못한 에러: %v", err)
+			}
+			var pods corev1.PodList
+			_ = c.List(context.Background(), &pods, client.InNamespace("kcloud"))
+			if len(pods.Items) != 1 {
+				t.Fatalf("probe 파드 1개 기대, 실제 %d", len(pods.Items))
+			}
+			got := pods.Items[0].Spec.ActiveDeadlineSeconds
+			if got == nil {
+				t.Fatal("probe 파드에 activeDeadlineSeconds 가 없다 — Pending 파드가 영구 잔존한다")
+			}
+			if *got != tc.wantDeadline {
+				t.Fatalf("activeDeadlineSeconds %d 기대, 실제 %d", tc.wantDeadline, *got)
+			}
+		})
 	}
 }
 

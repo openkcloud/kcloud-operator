@@ -418,12 +418,15 @@ spec:
                   enabled:
                     type: boolean
                   image:
-                    description: 'Image 는 벤더 CLI 가 든 이미지다(예: acpp.probeImages 와 같은
-                      것).'
+                    description: |-
+                      Image 는 벤더 CLI 가 든 이미지다(예: acpp.probeImages 와 같은 것).
+                      필수. 비면 probe 는 파드를 만들지 않고 비통과(벤더 기본 이미지 없음).
                     type: string
                   resourceName:
-                    description: 'ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu). 비면
-                      벤더 기본 리소스명.'
+                    description: |-
+                      ResourceName 은 요청할 확장 자원(예: nvidia.com/gpu).
+                      필수. 비면 probe 는 파드를 만들지 않고 비통과(벤더 기본 리소스명 없음 —
+                      furiosa 는 product 가 있어야 리소스명이 정해진다).
                     type: string
                   timeoutSeconds:
                     description: TimeoutSeconds 는 파드 완료 대기 상한(기본 120).

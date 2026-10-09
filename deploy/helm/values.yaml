@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가,
+# 생성일: 2026-03-25 | 수정일: 2026-10-09 (NVIDIA 설치기 기본 태그 v5; 벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가,
 #   v4 설치기 버전 고정 이후 죽은 NVIDIA_DRIVER_CHOICE 기본 env 제거)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,7 +609,9 @@ driverInstallPolicies:
       # 설치 버전은 `version` 하나로 정한다 — v4 설치기는 정책 version 을 1순위로 고정
       # 설치하고 실패해도 다른 후보로 대체하지 않으므로 이 env 는 쓰이지 않는다.
       # 필요하면 env 로 직접 줄 수 있다.
-      tag: "v4"
+      # v5 는 재부팅 유예 가드를 정책 version 의 patch 단위까지 비교하고(다른 patch 가
+      # 깔려 있으면 재부팅을 맡기지 않는다) apt 잠금 대기 실패를 호출부에 전파한다.
+      tag: "v5"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false

@@ -3,7 +3,7 @@
 // 상세: backend-source 중재(NPUClusterPolicy 관리 벤더 거절)·발견가능 preflight·
 //       SSA apply(ownerRef+라벨)·라벨 기반 능동 prune 을 한곳에 모은다. descriptor 는
 //       cluster-scoped 라 namespaced·cluster-scoped 생성물 모두를 소유할 수 있다.
-// 생성일: 2026-09-18 | 수정일: 2026-10-09
+// 생성일: 2026-09-18 | 수정일: 2026-10-09 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기 보강)
 // ============================================================
 
 package controller
@@ -128,7 +128,7 @@ func autoApplyDiscoveryRefusal(
 // 모델이 있으면 그 노드의 광고에 다른 제품이 섞인다. 런타임에 PCI vendor:device 필터를
 // 넣는 길은 NVIDIA 가 char 장치를 커널 장치 모델에 등록하지 않아(k8s-worker1 실측:
 // /sys/dev/char 에 major 195 항목 없음) 벤더 중립 기전이 없다는 이유로 거절됐다 -
-// docs/impl/descriptor-mixed-model-spike-20261009.md.
+// ../docs/decisions/adr-004-descriptor-mixed-model-nodes.md.
 //
 // 판정은 discoverableForAutoApply 와 같은 질문("런타임이 ID 를 가를 수 있는가")이라 호출부도
 // 같다. NodeDeviceReport 를 인자로 받아 이 함수 자체는 클러스터를 보지 않는다.
@@ -147,6 +147,12 @@ func mixedModelRefusal(
 		return ""
 	}
 
+	// 같은 벤더를 모으는 기준은 물리 벤더(NDR 의 d.Vendor)다. descriptor 어휘의 spec.Vendor 를
+	// 그대로 쓰면 rngd 특례가 거절을 가린다 - Warboy 는 벤더 furiosa, RNGD 는 벤더 rngd 로 갈려
+	// 한 노드에 둘이 있어도 "같은 벤더" 로 묶이지 않는다. descriptorRegistryKey 의 첫 반환값이
+	// descriptor 의 물리 벤더라 그것으로 비교하고, 제품은 matchesDescriptor(spec.Product)가 가른다.
+	physVendor, _ := descriptorRegistryKey(spec.Vendor, spec.Product)
+
 	// 노드 하나의 사유만 낸다. 노드·모델 모두 정렬해 입력 순서로 사유가 갈리지 않게 한다.
 	var nodes []string
 	others := map[string][]string{}
@@ -162,9 +168,11 @@ func mixedModelRefusal(
 			switch {
 			case matchesDescriptor(d, spec):
 				matched = true
-			// 벤더 정규화는 resolveDevices 와 같은 것을 쓴다(rngd 특례 포함) - 기준이
-			// 갈리면 한쪽이 혼재로 보는 노드를 다른 쪽이 아니라고 본다.
-			case strings.EqualFold(normalizeVendor(d.Vendor, d.Model), spec.Vendor) && !seen[d.Model]:
+			// 빈 Model 과 generic(DriverModelUnknown, detector 가 제품을 판정하지 못한 표시)도
+			// 다른 모델로 센다. DeviceModelMatches 의 원 도메인에서 generic 은 와일드카드지만
+			// 여기서는 거절 방아쇠가 되고, 그 방향이 안전하다 - 미판정 장치를 건너뛰면 글롭이
+			// 그 장치를 descriptor 제품으로 광고한다. 표기만 사람이 읽을 수 있게 바꾼다.
+			case strings.EqualFold(d.Vendor, physVendor) && !seen[d.Model]:
 				seen[d.Model] = true
 				models = append(models, d.Model)
 			}
@@ -182,7 +190,21 @@ func mixedModelRefusal(
 	node := nodes[0]
 	return fmt.Sprintf("노드 %s 에 같은 벤더의 다른 모델(%s)이 있다 — %s 열거는 파일명 글롭뿐이라 "+
 		"제품을 가르지 못해 %s 광고에 다른 제품이 섞인다",
-		node, strings.Join(others[node], ","), idPlaceholder, descriptor.ResourceNameFor(spec))
+		node, strings.Join(displayModels(others[node]), ","), idPlaceholder, descriptor.ResourceNameFor(spec))
+}
+
+// displayModels 는 거절 사유에 싣는 모델 이름 목록이다. 빈 Model 을 그대로 쓰면 사유가
+// "다른 모델()이 있다" 로 나와 사람이 무엇을 보고 거절했는지 읽을 수 없다. 정렬은 호출부가
+// 원값으로 이미 했으므로 여기서는 치환만 한다(순서 불변).
+func displayModels(models []string) []string {
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		if m == "" {
+			m = "모델 미보고"
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // applyGeneratedBackends 는 렌더된 객체를 SSA 로 적용하고 descriptor 를 ownerRef 로 건다.
