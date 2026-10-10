@@ -7,10 +7,11 @@
 // vendorcap 레지스트리(internal/vendorcap)가 그 벤더의 partition/sharing 을 Native/Software 로
 // 선언하지 않으면(Unsupported/Unknown) 형식 검사보다 먼저 사유·근거와 함께 거절한다.
 // ACPP 경로 자체는 partition backend 가 있는 벤더만 쓸 수 있다 — sharing 만 있고
-// partition 은 Unknown/Unsupported 인 벤더(예: tenstorrent)는 AcceleratorDescriptor
+// partition 은 Unknown/Unsupported 인 벤더(예: rebellions)는 AcceleratorDescriptor
 // spec.sharing 경로로 보낸다.
 // 삭제 중인 오브젝트(deletionTimestamp)는 재검증하지 않는다 — finalizer 제거를 막으면 안 된다.
-// 생성일: 2026-08-24 | 수정일: 2026-10-11 (requirePartitionBackendForSharing 주석에 게이트 순서 명시; 머리말 동어반복 수정 및 계획 항목 토큰 제거)
+// 생성일: 2026-08-24 | 수정일: 2026-10-11 (requirePartitionBackendForSharing 주석에 게이트 순서 명시; 머리말 동어반복 수정 및 계획 항목 토큰 제거;
+// 벤더 예시 오류 수정(tenstorrent→rebellions))
 // ============================================================
 package webhook
 

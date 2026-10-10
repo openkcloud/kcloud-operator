@@ -1,6 +1,6 @@
 {{- if .Values.deployClusterPolicy }}
 # clusterpolicy.yaml: NPUClusterPolicy 샘플 CR
-# 생성일: 2026-03-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-11 (detector.image 전체 경로 덮어쓰기 반영; 계획서 항목 토큰 제거)
 apiVersion: npu.ai/v1alpha1
 kind: NPUClusterPolicy
 metadata:

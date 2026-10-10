@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거; mode-enable 저널 분기 주석에 Failed 못 박힘 명시)
+// 생성일: 2026-07-23 | 수정일: 2026-10-11 (§ 인용 문서명 보강; 계획서 항목 토큰 제거; mode-enable 저널 분기 주석에 Failed 못 박힘 명시)
 // ============================================================
 package controller
 

@@ -4,7 +4,7 @@
 //       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
 //       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
 //       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18 | 수정일: 2026-10-10 (발견 규칙 시험 추가; furiosa+rngd 거절 시험 주석의 출하 경로 인용 정정)
+// 생성일: 2026-09-18 | 수정일: 2026-10-11 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기; 발견 규칙 시험 추가; furiosa+rngd 거절 시험 주석의 출하 경로 인용 정정)
 // ============================================================
 
 package controller

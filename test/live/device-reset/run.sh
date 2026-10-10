@@ -26,10 +26,9 @@
 #          unquiesce | reboot-recover | bmc-sel(SEL_STAGE=before|after) |
 #          all(기본, quiesce/reboot/bmc-sel 제외 순서대로 실행)
 #   FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap cleanup 의
-#   동작(수정 라운드 1, 계획 O 완료 판정 7)을 라이브 없이 확인할 수 있다. DRY_RUN=1 과
-#   함께 쓴다.
-# 생성일: 2026-09-28 | 수정일: 2026-10-10(계획 O 후속: bmc-sel 추가, do_reset 에
-#       실시간 커널 로그 캡처 연결, verdict 에 RESET_REPRO 줄 추가; 계획서 항목 토큰 제거)
+#   동작을 라이브 없이 확인할 수 있다. DRY_RUN=1 과 함께 쓴다.
+# 생성일: 2026-09-28 | 수정일: 2026-10-11 (bmc-sel 추가, do_reset 에 실시간 커널 로그
+#       캡처 연결, verdict 에 RESET_REPRO 줄 추가; 계획서 항목 토큰 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C

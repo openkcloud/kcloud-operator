@@ -5,7 +5,8 @@
 //   - Idle 게이트 순서: verifiedVersions 허용 목록 검사가 autoUpgrade 게이트보다 앞임을 검증.
 //   - WorkloadProbe 예산 경고: probe timeoutSeconds 가 validationTimeout 보다 길면 PreFlight 경고.
 //
-// 생성일: 2026-07-21 | 수정일: 2026-10-11 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험, 검증 예산 미설정 시 출처 표기 시험 추가; Idle 유지 시험 상태 직접 단언, 쿨다운 창 안 거부·probe 예산 경계 시험 추가)
+// 생성일: 2026-07-21 | 수정일: 2026-10-11 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험,
+// 검증 예산 미설정 시 출처 표기 시험 추가; Idle 유지 시험 상태 직접 단언, 쿨다운 창 안 거부·probe 예산 경계 시험 추가)
 package upgrade
 
 import (

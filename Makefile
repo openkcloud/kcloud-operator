@@ -129,6 +129,7 @@ private-ip-check: ## Verify no internal addresses or accounts are in tracked fil
 
 .PHONY: docs-path-check
 docs-path-check: ## Verify no sibling docs/ paths leak into code, charts, or scripts.
+	bash hack/docs-path-check.sh --self-test
 	bash hack/docs-path-check.sh
 
 .PHONY: version-check

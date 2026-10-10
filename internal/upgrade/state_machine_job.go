@@ -7,7 +7,7 @@
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
 //       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11 (validator 체인 호출을 validatorsFor(policy) 로 교체; 계획서 항목 토큰 제거)
 // ============================================================
 
 package upgrade

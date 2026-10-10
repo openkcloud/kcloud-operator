@@ -2,7 +2,7 @@
 // driverinstallpolicy_types.go: DriverInstallPolicy CRD 타입
 // 상세: 벤더 하나의 드라이버를 어떤 이미지·버전·방식으로 깔지 선언한다.
 // 노드별 전이는 DriverUpgradeState 가 맡고 이 타입은 그 전이가 따를 정책이다.
-// 생성일: 2026-04-10 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-04-10 | 수정일: 2026-10-11 (workloadProbe image·resourceName 필수 주석 정정; 계획서 항목 토큰 제거)
 // ============================================================
 package v1alpha1
 

@@ -4,7 +4,8 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가; 계획서 항목 토큰 제거; 가드 시험 주석에 현재 쓰기 경로 이름 보강)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가; 계획서 항목 토큰 제거;
+// 가드 시험 주석에 현재 쓰기 경로 이름 보강; manager 를 과거 이름이라 한 주석 정정)
 // ============================================================
 
 package upgrade
@@ -1326,8 +1327,9 @@ func TestResolveDriverImage_NoKernelImagesStaysSilent(t *testing.T) {
 
 // TestForeignSpecManagers 는 제3 관리자가 spec 필드를 쥔 경우만 골라내는지 본다. 제외 대상 셋:
 // helm 자신(라이브 .91 은 Apply, 세방향 병합 경로는 Update — 둘 다 이름으로 제외), 제품 내부
-// 관리자(CLI `kubectl-npu`, operator 바이너리 `manager` — 둘 다 과거 이름이고 현재 쓰기 경로는
-// `kcloud-operator-upgrade`), metadata 만 쥔 관리자(kubectl-label).
+// 관리자(CLI `kubectl-npu`, operator 바이너리 `manager` — 업그레이드 쓰기 경로는 이제
+// `kcloud-operator-upgrade` 이고, 두 이름은 라이브 managedFields 에 아직 남아 제외 목록에
+// 둔다), metadata 만 쥔 관리자(kubectl-label).
 // 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Operation=Apply 라, operation 한정이
 // 남아 있으면 전부 빠진다 — 다음 helm upgrade 를 실제로 멈추는 쪽이 이들이다.
 func TestForeignSpecManagers(t *testing.T) {

@@ -1,5 +1,5 @@
 # deployment.yaml: NPU Operator Controller Manager Deployment
-# 생성일: 2026-03-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-11 (반대 라인 operator 태그 거절; 계획서 항목 토큰 제거)
 {{/*
 operator 이미지 태그가 이 차트와 같은 릴리스 라인인지 render 단계에서 본다.
 -k8s1.28 접미는 K8s 1.26~1.30 라인 릴리스이고, 그 라인의 차트는 release/k8s-1.28

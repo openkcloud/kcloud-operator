@@ -1,6 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
+// 생성일: 2026-04-13 | 수정일: 2026-10-11 (ConsumedRollbackRequest 필드 추가 — 소비된 rollback 요청 재소비 차단; 계획서 항목 토큰 제거;
 //                                        VersionObservationAllowed 술어 추가)
 
 package v1alpha1

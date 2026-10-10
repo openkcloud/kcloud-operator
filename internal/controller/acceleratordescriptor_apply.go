@@ -3,7 +3,7 @@
 // 상세: backend-source 중재(NPUClusterPolicy 관리 벤더 거절)·발견가능 preflight·
 //       SSA apply(ownerRef+라벨)·라벨 기반 능동 prune 을 한곳에 모은다. descriptor 는
 //       cluster-scoped 라 namespaced·cluster-scoped 생성물 모두를 소유할 수 있다.
-// 생성일: 2026-09-18 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-09-18 | 수정일: 2026-10-11 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기 보강; 계획서 항목 토큰 제거; 도달 불가 경로 참조 제거)
 // ============================================================
 
 package controller
@@ -127,8 +127,8 @@ func autoApplyDiscoveryRefusal(
 // generic-dra-driver 도 쓴다) - 제품을 가르는 조건이 없어, 한 노드에 같은 벤더의 다른
 // 모델이 있으면 그 노드의 광고에 다른 제품이 섞인다. 런타임에 PCI vendor:device 필터를
 // 넣는 길은 NVIDIA 가 char 장치를 커널 장치 모델에 등록하지 않아(k8s-worker1 실측:
-// /sys/dev/char 에 major 195 항목 없음) 벤더 중립 기전이 없다는 이유로 거절됐다 -
-// ../docs/decisions/adr-004-descriptor-mixed-model-nodes.md.
+// /sys/dev/char 에 major 195 항목 없음) 벤더 중립 기전이 없다는 이유로 거절됐다 — 혼재
+// 노드는 아래 mixedModelRefusal 이 사유와 함께 거절한다.
 //
 // 판정은 discoverableForAutoApply 와 같은 질문("런타임이 ID 를 가를 수 있는가")이라 호출부도
 // 같다. NodeDeviceReport 를 인자로 받아 이 함수 자체는 클러스터를 보지 않는다.

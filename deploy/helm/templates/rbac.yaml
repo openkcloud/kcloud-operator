@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-11 (벤더 operator ClusterPolicy 류 CR get·list 추가; 계획서 항목 토큰 제거)
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
