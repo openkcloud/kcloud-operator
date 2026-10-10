@@ -5,7 +5,7 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거; 다중 풀 합산 시험 추가)
 // ============================================================
 
 package apiserver
@@ -636,6 +636,32 @@ func TestAttachDRAAllocation_PoolNameDiffersFromNode(t *testing.T) {
 	}
 	if got := items[0].NodeFree["dra:example.com/gpu"]; got != 3 {
 		t.Fatalf("nodeFree=%d (3 기대)", got)
+	}
+}
+
+// 한 노드·드라이버가 풀 둘로 광고하면 두 풀의 할당을 합산한다 — 종전에는 마지막 풀만 조회해
+// 다른 풀의 할당을 놓치고 여유를 과대 보고했다.
+func TestAttachDRAAllocation_MultiplePoolsPerNodeDriver(t *testing.T) {
+	slices := []resourcev1.ResourceSlice{
+		draSliceWithPool("k8s-worker1", "example.com/gpu", "pool-a", 2),
+		draSliceWithPool("k8s-worker1", "example.com/gpu", "pool-b", 2),
+	}
+	claims := []resourcev1.ResourceClaim{
+		allocatedClaimOn("pool-a", "example.com/gpu", "dev-0"),
+		allocatedClaimOn("pool-b", "example.com/gpu", "dev-1"),
+	}
+	items := []AcceleratorView{{NodeName: "k8s-worker1"}}
+
+	attachDRAAllocation(items, intent.BuildDRACapability(true, nil, slices), claims)
+
+	if got := items[0].NodeAdvertised["dra:example.com/gpu"]; got != 4 {
+		t.Fatalf("nodeAdvertised=%d (4 기대)", got)
+	}
+	if got := items[0].NodeAllocated["dra:example.com/gpu"]; got != 2 {
+		t.Fatalf("nodeAllocated=%d (2 기대) — 풀 하나만 세고 있다", got)
+	}
+	if got := items[0].NodeFree["dra:example.com/gpu"]; got != 2 {
+		t.Fatalf("nodeFree=%d (2 기대)", got)
 	}
 }
 

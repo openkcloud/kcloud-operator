@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (attachDRAAllocation 이 발행 쪽 풀 이름으로 조회; allocated 주석의 키 표기 노드→풀 정정)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11 (attachDRAAllocation 이 발행 쪽 풀 이름으로 조회; allocated 주석의 키 표기 노드→풀 정정; 풀 여럿일 때 할당 합산)
 // ============================================================
 
 package apiserver
@@ -514,8 +514,9 @@ const draKeyPrefix = "dra:"
 //
 // 키는 ResourceSlice 쪽(SlicesByNodeDriver)에서만 만든다 — 슬라이스가 있는 드라이버면 키를 만들고,
 // 할당 쪽은 키를 만들지 않는다(광고 없는 할당이 음수 free 로 둔갑하지 않게). 할당 조회는
-// DRACapability.PoolsByNodeDriver 에 담긴 발행 쪽 풀 이름을 쓴다 — 그 이름을 모르면(슬라이스에서
-// 못 채웠으면) 종전 규약대로 노드명을 풀 이름으로 써서 조회한다.
+// DRACapability.PoolsByNodeDriver 에 담긴 발행 쪽 풀 이름 전부에 대해 더한다 — 한 노드·드라이버가
+// 풀 여럿으로 광고하면 광고 수가 모든 풀의 합이므로, 할당도 한 풀만 보면 여유를 과대 보고한다.
+// 풀 이름을 모르면(슬라이스에서 못 채웠으면) 종전 규약대로 노드명을 풀 이름으로 써서 조회한다.
 func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, claims []resourcev1.ResourceClaim) {
 	allocated := map[string]map[string]int32{} // 풀 → 드라이버 → 할당 결과 수
 	for i := range claims {
@@ -547,11 +548,14 @@ func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, clai
 		}
 		for driver, adv := range drivers {
 			key := draKeyPrefix + driver
-			pool := dra.PoolsByNodeDriver[it.NodeName][driver]
-			if pool == "" {
-				pool = it.NodeName // 풀 이름을 모르면 종전 규약(풀 이름 = 노드명)으로 되돌아간다
+			pools := dra.PoolsByNodeDriver[it.NodeName][driver]
+			if len(pools) == 0 {
+				pools = []string{it.NodeName} // 풀 이름을 모르면 종전 규약(풀 이름 = 노드명)
 			}
-			alloc := allocated[pool][driver]
+			var alloc int32
+			for _, pool := range pools {
+				alloc += allocated[pool][driver]
+			}
 			it.NodeAdvertised[key] = adv
 			it.NodeAllocated[key] = alloc
 			it.NodeFree[key] = adv - alloc

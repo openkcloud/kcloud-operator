@@ -5,7 +5,7 @@
 // 무엇을 할 수 있는가), NDR(장치 메모리), DRA(DeviceClass·ResourceSlice 로 무엇을 줄 수
 // 있는가). ACPP 가 수렴하지 않았으면 그 노드는 stale 로 표시해 모든 모드에서 탈락시킨다
 // (fail closed).
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (empty DRACapability 에 PoolsByNodeDriver 초기화 추가; 계획서 항목 토큰 제거)
+// 생성일: 2026-07-29 | 수정일: 2026-10-11 (empty DRACapability 에 PoolsByNodeDriver 초기화 추가; 계획서 항목 토큰 제거; PoolsByNodeDriver 목록형 전환)
 // ============================================================
 package intent
 
@@ -347,7 +347,7 @@ func Load(ctx context.Context, c client.Reader) ([]NodeCapability, DRACapability
 func LoadDRACapability(ctx context.Context, c client.Reader) (DRACapability, error) {
 	empty := DRACapability{
 		DeviceClasses: map[string]bool{}, SlicesByNodeDriver: map[string]map[string]int32{},
-		PoolsByNodeDriver: map[string]map[string]string{},
+		PoolsByNodeDriver: map[string]map[string][]string{},
 	}
 	var classes resourcev1.DeviceClassList
 	if err := c.List(ctx, &classes); err != nil {
