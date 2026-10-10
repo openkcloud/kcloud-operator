@@ -6,7 +6,7 @@
 //	삭제 중 오브젝트 재검증 생략, 되돌릴 능력 없는 벤더의 exclusive 되돌리기 거절,
 //	partition backend 없는 벤더의 ACPP sharing 자체 거절.
 //
-// 생성일: 2026-08-24 | 수정일: 2026-10-10 (계획서 항목 토큰 제거; 거절 주체를 게이트 함수 이름으로 명시)
+// 생성일: 2026-08-24 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 거절 주체를 게이트 함수 이름으로 명시; 거절 시험 머리말의 낡은 벤더 예시·계획 항목 토큰 제거)
 // ============================================================
 package webhook
 
@@ -408,11 +408,12 @@ func TestValidateACPPProductAwareFuriosaPartitionMixedNodes(t *testing.T) {
 
 // ACPP 는 partition backend 가 있는 벤더(backendFor 가 있는 nvidia·furiosa)만 쓸 수
 // 있다 — spec.sharing 이 어느 모드든(exclusive 되돌리기 포함) partition 을 Native/Software 로
-// 선언하지 않은 벤더는 이 경로 자체를 거절해야 한다. tenstorrent 는 R2-8 로 timeSlicing 만
-// Software 가 됐고 partition 은 여전히 미지원(Unsupported)이라, 이 게이트가 없으면 아래 sharing 능력
-// 검사(timeSlicing Software)는 통과했다가 partition backend 부재로 컨트롤러의 backendFor 에서
-// "unknown vendor" 일반 오류로만 죽는다 — 그 대신 AcceleratorDescriptor spec.sharing(generic
-// device-plugin replicas) 경로로 보내야 한다.
+// 선언하지 않은 벤더는 이 경로 자체를 거절해야 한다. 이 게이트가 없으면 rebellions 처럼
+// timeSlicing 은 Software 인데 partition 은 Unsupported 인 벤더의 요청이 아래 sharing 능력
+// 검사는 통과했다가 partition backend 부재로 컨트롤러의 backendFor 에서 "unknown vendor"
+// 일반 오류로만 죽는다 — 그 대신 AcceleratorDescriptor spec.sharing(generic device-plugin
+// replicas) 경로로 보내야 한다. 픽스처가 tenstorrent 인 것은 partition 이 Unsupported 인
+// 벤더면 timeSlicing 선언과 무관하게 같은 자리에서 거절되기 때문이다.
 func TestValidateACPPRejectsSharingForNonPartitionBackendVendor(t *testing.T) {
 	t.Run("tenstorrent timeSliced 는 partition backend 가 없어 거절", func(t *testing.T) {
 		acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{

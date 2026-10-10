@@ -5,7 +5,7 @@
 //   - Idle 게이트 순서: verifiedVersions 허용 목록 검사가 autoUpgrade 게이트보다 앞임을 검증.
 //   - WorkloadProbe 예산 경고: probe timeoutSeconds 가 validationTimeout 보다 길면 PreFlight 경고.
 //
-// 생성일: 2026-07-21 | 수정일: 2026-10-10 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험, 검증 예산 미설정 시 출처 표기 시험 추가)
+// 생성일: 2026-07-21 | 수정일: 2026-10-11 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험, 검증 예산 미설정 시 출처 표기 시험 추가; Idle 유지 시험 상태 직접 단언, 쿨다운 창 안 거부·probe 예산 경계 시험 추가)
 package upgrade
 
 import (
@@ -174,11 +174,29 @@ func TestHandleIdle_AutoUpgradeOffAndVerified_StaysIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleIdle: %v", err)
 	}
-	if dus.Status.State == v1alpha1.UpgradeStateUnverifiedVersion {
-		t.Fatal("허용 목록 안 버전인데 UnverifiedVersion 으로 갔다")
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Fatalf("state=%q (Idle 기대) — 허용 목록 안 버전인데 Idle 에 머물지 않는다", dus.Status.State)
 	}
 	if !hasEvent(drainEvents(sm), "UpgradeAvailable") {
 		t.Fatal("UpgradeAvailable 경고가 없다")
+	}
+}
+
+// 허용 목록 검사는 IdleCooldown 가드보다 앞이다 — 쿨다운 창 안이어도 목록 밖 버전은 바로
+// UnverifiedVersion 으로 간다. 이 전이는 Job 도 cordon 도 만들지 않아 쿨다운이 막으려던
+// 되풀이와 무관하다.
+func TestHandleIdle_UnverifiedTransitionsInsideCooldown(t *testing.T) {
+	dip := makeDaemonsetDIP("580.178.04", true)
+	dip.Spec.VerifiedVersions = []string{"580.159.03"}
+	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "580.159.03", "580.178.04")
+	dus.Status.LastTransitionTime = metav1.Now() // 쿨다운 창 안
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleIdle(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleIdle: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Fatalf("state=%q (UnverifiedVersion 기대) — 쿨다운이 허용 목록 거부를 가린다", dus.Status.State)
 	}
 }
 
@@ -252,5 +270,49 @@ func TestHandlePreFlight_ProbeTimeoutExceedsDefaultBudget_MarksDefault(t *testin
 	}
 	if !hasEvent(events, "미설정") {
 		t.Errorf("경고가 기본값을 정책값처럼 보인다 — 출처 표기가 없다: %v", events)
+	}
+}
+
+// upgradePolicy 자체가 없으면 기본 예산(15분)과 비교한다 — 그 분기가 패닉 없이 돌아야 한다.
+func TestHandlePreFlight_NoUpgradePolicy_UsesDefaultBudget(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy = nil
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 1200,
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	if !hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("20분 probe 가 기본 15분 예산을 넘는데 경고가 없다")
+	}
+}
+
+// 두 시간이 같으면 경고하지 않는다 — 가드가 초과만 본다.
+func TestHandlePreFlight_ProbeTimeoutEqualsBudget_NoWarn(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "2m"
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 120,
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	if hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("같은 값인데 경고가 떴다")
 	}
 }

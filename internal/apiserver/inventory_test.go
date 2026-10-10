@@ -5,13 +5,14 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-11 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거; 다중 풀 합산 시험 추가)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거; 다중 풀 합산 시험 추가; draSliceWithPool 장치 이름 중복 제거)
 // ============================================================
 
 package apiserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -615,7 +616,7 @@ func TestAttachDRAAllocation_NoSlicesLeavesRowUntouched(t *testing.T) {
 func draSliceWithPool(node, driver, pool string, n int) resourcev1.ResourceSlice {
 	devices := make([]resourcev1.Device, n)
 	for i := range devices {
-		devices[i] = resourcev1.Device{Name: "dev"}
+		devices[i] = resourcev1.Device{Name: fmt.Sprintf("dev%d", i)}
 	}
 	return resourcev1.ResourceSlice{Spec: resourcev1.ResourceSliceSpec{
 		Driver: driver, NodeName: ptr.To(node), Pool: resourcev1.ResourcePool{Name: pool}, Devices: devices,
