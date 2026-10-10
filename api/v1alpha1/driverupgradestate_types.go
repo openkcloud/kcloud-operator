@@ -1,6 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (ConsumedRollbackRequest 필드 추가 — 소비된 rollback 요청 재소비 차단)
+// 생성일: 2026-04-13 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 
 package v1alpha1
 
@@ -50,9 +50,9 @@ const (
 	// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구합니다.
 	UpgradeStateUnverifiedVersion = "UnverifiedVersion"
 	// UpgradeStateRebootRequired 는 install 성공 후 cross-major 등으로 커널 모듈 교체에
-	// 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다(S2-5).
+	// 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다.
 	UpgradeStateRebootRequired = "RebootRequired"
-	// UpgradeStateRebooting 은 노드 재부팅을 트리거한 뒤 NotReady→Ready 복귀를 대기하는 상태입니다(S2-5).
+	// UpgradeStateRebooting 은 노드 재부팅을 트리거한 뒤 NotReady→Ready 복귀를 대기하는 상태입니다.
 	UpgradeStateRebooting = "Rebooting"
 )
 
@@ -114,11 +114,11 @@ type DriverUpgradeStateStatus struct {
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
 	// 새 업그레이드 사이클 진입 시(handleIdle) 0으로 초기화됩니다.
 	RollbackAttempts int32 `json:"rollbackAttempts,omitempty"`
-	// RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다(S2-5).
+	// RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다.
 	// UpgradePolicy.MaxReboots(기본 1) 초과 시 Failed 로 전이하여 무한 재부팅 루프를 방지합니다.
 	// 새 사이클(handleIdle) 진입 시 0 으로 초기화됩니다.
 	RebootAttempts int32 `json:"rebootAttempts,omitempty"`
-	// RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다(S2-5).
+	// RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다.
 	// Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
 	RebootRequestedTime metav1.Time `json:"rebootRequestedTime,omitempty"`
 	// RebootBootID 는 reboot Job 생성 직전에 캡처한 node.status.nodeInfo.bootID 입니다(P2 premature-Ready 가드).

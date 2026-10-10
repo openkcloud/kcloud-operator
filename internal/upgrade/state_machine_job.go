@@ -1,5 +1,5 @@
 // ============================================================
-// state_machine_job.go: WP-C-1 driver Job 모드 상태 핸들러 (Mode=job)
+// state_machine_job.go: driver Job 모드 상태 핸들러 (Mode=job)
 // 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 이
 //       Mode=job 일 때 early-return 으로 진입하는 대체 경로. 검증된 안전 순서
 //       (cordon→drain→install→validate→uncordon) 와 validator 체인은 그대로
@@ -7,7 +7,7 @@
 //       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
 //       daemonset 경로 본문은 바이트 불변(additive-only).
 //       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-10-09 (validator 체인 호출을 validatorsFor(policy) 로 교체)
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package upgrade

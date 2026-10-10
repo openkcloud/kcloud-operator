@@ -12,7 +12,7 @@
 #       PHASE 로 단계를 하나씩 부를 수 있다. quiesce/unquiesce(cordon+device-plugin 파드
 #       삭제)와 reboot-recover 는 all 에 넣지 않는다 — 리셋이 막히거나 장치가 안 돌아올
 #       때만 판단해서 쓰는 조치이기 때문이다(addendum §2).
-#       bmc-sel(계획 O 후속 Task 4, k8s-worker3 전용)은 ipmitool 로 BMC SEL 을 읽는다 —
+#       bmc-sel(계획 O 후속, k8s-worker3 전용)은 ipmitool 로 BMC SEL 을 읽는다 —
 #       SEL_STAGE=before|after(기본 before)로 리셋 전/후 sel-<stage>.txt 를 남기고,
 #       after 는 before 와 diff 해 sel-delta.txt 를 만든다. do_reset()은 실제 리셋
 #       직전에 원격 dmesg -w -T·journalctl -kf 를 백그라운드로 열어 dmesg-live.log·
@@ -28,7 +28,7 @@
 #   FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap cleanup 의
 #   동작(수정 라운드 1, 계획 O 완료 판정 7)을 라이브 없이 확인할 수 있다. DRY_RUN=1 과
 #   함께 쓴다.
-# 생성일: 2026-09-28 | 수정일: 2026-09-28(계획 O 후속 Task 4: bmc-sel 추가, do_reset 에
+# 생성일: 2026-09-28 | 수정일: 2026-09-28(계획 O 후속: bmc-sel 추가, do_reset 에
 #       실시간 커널 로그 캡처 연결, verdict 에 RESET_REPRO 줄 추가)
 # ============================================================
 set -euo pipefail
@@ -51,7 +51,7 @@ PHASE="${PHASE:-all}"
 # pre/post-boot-id.txt 비교(precheck·postcheck 가 남긴다, 이 라운드부터). 세 파일이
 # 없으면 각각 missing/missing/unknown 으로 낸다 — 지어내지 않는다.
 #
-# RESET_REPRO 줄(계획 O 후속 Task 4, addendum "판정 기계 줄")은 위 rc·node 계산을 그대로
+# RESET_REPRO 줄(계획 O 후속, addendum "판정 기계 줄")은 위 rc·node 계산을 그대로
 # 재사용해 sel_new(sel-delta.txt 의 diff '>' 줄 수 — before/after 둘 다 있어야 생긴다,
 # 없으면 missing)·last_kernel_line(dmesg-live.log 의 mtime 이 reset-start-utc.txt 의
 # 리셋 시각 이후인지 — 파일이 없으면 missing, 있는데 그 전이면 no)을 더한다. 이 둘도
@@ -331,7 +331,7 @@ precheck() {
   log "precheck 완료: 장치 개수=${count} dmesg 기준선=${dmesg_n}줄"
 }
 
-# start_live_capture/stop_live_capture — 계획 O 후속 Task 4(addendum "실시간 커널 로그
+# start_live_capture/stop_live_capture — 계획 O 후속(addendum "실시간 커널 로그
 # 캡처"): do_reset() 가 실제 리셋 직전에 원격 dmesg -w -T·journalctl -kf 를 백그라운드
 # SSH 로 열어 로컬 파일에 흘려 둔다. 리셋 중 노드가 죽어 SSH 가 끊기면 이 두 파일의
 # 마지막 줄이 크래시 직전 커널 기록이다 — 원격 디스크 flush 에 기대지 않고 스트림
@@ -558,7 +558,7 @@ YAML
   return 1
 }
 
-# bmc_sel — 계획 O 후속 Task 4: ipmitool 로 BMC SEL 을 읽는다. addendum §1 로 k8s-worker3
+# bmc_sel — 계획 O 후속: ipmitool 로 BMC SEL 을 읽는다. addendum §1 로 k8s-worker3
 # 만 허용(닫힌 목록) — 다른 노드(예: VENDOR=nvidia 로 잘못 호출)면 그 자리에서 거절한다.
 # 실행하는 명령은 addendum §2 가 허용한 읽기 4종뿐이다: sel elist(sel-<stage>.txt 로
 # 저장 — before/after diff 대상은 이 출력만), sel info·mc info·chassis status(evidence.txt

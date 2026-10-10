@@ -2,7 +2,7 @@
 // driverinstallpolicy_types.go: DriverInstallPolicy CRD 타입
 // 상세: 벤더 하나의 드라이버를 어떤 이미지·버전·방식으로 깔지 선언한다.
 // 노드별 전이는 DriverUpgradeState 가 맡고 이 타입은 그 전이가 따를 정책이다.
-// 생성일: 2026-04-10 | 수정일: 2026-10-09 (workloadProbe image·resourceName 필수 주석 정정)
+// 생성일: 2026-04-10 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package v1alpha1
 
@@ -72,7 +72,7 @@ type UpgradePolicy struct {
 	// +kubebuilder:validation:Minimum=0
 	IdleCooldownSeconds *int32 `json:"idleCooldownSeconds,omitempty"`
 
-	// MaxReboots 는 cross-major 드라이버 교체 시 노드 재부팅을 트리거할 최대 횟수입니다(S2-5).
+	// MaxReboots 는 cross-major 드라이버 교체 시 노드 재부팅을 트리거할 최대 횟수입니다.
 	// 초과 시 Failed 로 전이(무한 재부팅 방지). cross-major 는 통상 1회면 충분. 기본 1.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
@@ -104,7 +104,7 @@ type DriverInstallPolicySpec struct {
 	// +kubebuilder:validation:Enum=Require;IfNeeded;Never
 	RebootStrategy string `json:"rebootStrategy,omitempty"`
 
-	// RebootExecutor 는 재부팅 실행 방식입니다(S2-5). Job(기본): operator 가 privileged reboot Job 생성.
+	// RebootExecutor 는 재부팅 실행 방식입니다. Job(기본): operator 가 privileged reboot Job 생성.
 	// kured: 노드에 kured sentinel annotation 만 부착(kured 운영 클러스터용, cordon/drain 중복 억제 설정 권장).
 	// +kubebuilder:validation:Enum=Job;kured
 	// +kubebuilder:default=Job
@@ -234,7 +234,7 @@ type DriverSpec struct {
 
 	// Mode는 드라이버 설치 방식을 결정합니다.
 	// daemonset: DaemonSet으로 드라이버를 상시 실행 (컨테이너화 드라이버, 검증된 21초 롤링 자산 — 기본값).
-	// job:       순간 install Job 으로 설치 후 즉시 종료 (상주 pod 없음, WP-C-1). 100% opt-in.
+	// job:       순간 install Job 으로 설치 후 즉시 종료 (상주 pod 없음). 100% opt-in.
 	//            DUS 상태머신이 install Job 의 단일 소유자이며 daemonset 경로 본문은 무변경으로 재사용된다.
 	// +kubebuilder:validation:Enum=daemonset;job
 	// +kubebuilder:default=daemonset

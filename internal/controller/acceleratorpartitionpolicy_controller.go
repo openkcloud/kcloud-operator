@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -178,7 +178,7 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 	if gerr := r.gateReady(ctx, &acpp, &ts, target, ec); gerr != nil {
 		logger.Error(gerr, "evidence gate failed", "node", target.NodeName)
 	}
-	// cordon 복원 단일 choke-point — mode enable(Task 6)이 잠근 노드는 종점에서 반드시 풀려야 한다.
+	// cordon 복원 단일 choke-point — mode enable 이 잠근 노드는 종점에서 반드시 풀려야 한다.
 	// runTarget 의 종점은 갈래가 많아(터미널 5 + rollback 후 2) 개별 return 마다 흩뿌리면 새 갈래가
 	// 생길 때마다 노드가 unschedulable 로 남는다. terminal 갈래는 재시도해도 결과가 같으므로 영구다.
 	// restoreSchedulable 은 멱등이고 CordonedByPolicy=false(외부 cordon)면 no-op 이라 여기서 한 번에 닫는다.
@@ -214,7 +214,7 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 	case npuv1alpha1.ACPPPhaseVerifyingAllocatable:
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	case npuv1alpha1.ACPPPhaseApplying:
-		// MIG mode 전환 대기(-mig 1 → pending → 재부팅 → 재관측, Task 6). runErr 가 nil 이라
+		// MIG mode 전환 대기(-mig 1 → pending → 재부팅 → 재관측). runErr 가 nil 이라
 		// 능동 재확인이 없으면 기본 resync(~10h)까지 잠들어 재부팅 후에도 수렴하지 못한다.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	case npuv1alpha1.ACPPPhaseRestored:
@@ -311,7 +311,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	}
 
 	// 2. Validate — 매 reconcile 마다 방금 관측한 supported 로 다시 판정한다. mode enable 이 끝나
-	// profile 목록이 보이기 시작하면 Task 6 의 형식-only 완화가 자동으로 풀리고, 지원되지 않는
+	// profile 목록이 보이기 시작하면 형식-only 완화가 자동으로 풀리고, 지원되지 않는
 	// profile 요청은 여기서(GI 생성 전에) 거절된다 — -cgi 를 쏴보고 실패하는 경로로 새지 않는다.
 	layouts := toPartitionLayouts(acpp.Spec.Layout)
 	if len(layouts) == 0 {
@@ -349,12 +349,12 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 		if nerr != nil || nts.Phase != npuv1alpha1.ACPPPhaseReady {
 			return nts, nerr
 		}
-		// 파티션이 Ready 면 mode enable 을 위해 우리가 잠근 노드를 되돌린다(Task 6). GI apply 는
+		// 파티션이 Ready 면 mode enable 을 위해 우리가 잠근 노드를 되돌린다. GI apply 는
 		// cordon 을 요구하므로 여기(성공 종점)가 유일하게 안전한 복원 지점이다. 외부 cordon 은 유지.
 		if err := r.restoreSchedulable(t.Ctx, acpp, t.NodeName); err != nil {
 			return nts, err
 		}
-		// 파티션이 Ready 인 뒤에만 공유를 얹는다(Task 4). MIG Ready 로 가는 세 경로(첫 apply/
+		// 파티션이 Ready 인 뒤에만 공유를 얹는다. MIG Ready 로 가는 세 경로(첫 apply/
 		// managed no-diff/크래시 복구) 모두 여기를 통과하므로 spec.sharing 만 바뀌어도 반영된다.
 		rec := getApplyRecord(acpp, t.NodeName)
 		ec.Expectation = verification.Expectation{
@@ -377,7 +377,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 		return ts, err
 	}
 
-	// 4. Apply (no-diff 면 skip — 재사용/멱등 정교화는 Task 14). happy-path 는 no-diff.
+	// 4. Apply (no-diff 면 skip — 재사용/멱등 정교화는 후속 과제). happy-path 는 no-diff.
 	if diff.Changed {
 		rbState, err := backend.Apply(t, resolved)
 		if err != nil {
@@ -467,7 +467,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 		return ts, nil
 	}
 
-	// (2.5) MIG mode enable(Task 6) — mode 가 꺼져 있으면 GI 생성 전에 quiesce→-mig 1→reboot 를 완주한다.
+	// (2.5) MIG mode enable — mode 가 꺼져 있으면 GI 생성 전에 quiesce→-mig 1→reboot 를 완주한다.
 	// Diff 이전에 두는 이유: mode 가 Disabled 인 동안의 geometry 비교는 의미가 없고, 무엇보다 전환
 	// 중(mode-enable phase) 저널이 아래 !diff.Changed 분류를 통과하면 ExistingMigConfiguration 으로
 	// 떨어져 자가치유 없이 정책이 굳는다. 이미 Enabled 인 노드는 즉시 done 이라 기존 경로는 무회귀.
@@ -658,7 +658,7 @@ func (r *AcceleratorPartitionPolicyReconciler) routeNvidiaNoDiff(acpp *npuv1alph
 		// GI 이전 저널(mode 전환 또는 apply 직전 cordon)이 남은 채 geometry 만 일치 — baseline 이
 		// 없어 recovery tail 을 탈 수 없다.
 		// 여기서 아래 ExistingMigConfiguration 으로 떨어뜨리면 자가치유 없는 terminal 실패가 되므로
-		// (Task 4 교훈), 정상 경로로 내려보내 변경시-전제부터 다시 밟게 한다(전부 transient·requeue).
+		// (교훈), 정상 경로로 내려보내 변경시-전제부터 다시 밟게 한다(전부 transient·requeue).
 		return false, ts, nil
 	}
 	if rec.MigPhase == npuv1alpha1.MigPhaseRolledBack {
@@ -1209,7 +1209,7 @@ func setNvidiaReady(ts *npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorP
 }
 
 // ensureOwnerLock 은 unified DS 의 owner-lock annotation 이 이 acpp 소유로 찍혀 있음을 보장하는 멱등 헬퍼다
-// (Task 9 두 writer 조정). DS 부재(NotFound)는 조용히 건너뛴다(관리할 lock 이 없음). 그 외 에러는
+// (두 writer 조정). DS 부재(NotFound)는 조용히 건너뛴다(관리할 lock 이 없음). 그 외 에러는
 // reconcile 자체를 실패시키지 않고 로그만 남긴다 — status 는 이미 Ready 로 확정된 뒤이므로.
 func (r *AcceleratorPartitionPolicyReconciler) ensureOwnerLock(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy) {
 	logger := logf.FromContext(ctx)
@@ -1271,7 +1271,7 @@ func (r *AcceleratorPartitionPolicyReconciler) resolveConflict(ctx context.Conte
 
 	// DS 기반 scope/충돌 판정은 RNGD(furiosa) 전용 — DS 에 apply 하는 backend 만 해당(spec §2.3).
 	// NVIDIA 등 discovery-only 벤더는 대상 DS 가 없어 scope·충돌 개념이 없다 → 통과시켜
-	// runTarget 이 Unsupported 로 처리하게 한다(Task 12 동작 보존, 혼합 벤더 오분류 방지).
+	// runTarget 이 Unsupported 로 처리하게 한다(동작 보존, 혼합 벤더 오분류 방지).
 	if acpp.Spec.Vendor != vendorFuriosa {
 		return true, ""
 	}
@@ -1504,7 +1504,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 		var ds appsv1.DaemonSet
 		if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err == nil {
 			// 이 ACPP 가 실제 소유자일 때만 lock 해제 — TargetConflict 패자 삭제가 승자의 lock 을
-			// 지우면 안 된다(finding #2). value 는 소유 ACPP 의 .metadata.name(Task 9).
+			// 지우면 안 된다(finding #2). value 는 소유 ACPP 의 .metadata.name.
 			if ds.Annotations[rngd.PartitionOwnerAnnotation] == acpp.Name {
 				delete(ds.Annotations, rngd.PartitionOwnerAnnotation)
 				if err := r.Update(ctx, &ds); err != nil {
@@ -1571,7 +1571,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 			}
 		}
 		// phase≥Applying 이면 하드웨어가 실제로 mutate 됐다(Prepared/LockAcquired/미기록 은 복원 대상 아님).
-		// mode 전환 구간(Task 6)도 복원 대상이 아니다 — GI 를 만들기 전이라 되돌릴 GI 가 없고, 그럼에도
+		// mode 전환 구간도 복원 대상이 아니다 — GI 를 만들기 전이라 되돌릴 GI 가 없고, 그럼에도
 		// rollback 을 태우면 BuildDisableSteps 의 "current==Enabled" assert 가 전환 도중(Disabled)에
 		// 실패해 finalizer 가 영구히 남는다. mode 자체는 모델 B 대로 켜진 채 유지한다.
 		hardwareChanged := rec.MigPhase != "" && rec.MigPhase != npuv1alpha1.MigPhasePrepared &&
@@ -1595,7 +1595,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 			return fmt.Errorf("cleanup blocked on node %s: ownership conflict (phase=%s)", rec.NodeName, rec.MigPhase)
 		}
 		if !hardwareChanged {
-			// mode 전환 도중 삭제되면 우리가 잠근 노드를 되돌려 준다(cordon 된 채 방치 금지, Task 6).
+			// mode 전환 도중 삭제되면 우리가 잠근 노드를 되돌려 준다(cordon 된 채 방치 금지).
 			if err := r.restoreSchedulable(ctx, acpp, rec.NodeName); err != nil {
 				return err
 			}

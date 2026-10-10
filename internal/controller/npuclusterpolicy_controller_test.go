@@ -141,7 +141,7 @@ var _ = Describe("ensureNvidiaDevicePlugin renders mixed and flat DaemonSets", f
 		Expect(mixed.Spec.Template.Labels).To(HaveKeyWithValue(nvidiaDevicePluginVendorLabel, "nvidia"))
 		Expect(flat.Spec.Template.Labels).To(HaveKeyWithValue(nvidiaDevicePluginVendorLabel, "nvidia"))
 
-		// C-1: mixed 의 selector 는 과거(Task 4 이전) 라이브 값 그대로여야 한다 — 바뀌면 기존 클러스터에서
+		// C-1: mixed 의 selector 는 과거 라이브 값 그대로여야 한다 — 바뀌면 기존 클러스터에서
 		// immutable 필드라 422 로 영구 거부된다.
 		Expect(mixed.Spec.Selector.MatchLabels).To(Equal(map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin"}))
 
@@ -154,7 +154,7 @@ var _ = Describe("ensureNvidiaDevicePlugin renders mixed and flat DaemonSets", f
 		Expect(flatSel.Matches(labels.Set(mixed.Spec.Template.Labels))).To(BeFalse(), "flat selector must not match mixed pods")
 	})
 
-	// C-1: 기존(Task 4 이전) selector 를 가진 mixed DS 가 라이브에 이미 있는 업그레이드 경로.
+	// C-1: 기존 selector 를 가진 mixed DS 가 라이브에 이미 있는 업그레이드 경로.
 	// selector 가 바뀌면 DaemonSet.spec.selector 는 immutable 이라 API 서버가 422 로 영구 거부한다.
 	It("succeeds against a pre-existing mixed DS with the old (pre-split) selector", func() {
 		oldSelectorLabels := map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin"}
@@ -319,7 +319,7 @@ func TestIsDevicePluginResource(t *testing.T) {
 }
 
 // TestEnsureNvidiaDevicePluginPreservesSharingConfig: ACPP 가 sharing 을 소유(owner 어노테이션)한 DS 는
-// NPUClusterPolicy 재렌더에도 config-file arg/volume/mount 배선과 owner 어노테이션이 살아남아야 한다(Task 3, 2-writer 조정).
+// NPUClusterPolicy 재렌더에도 config-file arg/volume/mount 배선과 owner 어노테이션이 살아남아야 한다(2-writer 조정).
 func TestEnsureNvidiaDevicePluginPreservesSharingConfig(t *testing.T) {
 	live := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -384,7 +384,7 @@ func TestEnsureNvidiaDevicePluginUnownedStaysPlain(t *testing.T) {
 
 // TestFlatAffinityRenderIsDeterministic: flat DS 의 NodeAffinity 는 map 순회(무작위 순서)로
 // 조립되므로 sort.Strings 없이는 매 reconcile 마다 MatchExpressions 순서가 흔들려 DeepEqual 이
-// 불일치 → DS 가 매번 롤링 재시작한다(Task 4 I-A). sort.Strings 자체는 이미 있다 — 이 테스트는
+// 불일치 → DS 가 매번 롤링 재시작한다(I-A). sort.Strings 자체는 이미 있다 — 이 테스트는
 // 그걸 회귀로부터 고정한다.
 func TestFlatAffinityRenderIsDeterministic(t *testing.T) {
 	r := &NPUClusterPolicyReconciler{}

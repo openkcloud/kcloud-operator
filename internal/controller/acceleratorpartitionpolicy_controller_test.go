@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller_test.go: ACPP reconciler envtest
 // 상세: happy-path(no-diff→Ready) — unified DS(dual-core)+NDR+RNGD 노드 시드.
-// 생성일: 2026-07-23 | 수정일: 2026-10-05
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -696,7 +696,7 @@ var _ = Describe("ACPP validation rejection", func() {
 
 // NVIDIA ACPP 는 RNGD DS 기반 충돌/scope 가드를 우회해 자기 벤더 흐름(runTarget nvidia)으로 진입해야 한다.
 // (regression: 혼합 벤더 클러스터에서 furiosa DS 가 있어도 NVIDIA ACPP 가 BackendScopeMismatch 로 오분류되면 안 됨)
-// Task 12 이후 MIG-capable A30 은 apply 지원이므로 Unsupported 가 아니라 벤더 흐름으로 진입한다 —
+// MIG-capable A30 은 apply 지원이므로 Unsupported 가 아니라 벤더 흐름으로 진입한다 —
 // 여기선 count=0(무효 layout)로 Validate 단계까지 도달함을 확인해 우회를 증명한다(BackendScopeMismatch 아님).
 var _ = Describe("ACPP NVIDIA bypasses RNGD conflict guard", func() {
 	It("enters the nvidia vendor flow (not BackendScopeMismatch) even when the furiosa unified DS is present", func() {
@@ -913,7 +913,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 	})
 })
 
-// ---- nvidia MIG durable-journal 상태머신 (Task 12) ----
+// ---- nvidia MIG durable-journal 상태머신 ----
 
 // lgipA30Test 는 A30 MIG profile 목록(1g.6gb/2g.12gb/4g.24gb) 원문 — supported 채우기용.
 const lgipA30Test = `|   0  MIG 1g.6gb   19  4/4  5.75 |
@@ -1163,7 +1163,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-cordon": "true"}
-		// MIG mode 는 이미 Enabled(GI 없음) — mode 가 Disabled 면 Task 6 의 mode enable
+		// MIG mode 는 이미 Enabled(GI 없음) — mode 가 Disabled 면 mode enable
 		// 오케스트레이션이 먼저 노드를 cordon 해 버려 이 결함 자체를 볼 수 없다.
 		seedNvidiaNode("nv-cordon-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("nv-cordon-node") })
@@ -1304,7 +1304,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(n.Spec.Unschedulable).To(BeFalse(), "진행할 수 없는 노드는 잠그지 않는다")
 	})
 
-	// Task 6: MIG mode 미enable 은 더 이상 "차단하고 운영자를 기다리는" 종점이 아니다 —
+	// MIG mode 미enable 은 더 이상 "차단하고 운영자를 기다리는" 종점이 아니다 —
 	// operator 가 quiesce → -mig 1 → (pending) → 재부팅 순으로 직접 전환한다.
 	It("orchestrates mode enable instead of blocking when the target GPU MIG mode is disabled", func() {
 		wipeACPPs()
@@ -1789,7 +1789,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		Expect(other.Annotations[migOwnerAnnotation]).To(Equal("someone-else-uid"), "other owner's lock untouched by orphan scan")
 	})
 
-	// D-10(라이브 Task 7): 삭제 경로는 rollback 전제로 cordon 을 요구하지만(assertNodeQuiesced) 스스로
+	// D-10(라이브): 삭제 경로는 rollback 전제로 cordon 을 요구하지만(assertNodeQuiesced) 스스로
 	// cordon 하지는 않았다. 성공한 apply 는 종점에서 노드를 uncordon 하므로(restoreSchedulable), 그 뒤의
 	// 삭제는 항상 "node not cordoned; unsafe to rollback MIG" 로 막힌다 — 운영자가 수동 cordon 하지
 	// 않으면 finalizer 가 영구히 남는다(라이브: `kubectl delete acpp` 13분+ 정지, 수동 cordon 으로 해제).
@@ -1997,7 +1997,7 @@ func (c *cordonFailClient) Get(ctx context.Context, key client.ObjectKey, obj cl
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 
-// D-3(라이브 Task 5 §5.1): layout 없는 순수 시분할(sharing-only) 정책이 NVIDIA 에서 구조적으로
+// D-3(라이브 §5.1): layout 없는 순수 시분할(sharing-only) 정책이 NVIDIA 에서 구조적으로
 // 불가능했다 — CRD 가 spec.layout 을 Required 로 강제했고, layout: [] 우회도 backend Validate() 가
 // len(layout)==0 이면 Sharing 유무와 무관하게 ErrUnsupported 로 거부했다. sharing-only 는
 // 하드웨어를 바꾸지 않으므로(DP 설정만) cordon·MIG 경로 없이 Ready 에 도달해야 한다.
@@ -2015,7 +2015,7 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 		})
 		DeferCleanup(func() { cleanupNvidia("nv-sharing-only-node") })
 		// sharing 배선 대상 device-plugin DS. 이 노드는 mig-active 라벨이 없다(MIG 없는 A2) —
-		// DevicePluginTargetForNode 가 flat DS 를 대상화한다(Task 3).
+		// DevicePluginTargetForNode 가 flat DS 를 대상화한다.
 		dp := &appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameFlat, Namespace: "kube-system"},
 			Spec: appsv1.DaemonSetSpec{
@@ -2092,7 +2092,7 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 			MigModeCurrent: migModeNA, MigModePending: migModeNA,
 		})
 		DeferCleanup(func() { cleanupNvidia("nv-sharing-edit-node") })
-		// 이 노드는 mig-active 라벨이 없다(MIG 없는 A2) — flat DS 를 대상화한다(Task 3).
+		// 이 노드는 mig-active 라벨이 없다(MIG 없는 A2) — flat DS 를 대상화한다.
 		dp := &appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameFlat, Namespace: "kube-system"},
 			Spec: appsv1.DaemonSetSpec{
@@ -2217,7 +2217,7 @@ func deleteMpsDaemon() {
 		ObjectMeta: metav1.ObjectMeta{Name: mpsControlDaemonDSName, Namespace: "kube-system"}})
 }
 
-// D-5(라이브 Task 6 §6.3): MPS 게이트가 "이 정책이 실제로 다루는 장치" 대신 "이 노드의 같은 벤더
+// D-5(라이브 §6.3): MPS 게이트가 "이 정책이 실제로 다루는 장치" 대신 "이 노드의 같은 벤더
 // 전체 장치" 를 검사해, MIG 가 켜진 형제 장치(A30 — 같은 노드의 다른 ACPP 가 소유·Ready) 때문에
 // A2 만 겨냥한 MPS 정책이 discovery 직후 거부됐다. ensureMpsControlDaemon 은 한 번도 호출되지
 // 않았고(kube-system 에 DS 조차 안 생김), 이 클러스터의 worker1 구성에서 MPS 는 영구 도달 불가였다.
@@ -2263,8 +2263,8 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 
 		var got npuv1alpha1.AcceleratorPartitionPolicy
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-mps-acpp"}, &got)).To(Succeed())
-		// Task 5(MPS 근본해결) 이후: A30 가 방금 GI 를 받아 Ready 가 됐으므로 d5-node 는
-		// syncMigActiveLabel(Task 2)에 의해 이미 mig-active=true 다 — 그 노드 전체를 mixed DS 가
+		// MPS 근본해결 이후: A30 가 방금 GI 를 받아 Ready 가 됐으므로 d5-node 는
+		// syncMigActiveLabel 에 의해 이미 mig-active=true 다 — 그 노드 전체를 mixed DS 가
 		// 맡으므로 A2 겨냥 MPS 도 노드 단위로 막혀야 한다. "남의 소유 장치라 무시됐다" 가 아니라
 		// "이 노드가 MIG 관리 중" 이라는 더 정확한 이유로 거절되는 것이 이제는 정상이다 — D-5 가 고친
 		// owned-device 필터링 자체는 I-1/"owned by no one" spec 이 계속 지킨다.
@@ -2456,7 +2456,7 @@ func cleanupDevicePluginWiring() {
 		ObjectMeta: metav1.ObjectMeta{Name: nvidia.SharingConfigMapNameFlat, Namespace: "kube-system"}})
 }
 
-// D-8(라이브 Task 6 §6d.4): 업스트림 k8s-device-plugin 은 `--mig-strategy=mixed` 와 `sharing.mps` 를
+// D-8(라이브 §6d.4): 업스트림 k8s-device-plugin 은 `--mig-strategy=mixed` 와 `sharing.mps` 를
 // 함께 받으면 시작 시 플래그 검증에서 거부한다(프로세스 단위 배타 — 개별 장치 배타가 아니다).
 // DP DaemonSet·ConfigMap 은 클러스터 전역 단일 객체라, 노드 하나의 A2 를 겨냥한 MPS 정책이 전
 // nvidia 노드의 DP 를 CrashLoopBackOff 로 몰았고 무관한 정책이 소유한 A30 의 MIG 광고까지
@@ -2485,8 +2485,8 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 			return got.Status.Phase
 		}, "10s", "200ms").Should(Equal(npuv1alpha1.ACPPPhaseReady))
 
-		// Task 5(MPS 근본해결) 이후 게이트는 전역 DS 존재가 아니라 이 노드의 mig-active 라벨을 본다 —
-		// syncMigActiveLabel(Task 2)이 위 GI 적용의 부작용으로 이미 걸어 뒀어야 아래 거절이 의미가 있다.
+		// MPS 근본해결 이후 게이트는 전역 DS 존재가 아니라 이 노드의 mig-active 라벨을 본다 —
+		// syncMigActiveLabel 이 위 GI 적용의 부작용으로 이미 걸어 뒀어야 아래 거절이 의미가 있다.
 		var d8node corev1.Node
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d8-node"}, &d8node)).To(Succeed())
 		Expect(d8node.Labels[nvidia.MigActiveNodeLabel]).To(Equal("true"),
@@ -2507,7 +2507,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 		Expect(cond.Message).To(ContainSubstring("--mig-strategy=mixed"),
 			"거절 사유는 진단 가능해야 한다 — 무엇이 막았는지 말하지 않으면 사용자는 DP 로그를 찾아야 한다")
 		Expect(cond.Message).To(ContainSubstring("MigActiveNodeLabel=true"),
-			"★ 판정 근거가 노드 라벨이어야 한다(Task 5) — 전역 DS 존재만으로 거절한 구 판정으로 회귀하면 안 된다")
+			"★ 판정 근거가 노드 라벨이어야 한다 — 전역 DS 존재만으로 거절한 구 판정으로 회귀하면 안 된다")
 
 		By("거절은 mutation 이전이다 — DP 배선도 sharing ConfigMap 도 mps daemon 도 없어야 한다")
 		var dp appsv1.DaemonSet
@@ -2531,7 +2531,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 	})
 
 	// 가드는 mps 에만 걸려야 한다: 업스트림은 SharingStrategyMPS 에만 이 규칙을 걸고, time-slicing 은
-	// 같은 mixed DP 에서 정상 동작한다(Task 5 / D-3·D-4·D-5 가 라이브에서 통과시킨 조합).
+	// 같은 mixed DP 에서 정상 동작한다(D-3·D-4·D-5 가 라이브에서 통과시킨 조합).
 	// 가드가 sharing 전체로 넓어지면 이 spec 이 먼저 깨진다.
 	It("still applies time-slicing next to a Ready MIG partition", func() {
 		wipeACPPs()
@@ -2580,7 +2580,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 	})
 })
 
-// D-8 근본해결(MPS 근본해결 5단계 완료 — Task 5): mixed/flat DS 가 실제로 분리된 뒤(Task 4)에는
+// D-8 근본해결(MPS 근본해결 5단계 완료): mixed/flat DS 가 실제로 분리된 뒤에는
 // "클러스터에 mixed DS 가 존재하는가" 가 아니라 "이 노드가 mig-active 라벨을 달고 있는가" 만 봐야
 // 한다. 구 판정(전역 DS 조회)은 mixed DS 가 존재하기만 하면 노드와 무관하게 모든 MPS 요청을
 // 막았다 — 이 spec 은 mixed DS 를 실제로 렌더해 둔 채로(ensureNvidiaDevicePlugin 은 두 DS 를

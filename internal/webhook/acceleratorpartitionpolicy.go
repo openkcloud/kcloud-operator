@@ -6,7 +6,7 @@
 // 알려진 경우의 명백한 오타뿐이다. 최종 판정은 컨트롤러와 하드웨어가 한다.
 // vendorcap 레지스트리(internal/vendorcap)가 그 벤더의 partition/sharing 을 Native/Software 로
 // 선언하지 않으면(Unsupported/Unknown) 형식 검사보다 먼저 사유·근거와 함께 거절한다.
-// ACPP 경로 자체는 partition backend 가 있는 벤더만 쓸 수 있다(R2-9) — sharing 만 있고
+// ACPP 경로 자체는 partition backend 가 있는 벤더만 쓸 수 있다 — sharing 만 있고
 // partition 은 Unknown/Unsupported 인 벤더(예: tenstorrent)는 AcceleratorDescriptor
 // spec.sharing 경로로 보낸다.
 // 삭제 중인 오브젝트(deletionTimestamp)는 재검증하지 않는다 — finalizer 제거를 막으면 안 된다.
@@ -61,7 +61,7 @@ func (v *ACPPValidator) ValidateDelete(_ context.Context, _ runtime.Object) (adm
 // validateACPP 순서: (1) layout·sharing 둘 다 빈 요청 거부, 이어서 layout 없는 exclusive
 // 되돌리기 요청은 되돌릴 능력이 하나도 없는 벤더에서만 거부 (2) layout 이 있으면 vendorcap
 // 레지스트리가 그 벤더의 partition 을 Native/Software 로 선언하는지 확인 (3) sharing 이 있으면
-// partition backend 가 없는 벤더를 거부한다(R2-9 — ACPP 경로 자체가 partition backend 전용,
+// partition backend 가 없는 벤더를 거부한다(ACPP 경로 자체가 partition backend 전용,
 // exclusive 포함) (4) sharing 모드가 timeSliced/mps 면 같은 레지스트리로 그 능력을 확인 —
 // (2)(3)(4) 모두 아니면(Unsupported/Unknown) 사유 있는 거절이 이겨야 하므로 형식 검사보다
 // 먼저 거절한다 (5) partition.ValidateLayoutShape 로 노드 비의존 형식 오류 거부 (6) nodeSelector
@@ -107,7 +107,7 @@ func validateACPP(ctx context.Context, c client.Client, obj runtime.Object) erro
 
 	// 명세서 층 검사: 레지스트리가 그 벤더의 파티션을 Native/Software 로 선언하지 않으면
 	// 형식 검사보다 먼저, 사유·근거와 함께 거절한다(spec §5.6). Unknown 도 거절한다. furiosa 는
-	// 벤더 아래 제품이 둘(rngd/warboy)이라 파티션 능력이 갈리므로(R2-5) nodeSelector 가 고르는
+	// 벤더 아래 제품이 둘(rngd/warboy)이라 파티션 능력이 갈리므로 nodeSelector 가 고르는
 	// 노드의 NDR 로 제품을 알아낼 수 있으면 product-aware 로 본다(vendorCapability).
 	if len(spec.Layout) > 0 {
 		if s := vendorCapability(ctx, c, spec.Vendor, spec.NodeSelector, vendorcap.CapPartition); !declaredSupported(s) {
@@ -115,7 +115,7 @@ func validateACPP(ctx context.Context, c client.Client, obj runtime.Object) erro
 		}
 	}
 
-	// ACPP 는 partition backend 가 있는 벤더만 쓸 수 있다(R2-9). validateACPP 인라인 대신
+	// ACPP 는 partition backend 가 있는 벤더만 쓸 수 있다. validateACPP 인라인 대신
 	// 헬퍼로 뺀 것은 gocyclo 상한(30) 때문이다(acceleratordescriptor_controller.go 의
 	// sharingRefusal 과 같은 이유).
 	if err := requirePartitionBackendForSharing(ctx, c, spec); err != nil {
@@ -182,7 +182,7 @@ func validateACPP(ctx context.Context, c client.Client, obj runtime.Object) erro
 	return nil
 }
 
-// vendorCapability 는 product-aware 레지스트리 조회다(R2-5). furiosa 처럼 벤더 아래 제품이
+// vendorCapability 는 product-aware 레지스트리 조회다. furiosa 처럼 벤더 아래 제품이
 // 여럿이면(rngd/warboy) partition/sharing 능력이 갈리므로, nodeSelector 가 고르는 노드의
 // NodeDeviceReport 로 제품을 알아낼 수 있을 때만 vendorcap.Lookup 을 쓰고, 그 외(단일 제품
 // 벤더·제품 불명)엔 기존 LookupVendor 로 그대로 폴백한다 — 단일 제품 벤더는 동작이 그대로다.
@@ -200,7 +200,7 @@ func vendorCapability(
 	return vendorcap.LookupVendor(vendor, capability)
 }
 
-// requirePartitionBackendForSharing 는 R2-9 게이트다 — spec.sharing 이 어느 모드든(exclusive
+// requirePartitionBackendForSharing 는 게이트다 — spec.sharing 이 어느 모드든(exclusive
 // 되돌리기 포함) partition 을 Native/Software 로 선언하지 않은 벤더는 ACPP 경로 자체를
 // 거절한다. 그 벤더는 AcceleratorDescriptor spec.sharing → generic device-plugin
 // replicas(SW 기제, R2-8)를 대신 써야 한다. 이 게이트가 없으면 tenstorrent 처럼 timeSlicing

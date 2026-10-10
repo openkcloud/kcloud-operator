@@ -1,6 +1,6 @@
 # values.yaml: NPU Operator 기본 설정값
 # 생성일: 2026-03-25 | 수정일: 2026-10-09 (NVIDIA 설치기 기본 태그 v5; 벤더 DIP 블록마다 workloadProbe opt-in 기본값 추가,
-#   v4 설치기 버전 고정 이후 죽은 NVIDIA_DRIVER_CHOICE 기본 env 제거)
+#   v4 설치기 버전 고정 이후 죽은 NVIDIA_DRIVER_CHOICE 기본 env 제거; 계획서 항목 토큰 제거)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류로 나뉜다. 어느 이미지가 어느 쪽에 속하는지는
@@ -68,7 +68,7 @@ hostExec:
   repository: "kcloud-host-exec"
   tag: "v0.1.0"
 
-# generatedBackend: AcceleratorDescriptor auto-apply(D4b/c)가 만드는 일반 런타임
+# generatedBackend: AcceleratorDescriptor auto-apply 가 만드는 일반 런타임
 #   DaemonSet(device-plugin/DRA driver) 이미지. hostExec 과 같은 규약이다 — registry 는
 #   global.registry 로 조립되고(kcloud 빌드 이미지), repository 를 비우면 operator
 #   Deployment 인자(--generated-dp-image/--generated-dra-image) 자체가 빠져 그 backend 는
@@ -430,7 +430,7 @@ runtimeClass:
     enabled: true
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Admission webhook (S4-1): DIP/NCP validating + opt-in Pod mutating.
+# Admission webhook: DIP/NCP validating + opt-in Pod mutating.
 # 기본 opt-in(enabled=false) — 라이브 검증 시에만 true 로 전환.
 # cert 는 helm lookup 으로 최초 1회만 발급하고 upgrade 마다 재사용(멱등).
 # failurePolicy=Ignore: webhook 장애가 클러스터 admission 을 막지 않게(최우선 안전).
@@ -444,7 +444,7 @@ webhook:
   injectLabel: "kcloud.ai/inject"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 관리 REST API (S5-3-②) + 웹 콘솔(track ③, /ui/): kubeconfig 없는 외부 관리툴/대시보드용 HTTP API.
+# 관리 REST API + 웹 콘솔(track ③, /ui/): kubeconfig 없는 외부 관리툴/대시보드용 HTTP API.
 # operator pod 내 별도 HTTPS listener(:9444). 인증=TokenReview, 인가=SubjectAccessReview.
 # 기본 opt-in(enabled=false) — 라이브 검증 시에만 true 로 전환. cert 는 lookup 멱등(upgrade 재수행에도 불변).
 # Service kcloud-operator-controller-api(ClusterIP, 443→9444). control 은 전부 CR patch 로 귀결.
@@ -492,7 +492,7 @@ driverInstallPolicies:
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa Warboy (mode=daemonset)
   # 기존 mode=job (`furiosa-warboy`) + tester mode=daemonset (`furiosa-warboy-ds`)
-  # 중복을 2026-04-21 에 mode=daemonset 단일 정책으로 통합 (P0-3).
+  # 중복을 2026-04-21 에 mode=daemonset 단일 정책으로 통합.
   # 이전 배포와의 충돌 방지를 위해 이름도 `furiosa-warboy-ds` 로 고정.
   # mode=job 으로 회귀가 필요하면 values override 로 enabled=false 후 수동 CR 생성.
   # ─────────────────────────────────────────────────────────────────────
@@ -566,7 +566,7 @@ driverInstallPolicies:
       rollbackOnFailure: true
   # ─────────────────────────────────────────────────────────────────────
   # NVIDIA generic (mode=daemonset)
-  # 2026-04-21 에 기본값을 enabled=true 로 전환 (P0-1). image 는 -v16 접미사 필수.
+  # 2026-04-21 에 기본값을 enabled=true 로 전환. image 는 -v16 접미사 필수.
   # ─────────────────────────────────────────────────────────────────────
   nvidia:
     enabled: true
@@ -667,7 +667,7 @@ driverInstallPolicies:
       # 쓰인다. Job 실행 자체는 activeDeadlineSeconds(30m)가 시한을 갖는다.
       validationTimeout: "10m"
       rollbackOnFailure: true
-      # S2-5 cross-major reboot: rmmod 불가로 재부팅이 필요한 NVIDIA 메이저 교체(예 535→580) 대응.
+      # cross-major reboot: rmmod 불가로 재부팅이 필요한 NVIDIA 메이저 교체(예 535→580) 대응.
       # 미지정 시 CRD 기본값(maxReboots=1, rebootTimeout 15m) 적용. cross-major 는 통상 1회 재부팅이면 충분.
       maxReboots: 1
       rebootTimeout: "15m"

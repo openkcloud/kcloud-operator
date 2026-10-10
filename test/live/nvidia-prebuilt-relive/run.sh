@@ -5,13 +5,13 @@
 #       커밋 aa7a13b/a40b94e 가 사전 컴파일 정합성 가드에서 apt-cache madison 아카이브
 #       조회를 제거했는데, k8s-worker1 에 떠 있던 -v2 이미지는 그 제거 이전 빌드였다.
 #       이 하네스는 그 제거를 담은 새 이미지(-v3, 이 하네스 밖에서 make build-precompiled
-#       로 미리 빌드·push 해 둔다)를 DIP kernelImages 에 등록하고, 2026-09-26 Task 6
+#       로 미리 빌드·push 해 둔다)를 DIP kernelImages 에 등록하고,
 #       (2026-09-26 실측) 이 실행한
 #       것과 같은 9개 패키지 제거+재부팅으로 노드를 빈 상태로 만든 뒤, operator 자기복구
 #       설치 Job 을 관찰해 (a) apt-cache madison 조회 0회 (b) 실행 중 사용자 공간 apt
 #       설치 0회 (c) dpkg -i 로 동봉 .deb 설치 (d) 모듈·광고·헬스 복귀를 확인한다.
 #       9개 패키지 목록·순서는 images 저장소 driver-installer/nvidia/entrypoint.sh 의
-#       nvidia_prebuilt_cleanup_cmd 와 2026-09-26 Task 6 실행 기록이 정확히 같다 — 이
+#       nvidia_prebuilt_cleanup_cmd 와 2026-09-26 실행 기록이 정확히 같다 — 이
 #       하네스에서 환경변수로 덮지 않는다(그 목록 자체가 절차의 근거).
 #       PHASE 로 단계를 하나씩 부를 수 있다. dip-patch·quiesce/unquiesce·rollback-dip 는
 #       all 순서 밖에 따로 있다 — dip-patch 는 all 안에도 포함되지만(전이 트리거 자체가
@@ -55,7 +55,7 @@ REGISTRY_REPO="${REGISTRY_REPO:?REGISTRY_REPO 을 지정하십시오}"
 NEW_TAG="${IMAGE_TAG:-${REGISTRY_REPO}:${DRIVER_VERSION}-k${KERNEL}-${NEW_VARIANT}}"
 
 # PACKAGES — 9개, 순서 고정. entrypoint.sh 의 nvidia_prebuilt_cleanup_cmd 와
-# 2026-09-26 Task 6 실행 기록(task-6-report.md Step 3)이 정확히 이 순서다: 모듈이
+# 2026-09-26 실행 기록(task-6-report.md Step 3)이 정확히 이 순서다: 모듈이
 # nvidia-kernel-common 을, 그것이 nvidia-firmware 를 의존하므로 모듈이 앞, firmware 가
 # 맨 뒤. env 로 덮지 않는다 — 목록 자체가 이 절차의 근거다.
 PACKAGES=(
@@ -282,7 +282,7 @@ unquiesce() {
   printf 'uncordon %s\n' "$NODE" | evid "UNQUIESCE"
 }
 
-# empty_node — ADR-002 Task 6 실행 기록과 정확히 같은 9개 패키지를 apt-get remove 로
+# empty_node — ADR-002 실행 기록과 정확히 같은 9개 패키지를 apt-get remove 로
 # 지운다(순서·이름 고정, PACKAGES 배열). dcgm-exporter·device-plugin DaemonSet 파드는
 # 변경하지 않는다 — 드라이버가 사라지면 CrashLoop 이 정상이고 설치 뒤 스스로 복귀한다.
 empty_node() {
@@ -319,7 +319,7 @@ empty_node() {
 
 # reboot_recover — 재부팅을 보내고, SSH 로 확인한 uptime 이 600초 미만(=이번 재부팅의
 # 새 boot)인 시점과 kubectl 이 보는 Ready=True 가 "같은 폴링 순간"에 동시에 성립할 때만
-# 성공으로 본다. Task 6 실행에서 "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로 착각하는
+# 성공으로 본다. 실행에서 "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로 착각하는
 # 함정이 실제로 있었다(uptime 87897s 를 uptime<600 가드로 걸러냈다) — 이 동시 조건이 그
 # 가드와 같은 효과를 낸다: uptime<600 이 참인 순간의 Ready 는 정의상 이번 새 부팅 이후의
 # 관측일 수밖에 없다.
@@ -354,7 +354,7 @@ reboot_recover() {
   return 1
 }
 
-# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다(Task 6 의
+# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다(
 # "검증 전제 성립" 확인과 같다). 여기서 모듈이 이미 로드돼 있으면 이후 관찰이 성립하지
 # 않으므로 실패로 멈춘다.
 wait_empty() {

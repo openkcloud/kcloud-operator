@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: k8s-worker1 NVIDIA 잔재 패키지 셋 제거 실측 하네스
-# 상세: 계획 O Task 4(Ruling R-O18)가 제거를 보류했던 세 패키지
+# 상세: 계획 O(Ruling R-O18)가 제거를 보류했던 세 패키지
 #       (nvidia-firmware-580-580.178.04·nvidia-firmware-595-595.91.07·
 #       nvidia-kernel-source-580, 전부 실행 중 드라이버 580.126.09 와 무관한 잔재)를
 #       사용자 결정에 따라 실제로 제거한다. 안전 게이트(nvidia.com/gpu 요구 파드 0,

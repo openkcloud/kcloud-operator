@@ -1,8 +1,8 @@
 // ============================================================
 // acceleratordescriptor_controller.go: AcceleratorDescriptor 감시 컨트롤러
 // 상세: 검증기·판정기를 돌려 status.feasibleBackends 와 refusals 를 채운다. 배포물
-//       적용은 D4b — resolve 는 NDR 카드별 entry(count=1, pcieAddress — report.go fan-out)에서 한다.
-// 생성일: 2026-09-15 | 수정일: 2026-10-09
+//       적용은 이 컨트롤러가, resolve 는 NDR 카드별 entry(count=1, pcieAddress — report.go fan-out)에서 한다.
+// 생성일: 2026-09-15 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package controller
@@ -30,12 +30,12 @@ import (
 )
 
 // AcceleratorDescriptorReconciler 는 descriptor 의 판정 결과를 status 에 반영하고,
-// 관리되지 않는 벤더의 descriptor 는 backend 배포물을 auto-apply 한다(D4b/c).
+// 관리되지 않는 벤더의 descriptor 는 backend 배포물을 auto-apply 한다.
 type AcceleratorDescriptorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	// DPImage/DRAImage 는 생성 device-plugin/DRA DaemonSet 이 쓸 일반 런타임 이미지다.
-	// 비면 해당 backend 배포물은 렌더 단계에서 그 이미지로 뜨지 못한다(Task 6 helm 주입).
+	// 비면 해당 backend 배포물은 렌더 단계에서 그 이미지로 뜨지 못한다(helm 주입).
 	DPImage  string
 	DRAImage string
 	// GeneratedNamespace 는 namespaced 생성물(ConfigMap/DaemonSet/SA)을 둘 네임스페이스다
@@ -101,7 +101,7 @@ func (r *AcceleratorDescriptorReconciler) Reconcile(
 	// 노드 하나의 실패로 이 descriptor 전체의 판정·배포물 반영을 막지 않는다(비치명 side effect).
 	r.verifyResolvedDevices(ctx, &desc, feasible)
 
-	// 배포물 적용 판정(D4b/c). 중재·발견가능 거절은 status 를 한 번만 쓰도록 여기서
+	// 배포물 적용 판정. 중재·발견가능 거절은 status 를 한 번만 쓰도록 여기서
 	// refusals 에 접어 넣고, 그 결과로 apply 할지 prune 할지 정한다(이중 Status().Update 회피).
 	applyOK := len(feasible) > 0
 	if applyOK {
@@ -127,7 +127,7 @@ func (r *AcceleratorDescriptorReconciler) Reconcile(
 			}
 		}
 	}
-	// sharing(SW 시분할) 게이트(Round 2 Task 3): registry 가 그 vendor/product 의 timeSlicing
+	// sharing(SW 시분할) 게이트: registry 가 그 vendor/product 의 timeSlicing
 	// 을 Software 로 선언하지 않으면 거절한다 — 동시 접근 안전 실측 없이 격리 없는 공유를
 	// 조용히 내보내지 않는다. gocyclo 상한(30) 때문에 판정은 sharingRefusal 헬퍼로 뺐다.
 	if applyOK {

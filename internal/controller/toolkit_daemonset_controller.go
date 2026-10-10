@@ -1,12 +1,12 @@
 // ============================================================
-// toolkit_daemonset_controller.go: Container Toolkit DaemonSet 컨트롤러 (S2-2)
+// toolkit_daemonset_controller.go: Container Toolkit DaemonSet 컨트롤러
 // 상세: DriverInstallPolicy.spec.toolkit.enabled=true 인 정책에 대해 vendor 별
 //       container-toolkit DaemonSet 을 생성/업데이트합니다. NVIDIA 는
 //       nvidia-container-toolkit 이미지를 통해 containerd 에 nvidia runtime 을
 //       등록합니다. toolkit 은 driver Ready 이후 시작하도록 init container 로
 //       host driver 존재를 대기합니다. containerd 변경은 toolkit 이미지가 수행하며
 //       nvidia-ctk 의 idempotent 특성상 이미 등록된 노드에서는 no-op 입니다.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package controller

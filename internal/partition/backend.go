@@ -1,7 +1,7 @@
 // ============================================================
 // backend.go: 벤더 중립 파티션 backend 계약 (spec §8)
 // 상세: Discover/Validate/Diff/Apply/Verify/Rollback. 미지원 op 는 ErrUnsupported 반환.
-// 생성일: 2026-07-23 | 수정일: 2026-07-23
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package partition
 
@@ -36,7 +36,7 @@ type Target struct {
 	// DaemonSet 식별(RNGD apply/충돌 판정 기준).
 	DaemonSetName      string
 	DaemonSetNamespace string
-	// Owner 는 이 target 을 요청한 ACPP 의 .metadata.name — owner-lock annotation 값(Task 9 두 writer 조정).
+	// Owner 는 이 target 을 요청한 ACPP 의 .metadata.name — owner-lock annotation 값(두 writer 조정).
 	Owner string
 	// Generation 은 요청 ACPP 의 .metadata.generation — Job operation-ID 재료(nvidia MIG).
 	Generation int64

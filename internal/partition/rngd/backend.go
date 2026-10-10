@@ -1,7 +1,7 @@
 // ============================================================
 // backend.go: RNGD 파티션 backend — DS env(RNGD_PARTITION_POLICY) 기반 apply (spec §2.3, §4.1)
 // 상세: discover/validate/diff/apply/rollback/verify. 적용 범위 = DaemonSet 전역(DaemonSetGlobal).
-// 생성일: 2026-07-23 | 수정일: 2026-10-09
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package rngd
 
@@ -28,7 +28,7 @@ const (
 	pluginContainerName = "furiosa-device-plugin"
 )
 
-// PartitionOwnerAnnotation 은 이 DS 의 partition env 를 ACPP 가 소유함을 표시한다(두 writer 조정, Task 9).
+// PartitionOwnerAnnotation 은 이 DS 의 partition env 를 ACPP 가 소유함을 표시한다(두 writer 조정).
 const PartitionOwnerAnnotation = "npu.ai/partition-owner"
 
 // MultiProcessEnv 는 라이브 실측(test/live/rngd-multiprocess) 결과를 operator 에 주입하는 env 다.
@@ -175,7 +175,7 @@ func capabilityProfiles() []v1alpha1.ProfileSupport {
 
 // deviceStatusFor 는 RNGD 장치 status 를 만들며 capability 3축을 채운다.
 // TimeSlicing/Brokered 는 미구현이라 전부 Supported=false + Verification=required 다.
-// MultiProcess 는 라이브 실측 결과(MultiProcessEnv, Task 7)를 반영 — 미실측이면 마찬가지로 required.
+// MultiProcess 는 라이브 실측 결과(MultiProcessEnv)를 반영 — 미실측이면 마찬가지로 required.
 // vendor 는 실측 근거가 없어 시그니처만 유지한다(호출부 대칭, 향후 벤더별 분기 대비).
 //
 // IsolationCapability 는 세 축 전부 빈 문자열, 즉 미실측이다. compute 축은 한때
@@ -234,7 +234,7 @@ func dsImageVersion(ds *appsv1.DaemonSet) string {
 }
 
 // Apply 는 DS RNGD_PARTITION_POLICY 를 목표 policy 로 patch 하고 apply 전 상태를 rollback state 로 반환한다.
-// 적용 범위 = DaemonSetGlobal(spec §2.3). owner 어노테이션으로 NPUClusterPolicy 와의 경합을 차단(Task 9).
+// 적용 범위 = DaemonSetGlobal(spec §2.3). owner 어노테이션으로 NPUClusterPolicy 와의 경합을 차단.
 func (b *Backend) Apply(t partition.Target, resolved []partition.ResolvedEntry) (*partition.RollbackState, error) {
 	if len(resolved) != 1 {
 		return nil, fmt.Errorf("rngd: expected exactly 1 resolved entry, got %d", len(resolved))
@@ -255,7 +255,7 @@ func (b *Backend) Apply(t partition.Target, resolved []partition.ResolvedEntry) 
 	if ds.Annotations == nil {
 		ds.Annotations = map[string]string{}
 	}
-	ds.Annotations[PartitionOwnerAnnotation] = t.Owner // 소유 ACPP 식별자(.metadata.name) — 두 writer 조정(Task 9)
+	ds.Annotations[PartitionOwnerAnnotation] = t.Owner // 소유 ACPP 식별자(.metadata.name) — 두 writer 조정
 	if err := b.c.Update(t.Ctx, ds); err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (b *Backend) Verify(t partition.Target) (*partition.VerifyResult, error) {
 		return nil, nil
 	}
 	// 목표 allocatable = 카드 수 × countPerDevice 는 reconciler 가 계산해 전달하는 편이 자연스러우나,
-	// MVP-1 은 flat 리소스 존재만 확인(1-파티션 테스트 Pod). 상세는 reconciler(Task 12)에서.
+	// MVP-1 은 flat 리소스 존재만 확인(1-파티션 테스트 Pod). 상세는 reconciler 에서.
 	return b.verifier.VerifyAllocation(t, RngdResourceName)
 }
 

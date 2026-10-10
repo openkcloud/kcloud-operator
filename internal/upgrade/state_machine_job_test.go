@@ -1,10 +1,10 @@
 // ============================================================
-// state_machine_job_test.go: WP-C-1 Job 모드 상태 핸들러 단위 테스트
-// 상세: fake client 기반. handleIdle 초기설치 분기(Q1), handleUpgradingJob(생성),
+// state_machine_job_test.go: Job 모드 상태 핸들러 단위 테스트
+// 상세: fake client 기반. handleIdle 초기설치 분기, handleUpgradingJob(생성),
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가)
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가; 계획서 항목 토큰 제거)
 // ============================================================
 
 package upgrade
@@ -116,7 +116,7 @@ func TestIsJobMode(t *testing.T) {
 	}
 }
 
-// ── handleIdle 초기 설치 (Q1) ────────────────────
+// ── handleIdle 초기 설치 ────────────────────
 
 // Job 모드 + currentVersion="" 이면 autoUpgrade 무관하게 초기 설치(UpgradeRequired)로 전이.
 func TestHandleIdleJob_InitialInstall_IgnoresAutoUpgrade(t *testing.T) {
@@ -141,7 +141,7 @@ func TestHandleIdleJob_InitialInstall_IgnoresAutoUpgrade(t *testing.T) {
 }
 
 // 버전 일치(cur==des)여도 NDR.driverLoaded=false 면 install Job 을 트리거해야 한다
-// (Q1 self-heal — 재부팅/수동 rmmod 로 모듈 언로드된 job 모드 노드 복구).
+// (self-heal — 재부팅/수동 rmmod 로 모듈 언로드된 job 모드 노드 복구).
 func TestHandleIdleJob_DriverNotLoaded_TriggersReinstall(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, verNew, verNew)
 	dip := makeJobDIP(verNew, imgNew, false, true) // autoUpgrade=false 여도 복구 진행

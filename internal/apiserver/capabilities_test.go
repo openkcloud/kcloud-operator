@@ -2,7 +2,7 @@
 // capabilities_test.go: 노드 단위 capability 조회 테스트
 // 상세: 후보에서 빠진 노드가 목록에서 사라지지 않고 "왜 빠졌는지" 를 달고 남는지 본다
 //       (cordon / ACPP 미수렴). 미검증 capability 가 verified=false 로 나가는지도 재확인한다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package apiserver
@@ -137,7 +137,7 @@ func TestCapabilities_DeniedWithoutNDRAuthz(t *testing.T) {
 	}
 }
 
-// TestBuildNodeCapabilities_FailedSiblingDoesNotHideReadyPolicy — 라이브 결함 D-4(Task 5 §5.2):
+// TestBuildNodeCapabilities_FailedSiblingDoesNotHideReadyPolicy — 라이브 결함 D-4(§5.2):
 // 사전순 앞의 Failed 정책("worker1-a2-timeslice")이 같은 노드의 Ready 정책(readySiblingPolicyName)을
 // /capabilities 에서 통째로 가리고 노드 전체를 candidate:false 로 만들면 안 된다.
 func TestBuildNodeCapabilities_FailedSiblingDoesNotHideReadyPolicy(t *testing.T) {

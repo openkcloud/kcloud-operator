@@ -5,7 +5,7 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가)
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거)
 // ============================================================
 
 package apiserver
@@ -348,7 +348,7 @@ func TestBuildInventory_PendingRowCarriesNoInstanceCounts(t *testing.T) {
 	}
 }
 
-// TestBuildInventory_FailedSiblingDoesNotHideReadyRows — 라이브 결함 D-4(Task 5 §5.2):
+// TestBuildInventory_FailedSiblingDoesNotHideReadyRows — 라이브 결함 D-4(§5.2):
 // devicesForNode 의 첫-매치 단락이 Failed 정책("worker1-a2-timeslice")을 골라 같은 노드의
 // Ready 정책(readySiblingPolicyName) 장치 행을 뭉개면 안 된다(/accelerators total 4→ 정상 복원).
 func TestBuildInventory_FailedSiblingDoesNotHideReadyRows(t *testing.T) {

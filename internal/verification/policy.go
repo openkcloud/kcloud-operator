@@ -4,7 +4,7 @@
 //
 //	없어도 DefaultPolicy 로 동작한다 — 검증은 정책 설치 여부와 무관하게 돌아야 한다.
 //
-// 생성일: 2026-07-31
+// 생성일: 2026-07-31 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package verification
 
@@ -43,7 +43,7 @@ func DefaultPolicy() EffectivePolicy {
 			v1alpha1.EvidenceCheckAllocationProbe:   false,
 		},
 		TTL: defaultTTL,
-		// FirmwareVersion 은 기본 감시축에서 뺀다 — 의도된 선택이다(설계 근거는 Task 6 문서).
+		// FirmwareVersion 은 기본 감시축에서 뺀다 — 의도된 선택이다(설계 근거는 별도 문서).
 		InvalidateOn:     []string{FieldBootID, FieldDriverVersion, FieldKernelVersion, FieldGeneration},
 		DriftGracePeriod: defaultDriftGracePeriod,
 	}

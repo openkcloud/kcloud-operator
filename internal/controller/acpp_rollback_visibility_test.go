@@ -1,7 +1,7 @@
 // ============================================================
 // acpp_rollback_visibility_test.go: 파티션 되돌리기 실패의 상태 노출 envtest
 // 상세: 되돌리기가 실패하면 그 사실이 phase 와 조건에 남아야 조정자가 수동 복구 종점을 열 수 있다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -191,7 +191,7 @@ var _ = Describe("partition rollback visibility", func() {
 	// 노출하고, **여러 pass 를 거쳐도** 그 신호가 남는다. 이 함수는 rb 가 없어(하드웨어 mutation 은
 	// 이미 끝났다고 간주) 위 두 경로와 시그니처가 다르므로 별도로 확인해야 한다. "이미 이 ACPP 가
 	// 소유하고 geometry 도 일치하는데 Verifying 단계에서 크래시했다" 는 저널을 심어
-	// owned && isApplyInFlightPhase 진입 조건을 만든다(Task 6/9 의 managed no-diff 픽스처와
+	// owned && isApplyInFlightPhase 진입 조건을 만든다(managed no-diff 픽스처와
 	// 같은 패턴) — 관측 seam(a30Device 의 geometry)이 되돌리기 실패 후에도 GI 가 그대로 남은
 	// 프로덕션 상태를 그대로 반영한다(빈 문자열이면 diff.Changed 가 항상 참이 되어 이 결함을
 	// 가린다 — 실측함).

@@ -4,7 +4,7 @@
 //
 //	하드웨어는 건드리지 않는다(device-plugin 설정/배선만 변경).
 //
-// 생성일: 2026-07-29 | 수정일: 2026-07-31
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -213,7 +213,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 	return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas, true), nil
 }
 
-// runSharingOnly 는 layout 없는(순수 공유) 정책의 전체 경로다(라이브 결함 D-3, Task 5 §5.1).
+// runSharingOnly 는 layout 없는(순수 공유) 정책의 전체 경로다(라이브 결함 D-3, §5.1).
 // 파티션 apply 경로(runNvidiaTarget: owner-lock·cordon·MIG mode enable·GI)는 타지 않는다 —
 // 공유는 device-plugin 설정만 바꾸므로 cordon 이 필요 없다(DP 재시작만 필요). backend Validate 도
 // 부르지 않는다: 검증할 파티션 레이아웃이 없고, NVIDIA Validate 는 빈 layout 을 fail-closed 로
@@ -401,7 +401,7 @@ func (r *AcceleratorPartitionPolicyReconciler) precheckSharing(ctx context.Conte
 	// Ready + Verified 가 찍힌다. 추상 사용자 API(intent/mode.go)는 이 게이트를 이미 갖고 있었다.
 	//
 	// mps 에만 건다. timeSliced 로 넓히면 비-MIG 장치가 deviceStatusFor 를 건너뛰어 TimeSlicing 이
-	// zero-value 로 남는 것(Task 1 스코프 결정, backend.go 참조) 때문에 A2 의 time-slicing 이 막힌다.
+	// zero-value 로 남는 것(의도적 범위 제한, backend.go 참조) 때문에 A2 의 time-slicing 이 막힌다.
 	//
 	// 도달성 주의(D-8): 아래 장치 단위 판정은 현재 배포에서 **실행되지 않는다** — 바로 위의 D-8 가드가
 	// 항상 먼저 거절하기 때문이다(렌더러가 mixed 를 무조건 붙인다). 의도된 도달 불가이며 삭제 대상이
@@ -409,7 +409,7 @@ func (r *AcceleratorPartitionPolicyReconciler) precheckSharing(ctx context.Conte
 	// D-5 라이브 검증 결과가 코드에서 사라진다. 유일한 커버리지는 mixed 아닌 DP 픽스처가 지킨다.
 	//
 	// 검사 대상은 "이 노드의 같은 벤더 전체 장치" 가 아니라 "다른 정책이 소유하지 않은 장치" 다
-	// (라이브 결함 D-5, Task 6 §6.3): ts.Devices 는 Discover 가 채운 노드 전체 목록이라, MIG 가 켜진
+	// (라이브 결함 D-5, §6.3): ts.Devices 는 Discover 가 채운 노드 전체 목록이라, MIG 가 켜진
 	// 형제 장치를 다른 ACPP 가 이미 소유·관리 중인 노드(worker1 = MIG A30 + 비-MIG A2)에서는 A2 만
 	// 겨냥한 MPS 정책도 A30 때문에 통째로 거부됐다 — 배선(ensureMpsControlDaemon)에 한 번도 도달하지
 	// 못했다. 자기 자신이 소유한 장치는 제외 대상이 아니다(파티션+MPS 조합은 여전히 이 게이트가 막는다).
@@ -418,7 +418,7 @@ func (r *AcceleratorPartitionPolicyReconciler) precheckSharing(ctx context.Conte
 	// 장치가 여럿이고 그중 일부만 MPS 지원" 은 여전히 표현할 수 없다 — 그 경우는 fail-closed 로
 	// 거절된다. 셀렉터가 생기면 이 판정은 그 집합으로 좁혀야 한다.
 	if layout.Mode == npuv1alpha1.SharingModeMPS {
-		// D-8(라이브 Task 6 §6d.4) — 장치 단위보다 먼저 프로세스 단위 배타를 본다.
+		// D-8(라이브 §6d.4) — 장치 단위보다 먼저 프로세스 단위 배타를 본다.
 		blocked, berr := r.mpsBlockedByMigStrategy(ctx, ts.NodeName)
 		if berr != nil {
 			return nil, ts, false, berr
@@ -508,7 +508,7 @@ func (r *AcceleratorPartitionPolicyReconciler) devicesOwnedByOtherPolicies(ctx c
 }
 
 // mpsBlockedByMigStrategy 는 "이 노드에서 지금 MPS 를 켜면 device-plugin 이 기동조차 못 하는가"
-// 를 판정한다. MPS 근본해결(노드별 mixed/flat DaemonSet 분리, Task 1~4) 이후에는 노드의
+// 를 판정한다. MPS 근본해결(노드별 mixed/flat DaemonSet 분리) 이후에는 노드의
 // nvidia.MigActiveNodeLabel 하나만 보면 된다 — 그 라벨이 true 인 노드는 mixed DS(항상
 // --mig-strategy=mixed)가 맡으므로 업스트림이 거부하고, 없는 노드는 flat DS(그 플래그를
 // 렌더하지 않음)가 맡으므로 MPS 가 통과한다. DS 를 직접 열어 Args 를 파싱하던 이전 판정(D-8

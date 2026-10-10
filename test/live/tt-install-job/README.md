@@ -1,5 +1,5 @@
-<!-- README.md: Tenstorrent install-Job 멱등 경로 라이브 검증 사용법 | 생성일: 2026-09-20 -->
-# Tenstorrent install-Job 멱등 경로 라이브 검증 (Round 3 Task 3)
+<!-- README.md: Tenstorrent install-Job 멱등 경로 라이브 검증 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
+# Tenstorrent install-Job 멱등 경로 라이브 검증
 
 ## 왜
 

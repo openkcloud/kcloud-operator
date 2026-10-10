@@ -177,7 +177,7 @@ func nodeDRAOwned(n corev1.Node, vendor, product string) bool {
 }
 
 // nodeDRARetired 는 (vendor,product) 의 dra-retired 라벨을 본다 — nodeDRAOwned 와 같은
-// furiosa/rngd 분기(라벨 키가 갈린다, Task 2 addendum). 되돌린 뒤에도 DRA 드라이버 파드가
+// furiosa/rngd 분기(라벨 키가 갈린다). 되돌린 뒤에도 DRA 드라이버 파드가
 // 아직 그 노드를 떠나지 않았거나 막 떠난 직후라는 뜻이라 읽기 전용으로 표시만 한다.
 func nodeDRARetired(n corev1.Node, vendor, product string) bool {
 	if vendor != VendorFuriosa {

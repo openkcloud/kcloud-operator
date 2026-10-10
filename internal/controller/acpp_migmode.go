@@ -5,7 +5,7 @@
 //	기존 reboot Job 렌더러를 ACPP 소유로 재사용한다. 각 단계는 ApplyRecord.migPhase 로 영속되고
 //	(persist-before-mutate), 실패 시 정책이 잠근 노드만 다시 schedulable 로 되돌린다.
 //
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -143,7 +143,7 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureMigModeEnabled(
 		return false, ts, err // 영속 실패 시 cordon 하지 않는다(우리가 잠갔다는 사실이 durable 해야 복원 가능).
 	}
 	q := partition.NvidiaQuiescer(r.Client)
-	// remaining 은 정보성이다 — 완료 판정은 오직 AssertQuiesced 로 한다(Task 5 I-2).
+	// remaining 은 정보성이다 — 완료 판정은 오직 AssertQuiesced 로 한다(I-2).
 	if _, err := q.EvictDeviceWorkloads(t.Ctx, t.NodeName); err != nil {
 		return false, ts, err
 	}

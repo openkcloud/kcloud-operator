@@ -147,7 +147,7 @@ spec:
                 type: array
               rebootAttempts:
                 description: |-
-                  RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다(S2-5).
+                  RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다.
                   UpgradePolicy.MaxReboots(기본 1) 초과 시 Failed 로 전이하여 무한 재부팅 루프를 방지합니다.
                   새 사이클(handleIdle) 진입 시 0 으로 초기화됩니다.
                 format: int32
@@ -160,7 +160,7 @@ spec:
                 type: string
               rebootRequestedTime:
                 description: |-
-                  RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다(S2-5).
+                  RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다.
                   Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
                 format: date-time
                 type: string

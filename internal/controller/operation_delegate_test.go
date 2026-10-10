@@ -4,7 +4,7 @@
 //
 //	그리고 정책부터 근거까지 전 구간을 한 번에 통과시키는 이음매 시험.
 //
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -270,7 +270,7 @@ var _ = Describe("delegate mode", func() {
 	// 뮤테이션 정정(브리핑 원안 이탈, 이유는 task-9-report.md): 브리핑은 "ResourceKeysForACPP 가
 	// 빈 슬라이스를 돌려주면 충돌이 안 잡혀 실패한다" 고 주장하지만 실측하면 그렇지 않다 —
 	// ResourceKeysForACPP 를 nil 로 고정해도 이 스펙은 통과한다. 두 operation 이 같은 노드를
-	// 노리므로 Admit(자원 키 충돌 판정)이 통과시켜도 stepAcquire 의 노드 Lease(Task 3)가 독립적으로
+	// 노리므로 Admit(자원 키 충돌 판정)이 통과시켜도 stepAcquire 의 노드 Lease가 독립적으로
 	// 같은 노드에 대한 두 번째 획득을 막는다 — 이 픽스처(같은 노드)에서는 Lease 가 이미 충분한
 	// 방어선이라 ResourceKeys 단독으로는 이 스펙을 깰 수 없다(실측 확인, 아래 report 참조).
 	// ResourceKeys/Admit 고유 로직은 internal/operation/conflict_test.go 가 별도로 고정한다.

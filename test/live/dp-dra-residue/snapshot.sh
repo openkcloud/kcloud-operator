@@ -4,7 +4,7 @@
 # 상세: kubectl get·ssh cat/ls 외의 명령을 쓰지 않는다 — 클러스터에 아무것도 만들거나
 #       바꾸지 않는다. 벤더가 device-plugin과 DRA allocation API 사이를 전환할 때 남을 수
 #       있는 흔적(0으로 남은 등록, 여전히 0이 아닌 옛 광고, 고아 ResourceSlice/CDI 파일)을
-#       비교(Task 2)가 알아볼 수 있도록, 관련 자원 전부를 노드별 파일 12개로 남긴다.
+#       비교가 알아볼 수 있도록, 관련 자원 전부를 노드별 파일 12개로 남긴다.
 #       ResourceSlice/ResourceClaim/ResourceClaimTemplate/DeviceClass 네 종류는 "이 클러스터에
 #       그 종류 자체가 없음"(kubectl이 kind를 못 찾음)과 "종류는 있으나 0개"를 구분해
 #       {"collected":false,...} / {"collected":true,"items":[...]}로 남긴다 — 앞의 것을
@@ -79,7 +79,7 @@ manifest_status() {
 # 계속한다(exit 하지 않는다). 원격 명령 뒤에 종료 코드 마커(echo)를 붙여 SSH 접속 자체의
 # 성공 여부와 원격 명령 자체의 성공 여부를 분리해서 받는다 — 접속은 됐지만 원격 명령이
 # "Permission denied" 등으로 실패하면 그 결과는 관측 불가(partial)이지 "관측 성공"(ok)이
-# 아니다(Task 1 리뷰 인계 사항, R-O7). 마커 줄은 파일에 남기기 전에 지운다.
+# 아니다(R-O7). 마커 줄은 파일에 남기기 전에 지운다.
 SSH_STATUS=""
 ssh_capture() {
   local outfile="$1" remote_cmd="$2"

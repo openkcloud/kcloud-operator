@@ -1,10 +1,10 @@
 // ============================================================
-// acceleratordescriptor_apply_test.go: descriptor auto-apply envtest (D4b/c)
+// acceleratordescriptor_apply_test.go: descriptor auto-apply envtest
 // 상세: 중재(관리 벤더 거절)·SSA apply·능동 prune 을 실 apiserver(envtest)에서 검증한다.
 //       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
 //       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
 //       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18 | 수정일: 2026-10-09 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기)
+// 생성일: 2026-09-18 | 수정일: 2026-10-10 (발견 규칙 시험 추가)
 // ============================================================
 
 package controller
@@ -27,6 +27,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/descriptor"
@@ -353,7 +354,7 @@ func TestAutoApplyRefusesWhenImageUnset(t *testing.T) {
 }
 
 // sharing 이 선언됐어도 레지스트리가 그 벤더/제품의 timeSlicing 을 Software 로 선언하지
-// 않으면 auto-apply 를 거절해야 한다(Round 2 Task 3) — 동시 접근 안전 실측 없이 SW 시분할을
+// 않으면 auto-apply 를 거절해야 한다 — 동시 접근 안전 실측 없이 SW 시분할을
 // 켜면 격리 없는 공유가 조용히 나간다. RNGD 는 배타적 open 이라 registry 상 Unsupported.
 //
 // vendor 는 "rngd" 다(furiosa 가 아니다) — descriptor 어휘는 RNGD 를 vendor="rngd" 하나로
@@ -844,5 +845,40 @@ func TestDescriptorVendorManagedDelegatedRngd(t *testing.T) {
 	spec := npuv1alpha1.AcceleratorDescriptorSpec{Vendor: "rngd"}
 	if !descriptorVendorManaged(spec, policies) {
 		t.Fatalf("delegated furiosa 의 rngd descriptor 는 관리 중으로 판정돼야 한다")
+	}
+}
+
+// 출하 archetype 은 auto-apply 발견 규칙을 통과해야 한다 — 통과하지 못하는 형태를 예시로
+// 두면 그 파일을 복사한 사용자가 거절 사유부터 만나게 된다.
+func TestShippedArchetypesPassDiscovery(t *testing.T) {
+	dir := filepath.Join("..", "descriptor", "testdata", "archetypes")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var checked int
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) != ".yaml" {
+			continue
+		}
+		checked++
+		t.Run(e.Name(), func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			var spec npuv1alpha1.AcceleratorDescriptorSpec
+			if err := yaml.Unmarshal(raw, &spec); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if err := discoverableForAutoApply(spec); err != nil {
+				t.Fatalf("발견 규칙 위반: %v", err)
+			}
+		})
+	}
+	// 픽스처 디렉터리가 비거나 .yaml 파일이 사라지면 0회 순회로 조용히 통과한다 — 표본이
+	// 있었는지 먼저 단언한다.
+	if checked == 0 {
+		t.Fatal("archetypes 디렉터리에 .yaml 파일이 없어 발견 규칙을 한 번도 검사하지 않았다")
 	}
 }

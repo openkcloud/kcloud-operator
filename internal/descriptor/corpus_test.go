@@ -4,7 +4,7 @@
 //
 //	선언하므로 검증기 구현과 독립이다 - 순환 평가를 피한다.
 //
-// 생성일: 2026-08-10
+// 생성일: 2026-08-10 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package descriptor
 
@@ -68,7 +68,7 @@ func TestArchetypesAreValid(t *testing.T) {
 // 런타임 발견이 도입되며 이 조합은 단일 고정 장치로 처리돼 더는 컴파일 단계
 // 결함이 아니다.
 // 25 에서 26 으로(2차): "sharing replicas 범위 밖" 을 추가해 spec.sharing.replicas
-// 하한(2) 검사를 두들기는 표본을 만들었다(Round 2 Task 1).
+// 하한(2) 검사를 두들기는 표본을 만들었다.
 func TestMutationRuleCount(t *testing.T) {
 	rules := MutationRules()
 	if len(rules) != 26 {

@@ -2,10 +2,10 @@
 // webhookpath_test.go: 매니저 등록 validator ↔ 배포 webhook 설정 경로 일치 테스트
 // 상세: ctrl.NewWebhookManagedBy 등록만으로는 API 서버가 요청을 보내지 않는다 — 이 저장소는
 // ValidatingWebhookConfiguration 을 controller-gen 이 아니라 deploy/helm/templates/webhook.yaml 에
-// 손으로 적는다(Task 8 리뷰 C1). 여기서 코드가 등록한 각 타입의 경로를 controller-runtime 이
+// 손으로 적는다(리뷰 C1). 여기서 코드가 등록한 각 타입의 경로를 controller-runtime 이
 // 실제로 만드는 것과 같은 공식으로 계산해 그 yaml 텍스트에 있는지 대조한다 — validator 를
 // 등록만 하고 yaml 을 안 고치면 이 테스트가 잡는다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-24
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package webhook
 

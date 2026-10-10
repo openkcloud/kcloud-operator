@@ -6,7 +6,7 @@
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
 // 생성일: 2026-04-13 | 수정일: 2026-10-10 (verifiedVersions 허용 목록 검사를 autoUpgrade 게이트 앞으로 이동;
 //       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가;
-//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신)
+//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신; 계획서 항목 토큰 제거)
 // ============================================================
 
 package upgrade
@@ -195,7 +195,7 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateUpgrading:
 		return m.handleUpgrading(ctx, state, policy)
 	case v1alpha1.UpgradeStateValidating:
-		// S2-5: install 성공 후 cross-major 로 커널 모듈 교체에 재부팅이 필요하면(NDR.needsReboot),
+		// install 성공 후 cross-major 로 커널 모듈 교체에 재부팅이 필요하면(NDR.needsReboot),
 		// validator 체인 앞에서 RebootRequired 로 분기(재부팅 전엔 validator 가 구 버전을 보고 실패).
 		// 마커가 없으면 이 분기를 절대 타지 않는다 — 근거 없는 재부팅은 고착보다 나쁘다.
 		// 마커가 있을 때 남는 문제는 그 관측을 믿어도 되는가다: 재부팅 후 install Job 이 host
@@ -269,11 +269,11 @@ func (m *UpgradeStateMachine) handleIdle(
 		return true, 60 * time.Second, nil
 	}
 
-	// WP-C-1 (Q1): Job 모드는 상주 DS 가 없어 driverLoaded=false(초기 미설치 / 재부팅·수동 rmmod
+	// Job 모드는 상주 DS 가 없어 driverLoaded=false(초기 미설치 / 재부팅·수동 rmmod
 	// 로 모듈 언로드 / 드라이버 crash) 상태를 스스로 복구할 수 없다. 따라서 desired 버전이 지정돼
 	// 있고 (a) 아직 아무 버전도 없거나(currentVersion=="") (b) NDR 이 driverLoaded=false 를 보고하면,
 	// 버전 일치 여부와 무관하게 install Job 을 트리거한다. autoUpgrade 무관(설치/복구는 기대된
-	// 동작) — daemonset 의 DS pod 가 항상 modprobe 로 재로딩하는 것과 동등성을 맞춘다(Q1).
+	// 동작) — daemonset 의 DS pod 가 항상 modprobe 로 재로딩하는 것과 동등성을 맞춘다.
 	// 버전 변경 업그레이드(driver 는 로드됐고 desired 만 상이)는 아래 autoUpgrade 게이트를 존중한다.
 	if isJobMode(policy) && desiredVersion != "" {
 		needInstall := currentVersion == ""
@@ -607,7 +607,7 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
-	// WP-C-1: Job 모드는 install Job 생성/재생성 경로로 분기(daemonset 본문 무변경).
+	// Job 모드는 install Job 생성/재생성 경로로 분기(daemonset 본문 무변경).
 	if isJobMode(policy) {
 		return m.handleUpgradingJob(ctx, state, policy)
 	}
@@ -702,7 +702,7 @@ func (m *UpgradeStateMachine) handleValidating(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
-	// WP-C-1: Job 모드는 "Job 성공 종료 + NDR 일치" 검증 경로로 분기(daemonset 본문 무변경).
+	// Job 모드는 "Job 성공 종료 + NDR 일치" 검증 경로로 분기(daemonset 본문 무변경).
 	if isJobMode(policy) {
 		return m.handleValidatingJob(ctx, state, policy)
 	}
@@ -1016,7 +1016,7 @@ func (m *UpgradeStateMachine) handleRollback(
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
-	// WP-C-1: Job 모드는 "이전 버전 install Job 재실행" 경로로 분기(daemonset 본문 무변경).
+	// Job 모드는 "이전 버전 install Job 재실행" 경로로 분기(daemonset 본문 무변경).
 	if isJobMode(policy) {
 		return m.handleRollbackJob(ctx, state, policy)
 	}
@@ -1201,7 +1201,7 @@ func (m *UpgradeStateMachine) transitionTo(
 
 // stateToPhase는 UpgradeState 상수를 메트릭 phase 레이블로 변환합니다.
 // ─────────────────────────────────────────────
-// S2-5: cross-major reboot 자동화 (RebootRequired / Rebooting)
+// cross-major reboot 자동화 (RebootRequired / Rebooting)
 // ─────────────────────────────────────────────
 
 // nodeNeedsReboot 는 NDR.status.devices[vendor/model].needsReboot 를 읽는다(driverNotLoaded 와 동일 패턴).
@@ -1284,7 +1284,7 @@ func (m *UpgradeStateMachine) handleRebootRequired(ctx context.Context, state *v
 	// kured executor 는 1차 미구현(계획 §5, 수요 시). 기본 Job 만 실행.
 	if policy.Spec.RebootExecutor == "kured" {
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RebootExecutorUnsupported",
-			"kured executor 는 1차 미구현(S2-5 후속) — DIP.driver.rebootExecutor=Job 사용")
+			"kured executor 는 1차 미구현(후속 과제) — DIP.driver.rebootExecutor=Job 사용")
 		return true, 60 * time.Second, nil
 	}
 

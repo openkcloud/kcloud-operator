@@ -1,4 +1,4 @@
-<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-09-29(급정지 원인 조사 수집기 investigate-pcie.sh 절 추가) -->
+<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
 # 벤더 장치 리셋 실측
 
 ## 왜
@@ -44,7 +44,7 @@ rebellions 는 공개 인터페이스에 리셋 수단이 없다고 판정했으
    노드는 `kubectl get node <NODE> -o jsonpath=...` 로 클러스터에 실재하는 노드에서만
    IP 를 구하므로 그 목록 밖의 주소로 향할 경로 자체가 없다.
 5. `PHASE=bmc-sel`(ipmitool 설치+BMC SEL 조회)은 **k8s-worker3 에서만** 허용한다(계획 O
-   후속 Task 4 addendum §1) — `NODE` 가 그 밖이면(예: `VENDOR=nvidia` 로 호출) 아무것도
+   후속 addendum §1) — `NODE` 가 그 밖이면(예: `VENDOR=nvidia` 로 호출) 아무것도
    하지 않고 거절한다. 실행하는 ipmitool 명령은 `sel elist`·`sel info`·`mc info`·
    `chassis status` 읽기 4종뿐이다 — `power`·`chassis power`·`sel clear` 같은 쓰기 명령은
    없다. BMC 는 그 노드 안의 `/dev/ipmi0` 로만 접근한다 — 네트워크로 BMC 에 접속하지
@@ -85,7 +85,7 @@ PHASE=quiesce      VENDOR=nvidia bash test/live/device-reset/run.sh   # reset �
 PHASE=unquiesce    VENDOR=nvidia bash test/live/device-reset/run.sh
 PHASE=reboot-recover VENDOR=nvidia bash test/live/device-reset/run.sh # 장치가 안 돌아올 때만
 
-# BMC SEL(k8s-worker3 전용, 계획 O 후속 Task 4) — SEL_STAGE=before|after(기본 before).
+# BMC SEL(k8s-worker3 전용, 계획 O 후속) — SEL_STAGE=before|after(기본 before).
 # 같은 RUN_ID 로 before 뒤 after 를 부르면 sel-delta.txt(신규 SEL 항목)까지 만든다.
 SEL_STAGE=before RUN_ID=<고정> VENDOR=tenstorrent PHASE=bmc-sel bash test/live/device-reset/run.sh
 SEL_STAGE=after  RUN_ID=<위와 같은 값> VENDOR=tenstorrent PHASE=bmc-sel bash test/live/device-reset/run.sh
@@ -94,7 +94,7 @@ SEL_STAGE=after  RUN_ID=<위와 같은 값> VENDOR=tenstorrent PHASE=bmc-sel bas
 RUN_DIR=test/live/device-reset/runs/<RUN_ID>-<vendor> PHASE=verdict bash test/live/device-reset/run.sh
 # -> RESET_VERDICT: <PASS|FAIL> rc=<n|missing> devices=<same|changed|missing> node=<ready|rebooted|unknown>
 # -> RESET_REPRO: rc=<n|ssh-lost|missing> node=<ready|rebooted|unknown> sel_new=<n|missing> last_kernel_line=<yes|no|missing>
-#    (계획 O 후속 Task 4 전용 — sel-delta.txt·dmesg-live.log·reset-start-utc.txt 가 없으면 missing, 지어내지 않는다)
+#    (계획 O 후속 전용 — sel-delta.txt·dmesg-live.log·reset-start-utc.txt 가 없으면 missing, 지어내지 않는다)
 
 # 시험 훅 — FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap
 # cleanup 의 동작(라이브 없이)을 확인할 수 있다. DRY_RUN=1 과 함께 쓴다.

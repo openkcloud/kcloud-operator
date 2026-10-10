@@ -45,7 +45,7 @@ type DeviceEntry struct {
 	// DriverBinding 은 해당 장치의 PCI 커널 드라이버 바인딩 상태입니다.
 	// "nvidia"=드라이버 바인딩, "vfio-pci"=passthrough 바인딩, "none"=미바인딩(free). (a) passthrough 감지용.
 	DriverBinding string `json:"driverBinding,omitempty"`
-	// GFD(S3-3) 소스 필드 — node-agent 가 스캔 시 sysfs/PCI 에서 best-effort 추출합니다(미가용 시 공란).
+	// GFD 소스 필드 — node-agent 가 스캔 시 sysfs/PCI 에서 best-effort 추출합니다(미가용 시 공란).
 	MemoryMiB         int64  `json:"memoryMiB,omitempty"`         // 디바이스 메모리(MiB)
 	ComputeCapability string `json:"computeCapability,omitempty"` // NVIDIA sm_xx / 벤더 capability 문자열
 	PCIeAddress       string `json:"pcieAddress,omitempty"`       // 대표 PCI 주소(라벨/디버깅용)
@@ -81,7 +81,7 @@ type NodeDeviceReportStatus struct {
 	// PassthroughReserved 는 노드에 GPU 가 존재하며 전량 vfio-pci(passthrough)에 바인딩된 경우 true 입니다.
 	// (a) 관리자가 passthrough 예약 노드를 식별하고 드라이버 설치 보류 판단을 보조합니다.
 	PassthroughReserved bool `json:"passthroughReserved,omitempty"`
-	// Validation 은 node-agent 가 상시/정기 실행하는 벤더별 검증 결과입니다(S2-3).
+	// Validation 은 node-agent 가 상시/정기 실행하는 벤더별 검증 결과입니다.
 	Validation *ValidationStatus `json:"validation,omitempty"`
 	// ObservedAt 은 node-agent 가 이 보고서를 마지막으로 갱신한 시각입니다. 비어 있으면 "관측 시각
 	// 미상" 이고, health 판정은 그 상태를 Healthy 로 승격하지 않습니다(모르는 것을 아는 것처럼
@@ -110,7 +110,7 @@ type DeviceConsumer struct {
 	Container    string `json:"container"`
 }
 
-// ValidationStatus 는 node-agent Validation 능력의 노드 검증 결과입니다(S2-3).
+// ValidationStatus 는 node-agent Validation 능력의 노드 검증 결과입니다.
 type ValidationStatus struct {
 	// Passed 는 게이트 step 전부 통과 여부입니다(AC-1).
 	Passed bool `json:"passed"`
@@ -122,7 +122,7 @@ type ValidationStatus struct {
 	Steps []ValidationStep `json:"steps,omitempty"`
 }
 
-// ValidationStep 은 S2-3 5단계 각각의 결과입니다.
+// ValidationStep 은 5단계 각각의 결과입니다.
 type ValidationStep struct {
 	// Name 은 step 이름입니다("driverModule"|"deviceNode"|"devicePlugin"|"runtime"|"sampleWorkload").
 	// 멀티벤더 노드는 "<vendor>/<step>" 접두사가 붙습니다.

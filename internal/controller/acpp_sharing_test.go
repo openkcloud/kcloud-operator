@@ -4,7 +4,7 @@
 //
 //	저널 일치 재-reconcile 은 DP 를 다시 재시작하지 않음(멱등).
 //
-// 생성일: 2026-07-29 | 수정일: 2026-07-31
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -94,9 +94,9 @@ func mpsDaemonPod(node string, ready bool) *corev1.Pod {
 // extra 는 케이스별 추가 객체다(예: 이미 Ready 인 mps control daemon).
 //
 // worker1 은 mig-active 라벨이 없는(flat) 노드다 — 이 픽스처가 만드는 DS 도 flat 이름
-// (nvidia.DevicePluginNameFlat)이라 DevicePluginTargetForNode(Task 3)의 라우팅과 일치한다.
+// (nvidia.DevicePluginNameFlat)이라 DevicePluginTargetForNode 의 라우팅과 일치한다.
 // 여기 모인 spec 들은 mps 요청이 apply 단계까지 도달해야 관측할 수 있는 것들이고(저널 순서·daemon
-// 게이트·해제 경로), 노드가 mig-active 면 mpsBlockedByMigStrategy(Task 5)가 그보다 먼저 노드 단위로
+// 게이트·해제 경로), 노드가 mig-active 면 mpsBlockedByMigStrategy 가 그보다 먼저 노드 단위로
 // 거절하기 때문이다 — 그 거절 판정 자체는 프로덕션 렌더러가 만든 DS/라벨로 envtest 가 고정한다
 // (acceleratorpartitionpolicy_controller_test.go, "D-8"·"D-8 root fix"). 이 노드에 mig-active
 // 라벨을 걸면 아래 mps spec 들이 한꺼번에 Failed 로 깨져 그 사실을 알린다.
@@ -117,8 +117,8 @@ func sharingFixture(t *testing.T, acpp *npuv1alpha1.AcceleratorPartitionPolicy, 
 		Spec: corev1.PodSpec{NodeName: "worker1", Containers: []corev1.Container{{Name: "c", Image: "x"}}},
 	}
 	node := &corev1.Node{
-		// mig-active 라벨을 걸지 않는다 — DevicePluginTargetForNode(Task 3) 는 그 부재를 flat 으로 읽어
-		// 아래 flat DS 를 대상화한다. mig-active=true 를 걸면 mpsBlockedByMigStrategy(Task 5)가 이
+		// mig-active 라벨을 걸지 않는다 — DevicePluginTargetForNode 는 그 부재를 flat 으로 읽어
+		// 아래 flat DS 를 대상화한다. mig-active=true 를 걸면 mpsBlockedByMigStrategy 가 이
 		// 노드의 모든 mps 요청을 무조건 거절해, 이 파일이 exercise 하려는 apply 경로 심층 로직
 		// (저널 순서·daemon 게이트·거절-후-청소)에 이 fixture 로는 영영 도달할 수 없다 — 그 게이트
 		// 자체는 acceleratorpartitionpolicy_controller_test.go 의 "D-8" spec 들이 프로덕션 렌더러로 고정한다.
@@ -862,7 +862,7 @@ func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 	acpp.ResourceVersion = applied.ResourceVersion
 
 	// 2) 이 노드가 MIG 관리로 전환된다(예: 형제 정책이 GI 를 만들어 syncMigActiveLabel 이 라벨을
-	// 건다, Task 2) → 이제 가드(Task 5)가 이 노드의 mig-active 라벨을 보고 거절한다. 적용된 배선은
+	// 건다) → 이제 가드가 이 노드의 mig-active 라벨을 보고 거절한다. 적용된 배선은
 	// 여전히 flat DS/CM 에 있다 — resolveRollbackTarget 이 owner annotation 으로 찾으므로 라벨이
 	// 바뀌어도 청소는 그 실제 배선을 정확히 찾아낸다.
 	var node corev1.Node
@@ -932,7 +932,7 @@ func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 	}
 }
 
-// review 최종 ⑤(테스트 갭): Task 6 F2 MAJOR 의 mps 판이다. disableSharing 의 게이트에서 mps 를
+// review 최종 ⑤(테스트 갭): F2 MAJOR 의 mps 판이다. disableSharing 의 게이트에서 mps 를
 // 빼도 스위트가 초록이었다 — 같은 형태의 형제 게이트(handleNvidiaDeletion)는 고정돼 있는데
 // 이쪽만 회귀 방어가 없었다. 되돌렸을 때의 결과는 timeSliced 판보다 나쁘다: daemon 정리는 게이트
 // 밖에서 먼저 하므로 daemon 은 지워지고, DP 는 MPS_ROOT + 파이프 볼륨을 유지한 채 ConfigMap 이

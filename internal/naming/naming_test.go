@@ -2,7 +2,7 @@
 // naming_test.go: DriverDSName 단위 테스트
 // 상세: 드라이버 DaemonSet 이름 생성 규칙 — 벤더/모델 매핑 테이블, 빈 모델 안전성,
 //       대소문자 정규화(내부 lower-case 처리) 검증
-// 생성일: 2026-06-02
+// 생성일: 2026-06-02 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package naming
@@ -143,7 +143,7 @@ func TestDriverDSName_AlwaysHasDriverSuffix(t *testing.T) {
 	}
 }
 
-// TestInstallJobName 는 WP-C-1 install Job 이름 규약을 검증한다.
+// TestInstallJobName 는 install Job 이름 규약을 검증한다.
 //   - "kcloud-<vendor>[-<model>]-install-<8hex>" 형태
 //   - 동일 입력에 대해 결정론적(같은 값)
 //   - 노드가 다르면 접미사가 달라짐(노드별 분리)

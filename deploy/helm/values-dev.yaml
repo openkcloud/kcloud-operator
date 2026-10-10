@@ -5,7 +5,7 @@
 #       설정을 여기서 영속시킨다. --set 은 helm upgrade 한 번에 증발하므로(2026-07-16 사건:
 #       rev19 upgrade 에서 nvidia toolkit --set 소멸→toolkit DS 소멸→worker1 containerd
 #       nvidia runtime 유실→gpu allocatable 0) 반드시 커밋된 values 로 영속한다.
-# 생성일: 2026-07-16 | 수정일: 2026-09-09 (toolkit 이미지 기본값을 upstream 경로로)
+# 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 # ============================================================
 driverInstallPolicies:
   nvidia:
@@ -36,10 +36,10 @@ furiosa:
   unified:
     enabled: true
 
-# Admission webhook (S4-1): DIP/NCP validating + opt-in Pod mutating. 라이브 검증 상시 on.
+# Admission webhook: DIP/NCP validating + opt-in Pod mutating. 라이브 검증 상시 on.
 webhook:
   enabled: true
 
-# 관리 REST API (S5-3-②): operator pod 내 HTTPS listener(:9444). 라이브 검증 상시 on.
+# 관리 REST API: operator pod 내 HTTPS listener(:9444). 라이브 검증 상시 on.
 api:
   enabled: true

@@ -2,7 +2,7 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21
+// 생성일: 2026-04-21 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package controller
@@ -1751,7 +1751,7 @@ func TestEnsureUpgradeStates_MismatchSyncIsIdempotent(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// 버전 드리프트 감지 시나리오 (Task 2 — 감지 전용, 자동 조치 없음)
+// 버전 드리프트 감지 시나리오 (감지 전용, 자동 조치 없음)
 // ─────────────────────────────────────────────
 
 // TestSyncUpgradeStateDriftConfirmed 는 Idle 에서 정책 선언 버전과 NDR 실측이 유예를 넘겨

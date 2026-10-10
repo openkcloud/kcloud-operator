@@ -4,7 +4,7 @@
 //
 //	seam 으로 typed CommandStep 실행, Verify 는 verifier seam 으로 위임(stateless).
 //
-// 생성일: 2026-07-23 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package nvidia
 
@@ -100,7 +100,7 @@ type Backend struct {
 	// NDR MIG 필드를, non-nil 이면 이 관측을 MIG-capable 장치의 진실 소스로 쓴다.
 	observations map[string]Observation
 	// profilesUnobservable 은 target 중 mode 가 Disabled 라 profile 목록을 관측할 수 없는 것이
-	// 있는지다(Task 6). Validate 가 이 경우 supported 부재를 "미지원"으로 오판하지 않게 한다.
+	// 있는지다. Validate 가 이 경우 supported 부재를 "미지원"으로 오판하지 않게 한다.
 	profilesUnobservable bool
 }
 
@@ -156,7 +156,7 @@ func (b *Backend) Vendor() string { return "nvidia" }
 
 // Discover 는 NDR NVIDIA 장치를 공통 capability 형식으로 변환한다(spec §4.2, criterion 12).
 // MIG profile 은 DeviceEntry.MigLgipOutput 파싱. MIG-capable 장치가 하나라도 있으면 b.targets/b.supported
-// 를 채우고 Apply/Rollback 을 supported=true, Advertisement.Mode="ProfileNamed" 로 보고한다(Task 11).
+// 를 채우고 Apply/Rollback 을 supported=true, Advertisement.Mode="ProfileNamed" 로 보고한다.
 // b.supported 는 targets 전원의 MigLgipOutput 교집합(profile 이 전 target 에 존재해야 하고, MaxInstances 는 최소값).
 func (b *Backend) Discover(t partition.Target) (*partition.DiscoverResult, error) {
 	var ndr v1alpha1.NodeDeviceReport
@@ -203,7 +203,7 @@ func (b *Backend) Discover(t partition.Target) (*partition.DiscoverResult, error
 		migCap := migCapable(d.Model)
 		if b.observations != nil {
 			// mode 가 Disabled 면 `mig -lgip` 가 profile 을 전혀 내놓지 않는다 — profile 유무만으로
-			// 판정하면 정작 mode enable 이 필요한 GPU 가 target 에서 빠진다(Task 6 닭-달걀).
+			// 판정하면 정작 mode enable 이 필요한 GPU 가 target 에서 빠진다(닭-달걀).
 			// mig.mode.current=Disabled 는 MIG 지원 GPU 에서만 나오는 값이므로(미지원은 N/A) 그 자체가
 			// capability 신호다. Unknown/N/A 는 여전히 제외하고, 관측 에러가 붙은 값도 신뢰하지 않는다
 			// (pending 파싱 실패처럼 current 는 Disabled 인 채 Err 만 채워지는 경우가 있다 — fail-closed).
@@ -247,9 +247,9 @@ func (b *Backend) Discover(t partition.Target) (*partition.DiscoverResult, error
 		res.Advertisement.Mode = advProfileNamed
 		b.supported = intersectProfiles(profileSets)
 	}
-	// capability 3축(Task 1)은 MIG-capable(target) 장치에만 채운다 — b.supported 는 위에서
+	// capability 3축은 MIG-capable(target) 장치에만 채운다 — b.supported 는 위에서
 	// 방금 확정됐으므로 이 시점 이후에만 정확하다. TimeSlicing/Isolation/AllocationAPIs 는 비-MIG
-	// 장치(A2 등)에 대해 zero-value(미실측) 유지(Task 1 스코프 결정, 이번 커밋 대상 아님).
+	// 장치(A2 등)에 대해 zero-value(미실측) 유지(의도적 범위 제한, 이번 커밋 대상 아님).
 	// MultiProcess 는 이미 위 루프에서 채워졌다(관측 mc 가 그 시점에만 있어서다).
 	for i := range res.Devices {
 		if !res.Devices[i].PartitionCapability.HardwareSupported {
@@ -390,8 +390,8 @@ func (b *Backend) Validate(layout []partition.Layout) error {
 	}
 	max, ok := b.supported[l.Profile]
 	if !ok {
-		// MIG mode 가 꺼져 있으면 `mig -lgip` 가 profile 을 내놓지 않아 supported 를 채울 수 없다
-		// (Task 6). 이때 "미지원" 으로 단정하면 mode enable 자체가 영영 시작되지 않으므로, 형식
+		// MIG mode 가 꺼져 있으면 `mig -lgip` 가 profile 을 내놓지 않아 supported 를 채울 수 없다.
+		// 이때 "미지원" 으로 단정하면 mode enable 자체가 영영 시작되지 않으므로, 형식
 		// 검증(profile 정규식 + count>0)만 통과시키고 실제 판정은 하드웨어(-cgi)에 맡긴다.
 		// -cgi 는 실패 시 non-zero 로 끝나고 apply 는 fail-closed 로 rollback 된다.
 		if b.profilesUnobservable {

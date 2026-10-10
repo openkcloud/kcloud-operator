@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25 | 수정일: 2026-10-09 (벤더 operator ClusterPolicy 류 CR get·list 추가)
+# 생성일: 2026-03-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -18,7 +18,7 @@ kind: ClusterRole
 metadata:
   name: {{ include "kcloud-operator.fullname" . }}-role
 rules:
-  # P6 최소화: NCP 는 사용자 생성 CR — operator 는 reconcile(status/finalizer)만. create/delete 미사용 제거.
+  # 최소화: NCP 는 사용자 생성 CR — operator 는 reconcile(status/finalizer)만. create/delete 미사용 제거.
   - apiGroups: ["npu.ai"]
     resources: ["npuclusterpolicies", "npuclusterpolicies/status", "npuclusterpolicies/finalizers"]
     verbs: ["get", "list", "watch", "update", "patch"]
@@ -75,7 +75,7 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["acceleratordescriptors/status"]
     verbs: ["get", "update", "patch"]
-  # P6 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러(migobservation_controller.go)
+  # 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러(migobservation_controller.go)
   # 가 특권 Job 의 관측 결과를 이 보고서에 직접 기록한다(detector 는 비특권이라 MIG 를 못 봐서
   # 대신 쓴다) — status 에 update/patch 가 없으면 그 기록이 조용히 거절되고, 보고서가 영영
   # 안 바뀌어 재관측이 필요하다고 계속 판단해 특권 Job 이 반복 생성된다(2026-08-04 라이브 핫루프,
@@ -88,7 +88,7 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports/status"]
     verbs: ["get", "update", "patch"]
-  # P6 최소화: DIP 는 사용자 생성 CR — reconciler get/list/watch + 관리 API(pkg/npuctl)가 spec patch(upgrade/rollback/toggle). create/update 미사용 제거.
+  # 최소화: DIP 는 사용자 생성 CR — reconciler get/list/watch + 관리 API(pkg/npuctl)가 spec patch(upgrade/rollback/toggle). create/update 미사용 제거.
   - apiGroups: ["npu.ai"]
     resources: ["driverinstallpolicies"]
     verbs: ["get", "list", "watch", "patch"]
@@ -98,7 +98,7 @@ rules:
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # WP-C-1 Mode=job: DUS 상태머신이 install Job 을 생성/조회/삭제하고 controller-runtime 이 Job 을 watch 함
+  # Mode=job: DUS 상태머신이 install Job 을 생성/조회/삭제하고 controller-runtime 이 Job 을 watch 함
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -147,14 +147,14 @@ rules:
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # clusterroles/clusterrolebindings 에 bind;escalate 추가 — descriptor auto-apply(D4b/c)가
+  # clusterroles/clusterrolebindings 에 bind;escalate 추가 — descriptor auto-apply 가
   # 생성 DRA 드라이버용 ClusterRole(operator 가 전부는 안 가진 resourceslices 권한 부여)을
   # 만들려면 escalate 가 필요하다. namespaced roles/rolebindings 는 코드가 만들지도 읽지도
   # 않아 제거했다(최소권한).
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"]
-  # P4 관리 REST API(S5-3-②): 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
+  # P4 관리 REST API: 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
   # api.enabled=false 여도 무해하며, 누락 시 모든 API 요청이 500(리뷰 생성 실패)이 되므로 항상 부여.
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
@@ -220,7 +220,7 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports", "nodedevicereports/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # node-agent NFD/GFD 라벨링(§5.3, Q1=A): 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
+  # node-agent NFD/GFD 라벨링(§5.3): 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "update", "patch"]

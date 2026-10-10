@@ -357,7 +357,7 @@ func ndrEntriesFor(ndrs []v1alpha1.NodeDeviceReport, nodeName string) []v1alpha1
 // 오답이 난다(task-2-review Important #3 — worker1 에서 NVIDIA 장치에 furiosa 가 찍히는 재현
 // 사례). 매칭되는 NDR 행이 없으면(detector 미관측 등) vendorForNode 로 폴백한다 — 그 경우엔
 // 여전히 오답 가능성이 남는다(DeviceStatus 에 device 단위 벤더 필드가 없는 한 완전한 해결은
-// 불가 — Task 1 스키마 범위 밖).
+// 불가 — 스키마 범위 밖).
 func deviceVendor(nc intent.NodeCapability, ndrs []v1alpha1.NodeDeviceReport, nodeName, model string) string {
 	for _, e := range ndrEntriesFor(ndrs, nodeName) {
 		if e.Model == model {

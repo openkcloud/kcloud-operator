@@ -1,7 +1,7 @@
 // ============================================================
 // timeslicing_test.go: NVIDIA device-plugin sharing config 렌더 테스트
 // 상세: 스키마 정본은 operator 작업트리의 reference/nvidia-k8s-device-plugin/api/config/v1/{sharing,replicas}.go.
-// 생성일: 2026-07-29 | 수정일: 2026-07-31
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package nvidia
 
@@ -301,7 +301,7 @@ func TestApplySharingCreatesConfigMapAndPatchesDS(t *testing.T) {
 }
 
 // TestApplySharingRejectsInvalidLayout: 렌더러(RenderSharingConfig)는 replicas 를 검증하지 않으므로
-// backend 가 fail-closed 로 막아야 한다 — 아니면 DP 가 기동 실패하는 config 가 실려나간다(Task 3 리뷰 지적).
+// backend 가 fail-closed 로 막아야 한다 — 아니면 DP 가 기동 실패하는 config 가 실려나간다(리뷰 지적).
 func TestApplySharingRejectsInvalidLayout(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(scheme()).WithObjects(dpDaemonSet(), worker1Node()).Build()

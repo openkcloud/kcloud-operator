@@ -2,7 +2,7 @@
 // dra_driver_test.go: DRA 드라이버 렌더러와 배포 게이트 시험
 // 상세: 벤더 chart 를 그대로 쓰지 않고 우리 라벨·이미지로 옮기는 것이 렌더러의
 // 존재 이유다. 그 치환이 실제로 일어나는지를 고정한다.
-// 생성일: 2026-08-07 | 수정일: 2026-09-16
+// 생성일: 2026-08-07 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -1099,7 +1099,7 @@ func TestDualAdvertiseCondition_IgnoresOtherVendorSlices(t *testing.T) {
 
 // TestDualAdvertiseCondition_DistinguishesFuriosaAndRngd 는 rngd 드라이버(furiosa 와 공유하는
 // draDriverNameFuriosa)가 낸 슬라이스와 furiosa.ai/rngd allocatable 이 함께 있는 노드를 rngd
-// 이중광고로만 잡고 furiosa(warboy) 판정에는 영향이 없는 것을 단정한다. Task 1 은
+// 이중광고로만 잡고 furiosa(warboy) 판정에는 영향이 없는 것을 단정한다. 기존 시험은
 // tenstorrent·nvidia 조합만 시험해 furiosa·rngd 는 리소스명이 실제로 갈라지는지 직접 확인하지
 // 않았다 — 드라이버 이름은 같아도 리소스명(advertiseVendorResourceName)이 다르므로 갈려야 한다.
 func TestDualAdvertiseCondition_DistinguishesFuriosaAndRngd(t *testing.T) {
@@ -1132,7 +1132,7 @@ func TestDualAdvertiseCondition_DistinguishesFuriosaAndRngd(t *testing.T) {
 
 // TestDualAdvertiseCondition_EventOnlyOnTransition 는 DualAdvertise 경고가 False→True
 // 전이(최초 포함)에서만 나가고, 같은 True 상태가 반복되는 reconcile 에서는 다시 나가지 않는
-// 것을 단정한다 — Task 1 리뷰 Minor: 전이 판정 코드는 있었지만 이를 직접 겨냥한 시험이 없었다.
+// 것을 단정한다 — 리뷰 Minor: 전이 판정 코드는 있었지만 이를 직접 겨냥한 시험이 없었다.
 func TestDualAdvertiseCondition_EventOnlyOnTransition(t *testing.T) {
 	p := &npuv1alpha1.NPUClusterPolicy{}
 	node := &corev1.Node{

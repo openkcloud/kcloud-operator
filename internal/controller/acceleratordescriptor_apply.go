@@ -1,9 +1,9 @@
 // ============================================================
-// acceleratordescriptor_apply.go: descriptor 생성물 적용·회수 (D4b/c)
+// acceleratordescriptor_apply.go: descriptor 생성물 적용·회수
 // 상세: backend-source 중재(NPUClusterPolicy 관리 벤더 거절)·발견가능 preflight·
 //       SSA apply(ownerRef+라벨)·라벨 기반 능동 prune 을 한곳에 모은다. descriptor 는
 //       cluster-scoped 라 namespaced·cluster-scoped 생성물 모두를 소유할 수 있다.
-// 생성일: 2026-09-18 | 수정일: 2026-10-09 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기 보강)
+// 생성일: 2026-09-18 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package controller

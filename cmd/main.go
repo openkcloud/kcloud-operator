@@ -448,7 +448,7 @@ func main() {
 		setupLog.Info("webhook-cert-path 가 비어 admission webhook 미등록 — 웹훅 서버도 띄우지 않는다")
 	}
 
-	// Management REST API(S5-3-②, opt-in). api-bind-address 가 비면 미기동(무영향).
+	// Management REST API(opt-in). api-bind-address 가 비면 미기동(무영향).
 	// TokenReview/SAR 는 별도 clientset, 상태·CR patch 는 매니저의 캐시 client 를 재사용한다.
 	if apiBindAddress != "" {
 		authnClient, err := kubernetes.NewForConfig(mgr.GetConfig())

@@ -1,9 +1,9 @@
 // ============================================================
-// job_test.go: WP-C-1 install Job 빌더 단위 테스트
+// job_test.go: install Job 빌더 단위 테스트
 // 상세: privileged/hostPID/OnFailure/ttl/backoff/RUN_MODE env/nodeName 고정,
 //       PreStop·probe 제거(완료 시 rmmod 참사 방지), Furiosa secret,
 //       imagePullSecrets, JobOverrides override, ownerReference(DIP) 검증.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package driverjob

@@ -93,7 +93,7 @@ func deployedOperatorRules(t *testing.T) map[string][]string {
 //
 // npuclusterpolicies 의 create/delete: NCP 는 사용자가 만드는 CR 이라 operator 는 reconcile
 // (status·finalizer)만 한다. kubebuilder 마커에는 두 verb 가 남아 있지만 코드가 쓴 적이 없고,
-// 배포본이 최소권한으로 좁힌 쪽이 맞다(deploy/helm/templates/rbac.yaml 의 "P6 최소화" 주석).
+// 배포본이 최소권한으로 좁힌 쪽이 맞다(deploy/helm/templates/rbac.yaml 의 "최소화" 주석).
 var knownRBACDivergence = map[string][]string{
 	"npuclusterpolicies": {"create", "delete"},
 }

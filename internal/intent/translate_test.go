@@ -1,7 +1,7 @@
 // ============================================================
 // translate_test.go: 추상 의도 → 벤더 리소스 번역 테스트
 // 상세: 벤더 우선순위, DRA 거절, 축을 지목하는 오류 전파, 노드 후보 확정.
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package intent
 
@@ -173,7 +173,7 @@ func TestTranslateUnknownVendorNamesTheClass(t *testing.T) {
 }
 
 // 같은 벤더가 두 번 매핑되면 선택이 비결정적이 된다 — webhook 이 이미 이걸 막지만
-// failurePolicy=Ignore 라 webhook 이 죽어도 Translate 스스로 걸러야 한다(D1).
+// failurePolicy=Ignore 라 webhook 이 죽어도 Translate 스스로 걸러야 한다.
 func TestTranslateRejectsDuplicateVendor(t *testing.T) {
 	req := Request{ClassName: "c", Mappings: []v1alpha1.AcceleratorMapping{{Vendor: vendorNvidia}, {Vendor: "NVIDIA"}},
 		Access: v1alpha1.AccessSpec{Mode: v1alpha1.AccessModeExclusive}, AllocationAPI: v1alpha1.AllocationAPIAuto}

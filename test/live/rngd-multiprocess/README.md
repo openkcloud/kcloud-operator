@@ -1,4 +1,4 @@
-# RNGD 다중 프로세스 실측 (Task 7)
+# RNGD 다중 프로세스 실측
 
 ## 왜
 RNGD 공유(time-slicing 유사 UX)의 가능 여부는 **런타임이 한 장치/파티션에 다중 프로세스 context 를

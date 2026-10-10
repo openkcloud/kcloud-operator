@@ -1,4 +1,4 @@
-# rngd.yaml: 유효 descriptor archetype - Furiosa RNGD | 생성일: 2026-08-10
+# rngd.yaml: 유효 descriptor archetype - Furiosa RNGD | 생성일: 2026-08-10 | 수정일: 2026-10-10
 vendor: rngd
 product: rngd
 allocationUnit: device
@@ -6,7 +6,7 @@ identity:
   source: pciAddress
   stableAcrossReboot: true
 deviceNodes:
-  - /dev/rngd/{{id}}*
+  - /dev/rngd/{{id}}
 backends:
   - devicePlugin
   - dra

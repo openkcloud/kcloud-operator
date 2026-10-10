@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_types.go: AcceleratorPartitionPolicy CRD 타입
 // 상세: 이기종 가속기(RNGD/NVIDIA) 파티션 통합 인터페이스. spec + status 4축.
-// 생성일: 2026-07-23 | 수정일: 2026-10-05
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package v1alpha1
 
@@ -145,10 +145,10 @@ type ApplyRecord struct {
 	Count                int32    `json:"count,omitempty"`
 	Generation           int64    `json:"generation,omitempty"`
 	MigPhase             string   `json:"migPhase,omitempty"`
-	// CordonedByPolicy 는 MIG mode enable 절차가 노드를 cordon 했는지다(Task 6). 운영자가 미리
+	// CordonedByPolicy 는 MIG mode enable 절차가 노드를 cordon 했는지다. 운영자가 미리
 	// cordon 해 둔 노드를 정책이 멋대로 uncordon 하지 않도록, 우리가 잠근 노드만 되돌린다.
 	CordonedByPolicy bool `json:"cordonedByPolicy,omitempty"`
-	// RebootAttempts 는 MIG mode 확정을 위해 이 정책이 요청한 재부팅 횟수다(Task 6). Job 생성
+	// RebootAttempts 는 MIG mode 확정을 위해 이 정책이 요청한 재부팅 횟수다. Job 생성
 	// 직전에 증가·영속하며, 상한을 넘으면 재부팅 대신 Failed 로 끝낸다(무한 재부팅 방지).
 	RebootAttempts int32 `json:"rebootAttempts,omitempty"`
 	// DisableRebootAttempts 는 deletionPolicy=RestoreMode 삭제 경로가 MIG mode 를 되돌리기 위해
@@ -207,7 +207,7 @@ type DeviceStatus struct {
 	PCIAddress          string              `json:"pciAddress,omitempty"`
 	Model               string              `json:"model,omitempty"`
 	PartitionCapability PartitionCapability `json:"partitionCapability,omitempty"`
-	// SharingCapability 는 공유 방식별 지원·검증 상태다(Task 1, R&D v1.0 §10.1).
+	// SharingCapability 는 공유 방식별 지원·검증 상태다(R&D v1.0 §10.1).
 	// +optional
 	SharingCapability SharingCapability `json:"sharingCapability,omitempty"`
 	// IsolationCapability 는 실측 근거가 있는 격리 등급이다(미실측은 빈 문자열).
@@ -343,7 +343,7 @@ const (
 const (
 	MigPhasePrepared     = "Prepared"
 	MigPhaseLockAcquired = "LockAcquired"
-	// MIG mode enable(Task 6) 전용 phase — GI 생성(Applying~) 이전 단계다. 하드웨어 mutation 은
+	// MIG mode enable 전용 phase — GI 생성(Applying~) 이전 단계다. 하드웨어 mutation 은
 	// -mig 1 뿐이고 GI 는 아직 없으므로 삭제 경로의 rollback 대상이 아니다(hardwareChanged 제외).
 	MigPhaseQuiescing       = "Quiescing"
 	MigPhaseModeEnabling    = "ModeEnabling"

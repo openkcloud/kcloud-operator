@@ -3,7 +3,7 @@
 // 상세: 이 계획의 유일한 번역 함수다. admission webhook 과 컨트롤러가 같은 함수를 부른다.
 // 순수 함수이므로 클러스터 조회는 호출부(Load)가 미리 해 둔다. 실패하면 항상 *Reject 를
 // 돌려주며, 절대 다른 모드·다른 벤더로 조용히 갈아끼우지 않는다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package intent
 
@@ -79,7 +79,7 @@ func TranslateWithDRA(req Request, snap []NodeCapability, dra DRACapability) (*R
 			Message: fmt.Sprintf("AcceleratorClass %s declares no vendor mapping", req.ClassName)}
 	}
 	// admission webhook 이 이미 벤더 중복을 막지만 failurePolicy=Ignore 라 웹훅이 죽으면
-	// 통과할 수 있다(D1) — 여기서도 걸러야 "선택이 비결정적" 인 클래스가 조용히 첫 매핑으로
+	// 통과할 수 있다 — 여기서도 걸러야 "선택이 비결정적" 인 클래스가 조용히 첫 매핑으로
 	// 정해지는 일이 없다.
 	if dup := duplicateVendor(mappings); dup != "" {
 		return nil, &Reject{Axis: AxisCandidates, Reason: v1alpha1.AWReasonNoVendorMapping,

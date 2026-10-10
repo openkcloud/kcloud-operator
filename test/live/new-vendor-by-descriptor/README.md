@@ -1,4 +1,4 @@
-<!-- README.md: "새 벤더 = device-plugin 코드 0줄" descriptor 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 -->
+<!-- README.md: "새 벤더 = device-plugin 코드 0줄" descriptor 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
 # 새 벤더 = descriptor 하나 (new-vendor-by-descriptor)
 
 ## 왜
@@ -29,7 +29,7 @@ device-plugin 이 `tenstorrent/blackhole-p150` 을 광고하며, 소비자 파�
 
 - operator 빌드에 tenstorrent 의 toggle-off(비활성화 시 소유 device-plugin 삭제) 경로가 있어야
   한다. 이 경로가 포함된 빌드(Round 4 이후)에서 실행한다.
-- descriptor auto-apply(D4)가 켜져 있어야 한다. tenstorrent 를 끄면 벤더가 비관리 상태가 되어
+- descriptor auto-apply 가 켜져 있어야 한다. tenstorrent 를 끄면 벤더가 비관리 상태가 되어
   descriptor 가 중재를 통과하고 생성 device-plugin 이 뜬다. tenstorrent 가 켜져 있거나 external
   이면 descriptor 는 이중 광고 방지로 거절되므로, 스크립트는 그 경우 `BLOCKED` 로 끝낸다.
 - k8s-worker3 에 tenstorrent 장치가 실재하고 device-plugin 이 떠 있는 상태에서 시작한다.

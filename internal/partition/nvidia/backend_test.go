@@ -1,6 +1,6 @@
 // ============================================================
 // backend_test.go: NVIDIA backend 단위 테스트 — discovery + Apply/Verify/Rollback/Diff
-// 생성일: 2026-07-23 | 수정일: 2026-07-31
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package nvidia
 
@@ -120,7 +120,7 @@ func TestNvidiaValidate_Scope(t *testing.T) {
 			t.Errorf("malformed profile %q should be ErrUnsupported, got %v", bad, err)
 		}
 	}
-	// resolved=nil(!=1 항목) 은 mixed-placement 미지원으로 거부한다(§14 Task 7 Step 1).
+	// resolved=nil(!=1 항목) 은 mixed-placement 미지원으로 거부한다(§14).
 	if _, err := b.Apply(partition.Target{}, nil); err != ErrMixedPlacementUnsupported {
 		t.Errorf("Apply with resolved!=1 must be ErrMixedPlacementUnsupported, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// TestDiscoverFillsCapabilityAxes 는 deviceStatusFor 가 capability 3축(Task 1)을 채우는지 검증한다.
+// TestDiscoverFillsCapabilityAxes 는 deviceStatusFor 가 capability 3축을 채우는지 검증한다.
 func TestDiscoverFillsCapabilityAxes(t *testing.T) {
 	b := New(nil).withSupported(map[string]int32{"1g.6gb": 7})
 	d := b.deviceStatusFor(MigDevice{PCI: "0000:18:00.0", ModeCurrent: "Enabled"}, "NVIDIA A30")
@@ -192,7 +192,7 @@ func TestSharingCapability_MPSNeverClaimsVerified(t *testing.T) {
 			if got.Verification == v1alpha1.VerificationVerified {
 				t.Error("실측 전에 verified 를 주장하면 안 된다")
 			}
-			// 지원=true 쪽도 사유가 있어야 한다(review 최종 ①): Task 6 F5 가 "미지원 + 빈 사유" 를
+			// 지원=true 쪽도 사유가 있어야 한다(review 최종 ①): F5 가 "미지원 + 빈 사유" 를
 			// 결함으로 고쳤는데 반대쪽("MIG 꺼짐 → 지원" 정상 경로)은 빈 사유로 남아 있었고,
 			// 검사가 `!Supported && Reason == ""` 라 아무도 그것을 보지 않았다.
 			if got.Reason == "" {

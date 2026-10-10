@@ -3,7 +3,7 @@
 // 상세: kubectl apply 에 즉시 거절 사유를 돌려주기 위한 경로다. 판정 자체는 컨트롤러와
 // 동일한 intent.Translate 를 쓴다 — 이 webhook 은 failurePolicy=Ignore 라 최종 권위가
 // 아니며, 권위 판정은 컨트롤러가 status 로 남긴다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package webhook
@@ -54,7 +54,7 @@ func (v *AWValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admis
 // 클래스 참조·모드·요구사항이 지금 클러스터에서 성립하는지 본다. 스냅샷 조회(Load)가 실패하면
 // (API 서버 일시 오류 등) 여기서 거절하지 않고 에러를 그대로 올려 admission 이 지연·에러로
 // 끝나게 둔다 — failurePolicy=Ignore 라 웹훅이 타임아웃/에러 나면 API 서버가 알아서 통과시키고,
-// 권위 판정은 어차피 컨트롤러가 다시 한다(D1). 여기서 fail-open 을 흉내 내려고 소리 없이
+// 권위 판정은 어차피 컨트롤러가 다시 한다. 여기서 fail-open 을 흉내 내려고 소리 없이
 // 통과시키면 실패를 감추게 되므로 하지 않는다.
 func validateAcceleratorWorkload(ctx context.Context, c client.Client, obj runtime.Object) (admission.Warnings, error) {
 	aw, ok := obj.(*npuv1alpha1.AcceleratorWorkload)

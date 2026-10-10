@@ -153,7 +153,7 @@ spec:
                       type: integer
                     cordonedByPolicy:
                       description: |-
-                        CordonedByPolicy 는 MIG mode enable 절차가 노드를 cordon 했는지다(Task 6). 운영자가 미리
+                        CordonedByPolicy 는 MIG mode enable 절차가 노드를 cordon 했는지다. 운영자가 미리
                         cordon 해 둔 노드를 정책이 멋대로 uncordon 하지 않도록, 우리가 잠근 노드만 되돌린다.
                       type: boolean
                     count:
@@ -191,7 +191,7 @@ spec:
                       type: string
                     rebootAttempts:
                       description: |-
-                        RebootAttempts 는 MIG mode 확정을 위해 이 정책이 요청한 재부팅 횟수다(Task 6). Job 생성
+                        RebootAttempts 는 MIG mode 확정을 위해 이 정책이 요청한 재부팅 횟수다. Job 생성
                         직전에 증가·영속하며, 상한을 넘으면 재부팅 대신 Failed 로 끝낸다(무한 재부팅 방지).
                       format: int32
                       type: integer
@@ -404,8 +404,8 @@ spec:
                           pciAddress:
                             type: string
                           sharingCapability:
-                            description: SharingCapability 는 공유 방식별 지원·검증 상태다(Task
-                              1, R&D v1.0 §10.1).
+                            description: SharingCapability 는 공유 방식별 지원·검증 상태다(R&D
+                              v1.0 §10.1).
                             properties:
                               brokered:
                                 description: SharingModeSupport 는 한 공유 방식의 지원·검증 상태다.

@@ -1,4 +1,4 @@
-<!-- README.md: k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 하네스 사용법 | 생성일: 2026-09-28 -->
+<!-- README.md: k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
 # k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 (계획 K 재확인)
 
 ## 왜
@@ -11,7 +11,7 @@ ADR-002 드라이버 버전 출처 단일화의 "해소된 결합"
 지금 라이브에 있는 것은 제거 이전 버전이다. 이 하네스가 그 재확인을 한다 — 제거를
 담은 새 이미지(`-v3`, 이 하네스 밖에서 `make build-precompiled`로 미리 빌드·push)를
 DIP 에 등록하고, 2026-09-26 실측 레코드
-(Task 6)가 실행한 것과 같은 9개 패키지 제거+재부팅으로 노드를 빈 상태로 만든 뒤,
+가 실행한 것과 같은 9개 패키지 제거+재부팅으로 노드를 빈 상태로 만든 뒤,
 operator 자기복구 설치 Job 을 관찰한다.
 
 ## 허용 조치(닫힌 목록) — 이 밖은 컨트롤러 승인 없이 하지 않는다
@@ -40,7 +40,7 @@ operator 자기복구 설치 Job 을 관찰한다.
   기록만으로 재부팅 뒤 실제로 그 커널로 뜬다는 보장은 없다 — `wait-empty`/`observe`
   단계가 실제 모듈·Job 관찰로 확인한다.
 - **재부팅 완성 판정**: SSH 로 잰 `uptime<600` 초(=새 boot)와 `kubectl` 이 보는
-  node Ready=True 가 **같은 폴링 순간**에 동시에 성립해야 통과다. 2026-09-26 Task 6
+  node Ready=True 가 **같은 폴링 순간**에 동시에 성립해야 통과다. 2026-09-26
   실행에서 재부팅 전 오래 떠 있던 stale Ready(uptime 87897초)를 새 Ready 로 착각할
   뻔한 함정이 실제로 있었다 — 이 동시 조건이 그 함정을 구조적으로 막는다.
 - **관찰 종료 조건**(`observe`): 설치 Job 파드가 `Succeeded`이고 DUS 가 `Idle`로
@@ -79,7 +79,7 @@ RUN_DIR=test/live/nvidia-prebuilt-relive/runs/<RUN_ID>-nvidia PHASE=verdict bash
 `v3`)·`REGISTRY_REPO`(기본 `<레지스트리>:5100/kcloud/nvidia-driver-ds`)·
 `IMAGE_TAG`(위 셋으로 계산한 값을 통째로 덮고 싶을 때)·`REBOOT_TIMEOUT`(기본
 540초)·`OBSERVE_TIMEOUT`(기본 540초). **제거 대상 9개 패키지 이름·순서
-(`PACKAGES` 배열)는 환경변수로 덮지 않는다** — ADR-002 Task 6 실행 기록과 정확히
+(`PACKAGES` 배열)는 환경변수로 덮지 않는다** — ADR-002 실행 기록과 정확히
 같아야 한다는 것이 이 절차의 근거다.
 
 **`PHASE=quiesce` 를 단독으로 돌렸으면 반드시 `PHASE=unquiesce` 로 되돌린다.** 정상

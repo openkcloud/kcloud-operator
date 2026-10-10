@@ -1,7 +1,7 @@
 // ============================================================
 // profiles_test.go: ValidateLayoutShape/KnownMIGProfiles 시험
 // 상세: 삭제 실험으로 CountPerDevice 경계를 실제로 잡는지 확인(TestValidateLayoutShape 참조).
-// 생성일: 2026-08-24 | 수정일: 2026-10-09
+// 생성일: 2026-08-24 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package partition
 
@@ -24,7 +24,7 @@ func TestValidateLayoutShape(t *testing.T) {
 		{"개수 음수", "nvidia", []Layout{{Profile: "1g.6gb", CountPerDevice: -1}}, true},
 		{"레이아웃 둘", "nvidia", []Layout{{Profile: "1g.6gb", CountPerDevice: 4}, {Profile: "2g.12gb", CountPerDevice: 1}}, true},
 		// 빈 레이아웃은 여기서 통과한다 — sharing 만 있는 정책(순수 공유)이 정상이고, 레이아웃과
-		// sharing 이 둘 다 비었는지는 ACPP 전체를 봐야 알 수 있어 webhook(Task 4)이 판정한다.
+		// sharing 이 둘 다 비었는지는 ACPP 전체를 봐야 알 수 있어 webhook 이 판정한다.
 		{"빈 레이아웃은 여기서 통과", "nvidia", nil, false},
 		{"furiosa 는 프로파일 형식을 강제하지 않음", "furiosa", []Layout{{Profile: "dual-core", CountPerDevice: 2}}, false},
 	}

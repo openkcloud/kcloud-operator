@@ -1,10 +1,10 @@
 // ============================================================
-// server.go: 관리 REST API 서버 (S5-3-②, 관리 API 2단계)
+// server.go: 관리 REST API 서버 (관리 API 2단계)
 // 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read(GET /status,
 //       /nodes/{node})/control(POST /vendors/{vendor}/upgrade|rollback|toggle)을 노출.
 //       control 은 전부 CR patch 로 귀결(1단계 계약 유지). 인증=TokenReview, 인가=SubjectAccessReview.
 // 생성일: 2026-07-20 | 수정일: 2026-10-10 (capabilities·accelerators·preview 에 DRA 읽기
-//         (resourceslices·deviceclasses) 인가 게이트 추가)
+//         (resourceslices·deviceclasses) 인가 게이트 추가; 계획서 항목 토큰 제거)
 // ============================================================
 
 package apiserver

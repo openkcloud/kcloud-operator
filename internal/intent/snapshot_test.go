@@ -1,7 +1,7 @@
 // ============================================================
 // snapshot_test.go: capability 스냅샷 테스트
 // 상세: 가속기 없는 노드 제외, ACPP 저널 반영, stale(fail closed) 판정, fake client Load.
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package intent
 
@@ -290,7 +290,7 @@ func TestBuildSnapshotACPPSelectionIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy 는 라이브 결함 D-4 재현이다(Task 5 §5.2):
+// TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy 는 라이브 결함 D-4 재현이다(§5.2):
 // 같은 노드를 타깃하는 ACPP 둘 중 이름 사전순 앞("worker1-a2-timeslice", "a2" < "a30")이 Failed 여도
 // 뒤의 Ready 정책("worker1-a30-4x1g")의 관측이 채택되고 노드는 stale 이 아니어야 한다.
 // 첫-매치 단락은 Failed 정책만 보고 즉시 반환해 Ready 정책의 장치·프로파일을 통째로 가렸다.

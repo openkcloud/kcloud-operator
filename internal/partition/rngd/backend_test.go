@@ -44,7 +44,7 @@ func dsWithPolicy(policy string) *appsv1.DaemonSet {
 }
 
 // TestMultiProcessSupportFromEnv 는 실측 주입 env(KCLOUD_RNGD_MULTIPROCESS)가 3가지 상태를
-// 정직하게(임의 추정 없이) SharingModeSupport 로 옮기는지 검증한다(Task 7 정직성 §19.3).
+// 정직하게(임의 추정 없이) SharingModeSupport 로 옮기는지 검증한다(정직성 §19.3).
 func TestMultiProcessSupportFromEnv(t *testing.T) {
 	t.Setenv(MultiProcessEnv, "")
 	if got := MultiProcessSupportFromEnv(); got.Supported || got.Verification != v1alpha1.VerificationRequired {
@@ -64,7 +64,7 @@ func TestMultiProcessSupportFromEnv(t *testing.T) {
 	}
 }
 
-// TestDiscoverFillsCapabilityAxesRngd 는 deviceStatusFor 가 capability 3축(Task 1)을 정직하게 채우는지 검증한다.
+// TestDiscoverFillsCapabilityAxesRngd 는 deviceStatusFor 가 capability 3축을 정직하게 채우는지 검증한다.
 func TestDiscoverFillsCapabilityAxesRngd(t *testing.T) {
 	d := deviceStatusFor("furiosa", "rngd")
 	if d.SharingCapability.TimeSlicing.Supported || d.SharingCapability.MultiProcess.Supported {
@@ -179,7 +179,7 @@ func TestRngdApply(t *testing.T) {
 	if rb.TemplateHash == "" {
 		t.Error("rollback TemplateHash empty — must be stable hash")
 	}
-	// DS env 가 목표로 변경 + owner 어노테이션 = target.Owner(ACPP .metadata.name, 두 writer 조정 Task 9)
+	// DS env 가 목표로 변경 + owner 어노테이션 = target.Owner(ACPP .metadata.name, 두 writer 조정)
 	var got appsv1.DaemonSet
 	_ = c.Get(context.Background(), types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, &got)
 	if envValue(&got) != "quad-core" {

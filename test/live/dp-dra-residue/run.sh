@@ -2,7 +2,7 @@
 # ============================================================
 # run.sh: device-plugin<->DRA 광고 주체 전환 왕복을 일으켜 잔재를 판정하는 하네스
 # 상세: NPUClusterPolicy.spec.<vendor>.advertiseBy 를 devicePlugin -> dra -> devicePlugin 으로
-#       왕복시키며 snapshot.sh(Task 1)로 전/중/후 상태를 남긴다. 판정(값 0 등록 잔재·살아
+#       왕복시키며 snapshot.sh 로 전/중/후 상태를 남긴다. 판정(값 0 등록 잔재·살아
 #       있는 광고·고아 객체)은 diff_snapshots 가 낸 표를 보고 사람이 한다 — 이 스크립트는
 #       지우는 코드를 담지 않는다. kubectl get/patch, kubectl-npu CLI, snapshot.sh(ssh
 #       ls/cat) 외의 쓰기는 하지 않는다.
@@ -13,7 +13,7 @@
 #       따라 갈리므로 all 에 넣지 않고 별도 PHASE 로 둔다.
 #       devicePlugin 복귀 뒤에는 dra-owned 회수(wait_settle) 다음 kcloud.ai/<vendor>.
 #       dra-retired=true 라벨 부여를 최대 120초 기다리고(wait_retired_label), SETTLE_AFTER_RETIRE
-#       초(기본 60)를 더 기다린 뒤에야 after-dp 스냅샷을 찍는다(Task 2 addendum 라이브 확인
+#       초(기본 60)를 더 기다린 뒤에야 after-dp 스냅샷을 찍는다(addendum 라이브 확인
 #       절 Ruling F-1). switch devicePlugin 부터 after-dp 스냅샷까지는 DualAdvertisement
 #       컨디션을 5초 간격 백그라운드로 dual-condition-poll.log 에 남긴다(start_dual_poll/
 #       stop_dual_poll). 스냅샷마다 그 시점의 DualAdvertisement 컨디션도
@@ -39,7 +39,7 @@
 #   폴링 백그라운드 프로세스부터 정리) advertiseBy·dra.enabled 를 이 실행 시작 시점 값으로
 #   되돌린다. FORCE_FAIL_AT=<set_dra_enabled(true)|...> 는 그 지점에서 강제로 실패시켜
 #   DRY_RUN 으로 cleanup 을 시연하는 시험 훅이다.
-# 생성일: 2026-09-28 | 수정일: 2026-09-28 (Task 2 라이브 확인: SETTLE_AFTER_RETIRE·
+# 생성일: 2026-09-28 | 수정일: 2026-09-28 (라이브 확인: SETTLE_AFTER_RETIRE·
 #       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가)
 # ============================================================
 set -euo pipefail
@@ -442,7 +442,7 @@ summarize_snapshot() {
   adv="$(jq -r ".items[0]${vpath}.advertiseBy // \"unset\"" "$dir/npuclusterpolicy.json")"
   dra_en="$(jq -r ".items[0]${vpath}.dra.enabled // false" "$dir/npuclusterpolicy.json")"
   # dual/retired: take_snapshot 이 함께 남긴 dual-advertisement-condition.json·node-labels.json
-  # 만 읽는다(요청 필드, Task 2 라이브 확인 절) — summarize 는 클러스터에 접속하지 않는다.
+  # 만 읽는다(요청 필드, 라이브 확인 절) — summarize 는 클러스터에 접속하지 않는다.
   dual="$(jq -r '.status // "unset"' "$dir/dual-advertisement-condition.json" 2>/dev/null || echo unset)"
   retired_key="kcloud.ai/${VENDOR}.dra-retired"
   retired="$(jq -r --arg k "$retired_key" '.labels[$k] // "absent"' "$dir/node-labels.json")"

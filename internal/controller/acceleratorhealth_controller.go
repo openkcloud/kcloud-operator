@@ -7,7 +7,7 @@
 //	internal/partition 을 필요로 하는데, internal/health 는 그 패키지를 import 할 수 없기
 //	때문이다(직접 mutation 금지 계약을 컴파일 그래프로 강제한다).
 //
-// 생성일: 2026-08-04 | 수정일: 2026-10-09
+// 생성일: 2026-08-04 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 package controller
 
@@ -294,7 +294,7 @@ func anyDriverLoaded(devs []npuv1alpha1.DeviceEntry) bool {
 }
 
 // deviceInputsFromNDR 는 NDR 장치를 장치 단위 판정 입력으로 옮긴다. PCI 주소가 없는 장치는
-// 뺀다 — 식별할 수 없는 장치는 지금 판정할 수도, 나중에(Task 3) 배치에서 뺄 수도 없다. 그런
+// 뺀다 — 식별할 수 없는 장치는 지금 판정할 수도, 나중에 배치에서 뺄 수도 없다. 그런
 // 항목까지 억지로 넣으면 빈 PCI 를 가진 여러 장치가 서로 뭉개져 오판정을 만든다.
 func deviceInputsFromNDR(devs []npuv1alpha1.DeviceEntry) []health.DeviceInput {
 	out := make([]health.DeviceInput, 0, len(devs))

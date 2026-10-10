@@ -1,8 +1,8 @@
 // ============================================================
 // toolkit_daemonset_controller_test.go: renderToolkitDaemonSet / vendor 게이트 단위 테스트
-// 상세: S2-2 — NVIDIA toolkit DS 구조(driver-validation init container, containerd
+// 상세: NVIDIA toolkit DS 구조(driver-validation init container, containerd
 //        config/socket 마운트, ownerRef, IfNotPresent), vendor 게이트, 이미지 override 검증.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 package controller

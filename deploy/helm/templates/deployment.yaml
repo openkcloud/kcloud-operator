@@ -1,5 +1,5 @@
 # deployment.yaml: NPU Operator Controller Manager Deployment
-# 생성일: 2026-03-25 | 수정일: 2026-10-04 (반대 라인 operator 태그 거절)
+# 생성일: 2026-03-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 {{/*
 operator 이미지 태그가 이 차트와 같은 릴리스 라인인지 render 단계에서 본다.
 -k8s1.28 접미는 K8s 1.26~1.30 라인 릴리스이고, 그 라인의 차트는 release/k8s-1.28
@@ -158,7 +158,7 @@ spec:
         - name: KCLOUD_OPERATION_COORDINATOR
           value: "delegate"
         {{- end }}
-        # P6(S4-5) Pod Security: pod-level runAsNonRoot+seccompRuntimeDefault 와 결합해 restricted 준수.
+        # Pod Security: pod-level runAsNonRoot+seccompRuntimeDefault 와 결합해 restricted 준수.
         # cert(webhook/api)는 read-only secret 마운트, manager 는 rootfs 에 쓰지 않으므로 RO rootfs 안전.
         securityContext:
           allowPrivilegeEscalation: false

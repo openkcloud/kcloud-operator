@@ -1,17 +1,17 @@
 // ============================================================
-// job.go: WP-C-1 driver install Job 빌더 (DriverSpec.Mode=job)
+// job.go: driver install Job 빌더 (DriverSpec.Mode=job)
 // 상세: 상시 privileged driver DaemonSet 대신 "순간 install Job" 을 렌더한다.
 //       DS pod spec(privileged/hostPID/host mounts/env)을 재사용하되,
 //       Job 전용으로 (1) restartPolicy=OnFailure (2) PreStop rmmod/probe 제거
 //       (완료 시 방금 설치한 모듈 언로드 참사 방지) (3) RUN_MODE=job env 주입
-//       (entrypoint 가 설치 후 exit 0) 로 변형한다. node-agent(S5-4) 가 그대로
+//       (entrypoint 가 설치 후 exit 0) 로 변형한다. node-agent 가 그대로
 //       흡수할 수 있도록 controller 에 의존하지 않는 독립 패키지로 둔다.
-// 생성일: 2026-07-16 | 수정일: 2026-09-09
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 // ============================================================
 
 // Package driverjob renders the one-shot driver install Job used by
-// DriverSpec.Mode=job (WP-C-1). It is intentionally free of controller-package
-// dependencies so the node-agent variant (S5-4) can reuse it directly.
+// DriverSpec.Mode=job. It is intentionally free of controller-package
+// dependencies so the node-agent variant can reuse it directly.
 package driverjob
 
 import (
