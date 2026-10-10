@@ -9,7 +9,7 @@
 //       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
 //       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
 //       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (attachDRAAllocation 이 발행 쪽 풀 이름으로 조회)
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (attachDRAAllocation 이 발행 쪽 풀 이름으로 조회; allocated 주석의 키 표기 노드→풀 정정)
 // ============================================================
 
 package apiserver
@@ -517,7 +517,7 @@ const draKeyPrefix = "dra:"
 // DRACapability.PoolsByNodeDriver 에 담긴 발행 쪽 풀 이름을 쓴다 — 그 이름을 모르면(슬라이스에서
 // 못 채웠으면) 종전 규약대로 노드명을 풀 이름으로 써서 조회한다.
 func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, claims []resourcev1.ResourceClaim) {
-	allocated := map[string]map[string]int32{} // node → driver → 할당 결과 수
+	allocated := map[string]map[string]int32{} // 풀 → 드라이버 → 할당 결과 수
 	for i := range claims {
 		a := claims[i].Status.Allocation
 		if a == nil {

@@ -4,7 +4,7 @@
 //       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
 //       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
 //       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18 | 수정일: 2026-10-10 (발견 규칙 시험 추가)
+// 생성일: 2026-09-18 | 수정일: 2026-10-10 (발견 규칙 시험 추가; furiosa+rngd 거절 시험 주석의 출하 경로 인용 정정)
 // ============================================================
 
 package controller
@@ -582,8 +582,8 @@ func TestMixedModelRefusal(t *testing.T) {
 		{
 			// 물리 벤더(d.Vendor)로 모으므로 normalizeVendor 의 rngd 특례가 거절을 가리지
 			// 않는다 — 두 제품 모두 furiosa 카드라 /dev/furiosa/{{id}} 글롭이 제품을 가르지
-			// 못한다. 오늘 출하 archetype 은 다른 글롭(/dev/rngd/{{id}}*)이라 피해가 없지만,
-			// 판정은 글롭 모양이 아니라 같은 벤더 다른 제품 여부여야 한다.
+			// 못한다. 출하 archetype 은 다른 경로(/dev/rngd/{{id}})라 피해가 없지만,
+			// 판정은 경로 모양이 아니라 같은 벤더 다른 제품 여부여야 한다.
 			name: "furiosa warboy + rngd → 거절", vendor: "furiosa", product: "warboy",
 			nodes: []string{"/dev/furiosa/{{id}}"},
 			ndrs: []npuv1alpha1.NodeDeviceReport{ndrWith("rngd-1",
