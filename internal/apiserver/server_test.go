@@ -2,7 +2,7 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20 | 수정일: 2026-10-10 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정)
+// 생성일: 2026-07-20 | 수정일: 2026-10-11 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정; 라우트별 SAR 개수 고정 표 추가, TokenReview 시험의 SAR 단언 제거)
 // ============================================================
 
 package apiserver
@@ -306,21 +306,54 @@ func TestAuthzAllDoesOneTokenReview(t *testing.T) {
 	if w := do(t, s, "POST", "/api/v1/preview", `{"class":"whole-gpu","access":{"mode":"exclusive"}}`, "tok"); w.Code != http.StatusOK {
 		t.Fatalf("200 이어야 함: got %d (%s)", w.Code, w.Body.String())
 	}
-	trs, sars := 0, 0
+	trs := 0
 	for _, a := range fake.Actions() {
-		switch a.GetResource().Resource {
-		case "tokenreviews":
+		if a.GetResource().Resource == "tokenreviews" {
 			trs++
-		case "subjectaccessreviews":
-			sars++
 		}
 	}
 	if trs != 1 {
 		t.Errorf("TokenReview 는 요청당 1회여야 함: got %d", trs)
 	}
-	// preview 는 nodes + npu.ai(acpp·ndr·class) 3종 + resourceslices·deviceclasses 2종 = 6개 SAR.
-	if sars != 6 {
-		t.Errorf("SAR 은 게이트 수(6)만큼: got %d", sars)
+}
+
+// 라우트별 인가 호출(SAR) 수를 고정한다 — 게이트를 늘리면 이 숫자가 늘고, 늘어난 사실이
+// 리뷰에 보여야 한다. 캐시는 넣지 않는다(인가 판정을 묵히면 권한 회수 직후의 요청이 통과하는
+// 창이 생긴다). SAR 수를 고정하는 자리는 이 표 하나로 모은다 — preview 의 수는 과거
+// TestAuthzAllDoesOneTokenReview 에도 있었으나 그 시험은 이제 TokenReview 수만 본다.
+// 기대값 출처(server.go): capabilities 는 capGates(nodes·acpp·ndr·resourceslices·deviceclasses
+// 5개), accelerators 는 invGates(capGates + acceleratorhealths·pods·resourceclaims = 8개),
+// preview 는 POST 핸들러 등록부의 인라인 게이트 목록(nodeGate·acppGate·ndrGate·classGate +
+// resourceslices·deviceclasses = 6개).
+func TestRouteAuthzCallCounts(t *testing.T) {
+	cases := []struct {
+		path, method, body string
+		wantSARs           int
+	}{
+		{"/api/v1/accelerators", "GET", "", 8},
+		{"/api/v1/capabilities", "GET", "", 5},
+		{"/api/v1/preview", "POST", `{"class":"whole-gpu","access":{"mode":"exclusive"}}`, 6},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			s, _ := newServer(t, okAuth(), previewObjects()...)
+			fake := s.Authn.(*k8sfake.Clientset)
+			fake.ClearActions()
+			w := do(t, s, c.method, c.path, c.body, "tok")
+			if w.Code != http.StatusOK {
+				t.Fatalf("code=%d (200 기대): %s", w.Code, w.Body.String())
+			}
+			sars := 0
+			for _, a := range fake.Actions() {
+				if a.GetResource().Resource == "subjectaccessreviews" {
+					sars++
+				}
+			}
+			if sars != c.wantSARs {
+				t.Fatalf("%s: SAR %d회 (%d 기대) — 게이트가 바뀌었으면 이 값도 함께 고친다",
+					c.path, sars, c.wantSARs)
+			}
+		})
 	}
 }
 

@@ -3,11 +3,13 @@
 // 상세: resource.k8s.io/v1 이 서빙되는가와, 서빙되더라도 특정 드라이버가 실제로 노드에
 // ResourceSlice 를 냈는가는 다른 사실이다(전자는 클러스터 업그레이드, 후자는 드라이버 설치가
 // 답이다) — 그래서 두 관측을 한 구조체 안에서도 분리해 담는다.
-// 생성일: 2026-08-05 | 수정일: 2026-10-11 (노드·드라이버별 풀 이름 PoolsByNodeDriver 추가; 다중 풀 지원으로 목록형 전환)
+// 생성일: 2026-08-05 | 수정일: 2026-10-11 (노드·드라이버별 풀 이름 PoolsByNodeDriver 추가; 다중 풀 지원으로 목록형 전환; 중복 검사를 slices.Contains 로 교체)
 // ============================================================
 package intent
 
 import (
+	"slices"
+
 	resourcev1 "k8s.io/api/resource/v1"
 )
 
@@ -27,7 +29,7 @@ type DRACapability struct {
 }
 
 // BuildDRACapability 는 DeviceClass·ResourceSlice 목록을 노드별 DRA capability 로 접는다(순수 함수).
-func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, slices []resourcev1.ResourceSlice) DRACapability {
+func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, resourceSlices []resourcev1.ResourceSlice) DRACapability {
 	out := DRACapability{
 		APIServed: apiServed, DeviceClasses: map[string]bool{},
 		SlicesByNodeDriver: map[string]map[string]int32{}, PoolsByNodeDriver: map[string]map[string][]string{},
@@ -35,8 +37,8 @@ func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, slices
 	for i := range classes {
 		out.DeviceClasses[classes[i].Name] = true
 	}
-	for i := range slices {
-		s := &slices[i]
+	for i := range resourceSlices {
+		s := &resourceSlices[i]
 		// 노드에 묶이지 않은 슬라이스는 "어느 노드가 후보인가" 에 답하지 못한다.
 		// 세지 않는다 — 세면 노드 없는 용량이 후보 판정을 통과시킨다.
 		if s.Spec.NodeName == nil || *s.Spec.NodeName == "" || s.Spec.Driver == "" {
@@ -50,22 +52,12 @@ func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, slices
 		if out.PoolsByNodeDriver[node] == nil {
 			out.PoolsByNodeDriver[node] = map[string][]string{}
 		}
+		// 같은 풀의 슬라이스가 여러 개여도 이름을 한 번만 담아 할당을 두 번 세지 않는다.
 		if pool := s.Spec.Pool.Name; pool != "" &&
-			!containsPool(out.PoolsByNodeDriver[node][s.Spec.Driver], pool) {
+			!slices.Contains(out.PoolsByNodeDriver[node][s.Spec.Driver], pool) {
 			out.PoolsByNodeDriver[node][s.Spec.Driver] =
 				append(out.PoolsByNodeDriver[node][s.Spec.Driver], pool)
 		}
 	}
 	return out
-}
-
-// containsPool 은 풀 이름이 이미 목록에 있는지 본다 — 같은 풀의 슬라이스가 여러 개여도
-// 이름을 한 번만 담아 할당을 두 번 세지 않는다.
-func containsPool(pools []string, name string) bool {
-	for _, p := range pools {
-		if p == name {
-			return true
-		}
-	}
-	return false
 }
