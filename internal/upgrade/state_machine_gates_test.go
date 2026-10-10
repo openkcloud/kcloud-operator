@@ -5,7 +5,7 @@
 //   - Idle 게이트 순서: verifiedVersions 허용 목록 검사가 autoUpgrade 게이트보다 앞임을 검증.
 //   - WorkloadProbe 예산 경고: probe timeoutSeconds 가 validationTimeout 보다 길면 PreFlight 경고.
 //
-// 생성일: 2026-07-21 | 수정일: 2026-10-10 (verifiedVersions/autoUpgrade 게이트 순서 시험 + WorkloadProbe 예산 경고 시험 추가)
+// 생성일: 2026-07-21 | 수정일: 2026-10-10 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험, 검증 예산 미설정 시 출처 표기 시험 추가)
 package upgrade
 
 import (
@@ -225,5 +225,32 @@ func TestHandlePreFlight_ProbeTimeoutWithinBudget_NoWarn(t *testing.T) {
 	}
 	if hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
 		t.Fatal("합당한 조합인데 경고가 떴다")
+	}
+}
+
+// validationTimeout 이 비면 경고는 parseDuration 기본값으로 비교하되, 그 값을 정책이 쓴 것처럼
+// 보이면 안 된다 — 운영자가 DIP 를 열면 그 필드가 없어 메시지를 대조할 수 없다.
+func TestHandlePreFlight_ProbeTimeoutExceedsDefaultBudget_MarksDefault(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "" // 미설정 — 기본값 15분이 적용된다
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 1200,
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	events := drainEvents(sm)
+	if !hasEvent(events, "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("기본 예산을 넘겼는데 경고가 없다")
+	}
+	if !hasEvent(events, "미설정") {
+		t.Errorf("경고가 기본값을 정책값처럼 보인다 — 출처 표기가 없다: %v", events)
 	}
 }

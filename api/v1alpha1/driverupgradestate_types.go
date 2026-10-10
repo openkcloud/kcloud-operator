@@ -1,6 +1,7 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-04-13 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
+//                                        VersionObservationAllowed 술어 추가)
 
 package v1alpha1
 
@@ -25,6 +26,25 @@ const RollbackRequestedAnnotation = "npu.ai/rollback-requested"
 func RollbackRequestAccepted(state string) bool {
 	switch state {
 	case "", UpgradeStateIdle, UpgradeStateFailed:
+		return true
+	}
+	return false
+}
+
+// VersionObservationAllowed 는 NodeDeviceReport 실측을 status.currentVersion 에 반영하고
+// 버전 드리프트를 판정해도 되는 상태인지다. 조정자(internal/controller)와 드리프트 검출기
+// (internal/verification)가 같은 술어를 쓴다 — 두 곳이 갈리면 한쪽만 감지가 꺼진다.
+//
+// 사이클 중간(UpgradeRequired~Rebooting·Rollback)은 제외다: DesiredVersion·PreviousVersion
+// 을 상태 기계가 소유하고 그 기록을 밖에서 덮으면 롤백이 깨지며, 불일치 자체가 정상이라
+// 드리프트로 읽으면 오경보가 된다. 받아들이는 둘은 보고 전용 종점이다 — Idle 과, 허용 목록
+// 밖 버전이 주차하는 UnverifiedVersion(Job 도 cordon 도 만들지 않는다).
+//
+// Failed 는 뺀다: 그 상태의 복구 판정이 currentVersion 을 근거로 쓰므로 밖에서 같은 값을
+// 바꾸면 판정 주체가 둘이 된다.
+func VersionObservationAllowed(state string) bool {
+	switch state {
+	case UpgradeStateIdle, UpgradeStateUnverifiedVersion:
 		return true
 	}
 	return false

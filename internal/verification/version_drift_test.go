@@ -1,3 +1,8 @@
+// ============================================================
+// version_drift_test.go: 버전 드리프트 판정 단위 시험
+// 상세: 관측 부재 → 억제 → 일치 → 디바운스 → 확정 다섯 판정의 게이트 순서를 고정한다.
+// 생성일: 2026-09-17 | 수정일: 2026-10-10 (주차 상태를 억제하지 않음을 고정)
+// ============================================================
 package verification
 
 import (
@@ -16,6 +21,23 @@ func TestVersionDriftSuppressedWhileNotIdle(t *testing.T) {
 	})
 	if v != VersionDriftSuppressed {
 		t.Errorf("verdict=%q reason=%q, want suppressed — 업그레이드 중에는 불일치가 정상이다", v, reason)
+	}
+}
+
+// TestVersionDriftConfirmedWhileParked 는 허용 목록 밖 버전이 주차하는 UnverifiedVersion 에서
+// 억제하지 않음을 본다 — 그 상태는 Job 도 cordon 도 만들지 않는 보고 전용 종점이고, 자동
+// 업그레이드를 끈 정책의 노드가 바로 거기 머문다. 억제하면 호스트 밖 변경 감지가 영구히 꺼진다.
+func TestVersionDriftConfirmedWhileParked(t *testing.T) {
+	v, reason := EvaluateVersionDrift(VersionDriftInput{
+		State:           "UnverifiedVersion",
+		DeclaredVersion: "580.173.02",
+		ObservedVersion: "595.91.07",
+		ObservedAt:      time.Now(),
+		Grace:           10 * time.Minute,
+		Since:           time.Now().Add(-time.Hour),
+	})
+	if v != VersionDriftConfirmed {
+		t.Errorf("verdict=%q reason=%q, want confirmed — 주차 상태는 사이클 중간이 아니다", v, reason)
 	}
 }
 

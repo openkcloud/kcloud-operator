@@ -10,7 +10,7 @@
 // partition 은 Unknown/Unsupported 인 벤더(예: tenstorrent)는 AcceleratorDescriptor
 // spec.sharing 경로로 보낸다.
 // 삭제 중인 오브젝트(deletionTimestamp)는 재검증하지 않는다 — finalizer 제거를 막으면 안 된다.
-// 생성일: 2026-08-24 | 수정일: 2026-09-22
+// 생성일: 2026-08-24 | 수정일: 2026-10-10 (requirePartitionBackendForSharing 주석에 게이트 순서 명시)
 // ============================================================
 package webhook
 
@@ -200,9 +200,9 @@ func vendorCapability(
 	return vendorcap.LookupVendor(vendor, capability)
 }
 
-// requirePartitionBackendForSharing 는 게이트다 — spec.sharing 이 어느 모드든(exclusive
-// 되돌리기 포함) partition 을 Native/Software 로 선언하지 않은 벤더는 ACPP 경로 자체를
-// 거절한다. 그 벤더는 AcceleratorDescriptor spec.sharing → generic device-plugin
+// requirePartitionBackendForSharing 는 아래 sharing 능력 검사보다 앞서는 게이트다 —
+// spec.sharing 이 어느 모드든(exclusive 되돌리기 포함) partition 을 Native/Software 로
+// 선언하지 않은 벤더는 ACPP 경로 자체를 거절한다. 그 벤더는 AcceleratorDescriptor spec.sharing → generic device-plugin
 // replicas(SW 기제, R2-8)를 대신 써야 한다. 이 게이트가 없으면 tenstorrent 처럼 timeSlicing
 // 만 Software 로 선언되고 partition 은 Unknown 인 벤더의 ACPP 요청이 아래 sharing 능력
 // 검사는 통과했다가, partition backend 가 없어 컨트롤러의 backendFor 에서 "unknown vendor"

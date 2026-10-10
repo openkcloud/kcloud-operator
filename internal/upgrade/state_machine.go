@@ -6,7 +6,8 @@
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
 // 생성일: 2026-04-13 | 수정일: 2026-10-10 (verifiedVersions 허용 목록 검사를 autoUpgrade 게이트 앞으로 이동;
 //       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가;
-//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신; 계획서 항목 토큰 제거)
+//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신; 계획서 항목 토큰 제거;
+//       검증 예산 경고에 그 값의 출처(정책값/기본값) 표기)
 // ============================================================
 
 package upgrade
@@ -466,11 +467,17 @@ func (m *UpgradeStateMachine) handlePreFlight(
 			rawTimeout = policy.Spec.UpgradePolicy.ValidationTimeout
 		}
 		validationTimeout := parseDuration(rawTimeout, 15*time.Minute)
+		// 예산 출처를 함께 싣는다 — 빈 값이나 파싱 실패면 parseDuration 이 기본값을 돌려주므로,
+		// 그 값을 그대로 쓰면 운영자가 DIP 에서 찾을 수 없는 필드값을 보게 된다.
+		budget := fmt.Sprintf("%s(기본값, upgradePolicy.validationTimeout 미설정)", validationTimeout)
+		if rawTimeout != "" {
+			budget = fmt.Sprintf("%s(upgradePolicy.validationTimeout=%q)", validationTimeout, rawTimeout)
+		}
 		if probeTimeout := time.Duration(wp.TimeoutSeconds) * time.Second; probeTimeout > validationTimeout {
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "WorkloadProbeTimeoutExceedsBudget",
-				"workloadProbe.timeoutSeconds=%ds 가 upgradePolicy.validationTimeout=%s 보다 길다 — "+
+				"workloadProbe.timeoutSeconds=%ds 가 검증 예산 %s 보다 길다 — "+
 					"probe 결과가 쓰이지 않고 파드가 그 차이만큼 장치를 점유한다. 둘 중 하나를 고칠 것",
-				wp.TimeoutSeconds, validationTimeout)
+				wp.TimeoutSeconds, budget)
 		}
 	}
 	allowlist := policy.Spec.KernelAllowlist

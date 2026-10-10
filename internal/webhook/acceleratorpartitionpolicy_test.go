@@ -6,7 +6,7 @@
 //	삭제 중 오브젝트 재검증 생략, 되돌릴 능력 없는 벤더의 exclusive 되돌리기 거절,
 //	partition backend 없는 벤더의 ACPP sharing 자체 거절.
 //
-// 생성일: 2026-08-24 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-08-24 | 수정일: 2026-10-10 (계획서 항목 토큰 제거; 거절 주체를 게이트 함수 이름으로 명시)
 // ============================================================
 package webhook
 
@@ -210,9 +210,10 @@ func TestValidateACPPRejectsUnsupportedPartitionVendorTenstorrent(t *testing.T) 
 // 한다 — 건너뛰면 컨트롤러의 backendFor 까지 흘러가 "unknown vendor" 같은 일반 런타임 오류로만
 // 실패한다. rebellions 의 timeSlicing 은 2026-09-22 유휴 재실측으로 Unknown→Software 가 됐지만,
 // rebellions 는 partition backend 가 없어(nvidia·furiosa 만 있음) ACPP 경로 자체를 못 쓴다 —
-// 그래서 이 sharing-only 요청은 timeSlicing 능력 검사(이제 통과)에 닿기 전에 (partition
-// backend 부재)에 걸려 AcceleratorDescriptor 경로로 안내된다. 이 시험이 지키려는 성질("사유 있는
-// 거절, 일반 오류 아님")은 그대로이고, 메시지는 그 사유(sharing + AcceleratorDescriptor 안내)다.
+// 그래서 이 sharing-only 요청은 timeSlicing 능력 검사(이제 통과)에 닿기 전에
+// requirePartitionBackendForSharing(partition backend 부재)에 걸려 AcceleratorDescriptor
+// 경로로 안내된다. 이 시험이 지키려는 성질("사유 있는 거절, 일반 오류 아님")은 그대로이고,
+// 메시지는 그 사유(sharing + AcceleratorDescriptor 안내)다.
 func TestValidateACPPRejectsUnsupportedSharingVendorWithReason(t *testing.T) {
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 		Vendor:  "rebellions",

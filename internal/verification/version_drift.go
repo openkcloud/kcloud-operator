@@ -1,17 +1,19 @@
 // ============================================================
 // version_drift.go: 드라이버 버전 선언값과 실측값의 어긋남 감지 (감지 전용 — 되돌리지 않는다)
-// 상세: DUS 가 Idle 인데 NDR 이 보고한 실제 드라이버 버전이 선언값과 다른 상태를 잡는다.
+// 상세: DUS 가 보고 전용 종점인데 NDR 이 보고한 실제 드라이버 버전이 선언값과 다른 상태를 잡는다.
 //
 //	업그레이드 사이클 중에는 불일치가 정상이므로 억제하고, 유예 시간을 넘겨야 확정한다.
 //	자동 재설치는 하지 않는다 — 노드를 제멋대로 재부팅시킨다(2026-09-16 파급 실측).
 //
-// 생성일: 2026-09-17
+// 생성일: 2026-09-17 | 수정일: 2026-10-10 (억제 게이트를 VersionObservationAllowed 로 통일)
 // ============================================================
 package verification
 
 import (
 	"fmt"
 	"time"
+
+	v1alpha1 "kcloud-operator/api/v1alpha1"
 )
 
 // VersionDriftVerdict 는 버전 드리프트 판정이다.
@@ -32,7 +34,8 @@ const (
 
 // VersionDriftInput 은 판정에 필요한 값 전부다. 수집은 호출자가 한다.
 type VersionDriftInput struct {
-	// State 는 DriverUpgradeState.status.state 다. "Idle" 이 아니면 억제한다.
+	// State 는 DriverUpgradeState.status.state 다. 보고 전용 종점(Idle·UnverifiedVersion)이
+	// 아니면 억제한다 — 판정 집합은 v1alpha1.VersionObservationAllowed 가 갖는다.
 	State string
 	// DeclaredVersion 은 DUS 가 들고 있는 현재 버전(설치 시점 기록)이다.
 	DeclaredVersion string
@@ -56,7 +59,7 @@ func EvaluateVersionDrift(in VersionDriftInput) (VersionDriftVerdict, string) {
 	if in.ObservedVersion == "" {
 		return VersionDriftUnknown, "실측 버전이 없다 — 확인하지 못한 것을 어긋남으로 읽지 않는다"
 	}
-	if in.State != "Idle" {
+	if !v1alpha1.VersionObservationAllowed(in.State) {
 		return VersionDriftSuppressed, fmt.Sprintf("상태가 %q 라 판정하지 않는다", in.State)
 	}
 	if in.DeclaredVersion == in.ObservedVersion {

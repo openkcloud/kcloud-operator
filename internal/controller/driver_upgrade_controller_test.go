@@ -2,7 +2,8 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-04-21 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
+//                                        주차 상태 버전 관측·재부팅 예산 시험 추가)
 // ============================================================
 
 package controller
@@ -1844,6 +1845,86 @@ func TestSyncUpgradeStateDriftNoneResets(t *testing.T) {
 	}
 	if got.Status.DriftFirstSeen != nil {
 		t.Errorf("버전 일치 후 DriftFirstSeen 이 해제되지 않음: %v", got.Status.DriftFirstSeen)
+	}
+}
+
+// TestSyncUpgradeStateDrift_UnverifiedVersionStillObserves 는 허용 목록 밖 버전으로 주차된
+// UnverifiedVersion 상태에서도 NDR 실측이 계속 반영됨을 고정한다 — currentVersion 동기화와
+// DriverVersionDrift 경고 둘 다. 두 블록을 Idle 로만 제한하면 주차된 노드의 보고 버전이 전이
+// 시점 값에 멈추고 사람이 호스트에서 드라이버를 바꾼 것을 알리는 경고가 그 노드·벤더에 대해
+// 영구히 평가되지 않는다. 자동 업그레이드를 끈 정책이 바로 그 감지에 기대는 구성이다.
+func TestSyncUpgradeStateDrift_UnverifiedVersionStillObserves(t *testing.T) {
+	const (
+		nodeName        = "worker-drift-parked"
+		dusName         = "worker-drift-parked-furiosa"
+		declaredVersion = "580.178.04"
+		observedVersion = "595.91.07"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy",
+		v1alpha1.UpgradeStateUnverifiedVersion, declaredVersion, declaredVersion)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+
+	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("주차 상태에서 DriverVersionDrift 경고가 발행되지 않음 — 호스트 밖 변경 감지가 꺼졌다")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.CurrentVersion != observedVersion {
+		t.Errorf("주차 상태에서 currentVersion 이 실측을 따르지 않음: got %q, want %q",
+			got.Status.CurrentVersion, observedVersion)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Errorf("관측 갱신이 상태를 바꿈: got %q, want %q",
+			got.Status.State, v1alpha1.UpgradeStateUnverifiedVersion)
+	}
+}
+
+// TestSyncUpgradeState_UnverifiedVersionKeepsRebootBudget 는 주차 상태에 넓힌 것이 관측 두
+// 블록뿐임을 고정한다. DesiredVersion 되돌림 블록은 재부팅 카운터·마커를 리셋하므로 Idle
+// 전용으로 남아야 한다 — 주차 상태까지 넓히면 MaxReboots 상한이 무력화된다.
+func TestSyncUpgradeState_UnverifiedVersionKeepsRebootBudget(t *testing.T) {
+	const (
+		nodeName   = "worker-parked-budget"
+		dusName    = "worker-parked-budget-furiosa"
+		dusDesired = "580.178.04"
+		dipVersion = "595.91.07" // 정책이 선언한 허용 목록 밖 버전(DUS 기록과 다름)
+	)
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy",
+		v1alpha1.UpgradeStateUnverifiedVersion, dusDesired, dusDesired)
+	dus.Status.RebootAttempts = 1
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", dipVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: dusDesired}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DesiredVersion != dusDesired {
+		t.Errorf("주차 상태에서 DesiredVersion 이 정책값으로 되돌려짐: got %q, want %q",
+			got.Status.DesiredVersion, dusDesired)
+	}
+	if got.Status.RebootAttempts != 1 {
+		t.Errorf("RebootAttempts: got %d, want 1 — 주차 상태에서 재부팅 예산이 리셋됨",
+			got.Status.RebootAttempts)
 	}
 }
 

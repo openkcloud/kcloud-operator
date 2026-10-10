@@ -27,7 +27,8 @@
 #          quiesce | unquiesce | empty-node | reboot-recover | wait-empty | observe |
 #          all(기본, precheck→dip-patch→quiesce→empty-node→reboot-recover→wait-empty→
 #              observe→unquiesce 순서대로 실행. rollback-dip 은 제외)
-# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
+#                                        reboot_recover 주석에 함정을 겪은 실행일 명시)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -319,10 +320,10 @@ empty_node() {
 
 # reboot_recover — 재부팅을 보내고, SSH 로 확인한 uptime 이 600초 미만(=이번 재부팅의
 # 새 boot)인 시점과 kubectl 이 보는 Ready=True 가 "같은 폴링 순간"에 동시에 성립할 때만
-# 성공으로 본다. 실행에서 "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로 착각하는
-# 함정이 실제로 있었다(uptime 87897s 를 uptime<600 가드로 걸러냈다) — 이 동시 조건이 그
-# 가드와 같은 효과를 낸다: uptime<600 이 참인 순간의 Ready 는 정의상 이번 새 부팅 이후의
-# 관측일 수밖에 없다.
+# 성공으로 본다. 2026-09-26 실측 실행에서 "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로
+# 착각하는 함정이 실제로 있었다(uptime 87897s 를 uptime<600 가드로 걸러냈다) — 이 동시
+# 조건이 그 가드와 같은 효과를 낸다: uptime<600 이 참인 순간의 Ready 는 정의상 이번 새
+# 부팅 이후의 관측일 수밖에 없다.
 reboot_recover() {
   safety_gate
   if [ "$DRY_RUN" = "1" ]; then

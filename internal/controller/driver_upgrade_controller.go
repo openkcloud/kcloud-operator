@@ -3,7 +3,8 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-10 (handleIdle 주석의 낡은 줄번호 제거; 계획서 항목 토큰 제거)
+// 생성일: 2026-04-13 | 수정일: 2026-10-10 (handleIdle 주석의 낡은 줄번호 제거; 계획서 항목 토큰 제거;
+//                                        버전 관측·드리프트 감지를 UnverifiedVersion 까지 확장)
 // ============================================================
 
 package controller
@@ -368,10 +369,15 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	r.syncDUSModel(ctx, &existing, vendorModel)
 	r.syncDUSObservedModels(ctx, &existing, observed)
 
-	// 대역외 드라이버 변경 감지(감지 전용). Idle 에서 정책 선언 버전과 NDR 실측이 어긋난 채
-	// 유예를 넘기면 Warning 이벤트로 알린다. 자동 재설치·재부팅은 하지 않는다(호스트 임의 재부팅 방지).
+	// 대역외 드라이버 변경 감지(감지 전용). 정책 선언 버전과 NDR 실측이 어긋난 채 유예를 넘기면
+	// Warning 이벤트로 알린다. 자동 재설치·재부팅은 하지 않는다(호스트 임의 재부팅 방지).
 	// 기준은 policy.Spec.Driver.Version(안정값) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다.
-	if existing.Status.State == v1alpha1.UpgradeStateIdle && device.DriverVersion != "" {
+	//
+	// 상태 조건이 Idle 과 UnverifiedVersion 둘인 이유: 허용 목록 밖 버전은 UnverifiedVersion 에
+	// 주차하므로, Idle 만 보면 자동 업그레이드를 끈 정책의 노드에서 감지가 영구히 꺼진다. 그 상태는
+	// Job 도 cordon 도 만들지 않는 보고 전용 종점이라 관측 갱신이 사이클과 겹치지 않는다.
+	// (억제 판정도 같은 술어를 쓴다 — 조정자와 EvaluateVersionDrift 가 둘로 갈리지 않게.)
+	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
 			DeclaredVersion: policy.Spec.Driver.Version,
@@ -438,9 +444,11 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	// 이미 담당하므로 여기에 별도 분기를 두지 않는다 — 두면 매 reconcile 마다
 	// LastTransitionTime 이 갱신돼 IdleCooldown 이 영원히 차지 않는다(실측).
 
-	// currentVersion 동기화: Idle 상태에서 NDR이 갱신되었지만 버전이 일치하는 경우
+	// currentVersion 동기화: NDR 이 갱신되었지만 버전이 일치하는 경우
 	// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)
-	if existing.Status.State == v1alpha1.UpgradeStateIdle &&
+	// 위 감지 블록과 같은 상태 집합이다 — 주차된 노드의 보고 버전이 전이 시점 값에 멈추면
+	// `kubectl get dus` 와 지표가 노드의 실제 드라이버 버전을 더는 따라가지 않는다.
+	if v1alpha1.VersionObservationAllowed(existing.Status.State) &&
 		device.DriverVersion != "" &&
 		existing.Status.CurrentVersion != device.DriverVersion {
 

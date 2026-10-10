@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거; mode-enable 저널 분기 주석에 Failed 못 박힘 명시)
 // ============================================================
 package controller
 
@@ -658,7 +658,8 @@ func (r *AcceleratorPartitionPolicyReconciler) routeNvidiaNoDiff(acpp *npuv1alph
 		// GI 이전 저널(mode 전환 또는 apply 직전 cordon)이 남은 채 geometry 만 일치 — baseline 이
 		// 없어 recovery tail 을 탈 수 없다.
 		// 여기서 아래 ExistingMigConfiguration 으로 떨어뜨리면 자가치유 없는 terminal 실패가 되므로
-		// (교훈), 정상 경로로 내려보내 변경시-전제부터 다시 밟게 한다(전부 transient·requeue).
+		// (그 분류는 ts.Phase 를 ACPPPhaseFailed 로 못 박는다), 정상 경로로 내려보내 변경시-전제부터
+		// 다시 밟게 한다(전부 transient·requeue).
 		return false, ts, nil
 	}
 	if rec.MigPhase == npuv1alpha1.MigPhaseRolledBack {
