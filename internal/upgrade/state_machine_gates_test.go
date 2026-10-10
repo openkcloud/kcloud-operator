@@ -2,8 +2,10 @@
 // 상세: 라이브 트리거(cordon/drain/driver 변경) 없이 순수 state-machine 분기를 fake client 로 검증.
 //   - IdleCooldown: Idle 진입 직후 재트리거 연기(IdleCooldownDeferred, 상태 불변).
 //   - Kernel allowlist: PreFlight 에서 커널 불일치 시 Rollback 전이(PreFlightFailed).
+//   - Idle 게이트 순서: verifiedVersions 허용 목록 검사가 autoUpgrade 게이트보다 앞임을 검증.
+//   - WorkloadProbe 예산 경고: probe timeoutSeconds 가 validationTimeout 보다 길면 PreFlight 경고.
 //
-// 생성일: 2026-07-21
+// 생성일: 2026-07-21 | 수정일: 2026-10-10 (verifiedVersions/autoUpgrade 게이트 순서 시험 + WorkloadProbe 예산 경고 시험 추가)
 package upgrade
 
 import (
@@ -137,5 +139,91 @@ func TestHandlePreFlight_KernelInAllowlist_Cordoning(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateCordoning {
 		t.Errorf("state=%q, want Cordoning (커널 일치 통과)", dus.Status.State)
+	}
+}
+
+// ── 항목3: Idle 게이트 순서(verifiedVersions vs autoUpgrade) ─────────
+// autoUpgrade 가 꺼져 있어도 허용 목록 밖 버전은 UnverifiedVersion 으로 드러낸다 —
+// 종전에는 autoUpgrade 게이트가 먼저 와서 UpgradeAvailable 경고만 내고 Idle 에 머물렀다.
+func TestHandleIdle_AutoUpgradeOffAndUnverified_Transitions(t *testing.T) {
+	dip := makeDaemonsetDIP("580.178.04", false)
+	dip.Spec.VerifiedVersions = []string{"580.159.03"}
+	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "580.159.03", "580.178.04")
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	_, _, err := sm.handleIdle(context.Background(), dus, dip)
+	if err != nil {
+		t.Fatalf("handleIdle: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Fatalf("state=%q (UnverifiedVersion 기대) — autoUpgrade 게이트가 허용 목록 검사를 가린다", dus.Status.State)
+	}
+	if !hasEvent(drainEvents(sm), "UnverifiedVersion") {
+		t.Fatal("UnverifiedVersion 이벤트가 없다")
+	}
+}
+
+// autoUpgrade 가 꺼져 있고 버전이 허용 목록 안이면 종전대로 Idle 에 머문다.
+func TestHandleIdle_AutoUpgradeOffAndVerified_StaysIdle(t *testing.T) {
+	dip := makeDaemonsetDIP("580.159.03", false)
+	dip.Spec.VerifiedVersions = []string{"580.159.03", "580.178.04"}
+	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	_, _, err := sm.handleIdle(context.Background(), dus, dip)
+	if err != nil {
+		t.Fatalf("handleIdle: %v", err)
+	}
+	if dus.Status.State == v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Fatal("허용 목록 안 버전인데 UnverifiedVersion 으로 갔다")
+	}
+	if !hasEvent(drainEvents(sm), "UpgradeAvailable") {
+		t.Fatal("UpgradeAvailable 경고가 없다")
+	}
+}
+
+// ── 항목4: WorkloadProbe 제한시간 vs 검증 예산 PreFlight 경고 ──────────
+// probe 제한시간이 검증 예산보다 길면 PreFlight 가 경고를 낸다 — 그 조합에서는 바깥 예산이
+// 먼저 만료해 probe 결과가 쓰이지 않고, 파드는 kubelet 제한시간까지 남는다.
+func TestHandlePreFlight_ProbeTimeoutExceedsBudget_Warns(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "1m"
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 300,
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	if !hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("경고 이벤트가 없다 — 설정 모순이 보이지 않는다")
+	}
+}
+
+// 합당한 조합(probe 제한시간 < 검증 예산)에서는 경고가 없다.
+func TestHandlePreFlight_ProbeTimeoutWithinBudget_NoWarn(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "15m"
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", TimeoutSeconds: 120,
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	if hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("합당한 조합인데 경고가 떴다")
 	}
 }

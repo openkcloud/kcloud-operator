@@ -4,7 +4,8 @@
 //       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-09 (resolveDriverImage 사유 경로 수 정정, 작업 항목 토큰 제거)
+// 생성일: 2026-04-13 | 수정일: 2026-10-10 (verifiedVersions 허용 목록 검사를 autoUpgrade 게이트 앞으로 이동;
+//       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가)
 // ============================================================
 
 package upgrade
@@ -316,6 +317,24 @@ func (m *UpgradeStateMachine) handleIdle(
 		return true, 60 * time.Second, nil
 	}
 
+	// verifiedVersions 화이트리스트 검사는 autoUpgrade 게이트보다 앞이다 — 허용 목록 밖 버전은
+	// 자동 업그레이드를 끈 정책에서도 거부 사유를 드러내야 한다. 종전 순서에서는 autoUpgrade=false
+	// 가 먼저 돌려보내 UpgradeAvailable("새 버전 있음") 경고만 남고, 진짜 이유(목록 밖)는
+	// 어디에도 보이지 않았다(2026-10-09 라이브 확인). 이 전이는 Job 을 만들지 않고 cordon 도
+	// 하지 않으며, 버전이 목록에 다시 들어오면 handleUnverifiedVersion 이 Idle 로 되돌린다.
+	if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
+		msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
+			desiredVersion, policy.Spec.VerifiedVersions)
+		logger := logf.FromContext(ctx)
+		logger.Info("verifiedVersions 검증 실패 — 업그레이드 거부",
+			"node", state.Spec.NodeName,
+			"desiredVersion", desiredVersion,
+			"verifiedVersions", policy.Spec.VerifiedVersions)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UnverifiedVersion", "%s", msg)
+		state.Status.DesiredVersion = desiredVersion
+		return m.transitionTo(state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
+	}
+
 	// autoUpgrade가 false이면 이벤트만 발행하고 Idle 유지
 	if policy.Spec.UpgradePolicy == nil || !policy.Spec.UpgradePolicy.AutoUpgrade {
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeAvailable",
@@ -355,23 +374,6 @@ func (m *UpgradeStateMachine) handleIdle(
 			// state 변경 없이 잔여 시간 후 재시도 (transitionTo 미호출 → LastTransitionTime 보존)
 			return true, remaining, nil
 		}
-	}
-
-	// verifiedVersions 화이트리스트 검사 (non-empty 시에만 검사, backward compat 유지).
-	// DIP.spec.verifiedVersions 가 설정되어 있고 desiredVersion 이 목록에 없으면
-	// 업그레이드를 거부하고 UnverifiedVersion 터미널 상태로 전이한다.
-	// DS image patch 를 수행하지 않으므로 실제 드라이버 변경 없음.
-	if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
-		msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
-			desiredVersion, policy.Spec.VerifiedVersions)
-		logger := logf.FromContext(ctx)
-		logger.Info("verifiedVersions 검증 실패 — 업그레이드 거부",
-			"node", state.Spec.NodeName,
-			"desiredVersion", desiredVersion,
-			"verifiedVersions", policy.Spec.VerifiedVersions)
-		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UnverifiedVersion", "%s", msg)
-		state.Status.DesiredVersion = desiredVersion
-		return m.transitionTo(state, v1alpha1.UpgradeStateUnverifiedVersion, msg, 0)
 	}
 
 	// 버전 불일치 + autoUpgrade: UpgradeRequired로 전이
@@ -450,6 +452,25 @@ func (m *UpgradeStateMachine) handlePreFlight(
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, eventPolicySharedOwnership,
 			"DriverInstallPolicy %s 의 spec 을 제3 관리자 %v 가 함께 소유한다 — 값은 helm 값 파일로만 바꿀 것(다음 helm upgrade 의 SSA 충돌 예방). 이미 생긴 소유 항목은 helm 이 같은 필드를 같은 값으로 다시 적용해 소유를 회수할 때까지 남고, 그동안 이 경고도 PreFlight 마다 선다",
 			policy.Name, foreign)
+	}
+	// probe 제한시간이 Validating 전체 예산보다 길면 그 probe 는 결론을 낼 수 없다 — 바깥
+	// 예산(handleValidating 의 validationTimeout)이 먼저 만료해 Rollback·Failed 로 전이하고
+	// WorkloadValidator.Run 은 다시 불리지 않는다. 생성된 probe 파드는 kubelet 의
+	// activeDeadlineSeconds(= 이 TimeoutSeconds)까지 남아 그동안 장치 점유자로 집계된다.
+	// 거절하지 않고 경고만 낸다 — 기존 객체를 admission 에서 막으면 운영 중 정책이 갱신 불가가 된다.
+	// 예산 파싱은 handleValidating 이 이미 쓰는 parseDuration 을 재사용(새 헬퍼 미추가).
+	if wp := policy.Spec.WorkloadProbe; wp != nil && wp.Enabled && wp.TimeoutSeconds > 0 {
+		var rawTimeout string
+		if policy.Spec.UpgradePolicy != nil {
+			rawTimeout = policy.Spec.UpgradePolicy.ValidationTimeout
+		}
+		validationTimeout := parseDuration(rawTimeout, 15*time.Minute)
+		if probeTimeout := time.Duration(wp.TimeoutSeconds) * time.Second; probeTimeout > validationTimeout {
+			m.Recorder.Eventf(state, corev1.EventTypeWarning, "WorkloadProbeTimeoutExceedsBudget",
+				"workloadProbe.timeoutSeconds=%ds 가 upgradePolicy.validationTimeout=%s 보다 길다 — "+
+					"probe 결과가 쓰이지 않고 파드가 그 차이만큼 장치를 점유한다. 둘 중 하나를 고칠 것",
+				wp.TimeoutSeconds, validationTimeout)
+		}
 	}
 	allowlist := policy.Spec.KernelAllowlist
 
