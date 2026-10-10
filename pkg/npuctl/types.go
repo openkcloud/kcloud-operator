@@ -3,7 +3,7 @@
 //
 //	안정 필드명의 JSON 계약. 필드는 모두 omitempty로 두어 벤더/리소스가 없을 때 생략된다.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-10-06
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (VendorOperatorStatus·ClusterPolicyStatus.VendorOperators 추가)
 package npuctl
 
 import "kcloud-operator/internal/health"
@@ -118,6 +118,15 @@ type UpgradeStatus struct {
 	Models []string `json:"models,omitempty"`
 }
 
+// VendorOperatorStatus 는 NPUClusterPolicy 의 <Vendor>OperatorReady 조건 하나를 옮긴 것이다.
+// 판정은 컨트롤러가 이미 내렸고 이 패키지는 옮기기만 한다.
+type VendorOperatorStatus struct {
+	Vendor  string `json:"vendor"`
+	Status  string `json:"status"` // "True"|"False"|"Unknown"
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 // ClusterPolicyStatus는 NPUClusterPolicy 하나의 조회 결과(관측 상태)입니다.
 type ClusterPolicyStatus struct {
 	Namespace string `json:"namespace"`
@@ -127,6 +136,8 @@ type ClusterPolicyStatus struct {
 	Ready        string `json:"ready,omitempty"` // "True"|"False"|"Unknown"|"" (조건 없음)
 	ReadyReason  string `json:"readyReason,omitempty"`
 	ReadyMessage string `json:"readyMessage,omitempty"`
+	// VendorOperators 는 <Vendor>OperatorReady 조건 목록이다(벤더 이름 오름차순).
+	VendorOperators []VendorOperatorStatus `json:"vendorOperators,omitempty"`
 }
 
 // NodeDetail 은 노드 하나의 상세다. 여기 실리는 값은 전부 다른 컨트롤러가 이미 판정해

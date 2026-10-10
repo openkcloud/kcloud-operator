@@ -3,7 +3,8 @@
 // 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read(GET /status,
 //       /nodes/{node})/control(POST /vendors/{vendor}/upgrade|rollback|toggle)을 노출.
 //       control 은 전부 CR patch 로 귀결(1단계 계약 유지). 인증=TokenReview, 인가=SubjectAccessReview.
-// 생성일: 2026-07-20 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
+// 생성일: 2026-07-20 | 수정일: 2026-10-10 (capabilities·accelerators·preview 에 DRA 읽기
+//         (resourceslices·deviceclasses) 인가 게이트 추가)
 // ============================================================
 
 package apiserver
@@ -112,7 +113,13 @@ func (s *Server) Handler() http.Handler {
 	// 인벤토리 라우트 셋은 건강 판정(acceleratorhealths)·할당량(pods)·DRA 집계(resourceclaims)까지
 	// 읽는다(loadInventory 의 attachDRAAllocation). capabilities 는 그것들을 읽지 않으므로
 	// 게이트를 나눈다 — 게이트는 라우트가 실제로 읽는 것만 요구한다.
-	capGates := []authzPair{nodeGate, acppGate, ndrGate}
+	// capabilities·accelerators 는 둘 다 intent.Load 를 거치고, 그 안의 LoadDRACapability 가
+	// DeviceClass·ResourceSlice 를 읽으므로 그 둘의 list 인가를 capGates 에 싣는다 — invGates 가
+	// capGates 를 포함해 가속기 라우트에도 그대로 전파된다.
+	capGates := []authzPair{nodeGate, acppGate, ndrGate,
+		{Group: "resource.k8s.io", Verb: "list", Resource: "resourceslices"},
+		{Group: "resource.k8s.io", Verb: "list", Resource: "deviceclasses"},
+	}
 	invGates := append(append([]authzPair{}, capGates...), npuPair("list", "acceleratorhealths"), podsGate,
 		authzPair{Group: "resource.k8s.io", Verb: "list", Resource: "resourceclaims"})
 	// read: npu.ai 리소스 list 권한 + core 그룹 nodes 권한. CollectStatus 가 corev1.NodeList 를
@@ -164,10 +171,14 @@ func (s *Server) Handler() http.Handler {
 	// core 그룹 리소스이므로 그룹을 명시한다 — npu.ai 로 물으면 SAR 이 항상 거부한다.
 	mux.HandleFunc("GET /api/v1/events", s.authzGroup("", "list", "events", s.handleEvents))
 	// preview 는 POST 지만 아무것도 쓰지 않는다 — 그래서 읽기 등급(list) 권한을 요구한다.
-	// intent.Load(ACPP+NDR+Node)와 클래스 조회를 그대로 수행하므로, 응답이 실제로 읽는 네 리소스
-	// 전부를 인가한다("읽는 리소스는 전부 인가한다" 규칙 — acceleratorworkloads
-	// 자체는 읽지 않으므로 요구하지 않는다. nodes 는 core 그룹이라 별도 게이트가 필요하다).
-	mux.HandleFunc("POST /api/v1/preview", s.authzAll([]authzPair{nodeGate, acppGate, ndrGate, classGate}, s.handlePreview))
+	// intent.Load(ACPP+NDR+Node+DeviceClass+ResourceSlice)와 클래스 조회를 그대로 수행하므로,
+	// 응답이 실제로 읽는 여섯 리소스 전부를 인가한다("읽는 리소스는 전부 인가한다" 규칙 —
+	// acceleratorworkloads 자체는 읽지 않으므로 요구하지 않는다. nodes·resourceslices·
+	// deviceclasses 는 core/resource.k8s.io 그룹이라 별도 게이트가 필요하다).
+	mux.HandleFunc("POST /api/v1/preview", s.authzAll([]authzPair{nodeGate, acppGate, ndrGate, classGate,
+		{Group: "resource.k8s.io", Verb: "list", Resource: "resourceslices"},
+		{Group: "resource.k8s.io", Verb: "list", Resource: "deviceclasses"},
+	}, s.handlePreview))
 	// 정책 쓰기: 생성은 create, 삭제는 delete 인가를 요구한다. 수정(PUT)은 만들지 않는다 —
 	// 상태기계가 중간 단계에 있는 채로 spec 이 바뀌면 되돌릴 기준이 흐려진다.
 	// dryRun=true 면 같은 핸들러가 client.DryRunAll 로 webhook 만 돌린다(인가는 동일).

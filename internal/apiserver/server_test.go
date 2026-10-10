@@ -2,7 +2,7 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
+// 생성일: 2026-07-20 | 수정일: 2026-10-10 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정)
 // ============================================================
 
 package apiserver
@@ -276,6 +276,27 @@ func TestAcceleratorsRequireResourceClaimsAuthz(t *testing.T) {
 	}
 }
 
+// TestCapabilityRoutesRequireDRAReadAuthz: capabilities·accelerators 는 intent.Load 가
+// LoadDRACapability 로 DeviceClass·ResourceSlice 도 읽으므로 그 둘의 list 인가도 요구해야
+// 한다 — 게이트 없이 응답하면 권한 없는 주체에게 DRA 발행 현황이 새어 나간다.
+func TestCapabilityRoutesRequireDRAReadAuthz(t *testing.T) {
+	for _, res := range []string{"resourceslices", "deviceclasses"} {
+		t.Run(res, func(t *testing.T) {
+			opts := authnOpts{
+				authenticated: true, username: "sa:no-dra-read", allowed: true,
+				denyResources: map[string]bool{res: true},
+			}
+			s, _ := newServer(t, opts, previewObjects()...)
+			for _, path := range []string{"/api/v1/capabilities", "/api/v1/accelerators"} {
+				w := do(t, s, "GET", path, "", "tok")
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("%s: code=%d (403 기대) — %s 인가가 게이트에 없다", path, w.Code, res)
+				}
+			}
+		})
+	}
+}
+
 // 중첩 게이트가 계층마다 TokenReview 를 반복하면 요청당 왕복이 게이트 수만큼 늘어난다.
 // 토큰이 하나면 TokenReview 도 한 번이어야 한다(최종 리뷰 후속 4번).
 func TestAuthzAllDoesOneTokenReview(t *testing.T) {
@@ -297,8 +318,9 @@ func TestAuthzAllDoesOneTokenReview(t *testing.T) {
 	if trs != 1 {
 		t.Errorf("TokenReview 는 요청당 1회여야 함: got %d", trs)
 	}
-	if sars != 4 {
-		t.Errorf("SAR 은 게이트 수(4)만큼: got %d", sars)
+	// preview 는 nodes + npu.ai(acpp·ndr·class) 3종 + resourceslices·deviceclasses 2종 = 6개 SAR.
+	if sars != 6 {
+		t.Errorf("SAR 은 게이트 수(6)만큼: got %d", sars)
 	}
 }
 

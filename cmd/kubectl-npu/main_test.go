@@ -3,7 +3,9 @@
 //
 //	describe 명령의 렌더·인자 파싱도 여기서 시험한다.
 //
-// 생성일: 2026-08-11 | 수정일: 2026-10-06 (CONSUMERS 절 렌더 시험 추가)
+// 생성일: 2026-08-11 | 수정일: 2026-10-10 (NPUClusterPolicy 벤더 operator 조건 렌더 시험
+//
+//	추가, 열 폭 측정·Ready 없음 조합 시험 보강)
 package main
 
 import (
@@ -147,6 +149,129 @@ func TestPrintStatusText_ShowsExclusionForNodeWithoutDevices(t *testing.T) {
 
 // TestPrintStatusText_OmitsEmptyReasonParens 는 사유가 빈 배제 노드에 빈 괄호(`제외됨()`)를
 // 내지 않는지 본다 — 사유가 있는 줄 알게 만든다.
+// TestPrintStatusText_ClusterPolicyShowsVendorOperatorLines 는 NPUClusterPolicy 절에
+// 벤더 operator 조건이 Ready 줄 바로 다음에, 전달받은 순서대로 나오는지 본다.
+func TestPrintStatusText_ClusterPolicyShowsVendorOperatorLines(t *testing.T) {
+	status := &npuctl.ClusterStatus{ClusterPolicies: []npuctl.ClusterPolicyStatus{
+		{
+			Namespace: "kcloud", Name: "default",
+			Ready: "True", ReadyReason: "AllComponentsReady",
+			VendorOperators: []npuctl.VendorOperatorStatus{
+				{Vendor: "nvidia", Status: "False", Reason: "NoClusterPolicy"},
+				{Vendor: "rebellions", Status: "Unknown", Reason: "StatusProbeUnavailable"},
+			},
+		},
+	}}
+	out := captureStdout(t, func() { printStatusText(status) })
+
+	section := out[strings.Index(out, "=== NPUClusterPolicy ==="):]
+	section = section[:strings.Index(section, "\n\n=== DriverUpgradeState ===")]
+	lines := strings.Split(strings.TrimRight(section, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("헤더+Ready+벤더2줄=4줄이어야 하는데 %d줄: %q", len(lines), lines)
+	}
+	if lines[1] != "  kcloud/default: Ready=True (AllComponentsReady)" {
+		t.Errorf("Ready 줄이 다르다: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "nvidia") || !strings.Contains(lines[2], "False") ||
+		!strings.Contains(lines[2], "NoClusterPolicy") {
+		t.Errorf("nvidia 벤더 줄이 다르다: %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "rebellions") || !strings.Contains(lines[3], "Unknown") ||
+		!strings.Contains(lines[3], "StatusProbeUnavailable") {
+		t.Errorf("rebellions 벤더 줄이 다르다: %q", lines[3])
+	}
+}
+
+// TestPrintStatusText_ClusterPolicyNoVendorOperatorsOutputsNoExtraLines 는 벤더 조건이
+// 없는 정책에서 NPUClusterPolicy 절 출력이 종전과 동일한 한 줄만 내는지 본다(회귀 방지).
+func TestPrintStatusText_ClusterPolicyNoVendorOperatorsOutputsNoExtraLines(t *testing.T) {
+	status := &npuctl.ClusterStatus{ClusterPolicies: []npuctl.ClusterPolicyStatus{
+		{Namespace: "kcloud", Name: "default", Ready: "True", ReadyReason: "AllComponentsReady"},
+	}}
+	out := captureStdout(t, func() { printStatusText(status) })
+
+	section := out[strings.Index(out, "=== NPUClusterPolicy ==="):]
+	section = section[:strings.Index(section, "\n\n=== DriverUpgradeState ===")]
+	lines := strings.Split(strings.TrimRight(section, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("헤더+Ready줄=2줄이어야 하는데 %d줄 (벤더 조건 없는데 줄이 더 남음): %q", len(lines), lines)
+	}
+	if lines[1] != "  kcloud/default: Ready=True (AllComponentsReady)" {
+		t.Errorf("Ready 줄이 바뀜: %q", lines[1])
+	}
+}
+
+// TestPrintStatusText_ClusterPolicyVendorColumnWidthMeasuredFromData 는 벤더 이름이
+// 고정폭(12자)을 넘어도 그 줄만 밀리지 않고 STATUS 열이 다른 줄과 같은 자리에서
+// 시작하는지 본다 — printTable 이 이미 겪은 증상(main.go:28 주석)과 같은 패턴이라
+// 벤더 줄에도 같은 원칙(폭을 데이터에서 잰다)을 적용했는지 고정한다. 고정폭
+// (`%-12s`)으로 되돌리면 이 시험이 FAIL 한다. "longvendorname" 은 실재 벤더가
+// 아니라 폭 측정만 보려고 쓴 합성 이름이다.
+func TestPrintStatusText_ClusterPolicyVendorColumnWidthMeasuredFromData(t *testing.T) {
+	status := &npuctl.ClusterStatus{ClusterPolicies: []npuctl.ClusterPolicyStatus{
+		{
+			Namespace: "kcloud", Name: "default",
+			Ready: "True", ReadyReason: "AllComponentsReady",
+			VendorOperators: []npuctl.VendorOperatorStatus{
+				{Vendor: "longvendorname", Status: "False", Reason: "NoClusterPolicy"},
+				{Vendor: "nvidia", Status: "Unknown", Reason: "StatusProbeUnavailable"},
+			},
+		},
+	}}
+	out := captureStdout(t, func() { printStatusText(status) })
+
+	section := out[strings.Index(out, "=== NPUClusterPolicy ==="):]
+	section = section[:strings.Index(section, "\n\n=== DriverUpgradeState ===")]
+	lines := strings.Split(strings.TrimRight(section, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("헤더+Ready+벤더2줄=4줄이어야 하는데 %d줄: %q", len(lines), lines)
+	}
+
+	longRow, shortRow := lines[2], lines[3]
+	wantCol := runeColStart(t, longRow, "False")
+	gotCol := runeColStart(t, shortRow, "Unknown")
+	if gotCol != wantCol {
+		t.Errorf("STATUS 열이 %d 에서 시작해야 하는데 %d 다(벤더 이름이 길어지면 밀림) — %q vs %q",
+			wantCol, gotCol, longRow, shortRow)
+	}
+}
+
+// TestPrintStatusText_ClusterPolicyNoReadyConditionStillShowsVendorLines 는 Ready
+// 조건이 없는("no conditions") 정책에서도 벤더 조건이 있으면 벤더 줄이 나오는지
+// 본다 — main.go 의 if/else 재구성(Ready 유무와 무관하게 벤더 루프를 공통으로
+// 실행)이 지키는 조합이다.
+func TestPrintStatusText_ClusterPolicyNoReadyConditionStillShowsVendorLines(t *testing.T) {
+	status := &npuctl.ClusterStatus{ClusterPolicies: []npuctl.ClusterPolicyStatus{
+		{
+			Namespace: "kcloud", Name: "default",
+			VendorOperators: []npuctl.VendorOperatorStatus{
+				{Vendor: "nvidia", Status: "False", Reason: "NoClusterPolicy"},
+				{Vendor: "rebellions", Status: "Unknown", Reason: "StatusProbeUnavailable"},
+			},
+		},
+	}}
+	out := captureStdout(t, func() { printStatusText(status) })
+
+	section := out[strings.Index(out, "=== NPUClusterPolicy ==="):]
+	section = section[:strings.Index(section, "\n\n=== DriverUpgradeState ===")]
+	lines := strings.Split(strings.TrimRight(section, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("헤더+no conditions+벤더2줄=4줄이어야 하는데 %d줄: %q", len(lines), lines)
+	}
+	if lines[1] != "  kcloud/default: no conditions" {
+		t.Errorf("no conditions 줄이 다르다: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "nvidia") || !strings.Contains(lines[2], "False") ||
+		!strings.Contains(lines[2], "NoClusterPolicy") {
+		t.Errorf("nvidia 벤더 줄이 다르다: %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "rebellions") || !strings.Contains(lines[3], "Unknown") ||
+		!strings.Contains(lines[3], "StatusProbeUnavailable") {
+		t.Errorf("rebellions 벤더 줄이 다르다: %q", lines[3])
+	}
+}
+
 func TestPrintStatusText_OmitsEmptyReasonParens(t *testing.T) {
 	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{
 		{Name: "k8s-master", Excluded: true},

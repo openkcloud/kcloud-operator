@@ -1,10 +1,11 @@
 // status_test.go: CollectStatus 단위 테스트(fake client, envtest 불필요)
 // 상세: NCP/DIP(+rngd 서브벤더)/NDR/DUS/Node를 섞어 넣고 ClusterStatus 집약 결과를 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (벤더 operator 조건 집계 시험 추가)
 package npuctl
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -311,4 +312,87 @@ func TestCollectStatus_ObservedModelsCopied(t *testing.T) {
 		}
 	}
 	t.Fatalf("observedModels 가 CLI 상태에 옮겨지지 않았다: %+v", status.Nodes)
+}
+
+// 벤더 operator 조건이 집계에 실린다 — 종전에는 Ready 조건만 읽어 <Vendor>OperatorReady 가
+// 어느 출력에도 나오지 않았다.
+func TestBuildClusterPolicyStatuses_IncludesVendorOperatorConditions(t *testing.T) {
+	ncp := npuv1alpha1.NPUClusterPolicy{}
+	ncp.Name = "default"
+	ncp.Status.Phase = "Ready"
+	ncp.Status.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "AllComponentsReady"},
+		{Type: "NvidiaOperatorReady", Status: metav1.ConditionFalse, Reason: "NoClusterPolicy",
+			Message: "nvidia.com ClusterPolicy 가 없다"},
+		{Type: "RebellionsOperatorReady", Status: metav1.ConditionUnknown, Reason: "StatusProbeUnavailable"},
+	}
+
+	out := buildClusterPolicyStatuses([]npuv1alpha1.NPUClusterPolicy{ncp})
+
+	if len(out) != 1 {
+		t.Fatalf("정책 %d건 (1 기대)", len(out))
+	}
+	if len(out[0].VendorOperators) != 2 {
+		t.Fatalf("벤더 조건 %d건 (2 기대) — Ready 조건만 읽는다", len(out[0].VendorOperators))
+	}
+	if out[0].VendorOperators[0].Vendor != VendorNvidia ||
+		out[0].VendorOperators[0].Status != "False" ||
+		out[0].VendorOperators[0].Reason != "NoClusterPolicy" {
+		t.Fatalf("첫 항목이 다르다: %+v", out[0].VendorOperators[0])
+	}
+}
+
+// TestBuildClusterPolicyStatuses_VendorOperatorsSortedByName 은 조건 순서가 섞여 있어도
+// 출력은 벤더 이름 오름차순으로 고정되는지 본다.
+func TestBuildClusterPolicyStatuses_VendorOperatorsSortedByName(t *testing.T) {
+	ncp := npuv1alpha1.NPUClusterPolicy{}
+	ncp.Name = "cluster-policy"
+	ncp.Status.Conditions = []metav1.Condition{
+		{Type: "RebellionsOperatorReady", Status: metav1.ConditionUnknown, Reason: "StatusProbeUnavailable"},
+		{Type: "NvidiaOperatorReady", Status: metav1.ConditionTrue, Reason: "AllComponentsReady"},
+		{Type: "FuriosaOperatorReady", Status: metav1.ConditionTrue, Reason: "AllComponentsReady"},
+	}
+
+	out := buildClusterPolicyStatuses([]npuv1alpha1.NPUClusterPolicy{ncp})
+
+	if len(out[0].VendorOperators) != 3 {
+		t.Fatalf("벤더 조건 %d건 (3 기대)", len(out[0].VendorOperators))
+	}
+	got := []string{out[0].VendorOperators[0].Vendor, out[0].VendorOperators[1].Vendor, out[0].VendorOperators[2].Vendor}
+	want := []string{"furiosa", VendorNvidia, "rebellions"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("벤더 정렬 순서 got=%v want=%v", got, want)
+		}
+	}
+}
+
+// TestClusterPolicyStatus_JSON_VendorOperatorsOmittedWhenEmpty 는 벤더 조건이 없는
+// 입력에서 --json 출력에 vendorOperators 키가 생기지 않는지 본다(omitempty 계약).
+// 기존 필드(name/phase/ready/readyReason)의 이름·존재는 건드리지 않았는지도 함께 확인한다.
+func TestClusterPolicyStatus_JSON_VendorOperatorsOmittedWhenEmpty(t *testing.T) {
+	cp := ClusterPolicyStatus{
+		Namespace: "kcloud", Name: "cluster-policy",
+		Phase: "Installing", Ready: "True", ReadyReason: "AllComponentsReady",
+	}
+
+	raw, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	got := string(raw)
+	if strings.Contains(got, "vendorOperators") {
+		t.Errorf("벤더 조건이 없는데 vendorOperators 키가 출력됨: %s", got)
+	}
+	wantFields := []string{
+		`"name":"cluster-policy"`,
+		`"phase":"Installing"`,
+		`"ready":"True"`,
+		`"readyReason":"AllComponentsReady"`,
+	}
+	for _, field := range wantFields {
+		if !strings.Contains(got, field) {
+			t.Errorf("기존 필드 %s 가 없어짐: %s", field, got)
+		}
+	}
 }

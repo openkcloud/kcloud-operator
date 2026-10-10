@@ -12,8 +12,8 @@
 #       담은 SA 를 따로 둔다.
 #       viewer 는 조회 라우트만, operator 는 정책 생성·삭제와 드라이버 제어까지 포함한다.
 #       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
-# 생성일: 2026-09-03 | 수정일: 2026-10-06 (operator 에 acceleratorworkloads create·delete 권한 추가;
-#         api.console.extraServiceAccounts 로 화면용 SA·바인딩 묶음 추가)
+# 생성일: 2026-09-03 | 수정일: 2026-10-10 (viewer ClusterRole 에 resourceslices·deviceclasses
+#         list 권한 추가)
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $sa := printf "%s-console" $fullname }}
@@ -50,9 +50,10 @@ rules:
       # accelerators 가 건강 판정을 읽는다
       - "acceleratorhealths"
     verbs: ["list"]
-  # 1.28 라인에는 이 리소스가 없을 수 있지만 SAR 은 RBAC 만 보므로 게이트는 선다.
+  # 1.28 라인에는 이 리소스들이 없을 수 있지만 SAR 은 RBAC 만 보므로 게이트는 선다.
+  # resourceslices·deviceclasses 는 capabilities·accelerators·preview 가 intent.Load 로 읽는다.
   - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceclaims"]
+    resources: ["resourceclaims", "resourceslices", "deviceclasses"]
     verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

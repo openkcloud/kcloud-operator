@@ -4,7 +4,9 @@
 //	조회·제어 로직은 pkg/npuctl(kcloud-operator 모듈, replace로 로컬 참조)에 위임하고,
 //	이 파일은 CLI 파싱 + 사람용/JSON 출력 포맷팅만 담당한다(S5-3-① 관리 API 1단계).
 //
-// 생성일: 2026-03-25 | 수정일: 2026-10-06
+// 생성일: 2026-03-25 | 수정일: 2026-10-10 (NPUClusterPolicy 절에 벤더 operator 조건 줄 추가,
+//
+//	벤더 줄 열 폭을 고정값 대신 데이터에서 측정하도록 수정)
 package main
 
 import (
@@ -293,9 +295,25 @@ func printStatusText(status *npuctl.ClusterStatus) {
 	for _, cp := range status.ClusterPolicies {
 		if cp.Ready == "" {
 			fmt.Printf("  %s/%s: no conditions\n", cp.Namespace, cp.Name)
-			continue
+		} else {
+			fmt.Printf("  %s/%s: Ready=%s (%s)\n", cp.Namespace, cp.Name, cp.Ready, cp.ReadyReason)
 		}
-		fmt.Printf("  %s/%s: Ready=%s (%s)\n", cp.Namespace, cp.Name, cp.Ready, cp.ReadyReason)
+		// 벤더별 <Vendor>OperatorReady 조건 — 항목이 없으면 줄을 내지 않는다. 폭은
+		// printTable 과 같은 원칙으로 데이터에서 잰다 — 고정폭(예 %-12s)은 벤더
+		// 이름이 그 폭을 넘으면 그 줄만 밀려 printTable 주석이 적어 둔 바로 그
+		// 증상(열이 어긋나 표를 못 훑음)이 재현된다.
+		vendorWidth, statusWidth := 0, 0
+		for _, vo := range cp.VendorOperators {
+			vendorWidth = maxInt(vendorWidth, utf8.RuneCountInString(vo.Vendor))
+			statusWidth = maxInt(statusWidth, utf8.RuneCountInString(vo.Status))
+		}
+		for _, vo := range cp.VendorOperators {
+			reason := vo.Reason
+			if reason == "" {
+				reason = "-"
+			}
+			fmt.Printf("    %-*s %-*s %s\n", vendorWidth, vo.Vendor, statusWidth, vo.Status, reason)
+		}
 	}
 
 	fmt.Println("\n=== DriverUpgradeState ===")

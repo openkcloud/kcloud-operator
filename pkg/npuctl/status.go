@@ -4,13 +4,14 @@
 //	core/v1 Node(allocatable)를 한 번에 조회해 ClusterStatus로 합친다.
 //	kubectl-npu status --json 및 사람용 텍스트 출력이 공통으로 사용하는 단일 진입점.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (벤더 operator 조건 집계 추가)
 package npuctl
 
 import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -155,6 +156,10 @@ func flattenVendorIndex(idx map[string]*VendorStatus) []VendorStatus {
 }
 
 func buildClusterPolicyStatuses(ncps []npuv1alpha1.NPUClusterPolicy) []ClusterPolicyStatus {
+	const (
+		vendorOperatorCondSuffix = "OperatorReady"
+		readyCondType            = "Ready"
+	)
 	out := make([]ClusterPolicyStatus, 0, len(ncps))
 	for i := range ncps {
 		ncp := ncps[i]
@@ -164,13 +169,24 @@ func buildClusterPolicyStatuses(ncps []npuv1alpha1.NPUClusterPolicy) []ClusterPo
 			Phase:     ncp.Status.Phase,
 		}
 		for _, cond := range ncp.Status.Conditions {
-			if cond.Type == "Ready" {
+			if cond.Type == readyCondType {
 				cp.Ready = string(cond.Status)
 				cp.ReadyReason = cond.Reason
 				cp.ReadyMessage = cond.Message
-				break
+				continue
+			}
+			if strings.HasSuffix(cond.Type, vendorOperatorCondSuffix) {
+				cp.VendorOperators = append(cp.VendorOperators, VendorOperatorStatus{
+					Vendor:  strings.ToLower(strings.TrimSuffix(cond.Type, vendorOperatorCondSuffix)),
+					Status:  string(cond.Status),
+					Reason:  cond.Reason,
+					Message: cond.Message,
+				})
 			}
 		}
+		sort.Slice(cp.VendorOperators, func(i, j int) bool {
+			return cp.VendorOperators[i].Vendor < cp.VendorOperators[j].Vendor
+		})
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool {
