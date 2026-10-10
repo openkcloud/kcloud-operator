@@ -5,7 +5,8 @@
 //       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
 //       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
 // 생성일: 2026-04-13 | 수정일: 2026-10-10 (verifiedVersions 허용 목록 검사를 autoUpgrade 게이트 앞으로 이동;
-//       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가)
+//       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가;
+//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신)
 // ============================================================
 
 package upgrade
@@ -1933,11 +1934,13 @@ func resolveDriverImage(
 }
 
 // ownSpecManagerPrefixes 는 경고에서 제외하는 관리자 이름 접두 목록이다 — helm 과 제품 자신의
-// 제어 경로. pkg/npuctl.UpgradeVendor 가 DIP spec 을 FieldManager 없이 patch 하므로 API 서버가
-// User-Agent(= 바이너리 파일명)에서 이름을 유도한다. 라이브 .91 조회로 확인한 실제 이름:
-// operator 바이너리는 `manager`(Dockerfile 산출물 이름, DriverUpgradeState 항목이 그 이름),
-// CLI 는 `kubectl-npu`. 접두로 비교하는 이유는 버전 접미가 붙는 변형을 함께 거르기 위해서다.
-// `manager` 는 kubebuilder 기본 바이너리 이름이라 같은 이름의 제3 컨트롤러도 함께 빠진다 —
+// 제어 경로. pkg/npuctl.UpgradeVendor 는 이제 FieldManager 를 `kcloud-operator-upgrade` 로
+// 명시한다(= kcloud-operator 접두에 걸림). `manager`·`kubectl-npu` 는 그 전에 FieldManager 없이
+// patch 해서 API 서버가 User-Agent(= 바이너리 파일명)에서 이름을 유도했을 때 남은 과거 항목이다 —
+// 라이브 .91 조회로 확인한 실제 이름은 operator 바이너리 `manager`(Dockerfile 산출물 이름,
+// DriverUpgradeState 항목이 그 이름), CLI `kubectl-npu`. 라이브 managedFields 에 그 이름이
+// 더는 없을 때 접두 목록에서 제거한다. 접두로 비교하는 이유는 버전 접미가 붙는 변형을 함께
+// 거르기 위해서다. `manager` 는 kubebuilder 기본 바이너리 이름이라 같은 이름의 제3 컨트롤러도 함께 빠진다 —
 // 자기 제어 경로를 "외부 개입" 으로 지목하는 쪽이 보고된 결함이라 그 방향을 택했다.
 // `kubectl` 전체를 넣지 않는다: 사람이 돌린 kubectl patch/edit 는 그대로 경고 대상이다.
 var ownSpecManagerPrefixes = []string{"helm", "kubectl-npu", "kcloud-operator", "manager"}

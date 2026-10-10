@@ -4,7 +4,7 @@
 //       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
 //       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
 //       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-09 (공동 소유 경고 제외 대상·Apply 소유 픽스처 보강)
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가)
 // ============================================================
 
 package upgrade
@@ -1336,6 +1336,7 @@ func TestForeignSpecManagers(t *testing.T) {
 		{Manager: "helm", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "kubectl-npu", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "manager", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
+		{Manager: "kcloud-operator-upgrade", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "argocd-controller", Operation: metav1.ManagedFieldsOperationApply, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "kubectl-patch", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(specFields)}},
 		{Manager: "kubectl-label", Operation: metav1.ManagedFieldsOperationUpdate, FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:labels":{}}}`)}},

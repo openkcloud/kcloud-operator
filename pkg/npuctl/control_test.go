@@ -1,6 +1,6 @@
 // control_test.go: UpgradeVendor/SetVendorEnabled 단위 테스트(fake client)
 // 상세: 가드레일에 따라 제어 경로는 라이브 클러스터에서 실행하지 않고 fake client로만 검증한다.
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (FieldManager 단언 시험 추가)
 package npuctl
 
 import (
@@ -10,6 +10,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
@@ -99,6 +101,42 @@ func TestUpgradeVendor_AmbiguousVendorRequiresModel(t *testing.T) {
 		t.Errorf("매칭 없는 vendor는 에러여야 함")
 	} else if !strings.Contains(err.Error(), "매칭되는 DriverInstallPolicy가 없습니다") {
 		t.Errorf("에러 메시지가 예상과 다름: %v", err)
+	}
+}
+
+// UpgradeVendor 는 FieldManager 를 명시한다 — 지정하지 않으면 API 서버가 바이너리 파일명에서
+// 이름을 유도해 managedFields 항목이 실행 환경마다 달라진다. newTestClient 의 공유 fake 는
+// managedFields 를 읽기에서 지우므로 쓰지 않고, interceptor.Funcs 의 Patch 훅으로 호출 시점의
+// PatchOption 을 직접 가로챈다.
+func TestUpgradeVendor_SetsFieldManager(t *testing.T) {
+	dip := &npuv1alpha1.DriverInstallPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvidia-gpu-ds"},
+		Spec: npuv1alpha1.DriverInstallPolicySpec{
+			Vendor: "nvidia",
+			Model:  "generic",
+			Driver: npuv1alpha1.DriverSpec{Version: "580.159.03"},
+		},
+	}
+	var got string
+	fc := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(dip).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+				patch client.Patch, opts ...client.PatchOption) error {
+				po := &client.PatchOptions{}
+				po.ApplyOptions(opts)
+				got = po.FieldManager
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	c := newClientFromRuntimeClient(fc)
+
+	if _, err := c.UpgradeVendor(context.Background(), "nvidia", "580.178.04", UpgradeOptions{}); err != nil {
+		t.Fatalf("UpgradeVendor: %v", err)
+	}
+	if got != upgradeFieldManager {
+		t.Fatalf("FieldManager=%q (%q 기대)", got, upgradeFieldManager)
 	}
 }
 

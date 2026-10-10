@@ -11,7 +11,7 @@
 //	⚠️ 라이브 클러스터에서 이 경로를 실행하는 검증은 금지되어 있다(가드레일) — fake client
 //	단위 테스트로만 검증한다.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-09-30
+// 생성일: 2026-07-16 | 수정일: 2026-10-10 (UpgradeVendor patch 에 FieldManager 명시)
 package npuctl
 
 import (
@@ -24,6 +24,9 @@ import (
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
 )
+
+// upgradeFieldManager 는 DIP spec 을 바꾸는 이 패키지의 managedFields 이름이다.
+const upgradeFieldManager = "kcloud-operator-upgrade"
 
 // UpgradeOptions는 UpgradeVendor 호출 시 부가 동작을 제어합니다.
 type UpgradeOptions struct {
@@ -112,7 +115,11 @@ func (c *Client) UpgradeVendor(
 		}
 		dip.Spec.UpgradePolicy = up
 	}
-	if err := c.c.Patch(ctx, dip, patch); err != nil {
+	// FieldManager 를 명시한다 — 지정하지 않으면 API 서버가 User-Agent(= 바이너리 파일명)에서
+	// 이름을 유도해 CLI 는 kubectl-npu, operator 는 manager 로 서로 다른 항목이 생긴다.
+	// 이름을 고정하면 managedFields 에서 이 제어 경로를 식별할 수 있고, kcloud-operator 접두라
+	// 공동 소유 경고(foreignSpecManagers)에서 제품 자신으로 제외된다.
+	if err := c.c.Patch(ctx, dip, patch, client.FieldOwner(upgradeFieldManager)); err != nil {
 		return nil, fmt.Errorf("DriverInstallPolicy %q patch 실패: %w", dip.Name, err)
 	}
 
