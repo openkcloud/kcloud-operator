@@ -3,7 +3,7 @@
 // 상세: resource.k8s.io/v1 이 서빙되는가와, 서빙되더라도 특정 드라이버가 실제로 노드에
 // ResourceSlice 를 냈는가는 다른 사실이다(전자는 클러스터 업그레이드, 후자는 드라이버 설치가
 // 답이다) — 그래서 두 관측을 한 구조체 안에서도 분리해 담는다.
-// 생성일: 2026-08-05
+// 생성일: 2026-08-05 | 수정일: 2026-10-10 (노드·드라이버별 풀 이름 PoolsByNodeDriver 추가)
 // ============================================================
 package intent
 
@@ -19,11 +19,19 @@ type DRACapability struct {
 	DeviceClasses map[string]bool
 	// SlicesByNodeDriver 는 노드 → 드라이버 → 그 노드가 그 드라이버로 내놓는 장치 수다.
 	SlicesByNodeDriver map[string]map[string]int32
+	// PoolsByNodeDriver 는 노드 → 드라이버 → 그 드라이버가 그 노드에서 쓰는 풀 이름이다.
+	// 할당 집계가 ResourceClaim 결과의 pool 과 맞춰야 하므로 발행 쪽 이름을 그대로 보관한다 —
+	// 풀 이름이 노드명과 같다는 규약에 기대지 않는다. 한 노드·드라이버에 ResourceSlice 가 여럿이고
+	// 풀 이름이 서로 다르면 마지막 값이 남는다(여러 풀 지원은 이 범위 밖).
+	PoolsByNodeDriver map[string]map[string]string
 }
 
 // BuildDRACapability 는 DeviceClass·ResourceSlice 목록을 노드별 DRA capability 로 접는다(순수 함수).
 func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, slices []resourcev1.ResourceSlice) DRACapability {
-	out := DRACapability{APIServed: apiServed, DeviceClasses: map[string]bool{}, SlicesByNodeDriver: map[string]map[string]int32{}}
+	out := DRACapability{
+		APIServed: apiServed, DeviceClasses: map[string]bool{},
+		SlicesByNodeDriver: map[string]map[string]int32{}, PoolsByNodeDriver: map[string]map[string]string{},
+	}
 	for i := range classes {
 		out.DeviceClasses[classes[i].Name] = true
 	}
@@ -39,6 +47,10 @@ func BuildDRACapability(apiServed bool, classes []resourcev1.DeviceClass, slices
 			out.SlicesByNodeDriver[node] = map[string]int32{}
 		}
 		out.SlicesByNodeDriver[node][s.Spec.Driver] += int32(len(s.Spec.Devices))
+		if out.PoolsByNodeDriver[node] == nil {
+			out.PoolsByNodeDriver[node] = map[string]string{}
+		}
+		out.PoolsByNodeDriver[node][s.Spec.Driver] = s.Spec.Pool.Name
 	}
 	return out
 }

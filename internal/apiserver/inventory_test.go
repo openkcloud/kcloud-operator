@@ -5,7 +5,7 @@
 //       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
 //       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
 //       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 시험 추가)
+// 생성일: 2026-07-30 | 수정일: 2026-10-10 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가)
 // ============================================================
 
 package apiserver
@@ -21,6 +21,7 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"kcloud-operator/api/v1alpha1"
 	"kcloud-operator/internal/intent"
@@ -604,6 +605,37 @@ func TestAttachDRAAllocation_NoSlicesLeavesRowUntouched(t *testing.T) {
 	attachDRAAllocation(items, intent.DRACapability{}, nil)
 	if _, ok := items[0].NodeAdvertised["dra:gpu.nvidia.com"]; ok || len(items[0].NodeAdvertised) != 1 {
 		t.Fatalf("슬라이스가 없는 노드에 dra 키가 생겼다: %v", items[0].NodeAdvertised)
+	}
+}
+
+// draSliceWithPool 은 node 가 driver 로, 노드명과 다를 수 있는 pool 에서 장치 n개를 내는
+// ResourceSlice 다. internal/intent/translate_test.go 의 draSlice 와 이름이 같을 뿐 다른
+// 패키지의 비공개 함수라 가져다 쓸 수 없어, 기존 서명을 바꾸지 않고 이 시험 전용 지역
+// 빌더를 둔다.
+func draSliceWithPool(node, driver, pool string, n int) resourcev1.ResourceSlice {
+	devices := make([]resourcev1.Device, n)
+	for i := range devices {
+		devices[i] = resourcev1.Device{Name: "dev"}
+	}
+	return resourcev1.ResourceSlice{Spec: resourcev1.ResourceSliceSpec{
+		Driver: driver, NodeName: ptr.To(node), Pool: resourcev1.ResourcePool{Name: pool}, Devices: devices,
+	}}
+}
+
+// 풀 이름이 노드명과 다른 드라이버도 할당이 집계된다 — 종전에는 res.Pool 을 노드명으로 찾아
+// 할당이 0 으로 떨어지고 free 가 광고 수와 같아졌다(여유 과대 보고).
+func TestAttachDRAAllocation_PoolNameDiffersFromNode(t *testing.T) {
+	slices := []resourcev1.ResourceSlice{draSliceWithPool("k8s-worker1", "example.com/gpu", "pool-a", 4)}
+	claims := []resourcev1.ResourceClaim{allocatedClaimOn("pool-a", "example.com/gpu", "dev-0")}
+	items := []AcceleratorView{{NodeName: "k8s-worker1"}}
+
+	attachDRAAllocation(items, intent.BuildDRACapability(true, nil, slices), claims)
+
+	if got := items[0].NodeAllocated["dra:example.com/gpu"]; got != 1 {
+		t.Fatalf("nodeAllocated=%d (1 기대) — 풀 이름이 노드명과 다르면 할당을 못 센다", got)
+	}
+	if got := items[0].NodeFree["dra:example.com/gpu"]; got != 3 {
+		t.Fatalf("nodeFree=%d (3 기대)", got)
 	}
 }
 

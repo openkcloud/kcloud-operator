@@ -5,7 +5,7 @@
 // 무엇을 할 수 있는가), NDR(장치 메모리), DRA(DeviceClass·ResourceSlice 로 무엇을 줄 수
 // 있는가). ACPP 가 수렴하지 않았으면 그 노드는 stale 로 표시해 모든 모드에서 탈락시킨다
 // (fail closed).
-// 생성일: 2026-07-29 | 수정일: 2026-10-09
+// 생성일: 2026-07-29 | 수정일: 2026-10-10 (empty DRACapability 에 PoolsByNodeDriver 초기화 추가)
 // ============================================================
 package intent
 
@@ -345,7 +345,10 @@ func Load(ctx context.Context, c client.Reader) ([]NodeCapability, DRACapability
 // resource.k8s.io 가 없는 클러스터에서도 device-plugin 경로는 계속 동작해야 하므로,
 // 조회 실패는 오류가 아니라 "DRA 없음" 이다(APIServed=false).
 func LoadDRACapability(ctx context.Context, c client.Reader) (DRACapability, error) {
-	empty := DRACapability{DeviceClasses: map[string]bool{}, SlicesByNodeDriver: map[string]map[string]int32{}}
+	empty := DRACapability{
+		DeviceClasses: map[string]bool{}, SlicesByNodeDriver: map[string]map[string]int32{},
+		PoolsByNodeDriver: map[string]map[string]string{},
+	}
 	var classes resourcev1.DeviceClassList
 	if err := c.List(ctx, &classes); err != nil {
 		return empty, nil

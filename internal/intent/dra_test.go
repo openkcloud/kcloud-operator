@@ -2,7 +2,7 @@
 // dra_test.go: DRA 가용성 실측 테스트
 // 상세: API 서빙 여부와 드라이버별 노드 장치 수를 분리해 수집하는지, 노드에 묶이지 않은
 // ResourceSlice 를 후보 판정에서 제외하는지 본다.
-// 생성일: 2026-08-05
+// 생성일: 2026-08-05 | 수정일: 2026-10-10 (PoolsByNodeDriver 단언 추가)
 // ============================================================
 package intent
 
@@ -20,6 +20,7 @@ func TestBuildDRACapability(t *testing.T) {
 		{Spec: resourcev1.ResourceSliceSpec{
 			Driver:   "gpu.nvidia.com",
 			NodeName: ptr.To("k8s-worker1"),
+			Pool:     resourcev1.ResourcePool{Name: "pool-x"},
 			Devices:  []resourcev1.Device{{Name: "gpu-0"}, {Name: "gpu-1"}},
 		}},
 	}
@@ -32,6 +33,9 @@ func TestBuildDRACapability(t *testing.T) {
 	}
 	if n := got.SlicesByNodeDriver["k8s-worker1"]["gpu.nvidia.com"]; n != 2 {
 		t.Fatalf("device count = %d, want 2", n)
+	}
+	if p := got.PoolsByNodeDriver["k8s-worker1"]["gpu.nvidia.com"]; p != "pool-x" {
+		t.Fatalf("pool = %q, want %q", p, "pool-x")
 	}
 }
 
