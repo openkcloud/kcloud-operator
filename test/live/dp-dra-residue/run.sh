@@ -39,8 +39,8 @@
 #   폴링 백그라운드 프로세스부터 정리) advertiseBy·dra.enabled 를 이 실행 시작 시점 값으로
 #   되돌린다. FORCE_FAIL_AT=<set_dra_enabled(true)|...> 는 그 지점에서 강제로 실패시켜
 #   DRY_RUN 으로 cleanup 을 시연하는 시험 훅이다.
-# 생성일: 2026-09-28 | 수정일: 2026-09-28 (라이브 확인: SETTLE_AFTER_RETIRE·
-#       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가)
+# 생성일: 2026-09-28 | 수정일: 2026-10-10 (라이브 확인: SETTLE_AFTER_RETIRE·
+#       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가; 계획서 항목 토큰 제거)
 # ============================================================
 set -euo pipefail
 

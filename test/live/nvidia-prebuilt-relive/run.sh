@@ -27,7 +27,7 @@
 #          quiesce | unquiesce | empty-node | reboot-recover | wait-empty | observe |
 #          all(기본, precheck→dip-patch→quiesce→empty-node→reboot-recover→wait-empty→
 #              observe→unquiesce 순서대로 실행. rollback-dip 은 제외)
-# 생성일: 2026-09-28
+# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -354,7 +354,7 @@ reboot_recover() {
   return 1
 }
 
-# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다(
+# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다(2026-09-26 실행의
 # "검증 전제 성립" 확인과 같다). 여기서 모듈이 이미 로드돼 있으면 이후 관찰이 성립하지
 # 않으므로 실패로 멈춘다.
 wait_empty() {

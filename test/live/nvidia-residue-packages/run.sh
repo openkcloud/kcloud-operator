@@ -28,7 +28,7 @@
 #   PHASE: verdict(RUN_DIR= 필요, 클러스터 미접속) | safety-gate | precheck |
 #          simulate | remove | postcheck | wait-postchecks | quiesce | unquiesce |
 #          all(기본, quiesce/unquiesce 제외 순서대로 실행)
-# 생성일: 2026-09-28 | 수정일: 2026-09-28
+# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
