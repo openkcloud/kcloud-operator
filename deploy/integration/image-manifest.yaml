@@ -37,7 +37,7 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
   - image: furiosa-unified-device-plugin
     tag: "0.1.0"
     digest: ""
-    condition: "furiosa.unified.enabled 일 때 Furiosa 노드(Warboy·RNGD 통합 DaemonSet). GHCR 미발행 — 발행 뒤 digest 갱신"
+    condition: "furiosa.unified.enabled=true 설정 시에만(기본 false). 벤더 플러그인 우선 원칙으로 GHCR 에 발행하지 않는 내부 빌드"
   - image: furiosa-exporter
     tag: "0.1.3"
     digest: sha256:5caa47e01cb76f86a77e9357789b03cd4cf32e95f06ff117f361cafa3540b76e

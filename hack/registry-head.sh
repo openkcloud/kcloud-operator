@@ -15,6 +15,7 @@ declare -A ALLOWED_PRIVATE=(
   ["probe-tenstorrent:v1"]="acpp.probeImages.tenstorrent 설정 시에만 쓰는 내부 빌드, 기본 설치엔 없다"
   ["probe-rebellions:v1"]="acpp.probeImages.rebellions 설정 시에만 쓰는 내부 빌드, 기본 설치엔 없다"
   ["rebellions/rbln-workload:ubuntu22.04-v1"]="test/live/rebellions-timeslice 하네스 전용 내부 빌드, 차트에 없다"
+  ["furiosa-unified-device-plugin:0.1.0"]="벤더 플러그인을 그대로 쓰는 원칙으로 발행하지 않는 자체 구현, furiosa.unified.enabled=false 기본이라 기본 설치엔 없다"
 )
 
 # 멀티아치 index 도 받아야 docker pull 이 보는 digest 와 같은 값이 온다.

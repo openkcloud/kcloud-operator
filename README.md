@@ -402,4 +402,4 @@ RBAC 은 DaemonSet, Job, ConfigMap, Pod, Node 라벨 patch 권한을 포함합�
 
 ## 📄 License
 
-Apache License 2.0 입니다. 소스 파일 상단의 라이선스 헤더가 이를 명시합니다.
+Apache License 2.0 입니다. 전문은 저장소 루트의 `LICENSE` 파일에 있습니다.
