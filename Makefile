@@ -170,6 +170,16 @@ workspace-cite-check: ## 추적 파일이 가리키는 .superpowers 작업공간
 	bash hack/workspace-cite-check.sh --self-test
 	bash hack/workspace-cite-check.sh
 
+.PHONY: comment-check
+comment-check: ## 주석·문서의 이력 서술·세션 식별자·날짜·긴 블록 거부(스크립트 자가시험 먼저)
+	bash hack/comment-check.sh --self-test
+	bash hack/comment-check.sh
+
+.PHONY: comment-only-check
+comment-only-check: ## BASE..HEAD 가 주석·문서만 바꿨는지 확인 (make comment-only-check BASE=<커밋>)
+	bash hack/comment-only-check.sh --self-test
+	bash hack/comment-only-check.sh $(BASE)
+
 .PHONY: conformance
 conformance: ## Verify every registered vendor satisfies the onboarding contract (test/conformance + internal/controller).
 	go test ./test/conformance/... -v

@@ -57,6 +57,9 @@ jobs:
       - name: Workspace citation gate
         run: make workspace-cite-check
 
+      - name: Comment narrative gate
+        run: make comment-check
+
       - name: Linter config verify
         run: make lint-config
 

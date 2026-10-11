@@ -4,8 +4,7 @@
 //
 //	YAML 의 run 단계에서 `make <타깃>` 호출을 찾고, 단계가 사라지면 여기서 실패한다.
 //
-// 생성일: 2026-10-05 | 수정일: 2026-10-11 (docs-path-check·private-ip-check·lint-config·kubectl-npu 린트 고정 추가;
-// workspace-cite-check 고정 추가)
+// 생성일: 2026-10-05 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -45,7 +44,7 @@ func TestLintWorkflowRunsDocCiteCheck(t *testing.T) {
 // 손으로 돌릴 때만 돌았다). 같은 표에 고정한다(workspace-cite-check 는 신설 타깃).
 func TestLintWorkflowRunsGateTargets(t *testing.T) {
 	const wfPath = "../../.github/workflows/lint.yml"
-	for _, target := range []string{"docs-path-check", "private-ip-check", "lint-config", "workspace-cite-check"} {
+	for _, target := range []string{"docs-path-check", "private-ip-check", "lint-config", "workspace-cite-check", "comment-check"} {
 		t.Run(target, func(t *testing.T) {
 			if !workflowRunsMake(t, wfPath, target) {
 				t.Errorf("%s 에 `make %s` 단계가 없다 — 타깃은 있어도 CI 가 부르지 않으면 "+
