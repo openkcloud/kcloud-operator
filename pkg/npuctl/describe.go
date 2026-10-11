@@ -1,10 +1,8 @@
 // describe.go: pkg/npuctl 노드 하나 상세 수집 로직
 // 상세: Node/NodeDeviceReport/AcceleratorHealth/AcceleratorEvidence/AcceleratorPartitionPolicy를
-//
-//	노드 이름 하나로 모아 NodeDetail 로 옮긴다. 여기서는 값을 다시 판정하지 않는다 —
-//	다른 컨트롤러가 CRD 에 적어 둔 결과를 그대로 옮기기만 한다.
-//
-// 생성일: 2026-08-24 | 수정일: 2026-10-06
+// 노드 이름 하나로 모아 NodeDetail 로 옮긴다. 다른 컨트롤러가 CRD 에 적어 둔 값을 그대로
+// 옮기기만 하고 다시 판정하지 않는다.
+// 생성일: 2026-08-24 | 수정일: 2026-10-11
 package npuctl
 
 import (

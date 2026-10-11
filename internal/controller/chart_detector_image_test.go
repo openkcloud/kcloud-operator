@@ -1,14 +1,9 @@
 // ============================================================
 // chart_detector_image_test.go: detector.image 전체 경로 덮어쓰기가 렌더에
 // 반영되는지 고정한다.
-// 상세: clusterpolicy.yaml 의 detector 이미지는 crdUpgrade.kubectlImage 와 같은
-//
-//	규약을 쓴다 — .Values.detector.image 가 있으면 그대로, 없으면
-//	registry+repository+tag 로 조립한다. values.yaml 에 detector.image 키가
-//	없던 동안은 그 값을 소비하는 템플릿이 없어 helm 이 --set detector.image=<값>
-//	을 조용히 버렸다.
-//
-// 생성일: 2026-10-04 | 수정일: 2026-10-06 (기본 태그 0.6.19)
+// 상세: clusterpolicy.yaml 의 detector 이미지는 crdUpgrade.kubectlImage 와 같은 규약을 쓴다 —
+// .Values.detector.image 가 있으면 그대로, 없으면 registry+repository+tag 로 조립한다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

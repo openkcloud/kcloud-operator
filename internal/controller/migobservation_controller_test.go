@@ -1,7 +1,7 @@
 // ============================================================
 // migobservation_controller_test.go: 정책 독립 MIG 관측 컨트롤러 envtest
 // 상세: 정책이 없어도 관측이 돌아 보고서가 채워지는지, 고아 라벨이 정리되는지 고정한다.
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -124,11 +124,10 @@ var _ = Describe("MigObservation controller", func() {
 			"프로파일 목록이 없으면 유효한 MIG 정책을 만들 수 없다 — 이 필드가 닭과 달걀을 끊는다")
 	})
 
-	// 증명(2026-08-04 라이브 실패 후 수정): 관측 Job 을 띄우기 전에 시도 시각을 찍는다 —
-	// 성공·실패와 무관하게. 이것이 "다시 띄워도 되는가" 를 막는 유일한 문(rate limiter)이다.
-	// 성공 시각에만 걸면(직전 라운드의 판정) 관측이 계속 실패하는 노드에서 그 문이 영영 안
-	// 잠겨, 노드 watch 이벤트(kubelet 하트비트, ~10초 간격)가 올 때마다 특권 Job 이 다시 뜬다
-	// (라이브에서 5초 간격으로 재생성됐다).
+	// 증명: 관측 Job 을 띄우기 전에 시도 시각을 찍는다 — 성공·실패와 무관하게. 이것이 "다시
+	// 띄워도 되는가" 를 막는 유일한 문(rate limiter)이다. 성공 시각에만 걸면 관측이 계속
+	// 실패하는 노드에서 그 문이 영영 안 잠겨, watch 이벤트(kubelet 하트비트, ~10초 간격)마다
+	// 특권 Job 이 다시 뜬다.
 	// 깨는 뮤테이션: markObservationAttempted 호출을 Observe 성공 이후로 옮기거나 err==nil 로
 	// 게이트하면, 이 시험(전부 fail-closed)에서 주석이 안 찍혀 실패한다.
 	It("marks the attempt time even when every observation is fail-closed", func() {
@@ -157,10 +156,9 @@ var _ = Describe("MigObservation controller", func() {
 	// 증명: Observe 가 진짜 Go error(Job 생성·대기 실패 등, fail-closed 파싱 결과가 아니라)를
 	// 돌려줘도 시도 시각은 찍힌다. 위 시험(fail-closed, err==nil)만으로는 "Observe 이후 err==nil
 	// 검사를 통과해야만 시각을 찍는" 잘못된 배치도 우연히 통과한다 — MigObserver.Observe 가
-	// fail-closed 결과에서는 err 를 nil 로 돌려주기 때문이다. 이 시험은 err != nil 인 경로를
-	// 직접 겨냥해 "Job 을 띄우기 전에 찍는다" 는 배치 자체를 고정한다.
-	// 깨는 뮤테이션: markObservationAttempted 호출을 Observe 뒤 "err != nil 이면 return" 다음으로
-	// 옮기면, err != nil 이라 그 return 에서 먼저 나가 시각이 안 찍혀 실패한다.
+	// fail-closed 결과에서는 err 를 nil 로 돌려주기 때문이다. 이 시험은 err != nil 경로를 직접
+	// 겨냥해 "Job 을 띄우기 전에 찍는다" 는 배치 자체를 고정한다. 깨는 뮤테이션:
+	// markObservationAttempted 호출을 Observe 뒤 "err != nil 이면 return" 다음으로 옮기면 실패한다.
 	It("marks the attempt time even when Observe itself returns a real error", func() {
 		node := "migobs-infra-error-node"
 		seedMigNode(node, nil)
@@ -181,11 +179,10 @@ var _ = Describe("MigObservation controller", func() {
 			"Observe 가 진짜 오류를 냈는데 시도 시각을 안 찍었다")
 	})
 
-	// 증명(B 의 핵심 불변식, 2026-08-04 라이브 실패 후 수정): 마지막 시도가 주기 안이면,
-	// 장치 상태가 아무리 더러워도(seedMigNode 의 기본 상태 — MigObservationError 있음) 다시
-	// 띄우지 않는다. 장치 상태로 이 판단을 뒤집을 수 있었던 것이 라이브 핫루프의 진짜 동력이다
-	// (노드 watch 이벤트는 kubelet 하트비트로 몇 초마다 오는데, RequeueAfter 는 그 이벤트를
-	// 막지 못한다 — 막는 것은 이 시도-시각 문 하나뿐이다).
+	// 증명(핵심 불변식): 마지막 시도가 주기 안이면, 장치 상태가 아무리 더러워도(seedMigNode 의
+	// 기본 상태 — MigObservationError 있음) 다시 띄우지 않는다. 장치 상태로 이 판단을 뒤집으면
+	// 핫루프가 된다 — 노드 watch 이벤트는 kubelet 하트비트로 몇 초마다 오는데, RequeueAfter 는
+	// 그 이벤트를 막지 못한다. 막는 것은 이 시도-시각 문 하나뿐이다.
 	// 깨는 뮤테이션: needsObservation 이 시도 시각보다 장치 상태를 먼저 보게 되돌리면, 더러운
 	// 장치 때문에 다시 관측해 calls 가 1이 되어 실패한다.
 	It("does not launch a new job while the last attempt is recent, even though the devices are still dirty", func() {
@@ -245,7 +242,7 @@ var _ = Describe("MigObservation controller", func() {
 		// 전제: 이 노드를 소유하는 ACPP 가 하나도 없어야 한다. 있으면(다른 스펙이 cleanup 에서
 		// finalizer 를 못 지워 terminating 으로 남긴 ACPP 포함 — nodeHasOwningPolicy 는 그것을
 		// 가리지 않는다) 아래 라벨 정리가 조용히 스킵되고, 이 스펙만 봐서는 원인을 못 찾는다.
-		// 재발 시 오염원을 이름으로 바로 지목한다(2026-09-20 단독·직렬 실행 1회 FAIL 재발 방지).
+		// 재발 시 오염원을 이름으로 바로 지목한다(단독·직렬 실행 1회 FAIL 재발 방지).
 		var seeded corev1.Node
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: node}, &seeded)).To(Succeed())
 		Eventually(func() []string { return owningACPPNames(&seeded) }, "5s", "200ms").Should(BeEmpty(),
@@ -359,7 +356,7 @@ var _ = Describe("MigObservation controller", func() {
 		Expect(obs.calls).To(Equal(1), "시도 시각이 오래됐는데도 재관측하지 않았다 — 사람이 되돌린 모드를 영영 못 잡는다")
 	})
 
-	// 증명(C2): NodeSelector 를 생략한 ACPP 는 이 저장소의 표준 k8s 의미대로 "모든 노드" 를
+	// 증명: NodeSelector 를 생략한 ACPP 는 이 저장소의 표준 k8s 의미대로 "모든 노드" 를
 	// 겨냥한다. 그런 정책이 있으면, 셀렉터로 직접 지목되지 않은 노드라도 고아가 아니다.
 	// 깨는 뮤테이션: nodeHasOwningPolicy 가 빈 셀렉터를 "매칭 없음" 으로 되돌리면(예전 버그)
 	// 이 시험이 실패한다 — 라벨이 떨어진다.
@@ -396,9 +393,9 @@ var _ = Describe("MigObservation controller", func() {
 	})
 })
 
-// TestNvidiaPCIsOfSkipsPassthroughDevices 는 vfio-pci 바인딩 장치를 관측 대상에서 빼는지 본다
-// (C1, 최종 리뷰) — host 의 nvidia-smi 가 passthrough GPU 를 못 보므로 관측은 매번 fail-closed
-// 로 끝나고, 그 재시도가 폭주의 또 다른 씨앗이 된다.
+// TestNvidiaPCIsOfSkipsPassthroughDevices 는 vfio-pci 바인딩 장치를 관측 대상에서 빼는지 본다.
+// host 의 nvidia-smi 가 passthrough GPU 를 못 보므로 관측은 매번 fail-closed 로 끝나고, 그
+// 재시도가 폭주의 또 다른 씨앗이 된다.
 // 깨는 뮤테이션: DriverBinding == "vfio-pci" 분기를 지우면 그 PCI 가 섞여 나와 실패한다.
 func TestNvidiaPCIsOfSkipsPassthroughDevices(t *testing.T) {
 	ndr := &npuv1alpha1.NodeDeviceReport{Status: npuv1alpha1.NodeDeviceReportStatus{

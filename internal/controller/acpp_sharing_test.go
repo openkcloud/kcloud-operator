@@ -1,10 +1,8 @@
 // ============================================================
 // acpp_sharing_test.go: ACPP sharing 경로 단위 테스트
 // 상세: apply → allocatable 수렴(fake verifier) → Ready, 미수렴 → rollback → Restored,
-//
-//	저널 일치 재-reconcile 은 DP 를 다시 재시작하지 않음(멱등).
-//
-// 생성일: 2026-07-29 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거)
+// 저널 일치 재-reconcile 은 DP 를 다시 재시작하지 않는다(멱등).
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -62,7 +60,7 @@ func sharingScheme() *runtime.Scheme {
 
 // readyMpsDaemon 은 mps-control-daemon DS 를 "대상 노드(worker1)에서 Ready" 상태로 미리 만들어
 // 둔다. fake client 에는 daemonset 컨트롤러가 없어 DS status 도 pod 도 저절로 생기지 않으므로,
-// 준비 게이트(review 최종 ③)를 통과해야 하는 케이스는 픽스처가 그 사실을 명시해야 한다 —
+// 준비 게이트를 통과해야 하는 케이스는 픽스처가 그 사실을 명시해야 한다 —
 // 게이트를 우회하는 게 아니라 "daemon 이 실제로 떠 있는 클러스터" 를 표현하는 것이다.
 func readyMpsDaemon() []client.Object {
 	ds := renderMpsControlDaemonDS()
@@ -91,15 +89,11 @@ func mpsDaemonPod(node string, ready bool) *corev1.Pod {
 }
 
 // sharingFixture 는 DP DaemonSet + DP pod + ACPP 로 구성된 sharing 테스트 환경을 만든다.
-// extra 는 케이스별 추가 객체다(예: 이미 Ready 인 mps control daemon).
-//
-// worker1 은 mig-active 라벨이 없는(flat) 노드다 — 이 픽스처가 만드는 DS 도 flat 이름
-// (nvidia.DevicePluginNameFlat)이라 DevicePluginTargetForNode 의 라우팅과 일치한다.
-// 여기 모인 spec 들은 mps 요청이 apply 단계까지 도달해야 관측할 수 있는 것들이고(저널 순서·daemon
-// 게이트·해제 경로), 노드가 mig-active 면 mpsBlockedByMigStrategy 가 그보다 먼저 노드 단위로
-// 거절하기 때문이다 — 그 거절 판정 자체는 프로덕션 렌더러가 만든 DS/라벨로 envtest 가 고정한다
-// (acceleratorpartitionpolicy_controller_test.go, "D-8"·"D-8 root fix"). 이 노드에 mig-active
-// 라벨을 걸면 아래 mps spec 들이 한꺼번에 Failed 로 깨져 그 사실을 알린다.
+// extra 는 케이스별 추가 객체다(예: 이미 Ready 인 mps control daemon). worker1 은 mig-active
+// 라벨이 없는(flat) 노드다 — DS 도 flat 이름이라 라우팅과 일치한다. 여기 모인 spec 들은 mps
+// 요청이 apply 단계까지 도달해야 관측할 수 있는 것들이고, 노드가 mig-active 면
+// mpsBlockedByMigStrategy 가 그보다 먼저 노드 단위로 거절한다(그 거절 판정 자체는 다른 파일의
+// envtest 가 프로덕션 렌더러로 고정한다) — 이 노드에 mig-active 라벨을 걸면 아래 spec 들이 깨진다.
 func sharingFixture(t *testing.T, acpp *npuv1alpha1.AcceleratorPartitionPolicy, alloc map[string]int32, extra ...client.Object) (*AcceleratorPartitionPolicyReconciler, client.Client) {
 	t.Helper()
 	ds := &appsv1.DaemonSet{
@@ -111,7 +105,7 @@ func sharingFixture(t *testing.T, acpp *npuv1alpha1.AcceleratorPartitionPolicy, 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "nvidia-device-plugin-abcde", Namespace: "kube-system",
-			// restartNvidiaDevicePlugin 은 mixed/flat 공통 라벨(nvidiaDevicePluginVendorLabel)로 List 한다(C-1).
+			// restartNvidiaDevicePlugin 은 mixed/flat 공통 라벨(nvidiaDevicePluginVendorLabel)로 List 한다.
 			Labels: map[string]string{"app.kubernetes.io/name": "nvidia-device-plugin", nvidiaDevicePluginVendorLabel: "nvidia"},
 		},
 		Spec: corev1.PodSpec{NodeName: "worker1", Containers: []corev1.Container{{Name: "c", Image: "x"}}},
@@ -120,8 +114,8 @@ func sharingFixture(t *testing.T, acpp *npuv1alpha1.AcceleratorPartitionPolicy, 
 		// mig-active 라벨을 걸지 않는다 — DevicePluginTargetForNode 는 그 부재를 flat 으로 읽어
 		// 아래 flat DS 를 대상화한다. mig-active=true 를 걸면 mpsBlockedByMigStrategy 가 이
 		// 노드의 모든 mps 요청을 무조건 거절해, 이 파일이 exercise 하려는 apply 경로 심층 로직
-		// (저널 순서·daemon 게이트·거절-후-청소)에 이 fixture 로는 영영 도달할 수 없다 — 그 게이트
-		// 자체는 acceleratorpartitionpolicy_controller_test.go 의 "D-8" spec 들이 프로덕션 렌더러로 고정한다.
+		// (저널 순서·daemon 게이트·거절-후-청소)에 이 fixture 로는 영영 도달할 수 없다 — 그 거절
+		// 게이트 자체는 다른 파일의 envtest 가 프로덕션 렌더러로 고정한다.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "worker1",
 			Annotations: map[string]string{migOwnerAnnotation: string(acpp.UID)},
@@ -223,12 +217,9 @@ func TestRunSharingAppliesAndReportsReady(t *testing.T) {
 	}
 }
 
-// TestSharingReadyGradesAxesByMode 는 공유 모드마다 다른 등급을 적는지 고정한다.
-// MPS 는 제어 데몬이 프로세스별 상한을 실제로 강제한다(2026-08-11 실측) — 연산은
-// 솔로 클라이언트가 A30 전체 9370.7 GFLOPS 의 26.2% 만 냈고 데몬 질의
-// get_default_active_thread_percentage 가 replicas 4 와 일치하는 25.0 이며, 메모리는
-// 5888/23808 MiB 로 카드의 1/4 이다. 그것을 none 으로 적으면 실측된 강제를 없다고
-// 보고하는 것이다. 시분할은 두 축 모두 강제가 관측되지 않았으므로 none 이 맞다.
+// TestSharingReadyGradesAxesByMode 는 공유 모드마다 다른 등급을 적는지 고정한다. MPS 는 제어
+// 데몬이 프로세스별 상한을 실제로 강제함이 실측으로 확인된다(솔로 클라이언트가 카드 성능의
+// 1/4만 내고, 메모리도 1/4로 묶임). 시분할은 두 축 모두 강제가 관측되지 않으므로 none 이 맞다.
 func TestSharingReadyGradesAxesByMode(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -302,10 +293,10 @@ func mpsACPP() *npuv1alpha1.AcceleratorPartitionPolicy {
 	}
 }
 
-// F1(review): SharingLayoutFrom 이 spec.Sharing.MPS.Replicas 를 안 읽으면 Replicas 가 0으로 남아
-// ValidateSharing 이 매번 거부한다 — daemon 유무와 무관하게 mps 요청이 apply 단계에 절대 도달 못 한다.
-// 이 테스트는 실 컨트롤러 경로(runSharing)로 그 경로가 살아있는지 고정한다. F3(sharingReady 의
-// Reason 이 mps 에도 "timeSliced" 라고 말하는 결함)도 같이 고정한다.
+// SharingLayoutFrom 이 spec.Sharing.MPS.Replicas 를 안 읽으면 Replicas 가 0으로 남아 ValidateSharing
+// 이 매번 거부한다 — daemon 유무와 무관하게 mps 요청이 apply 단계에 절대 도달 못 한다. 이 테스트는
+// 실 컨트롤러 경로(runSharing)로 그 경로가 살아있는지 고정하고, sharingReady 의 Reason 이 mps 에도
+// "timeSliced" 라고 말하는 결함도 함께 고정한다.
 func TestRunSharingAppliesMPSAndReportsReady(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -354,7 +345,7 @@ func TestRunSharingAppliesMPSAndReportsReady(t *testing.T) {
 
 // testutilCounterValue 는 ACPPApplyTotal{vendor=nvidia,mode=timeSliced,result=ready} 값을
 // 읽는다. prometheus 의 testutil 로 레지스트리를 거치지 않고 벡터에서 직접 꺼낸다. 이 파일의
-// 계수 시험이 모두 이 계열만 쓰므로 라벨을 고정했다 — 다른 계열이 필요해지면 인자로 되돌린다.
+// 계수 시험이 모두 이 계열만 쓰므로 라벨을 고정한다 — 다른 계열이 필요해지면 인자로 되돌린다.
 func testutilCounterValue(t *testing.T) float64 {
 	t.Helper()
 	return testutil.ToFloat64(metrics.ACPPApplyTotal.WithLabelValues("nvidia", "timeSliced", "ready"))
@@ -383,11 +374,11 @@ func TestSharingReadyCountsOnlyWhenTransitioned(t *testing.T) {
 	}
 }
 
-// TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount 는 리뷰가 지적한 실제 결함을 재현한다.
+// TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount 는 실제 결함을 재현한다.
 // runSharingOnly(레이아웃 없는 순수 공유 정책)는 partition-Ready 지점을 거치지 않으므로 ts.Phase
-// 를 채우지 않은 채로 runSharing 을 부른다. 판정을 ts.Phase 로 추정했다면 이 재조정에서 "Phase 가
-// 비어 있으니 전이다" 로 오판해 매번 다시 센다 — 라이브 표본에서 해제 단계에 준비 완료
-// 계수가 한 번 더 오른 것이 이 경로였다.
+// 를 채우지 않은 채로 runSharing 을 부른다. 판정을 ts.Phase 로 추정하면 이 재조정에서 "Phase 가
+// 비어 있으니 전이다" 로 오판해 매번 다시 센다 — 해제 단계에서 준비 완료 계수가 거듭 오르는
+// 경로다.
 func TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount(t *testing.T) {
 	ctx := context.Background()
 	acpp := sharedACPP()
@@ -431,13 +422,11 @@ func TestRunSharingFirstApplyCountsEvenWhenTargetWasAlreadyReady(t *testing.T) {
 	}
 }
 
-// D-7(라이브 결함): 준비 게이트가 DaemonSet 전체(NumberReady == DesiredNumberScheduled)를 보면,
-// MPS 를 요청하지도 않은 무관한 노드의 daemon pod 이 영구히 못 뜰 때 대상 노드의 daemon 이 Ready
-// 여도 정책이 영원히 Applying 에 갇힌다(drain/quiesce 단계에 시한이 없고 Failed 전이도 없다 —
-// 자동 복구 경로 없는 hang).
-// 라이브 재현: DS 셀렉터(kcloud.ai/nvidia.present=true)가 k8s-master 도 매칭했는데 그 노드는
-// nvidia RuntimeClass 미구성으로 FailedCreatePodSandBox 를 영구 반복했다 —
-// numberReady=1 desiredNumberScheduled=2 고정, 대상 노드(worker1)의 daemon 은 Running/Ready.
+// 준비 게이트가 DaemonSet 전체(NumberReady == DesiredNumberScheduled)를 보면, MPS 를 요청하지도
+// 않은 무관한 노드의 daemon pod 이 영구히 못 떠도 대상 노드의 daemon 이 Ready 인 정책이 영원히
+// Applying 에 갇힌다(drain/quiesce 단계에 시한이 없고 Failed 전이도 없는 자동 복구 없는 hang).
+// 픽스처는 라이브에서 실제로 관측된 형상(무관한 노드가 영구 FailedCreatePodSandBox, 대상 노드는
+// Running/Ready)을 재현한다.
 func TestRunSharingMPSIgnoresUnrelatedNodeDaemonFailure(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -462,8 +451,7 @@ func TestRunSharingMPSIgnoresUnrelatedNodeDaemonFailure(t *testing.T) {
 }
 
 // 위 완화가 게이트 자체를 무력화하면 안 된다 — 대상 노드의 daemon pod 이 Ready 가 아니면
-// (pod 은 있는데 Ready=False — 실제 ImagePullBackOff 형상) 여전히 배선·검증 전에 막아야 한다
-// (review 최종 ③).
+// (pod 은 있는데 Ready=False — 실제 ImagePullBackOff 형상) 여전히 배선·검증 전에 막아야 한다.
 func TestRunSharingMPSStillBlocksWhenTargetNodeDaemonNotReady(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -484,10 +472,10 @@ func TestRunSharingMPSStillBlocksWhenTargetNodeDaemonNotReady(t *testing.T) {
 	}
 }
 
-// review 최종 ②: 적용 경로가 장치별 MPS capability 를 한 번도 읽지 않았다. Discover 가 "이 장치는
-// MIG 가 켜져 MPS 불가" 라고 판정해 status 에 적어 둔 뒤에도 ValidateSharing 은 replica 개수만 보고
-// 통과시켜, 그 장치의 MIG 조각에 대해 MPS 배수를 요청했다. 실 하드웨어(worker1: MIG Enabled A30)의
-// 시나리오다 — 다섯 라운드에 걸쳐 정교해진 판정이 적용 결정에 전혀 입력되지 않았다.
+// 적용 경로는 장치별 MPS capability 를 읽지 않으면 Discover 가 "MIG 가 켜져 MPS 불가" 로 판정해
+// status 에 적어 둔 장치에도 ValidateSharing(replica 개수만 봄)을 통과시켜 그 MIG 조각에 MPS
+// 배수를 요청한다 — 실 하드웨어(worker1: MIG Enabled A30)의 시나리오다. 장치별 판정이 있어도
+// 적용 결정에 입력되지 않으면 이 결함이 재발한다.
 func TestRunSharingRejectsMPSOnDeviceThatCannotRunIt(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -527,11 +515,11 @@ func TestRunSharingRejectsMPSOnDeviceThatCannotRunIt(t *testing.T) {
 	}
 }
 
-// review 최종 ③: ensureMpsControlDaemon 은 Get/Create/Update 만 했고, 광고 개수는 daemon 생존과
-// 무관하므로 verify 로도 daemon 부재를 잡을 수 없다(acpp_sharing.go 주석이 이미 인정한 구멍).
-// 그래서 air-gap 에서 이미지를 못 당기면 daemon 이 한 번도 뜨지 못한 채 Ready + Verified + "mps x4"
-// 가 찍혔다. 종점을 막는 것이 핵심이다 — 두 케이스 모두 sharingReady 에 도달하면 안 된다.
-// 실패가 아니라 대기다(이미지 pull 은 transient): Applying + requeue 로 받는다.
+// ensureMpsControlDaemon 은 Get/Create/Update 만 하고, 광고 개수는 daemon 생존과 무관하므로 verify
+// 로도 daemon 부재를 잡을 수 없다 — air-gap 에서 이미지를 못 당겨 daemon 이 한 번도 뜨지 못해도
+// Ready + Verified + "mps x4" 가 찍힐 수 있다. 종점을 막는 것이 핵심이다 — 두 케이스 모두
+// sharingReady 에 도달하면 안 된다. 실패가 아니라 대기다(이미지 pull 은 transient): Applying +
+// requeue 로 받는다.
 func TestRunSharingNeverReadyWithoutMpsDaemon(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -581,7 +569,7 @@ func TestRunSharingNeverReadyWithoutMpsDaemon(t *testing.T) {
 
 // journalAtEnsureRecorder 는 mps-control-daemon DS 를 만드는 순간(ensureMpsControlDaemon 의
 // Create 호출)의 ACPP 저널 상태를 그대로 스냅샷한다 — 타이밍 경합을 재현하지 않고도 "daemon 을
-// 만들 때 저널이 이미 mps 를 반영하고 있는가"라는 불변식을 직접 확인한다(review 재검토 4차).
+// 만들 때 저널이 이미 mps 를 반영하고 있는가" 라는 불변식을 직접 확인한다.
 type journalAtEnsureRecorder struct {
 	client.Client
 	acppName, node string
@@ -600,9 +588,8 @@ func (s *journalAtEnsureRecorder) Create(ctx context.Context, obj client.Object,
 	return s.Client.Create(ctx, obj, opts...)
 }
 
-// review 재검토 4차(Major): daemon 을 저널보다 먼저 만들면, 그 사이 창에서 무관한 정책의
-// reconcile 이 참조 카운트를 봐도 이 요청을 못 보고 방금 만든 daemon 을 지울 수 있다.
-// 저널을 daemon 보다 먼저 써야 한다.
+// daemon 을 저널보다 먼저 만들면, 그 사이 창에서 무관한 정책의 reconcile 이 참조 카운트를 봐도
+// 이 요청을 못 보고 방금 만든 daemon 을 지울 수 있다. 저널을 daemon 보다 먼저 써야 한다.
 func TestRunSharingPersistsJournalBeforeEnsuringDaemon(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -643,9 +630,9 @@ func (s *configAtEnsureRecorder) Create(ctx context.Context, obj client.Object, 
 	return s.Client.Create(ctx, obj, opts...)
 }
 
-// D-12 순서: daemon 은 sharing ConfigMap 을 마운트하므로 CM 이 **먼저** 있어야 한다. 거꾸로면
-// pod 이 ContainerCreating(ConfigMap not found)에 갇혀 Ready 게이트를 영원히 못 넘는다.
-// 요구 순서는 저널 → ConfigMap → daemon → DP 배선이다.
+// daemon 은 sharing ConfigMap 을 마운트하므로 CM 이 **먼저** 있어야 한다 — 거꾸로면 pod 이
+// ContainerCreating(ConfigMap not found)에 갇혀 Ready 게이트를 영원히 못 넘는다. 요구 순서는
+// 저널 → ConfigMap → daemon → DP 배선이다.
 func TestRunSharingWritesSharingConfigBeforeEnsuringDaemon(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -701,14 +688,14 @@ func TestRunSharingRollsBackWhenAllocatableDoesNotConverge(t *testing.T) {
 	}
 }
 
-// D-13 인접 누수: verify 미수렴으로 rollback 된 mps 정책은 배선을 다 걷고도 daemon 을 남겼다.
-// 그 종점(Restored)은 10분 requeue 이고, 다음 pass 는 D-9 게이트(같은 generation 의 rollback 은
-// terminal)에서 daemon 정리 전에 early return 하므로 정책이 살아 있는 한 daemon 이 영영 남는다.
-// 두 경로 모두에서 회수돼야 한다.
+// verify 미수렴으로 rollback 된 mps 정책은 배선을 걷은 뒤 daemon 도 회수해야 한다 — rollback
+// 종점(Restored)은 10분 requeue 이고, 다음 pass(같은 generation 의 rollback 은 terminal)는 daemon
+// 정리 전에 early return 하므로, 정책이 살아 있는 한 daemon 이 영영 남을 수 있다. 두 경로 모두에서
+// 회수돼야 한다.
 func TestRunSharingRemovesMpsDaemonAfterRollback(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
-	acpp.Generation = 1 // D-9 게이트는 generation 을 비교한다(0 이면 게이트가 없는 것과 같다).
+	acpp.Generation = 1 // rollback 종점 게이트는 generation 을 비교한다(0 이면 게이트가 없는 것과 같다).
 	// 수렴 실패 — 공유 전 값 그대로.
 	r, c := sharingFixture(t, acpp, map[string]int32{"nvidia.com/mig-1g.6gb": 4, nvidiaGPUResource: 0}, readyMpsDaemon()...)
 	base := map[string]int32{"nvidia.com/mig-1g.6gb": 4, nvidiaGPUResource: 0}
@@ -727,7 +714,7 @@ func TestRunSharingRemovesMpsDaemonAfterRollback(t *testing.T) {
 		t.Errorf("★ rollback 이 배선을 걷고도 daemon 을 남겼다: err=%v", err)
 	}
 
-	// 다음 pass = D-9 게이트(terminal Failed). 그 사이 daemon 이 되살아나 있어도 회수해야 한다.
+	// 다음 pass 는 terminal Failed 로 끝난다. 그 사이 daemon 이 되살아나 있어도 회수해야 한다.
 	seedMpsDaemon(t, ctx, r, acpp.Name, "worker1")
 	ts, err = r.runSharing(acpp, nvidia.New(c), sharingTarget(ctx, "acpp-mps"), in, base)
 	if err != nil {
@@ -830,15 +817,12 @@ func TestRunSharingDisablesWhenSpecReturnsToExclusive(t *testing.T) {
 	}
 }
 
-// C-1(D-8 리뷰 라운드 2): 가드는 mutation 이전 판정이지만, **이전 빌드가 이미 적용해 둔** mps 배선까지
-// 걷어내지 않으면 청소 주체가 없다 — spec 은 여전히 mps 를 요청하므로 disableSharing 도, 삭제 경로도
-// 불리지 않는다. 그 결과 전역 DP 는 거절된 요청의 설정 때문에 계속 validateFlags 로 죽고, 라이브에서
-// 관측된 간헐 회귀(worker1 allocatable 0↔4 왕복)가 **회복 시도조차 없는 영구 0** 으로 고정된다.
-// 도달 경로: pre-fix 빌드가 apply 를 마친 창(ConfigMap + DS 배선 + DP CrashLoopBackOff)에서 이 커밋이
-// 배포된다(operator 재시작). 라이브의 그 정책은 sharing-only 였으므로 진입점도 runSharingOnly 다 —
-// 거절 판정이 runSharing 이전(precheck)에서 끝나는 경로다.
-//
-// 검증 상태는 전부 프로덕션 apply 경로가 만든다(저널·ConfigMap·배선을 손으로 조립하지 않는다).
+// 가드는 mutation 이전 판정이지만, 이전 빌드가 이미 적용해 둔 mps 배선까지 걷어내지 않으면 청소
+// 주체가 없다 — spec 은 여전히 mps 를 요청해 disableSharing 도 삭제 경로도 불리지 않는다. 그
+// 결과 전역 DP 는 거절된 요청의 설정으로 계속 죽고, allocatable 이 0↔4 로 왕복하다 회복 시도
+// 없는 영구 0 으로 고정된다. 도달 경로: 이전 빌드가 적용을 마친 노드에 이 가드가 배포되면
+// (operator 재시작) sharing-only 진입점의 거절 판정이 precheck 에서 끝난다. 검증 상태는 전부
+// 프로덕션 apply 경로가 만든다.
 func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -879,7 +863,7 @@ func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 
 	// 1단계(mps 적용)가 restartNvidiaDevicePlugin 으로 지운 pod 을 kubelet 처럼 같은 이름으로
 	// 재생성한다 — 안 그러면 아래 "DP 가 재시작되지 않았다" 어서션이 이미 지워진 pod 을 다시
-	// 찾는 것뿐이라 2단계의 청소가 실제로 재시작을 트리거하는지 아무것도 증명하지 못한다(review-d8 I-3).
+	// 찾는 것뿐이라 2단계의 청소가 실제로 재시작을 트리거하는지 증명하지 못한다.
 	recreated := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "nvidia-device-plugin-abcde", Namespace: "kube-system",
@@ -932,11 +916,10 @@ func TestRunSharingCleansUpAppliedMPSWhenGuardRejects(t *testing.T) {
 	}
 }
 
-// review 최종 ⑤(테스트 갭): F2 MAJOR 의 mps 판이다. disableSharing 의 게이트에서 mps 를
-// 빼도 스위트가 초록이었다 — 같은 형태의 형제 게이트(handleNvidiaDeletion)는 고정돼 있는데
-// 이쪽만 회귀 방어가 없었다. 되돌렸을 때의 결과는 timeSliced 판보다 나쁘다: daemon 정리는 게이트
-// 밖에서 먼저 하므로 daemon 은 지워지고, DP 는 MPS_ROOT + 파이프 볼륨을 유지한 채 ConfigMap 이
-// 계속 ×N 을 광고한다 — 존재하지 않는 daemon 을 가리키는 DP.
+// disableSharing 의 게이트에서 mps 를 빼면(형제 게이트 handleNvidiaDeletion 과 달리 이쪽은
+// 회귀 방어가 없다) 결과가 timeSliced 보다 나쁘다: daemon 정리는 게이트 밖에서 먼저 하므로
+// daemon 은 지워지지만 DP 는 MPS_ROOT + 파이프 볼륨을 유지한 채 ConfigMap 이 계속 ×N 을
+// 광고한다 — 존재하지 않는 daemon 을 가리키는 DP 가 된다.
 func TestRunSharingDisablesMPSWhenSpecReturnsToExclusive(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -993,7 +976,7 @@ func TestRunSharingDisablesMPSWhenSpecReturnsToExclusive(t *testing.T) {
 	if rec := getApplyRecord(&got, "worker1"); rec.SharingMode != "" || rec.SharingReplicas != 0 {
 		t.Fatalf("★ 저널이 해제를 반영하지 않았다 — 되돌릴 방법이 ACPP 삭제뿐이 된다: %+v", rec)
 	}
-	// control daemon 도 남지 않아야 한다(이 정책만 mps 를 쓰고 있었다).
+	// control daemon 도 남지 않아야 한다 — 이 정책만 mps 를 쓴다.
 	var mpsDS appsv1.DaemonSet
 	if err := c.Get(ctx, types.NamespacedName{Name: mpsControlDaemonDSName, Namespace: "kube-system"}, &mpsDS); !apierrors.IsNotFound(err) {
 		t.Fatalf("mps control daemon 이 남았다: err=%v", err)
@@ -1135,10 +1118,9 @@ func TestHandleNvidiaDeletionRollsBackSharing(t *testing.T) {
 	}
 }
 
-// 추가 발견(F2 와 같은 결함 클래스, review 범위 밖): handleNvidiaDeletion 은 "공유가 적용돼
-// 있었는가" 를 SharingMode == SharingModeTimeSliced 하드코딩 비교로만 묻는다. mps 로 적용된
-// 채 ACPP 가 삭제되면 이 게이트가 거짓이라 RollbackSharing 을 아예 안 부르고, ConfigMap/DS 의
-// mps 배선과 owner 어노테이션이 영구히 남는다.
+// 핸들러 handleNvidiaDeletion 은 "공유가 적용돼 있는가" 를 SharingMode == SharingModeTimeSliced
+// 하드코딩 비교로만 묻는다. mps 로 적용된 채 ACPP 가 삭제되면 이 게이트가 거짓이라
+// RollbackSharing 을 아예 안 부르고, ConfigMap/DS 의 mps 배선과 owner 어노테이션이 영구히 남는다.
 func TestHandleNvidiaDeletionRollsBackMPSSharing(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -1170,8 +1152,8 @@ func TestHandleNvidiaDeletionRollsBackMPSSharing(t *testing.T) {
 	}
 }
 
-// review F3(2nd half): control daemon 이 실제로 뜬 채(ensureMpsControlDaemon 이 apply 때 만든 것을
-// 흉내) ACPP 가 삭제되면, 소유 ACPP 가 사라진 뒤에도 kube-system 에 daemon 이 영원히 남아선 안 된다.
+// control daemon 이 실제로 뜬 채(ensureMpsControlDaemon 이 apply 때 만든 것을 흉내) ACPP 가
+// 삭제되면, 소유 ACPP 가 사라진 뒤에도 kube-system 에 daemon 이 영원히 남아선 안 된다.
 func TestHandleNvidiaDeletionRemovesMpsControlDaemon(t *testing.T) {
 	ctx := context.Background()
 	acpp := mpsACPP()
@@ -1209,10 +1191,10 @@ func TestHandleNvidiaDeletionRemovesMpsControlDaemon(t *testing.T) {
 	}
 }
 
-// D-13(라이브 실측, v0.5.76): sharing-only 정책(layout 없음 → MigPhase 없음, 노드 owner-lock 도
-// 잡지 않음)을 삭제하면 handleNvidiaDeletion 의 daemon 정리가 **소유권 분기 뒤에** 있어 항상
-// continue 로 건너뛴다. ApplyRecords 가 아예 비면 루프 자체가 안 돈다. 두 경우 모두 daemon 이
-// kube-system 에 영원히 남는다(라이브 6분+ 관측, 수동 삭제로 회수).
+// sharing-only 정책(layout 없음 → MigPhase 없음, 노드 owner-lock 도 잡지 않음)을 삭제하면
+// handleNvidiaDeletion 의 daemon 정리가 **소유권 분기 뒤에** 있어 항상 continue 로 건너뛴다.
+// ApplyRecords 가 아예 비면 루프 자체가 안 돈다. 두 경우 모두 daemon 이 kube-system 에 영원히
+// 남는다.
 func TestHandleNvidiaDeletionRemovesMpsControlDaemonForSharingOnlyPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -1270,13 +1252,11 @@ func TestHandleNvidiaDeletionRemovesMpsControlDaemonForSharingOnlyPolicy(t *test
 	}
 }
 
-// 소유권 게이트 뒤에 갇혀 있던 두 번째 대상: sharing 원복 블록. daemon 회수만 게이트 밖으로
-// 나오고 ConfigMap/배선 원복은 그대로 남아, layout 없는 공유 정책을 지우면 **배수 광고만 남고
-// 그것을 받칠 MPS 서버는 사라진** 상태가 된다. 소유 표시(SharingOwnerAnnotation)까지 남아
-// 다른 이름의 새 정책은 소유 검사에서 영구 apply 실패하므로 자가치유도 없다.
-//
-// 픽스처는 실제 apply 성공 종점을 프로덕션 경로(runSharing)로 만든 뒤 삭제한다 — 손으로 조립한
-// 저널이 아니라, 이번 수정으로 처음 도달 가능해진 그 상태다.
+// 소유권 게이트 뒤에 있는 두 번째 대상: sharing 원복 블록. daemon 회수만 게이트 밖으로 나오고
+// ConfigMap/배선 원복은 그대로 남으면, layout 없는 공유 정책을 지울 때 배수 광고만 남고 그것을
+// 받칠 MPS 서버는 사라진 상태가 된다. 소유 표시(SharingOwnerAnnotation)까지 남으면 다른 이름의
+// 새 정책이 소유 검사에서 영구 apply 실패해 자가치유도 없다. 픽스처는 apply 성공 종점을
+// 프로덕션 경로(runSharing)로 만든 뒤 삭제한다 — 손으로 조립한 저널이 아니다.
 func TestHandleNvidiaDeletionRollsBackSharingWithoutNodeOwnerLock(t *testing.T) {
 	ctx := context.Background()
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
@@ -1415,7 +1395,7 @@ func (p *journalProbe) VerifyAllocatable(t partition.Target, expected map[string
 // TestSharingCrashWindowKeepsMigOwnership: 공유 적용 창(apply→DP 재시작→verify, 수 분) 한복판에서
 // operator 가 죽었다고 가정하고, 그때 영속돼 있던 저널로 MIG 상태머신을 다시 태운다. 공유가 MIG 저널의
 // MigPhase 를 덮어쓰면 managed 도 inProgress 도 아니게 되어 Failed/ExistingMigConfiguration 으로
-// 영구 브릭된다(C-1 회귀). 저널에 SharingMode 는 남아야 하고(persist-before-mutate) MigPhase 는 Ready 여야 한다.
+// 영구 브릭된다. 저널에 SharingMode 는 남아야 하고(persist-before-mutate) MigPhase 는 Ready 여야 한다.
 func TestSharingCrashWindowKeepsMigOwnership(t *testing.T) {
 	ctx := context.Background()
 	acpp := sharedACPP()
@@ -1460,7 +1440,7 @@ func TestSharingCrashWindowKeepsMigOwnership(t *testing.T) {
 }
 
 // TestRunSharingRejectsMissingTimeSlicingBlock: mode=timeSliced 인데 timeSlicing 블록이 없으면
-// (CRD 상 허용) replicas=0 이므로 아무것도 건드리기 전에 거절해야 한다(I-2).
+// (CRD 상 허용) replicas=0 이므로 아무것도 건드리기 전에 거절해야 한다.
 func TestRunSharingRejectsMissingTimeSlicingBlock(t *testing.T) {
 	ctx := context.Background()
 	acpp := sharedACPP()
@@ -1479,10 +1459,10 @@ func TestRunSharingRejectsMissingTimeSlicingBlock(t *testing.T) {
 	}
 }
 
-// D-9: sharing 경로에는 MIG GI apply(C-1)와 달리 rollback 후 같은 generation 재시도를 막는 게이트가
-// 없었다 — verify 미수렴은 에러가 아니라 결과로 돌아오므로(failVerifier 와 같은 모양) rollback 종점의
-// runErr 이 nil 이라 rate-limited 재시도도 안 걸리고, 다음 reconcile 이 다시 apply → device-plugin
-// 재시작 → verify → rollback 을 무한 반복한다. 같은 generation 의 rollback 저널은 terminal 이어야 한다.
+// sharing 경로는 rollback 후 같은 generation 재시도를 막는 게이트가 없으면, verify 미수렴이
+// 에러가 아니라 결과로 돌아오므로(failVerifier 와 같은 모양) rollback 종점의 runErr 이 nil 이라
+// rate-limited 재시도도 안 걸리고, 다음 reconcile 이 다시 apply → device-plugin 재시작 → verify
+// → rollback 을 무한 반복한다. 같은 generation 의 rollback 저널은 terminal 이어야 한다.
 var _ = Describe("ACPP sharing (D-9: rollback does not retry forever within the same generation)", func() {
 	It("stops after one rollback and requires a spec change to retry", func() {
 		wipeACPPs()

@@ -1,17 +1,8 @@
 // ============================================================
 // judgment_duplication_test.go: 장치 점유 판정 중복 방지 고정 시험
-// 상세: podUsesDevice 가 "이 Pod 가 장치를 쥐었는가" 를 묻는 유일한 함수여야 한다.
-//   전에는 hasDeviceWorkloads·podUsesDevice 가 가속기 리소스 이름 목록을 각자 적어
-//   두고 있었고, 그 목록에 rebellions.ai/ 가 빠져 rebellions 파드가 drain 대상에서
-//   빠졌다(state_machine.go 의 hasAcceleratorResourceName 위 주석). 판정을 하나로
-//   모은 뒤에도 같은 자리에서 다시 갈라지면 시험이 없는 한 알 수 없다 — go/ast 로
-//   internal/upgrade 의 비-테스트 소스를 파싱해, 판정의 표지(Spec.ResourceClaims
-//   참조 또는 hasAcceleratorResourceName 호출)를 본문에 가진 함수가 허용 목록
-//   하나뿐인지 본다. 표지는 OR 로 묶는다 — AND 로 묶으면 limits 축만 다시 적은
-//   복제(이 Round 가 고친 결함의 원래 모양: DRA 축을 모르는 판정)를 잡지 못한다.
-//   허용 목록은 패키지 수준 함수에만 적용한다 — Go 는 함수와 동명 메서드를 한 패키지에
-//   허용하므로 receiver 를 보지 않으면 메서드 복제가 이름만으로 허용 목록을 통과한다.
-// 생성일: 2026-10-04
+// 상세: podUsesDevice 를 장치 점유 판정의 유일한 함수로 고정하는 회귀 시험이다.
+//       go/ast 로 비-테스트 소스를 파싱해 같은 판정 표지를 본문에 가진 함수가 더 있는지 본다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade

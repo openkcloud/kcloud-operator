@@ -1,12 +1,7 @@
 // state_machine_gates_test.go: idle cooldown defer + kernel allowlist preflight 게이트 단위 테스트
-// 상세: 라이브 트리거(cordon/drain/driver 변경) 없이 순수 state-machine 분기를 fake client 로 검증.
-//   - IdleCooldown: Idle 진입 직후 재트리거 연기(IdleCooldownDeferred, 상태 불변).
-//   - Kernel allowlist: PreFlight 에서 커널 불일치 시 Rollback 전이(PreFlightFailed).
-//   - Idle 게이트 순서: verifiedVersions 허용 목록 검사가 autoUpgrade 게이트보다 앞임을 검증.
-//   - WorkloadProbe 예산 경고: probe timeoutSeconds 가 validationTimeout 보다 길면 PreFlight 경고.
-//
-// 생성일: 2026-07-21 | 수정일: 2026-10-11 (verifiedVersions/autoUpgrade 게이트 순서 시험, WorkloadProbe 예산 경고 시험,
-// 검증 예산 미설정 시 출처 표기 시험 추가; Idle 유지 시험 상태 직접 단언, 쿨다운 창 안 거부·probe 예산 경계 시험 추가)
+// 상세: 실제 트리거(cordon/drain/driver 변경) 없이 순수 state-machine 분기를 fake client 로
+// 검증한다(IdleCooldown·kernel allowlist·Idle 게이트 순서·WorkloadProbe 예산 경고).
+// 생성일: 2026-07-21 | 수정일: 2026-10-11
 package upgrade
 
 import (
@@ -144,8 +139,8 @@ func TestHandlePreFlight_KernelInAllowlist_Cordoning(t *testing.T) {
 }
 
 // ── 항목3: Idle 게이트 순서(verifiedVersions vs autoUpgrade) ─────────
-// autoUpgrade 가 꺼져 있어도 허용 목록 밖 버전은 UnverifiedVersion 으로 드러낸다 —
-// 종전에는 autoUpgrade 게이트가 먼저 와서 UpgradeAvailable 경고만 내고 Idle 에 머물렀다.
+// autoUpgrade 가 꺼져 있어도 허용 목록 밖 버전은 UnverifiedVersion 으로 드러난다 — autoUpgrade
+// 게이트가 먼저 오면 UpgradeAvailable 경고만 내고 Idle 에 머물러 진짜 이유(목록 밖)가 가려진다.
 func TestHandleIdle_AutoUpgradeOffAndUnverified_Transitions(t *testing.T) {
 	dip := makeDaemonsetDIP("580.178.04", false)
 	dip.Spec.VerifiedVersions = []string{"580.159.03"}

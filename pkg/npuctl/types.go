@@ -3,7 +3,7 @@
 //
 //	안정 필드명의 JSON 계약. 필드는 모두 omitempty로 두어 벤더/리소스가 없을 때 생략된다.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (VendorOperatorStatus·ClusterPolicyStatus.VendorOperators 추가; 계획서 항목 토큰 제거)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 package npuctl
 
 import "kcloud-operator/internal/health"

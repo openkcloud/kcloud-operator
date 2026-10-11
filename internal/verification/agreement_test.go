@@ -1,10 +1,8 @@
 // ============================================================
 // agreement_test.go: 4자 일치 판정 테스트
-// 상세: spec·장치·NodeDeviceReport·광고·테스트 Pod 중 하나라도 어긋나면 등급이 붙지 않는다는
-//
-//	규율을 축별로 고정한다. 기대 geometry 문자열은 프로덕션 헬퍼로 만든다.
-//
-// 생성일: 2026-07-31
+// 상세: spec·장치·NodeDeviceReport·광고·테스트 Pod 중 하나라도 어긋나면 등급이 붙지 않는다는 규율을
+// 축별로 고정한다. 기대 geometry 문자열은 프로덕션 헬퍼로 만든다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -101,8 +99,8 @@ func TestAbsentReportBlocksCommit(t *testing.T) {
 
 func TestAbsentReportBlocksCommitEvenForShareOnlyPolicy(t *testing.T) {
 	// 공유 전용 정책(Geometry=="")도 NDR 자체가 없으면 통과해서는 안 된다 — "geometry 축을
-	// 안 본다" 와 "보고서가 아예 없다" 는 다르다. 이전 가드는 Geometry != "" 와 연언이라 이
-	// 경로를 놓쳤다(공유 전용 게이트가 실제로 배선된 뒤에는 라이브 결함이 된다).
+	// 안 본다" 와 "보고서가 아예 없다" 는 다르다. NDR 부재 검사를 Geometry!="" 와 함께 조건부로
+	// 걸면 공유 전용 정책에서 이 경로가 빠진다.
 	in := agreeingInputs()
 	in.Expectation.Geometry = ""
 	in.ReportGeometry = map[string]string{}
@@ -237,8 +235,8 @@ func checkFailed(r Result, name string) bool {
 
 // TestUnobservableReportDeviceCapsLevel 은 노드 에이전트가 장치를 관측하지 못한 경우를 "불일치" 가
 // 아니라 "비교 불가" 로 다루되, 등급을 Observed 위로 올리지 않는지 고정한다. 불일치로 다루면
-// 비특권 detector 가 MIG 를 못 보는 클러스터에서 모든 MIG 근거가 영구 실패하고(2026-08-04 라이브),
-// 그냥 통과시키면 보지도 않은 축을 검증했다고 주장하게 된다.
+// 비특권 detector 가 MIG 를 못 보는 클러스터에서 모든 MIG 근거가 영구 실패하고, 그냥 통과시키면
+// 보지도 않은 축을 검증했다고 주장하게 된다.
 func TestUnobservableReportDeviceCapsLevel(t *testing.T) {
 	in := Inputs{
 		Expectation: Expectation{

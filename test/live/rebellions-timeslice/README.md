@@ -1,4 +1,4 @@
-<!-- README.md: Rebellions 시분할 실 워크로드 동시 실행 하네스 | 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 놓친 한 자리 추가 교체) -->
+<!-- README.md: Rebellions 시분할 실 워크로드 동시 실행 하네스 | 생성일: 2026-09-25 | 수정일: 2026-10-11 -->
 
 # Rebellions 시분할 실 워크로드 동시 실행 하네스
 
@@ -7,9 +7,9 @@ node5 의 Rebellions ATOM 한 장을 operator 의 descriptor 공유 경로로 SW
 라이브로 측정한다. 장치를 혼자 쓰는 solo 처리량과, 프로세스 두 개가 같은 장치(DEVICE_ID=0)를
 동시에 쓰는 co-run 처리량을 비교한다.
 
-Tenstorrent 는 같은 수준의 근거(유휴 동시 open + 공유 데모)로 시분할 등급을 올렸다가, 실
-워크로드 co-run 실측에서 tt-metal UMD 의 KMD 락으로 직렬화됨이 드러나 등급을 내렸다. 같은
-실측을 Rebellions 에도 한 것이 이 하네스다.
+Tenstorrent 선례(유휴 동시 open + 공유 데모로 올린 등급이 실 워크로드 co-run 실측에서
+tt-metal UMD 의 KMD 락에 의한 직렬화로 다시 내려간 사례)에 따라, 같은 실 워크로드 실측을
+Rebellions 에도 적용하는 것이 이 하네스다.
 
 ## 무엇을 측정하나
 
@@ -66,9 +66,9 @@ NPU 0 만 사용률이 오르고 NPU 1 은 유휴인지 확인한다.
 
 겹쳤으면 동시 실행 성립을 본다: 두 프로세스가 모두 완주하고 각각 solo 의 0.3배 이상 처리량을
 낸다(실질적 진행). 직렬화면 진 프로세스가 배리어를 놓쳐 `error` 로 죽거나 진행이 0 에
-수렴한다(Tenstorrent 선례). 실측(node5, 2026-09-25)은 solo 394.73 it/s, co-run 각각 약 0.92배,
+수렴한다(Tenstorrent 선례). node5 실측값은 solo 394.73 it/s, co-run 각각 약 0.92배,
 합 약 1.83배(같은 장치인데 합이 solo 를 크게 넘음 = 진짜 동시 실행, 시분할 직렬화 아님)로
-`verdict=pass` 였다.
+`verdict=pass` 다.
 
 ## 실행
 
@@ -91,7 +91,7 @@ PHASE=verdict OUT=/tmp/rebellions-timeslice-evidence bash test/live/rebellions-t
 bash test/collect/evidence.sh --node node5 --vendor rebellions \
   --command "bash test/live/rebellions-timeslice/run.sh" --expected "verdict=pass" \
   --mode sharing --backend devicePlugin --resource rebellions/atom \
-  -o <결과 디렉터리>/2026-09-25-rebellions-timeslice
+  -o <결과 디렉터리>/<날짜>-rebellions-timeslice
 ```
 
 주요 env: `KUBECTL_CONTEXT`, `NODE_SSH`(기본값은 `kubectl get node $NODE` 의 InternalIP다.
@@ -117,11 +117,10 @@ bash test/collect/evidence.sh --node node5 --vendor rebellions \
 
 ## 파드 경로 (`MEASURE_MODE=pods`)
 
-처음에는 `rebel` 이 든 컨테이너 이미지가 사내에 없어 파드 경로가 막혀 있었다. 이제는 이미지
-저장소에 `rbln-workload:ubuntu22.04-v1`(호스트와 같은 Ubuntu 22.04 계열, glibc 2.35) 이미지가
-있어 `pods` 모드로 같은 측정을 파드 3개(solo, corun-a, corun-b)로 돌릴 수 있다. 사내 python
-이미지(Debian 13, glibc 2.41)로는 네이티브 초기화 중 프로세스가 SIGSEGV 로 종료됐다. `host`
-모드(node5 호스트 프로세스로 직접 실행)는 그대로 남아 있고 기본값이다.
+파드 경로는 이미지 저장소의 `rbln-workload:ubuntu22.04-v1`(호스트와 같은 Ubuntu 22.04 계열,
+glibc 2.35) 이미지로 열려 있다 — `pods` 모드가 이 이미지로 같은 측정을 파드 3개(solo, corun-a,
+corun-b)로 돌린다. 사내 python 이미지(Debian 13, glibc 2.41)는 네이티브 초기화 중 SIGSEGV 로
+죽는다. `host` 모드(node5 호스트 프로세스로 직접 실행)가 기본값인 이유다.
 
 파드는 node5 의 `/etc/cdi/rbln.yaml` 이 정의하는 벤더 CDI 컨테이너 편집을 범용 device-plugin
 으로 재현해 받는다(각 장치 노드는 호스트 경로==컨테이너 경로로 주입된다).
@@ -138,8 +137,8 @@ bash test/collect/evidence.sh --node node5 --vendor rebellions \
 | dist-packages | 호스트 site-packages 둘 | `/host-local`·`/host-lib`(읽기 전용) | `import rebel` 에 필요 |
 | 사전 컴파일 캐시 | `/home/kcloud/rbln-ts-cache` | `/models`(읽기 전용) | 아래 "컴파일은 어디서" 참조 |
 
-근거는 2026-09-29 node5 라이브 실행이다 — 마운트 중 하나라도 빠지면 컨테이너 안 NPU 자동탐지·런타임
-초기화가 실패했다.
+근거는 node5 라이브 실행이다 — 마운트 중 하나라도 빠지면 컨테이너 안 NPU 자동탐지·런타임
+초기화가 실패한다.
 
 컴파일은 파드 안이 아니라 호스트에서 한다. 이 CDI 마운트를 전부 갖춰도 파드 안
 `compile_from_torch` 는 벤더가 실패 원인을 봉인해 둔 채(암호화된 진단 파일) 항상

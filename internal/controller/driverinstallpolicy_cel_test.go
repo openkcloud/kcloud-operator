@@ -1,9 +1,8 @@
 // ============================================================
 // driverinstallpolicy_cel_test.go: DriverSpec 커널 이미지 필드의 CEL 검증을 envtest 로 고정한다.
-// 상세: kernelImages 와 kernelImageBuildRevision 은 mode=job 에서만 유효하다. mode=daemonset 로
-// 그것을 준 DIP 생성은 API 서버가 거절하고, mode=job 이면 통과해야 한다
-// (CRD x-kubernetes-validations). 빌드 개정 값은 태그 접미사 모양(…-vN)이어야 한다.
-// 생성일: 2026-09-22 | 수정일: 2026-10-05 (숫자로 시작하는 variant 거절 추가)
+// 상세: kernelImages·kernelImageBuildRevision 은 mode=job 에서만 유효하다(CRD
+// x-kubernetes-validations) — mode=daemonset 로 주면 생성이 거절된다. 빌드 개정 값은 태그 접미사 모양(…-vN)이어야 한다.
+// 생성일: 2026-09-22 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

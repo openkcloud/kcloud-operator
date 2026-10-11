@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # install.sh: NPU Operator Helm 설치/업그레이드 래퍼
-# 상세: deploy.env 를 로드하여 global.registry / global.vendorRegistry 를 주입한 뒤
-#       helm upgrade --install 을 실행합니다.
-#       --dry-run 등 CLI 인수는 helm 에 그대로 전달됩니다.
-# 사용법:
-#   bash install.sh            # 실제 설치
-#   bash install.sh --dry-run  # helm dry-run (명령 미리보기 후 helm 이 렌더링만 수행)
-# 생성일: 2026-06-02 | 수정일: 2026-09-09 (VENDOR_REGISTRY 주입 추가)
+# 상세: deploy.env 를 로드해 global.registry/global.vendorRegistry 를 주입한 뒤 helm
+#       upgrade --install 을 실행한다. --dry-run 등 CLI 인수는 helm 에 그대로 전달한다.
+# 생성일: 2026-06-02 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

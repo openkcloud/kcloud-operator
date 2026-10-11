@@ -1,51 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: device-plugin<->DRA 광고 주체 전환 왕복을 일으켜 잔재를 판정하는 하네스
-# 상세: NPUClusterPolicy.spec.<vendor>.advertiseBy 를 devicePlugin -> dra -> devicePlugin 으로
-#       왕복시키며 snapshot.sh 로 전/중/후 상태를 남긴다. 판정(값 0 등록 잔재·살아
-#       있는 광고·고아 객체)은 diff_snapshots 가 낸 표를 보고 사람이 한다 — 이 스크립트는
-#       지우는 코드를 담지 않는다. kubectl get/patch, kubectl-npu CLI, snapshot.sh(ssh
-#       ls/cat) 외의 쓰기는 하지 않는다.
-#       DRY_RUN=1 이면 안전 게이트·스냅샷 등 읽기 전용 확인은 끝까지 돌고, 클러스터를 바꾸는
-#       명령(kubectl patch·kubectl-npu allocation switch·kubelet 재시작)은 출력만 한다.
-#       PHASE 로 단계를 하나씩 부를 수 있다(기본 all = 전체 왕복 앞부분: before/after-dra/
-#       after-dp 스냅샷까지). dra.enabled 되돌리기·kubelet 재시작·마지막 스냅샷은 판정 결과에
-#       따라 갈리므로 all 에 넣지 않고 별도 PHASE 로 둔다.
-#       devicePlugin 복귀 뒤에는 dra-owned 회수(wait_settle) 다음 kcloud.ai/<vendor>.
-#       dra-retired=true 라벨 부여를 최대 120초 기다리고(wait_retired_label), SETTLE_AFTER_RETIRE
-#       초(기본 60)를 더 기다린 뒤에야 after-dp 스냅샷을 찍는다. switch devicePlugin
-#       부터 after-dp 스냅샷까지는 DualAdvertisement
-#       컨디션을 5초 간격 백그라운드로 dual-condition-poll.log 에 남긴다(start_dual_poll/
-#       stop_dual_poll). 스냅샷마다 그 시점의 DualAdvertisement 컨디션도
-#       dual-advertisement-condition.json 으로 같이 남아 summarize 의 dual=/retired= 두
-#       필드를 채운다.
-#
-# 사용법:
-#   VENDOR=<rngd|tenstorrent> NODE=<node> [DRY_RUN=1] [PHASE=<phase>] [SETTLE_AFTER_RETIRE=<초>] run.sh
-#   PHASE: safety-gate | snapshot(LABEL 필요) | summarize(LABEL 필요, 클러스터 미접속) |
-#          enable-dra | disable-dra | wait-driver-publishing | switch-to-dra | switch-to-dp |
-#          wait-dra | wait-dp | wait-retired | workload-dra | workload-dp | resourceslice-poll |
-#          teardown-poll | diff(LABEL_A,LABEL_B 필요, 클러스터 미접속) | kubelet-restart | all(기본)
-#   dra.enabled=false 뒤에는 poll_teardown 이 2초 간격 최대 60초 DRA DaemonSet 존재·이
-#   노드의 DRA 파드 수·retired 라벨을 teardown-poll.log 에 남긴 뒤에야 restored 스냅샷을
-#   찍는다(v0.7.58/커밋 cbe1bd0 의 teardown 순서 수정 확인용, 계획 밖 2회차 추가).
-#   set_dra_enabled true 뒤에는 wait_driver_publishing(최대 90초) 으로 DRA 드라이버가 이
-#   노드에 ResourceSlice 를 실제로 발행할 때까지 기다린 다음에야 switch_advertise dra 를
-#   부른다 — DaemonSet 콜드스타트 중에 곧바로 전환을 요청하면 매번 거절된다(라이브 실측
-#   2회 재현, 계획 밖 수정).
-#   summarize·diff 는 스냅샷 디렉터리의 파일만 읽는다 — NPUClusterPolicy 조회(resolve_ncp)를
-#   그 값이 실제로 필요한 함수 안으로 미뤄 두 PHASE 가 클러스터에 접속하지 않게 한다.
-#   trap cleanup EXIT: 정상 종료가 아니면 이 실행이 만든 시험 자원을 지우고(떠 있는 dual
-#   폴링 백그라운드 프로세스부터 정리) advertiseBy·dra.enabled 를 이 실행 시작 시점 값으로
-#   되돌린다. FORCE_FAIL_AT=<set_dra_enabled(true)|...> 는 그 지점에서 강제로 실패시켜
-#   DRY_RUN 으로 cleanup 을 시연하는 시험 훅이다.
-# 생성일: 2026-09-28 | 수정일: 2026-10-11 (라이브 확인: SETTLE_AFTER_RETIRE·
-#       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가; 계획서 항목 토큰 제거;
-#       세션 전용 식별자 제거; 인용 삭제로 사라진 "첫 실행에 없던 절차" 사실 복원)
+# 상세: NPUClusterPolicy.spec.<vendor>.advertiseBy 를 devicePlugin↔dra 로 왕복시키며
+#       snapshot.sh 로 상태를 남기고, 판정은 diff_snapshots 표를 보고 사람이 한다 — 잔재를
+#       지우는 코드는 없다(PHASE·FORCE_FAIL_AT 세부는 case 문·maybe_force_fail() 참고).
+# 용법: VENDOR=<rngd|tenstorrent> NODE=<node> [DRY_RUN=1] [PHASE=<phase>] run.sh
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
 # 노드 SSH 계정. 소스에 박지 않는다 — 공개 저장소에 내부 계정이 실리면 안 된다.
+# kubectl get/patch·kubectl-npu CLI·snapshot.sh(ssh ls/cat) 외의 쓰기는 하지 않는다.
 SSH_USER="${SSH_USER:-ubuntu}"
 export LC_ALL=C LANG=C
 
@@ -54,8 +19,8 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SNAPSHOT="${SCRIPT_DIR}/snapshot.sh"
 KUBECTL_NPU="${REPO_DIR}/cmd/kubectl-npu/kubectl-npu"
 
-# 기본값은 이 태스크가 착수 시점에 고른 대상(tenstorrent/k8s-worker3) — 다른 후보
-# (rngd/rngd-1.cluster.local)로 다시 돌리려면 환경변수로 덮는다.
+# 기본 대상은 tenstorrent/k8s-worker3 다 — 다른 후보
+# (rngd/rngd-1.cluster.local)로 돌리려면 환경변수로 덮는다.
 VENDOR="${VENDOR:-tenstorrent}"
 NODE="${NODE:-k8s-worker3}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -96,7 +61,7 @@ vendor_json_path() {
 # (다중 정책은 이론상 가능이나 첫 항목만 본다)와 같다. 조회는 그 값이 실제로 필요한 함수(쓰기
 # 함수 전부)에서만 부른다 — summarize·diff 는 스냅샷 파일만 읽으므로 이 함수를 부르지 않고,
 # 그래서 클러스터에 접속하지 않는다. 첫 호출 때 이 실행 시작
-# 시점의 advertiseBy·dra.enabled 도 함께 잡아 둔다 — cleanup(F절)이 실패 시 되돌릴 값이다.
+# 시점의 advertiseBy·dra.enabled 도 함께 잡아 둔다 — cleanup 이 실패 시 되돌릴 값이다.
 NCP_NAME="" NCP_NS="" START_ADVERTISE="" START_DRA_ENABLED=""
 resolve_ncp() {
   [ -n "$NCP_NAME" ] && return 0
@@ -194,7 +159,7 @@ resource_name() {
 
 # pod_count_using_resource <node> <resource> — 그 노드에서 그 확장 자원을 requests 나
 # limits 에 담은 파드 수(device-reset/run.sh 와 같은 방식 — 확장 자원은 k8s 가 requests
-# 를 limits 에서 자동 복사하지만 어느 쪽으로 선언했든 잡는다, 범위 밖 관찰 3, 최종 리뷰).
+# 를 limits 에서 자동 복사하지만 어느 쪽으로 선언했든 잡는다).
 # unique_by(.metadata.uid) 로 다중 컨테이너가 같은 자원을 각각 요청해도 파드 하나를 두 번
 # 세지 않는다.
 pod_count_using_resource() {
@@ -267,7 +232,7 @@ switch_advertise() {
 # DaemonSet 이 이 노드에 ResourceSlice 를 최초로 발행할 때까지 5초 간격으로 기다린다.
 # switch_advertise dra 는 refuseAdvertiseSwitch 가 그 발행을 이미 확인해야 통과시키는데,
 # DaemonSet 콜드스타트(스케줄+이미지풀+드라이버 초기화)는 수 초가 걸려 곧바로 전환을
-# 요청하면 매번 거절된다(라이브 실측 2회 재현, wait_settle 은 첫 거절 사유에서 바로
+# 요청하면 매번 거절된다(wait_settle 은 첫 거절 사유에서 바로
 # 멈추고 재시도하지 않는다) — set_dra_enabled true 뒤 switch_advertise dra 전에 부른다.
 wait_driver_publishing() {
   local timeout="$1" elapsed=0 count
@@ -453,8 +418,8 @@ summarize_snapshot() {
 
 # pick_test_image — 이 노드에 이미 떠 있는 kube-system 표준 파드 중 셸(sh)과 ls 가 둘 다
 # 있는 이미지를 exec 로 확인해 고른다 — 새 이미지를 pull 하지 않는다.
-# ls 까지 확인하는 이유: kube-proxy 는 sh 는 있으나 ls 가 없어(라이브 실측, "sh: ls: not
-# found") 장치 목록 확인 명령 자체가 실패했다 — sh 만 확인하면 이 실패를 못 잡는다.
+# ls 까지 확인하는 이유: kube-proxy 는 sh 는 있으나 ls 가 없어 "sh: ls: not found" 로
+# 장치 목록 확인 명령 자체가 실패하는 경우가 있다 — sh 만 확인하면 이 실패를 못 잡는다.
 pick_test_image() {
   local name pod img
   for name in nginx-proxy calico-node kube-proxy nodelocaldns; do
@@ -500,7 +465,7 @@ wait_pod_running() {
 }
 
 # cleanup_test_resource <ns> <오브젝트...> — 이 실행(RUN_ID)이 만든 시험 자원만 지운다.
-# "지우는 코드 금지" 는 잔재를 지우는 코드를 뜻한다 — 자기 시험 자원 정리는 별개다(R-O11).
+# "지우는 코드 금지" 는 잔재를 지우는 코드를 뜻한다 — 자기 시험 자원 정리는 별개다.
 cleanup_test_resource() {
   local ns="$1"; shift
   if [ "$DRY_RUN" = "1" ]; then
@@ -510,8 +475,8 @@ cleanup_test_resource() {
   kubectl delete -n "$ns" "$@" --ignore-not-found --wait=true
 }
 
-# workload_dra — DRA ResourceClaim 으로 장치를 실제로 파드에 주입해 보인다(첫 라이브 실행에는
-# 없던 절차). 확인 뒤 만든 자원을 지우고 안전 게이트가 0 으로 돌아왔는지 본다.
+# workload_dra — DRA ResourceClaim 으로 장치를 실제로 파드에 주입해 보인다.
+# 확인 뒤 만든 자원을 지우고 안전 게이트가 0 으로 돌아왔는지 본다.
 workload_dra() {
   local ns="default" claim="dp-dra-residue-${RUN_ID_LC}-claim" pod="dp-dra-residue-${RUN_ID_LC}-dra" image
   if [ "$DRY_RUN" = "1" ]; then
@@ -551,9 +516,9 @@ workload_dp() {
 }
 
 # poll_resourceslice_gone — dra.enabled=false 직후부터 5초 간격, 최대 5분 ResourceSlice
-# 개수를 폴링해 시각과 개수를 로그에 남긴다(고아 소멸 시각의 실측 근거, 리뷰 ⚠️ 항목).
-# kubectl 실패는 0 개와 다르다 — 실패를 0 으로 읽으면 "관측 못함"이 "사라짐"으로 둔갑한다
-# (재리뷰 Minor). rc 를 grep 과 분리해 실패는 count=error 로 남기고 0 판정에 안 쓴다.
+# 개수를 폴링해 시각과 개수를 로그에 남긴다(고아 소멸 시각의 근거).
+# kubectl 실패는 0 개와 다르다 — 실패를 0 으로 읽으면 "관측 못함"이 "사라짐"으로 둔갑한다.
+# rc 를 grep 과 분리해 실패는 count=error 로 남기고 0 판정에 안 쓴다.
 poll_resourceslice_gone() {
   local logfile="$OUT_DIR/resourceslice-poll.log" elapsed=0 count ts raw kubectl_rc ever_observed=0
   if [ "$DRY_RUN" = "1" ]; then
@@ -600,8 +565,8 @@ dra_daemonset_name() {
 
 # poll_teardown — dra.enabled=false 직후부터 2초 간격, 최대 60초 DRA DaemonSet 존재
 # 여부·이 노드의 DRA 파드 수·retired 라벨 존재 여부를 함께 teardown-poll.log 에 남긴다
-# (v0.7.58/커밋 cbe1bd0 기대 동작: retired 는 DaemonSet 이 사라진 뒤에만 없어지고, 그
-# 사이 이 노드에 새 DRA 파드가 뜨지 않는다 — 판정은 이 로그를 보고 사람이 한다).
+# (기대 동작: retired 는 DaemonSet 이 사라진 뒤에만 없어지고, 그 사이 이 노드에 새 DRA
+# 파드가 뜨지 않는다 — 판정은 이 로그를 보고 사람이 한다).
 poll_teardown() {
   local logfile="$OUT_DIR/teardown-poll.log" ds retired_key elapsed=0 ds_present pod_count retired ts
   ds="$(dra_daemonset_name)"

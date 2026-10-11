@@ -1,13 +1,10 @@
 // ============================================================
-// acceleratorhealth_controller.go: 노드 health 감시 컨트롤러 (R&D base v0.1 §9)
-// 상세: 노드마다 신호를 모아 상태를 판정하고 AcceleratorHealth 에 기록한다. 이 컨트롤러의 부작용은
-//
-//	셋뿐이다 — ① 자기 CR status ② 격리 라벨 ③ AcceleratorOperation 생성. 장치·DaemonSet·
-//	ConfigMap·재부팅은 절대 건드리지 않는다(계약 §9.6). 수집이 이 파일에 있는 이유는 롤아웃 판정이
-//	internal/partition 을 필요로 하는데, internal/health 는 그 패키지를 import 할 수 없기
-//	때문이다(직접 mutation 금지 계약을 컴파일 그래프로 강제한다).
-//
-// 생성일: 2026-08-04 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// acceleratorhealth_controller.go: 노드 health 감시 컨트롤러
+// 상세: 노드마다 신호를 모아 상태를 판정해 AcceleratorHealth 에 기록한다. 부작용은 자기 CR
+// status·격리 라벨·AcceleratorOperation 생성 셋뿐이다 — 장치·DaemonSet·ConfigMap·재부팅은
+// 안 건드린다. 수집이 이 파일에 있는 이유: internal/health 는 internal/partition 을 import
+// 할 수 없어, 이 컨트롤러가 mutation 금지 계약을 컴파일 그래프로 강제하며 수집을 맡는다.
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -40,13 +37,9 @@ import (
 const QuarantineLabel = "kcloud.ai/health.quarantined"
 
 // QuarantineReleaseAnnotation 은 **사람이 격리를 푸는 유일한 입구**다. 값은 RFC3339 시각이고,
-// "이 시각 이전의 복구 실패는 확인했다" 는 뜻이다.
-//
-// 이것이 없으면 격리에서 나갈 길이 아예 없다. Evaluate 는 반복 실패를 가장 먼저 보고 Quarantined
-// 를 돌려주는데, 그 원인에는 붙는 복구 작업이 없어(자동 실행 중단) 복구 중(Recovering)이 될 수도
-// 없고, AllowedTransition 은 Quarantined 에서 Recovering 말고는 못 나가게 막는다 — 세 규칙이
-// 각자 옳은데 합쳐 놓으면 **영구 격리**가 된다. 실패한 작업을 손으로 지워도 전이 게이트가 막아
-// 풀리지 않는다. 사람이 고쳤다고 말할 수 있는 자리를 하나 만들어 그 고리를 끊는다.
+// "이 시각 이전의 복구 실패는 확인했다" 는 뜻이다. 없으면 나갈 길이 없다 — Quarantined 의
+// 원인에는 복구 작업이 안 붙어(자동 재시도 중단) Recovering 이 못 되고, AllowedTransition 은
+// Recovering 말고는 못 나가게 막아 **영구 격리**가 된다. 전이 게이트는 손으로 못 풀므로:
 //
 //	kubectl annotate node <노드> kcloud.ai/health.quarantine-release=$(date -u +%FT%TZ) --overwrite
 const QuarantineReleaseAnnotation = "kcloud.ai/health.quarantine-release"
@@ -138,7 +131,7 @@ func (r *AcceleratorHealthReconciler) Reconcile(ctx context.Context, req ctrl.Re
 }
 
 // requeueFor 는 이 노드를 다시 볼 간격이다. 정책이 정한 값이 있으면 그것을 쓴다 — 자가치유가
-// 빠른 장애는 기본 30초 주기로는 아예 관측되지 않는다(2026-08-04 라이브).
+// 빠른 장애는 기본 30초 주기로는 아예 관측되지 않는다.
 func requeueFor(p health.EffectivePolicy) time.Duration {
 	if p.MonitorInterval > 0 {
 		return p.MonitorInterval
@@ -153,14 +146,12 @@ func quarantineWorthy(state string) bool {
 	return state != health.StateUnknown && state != health.StateHealthy && state != ""
 }
 
-// acceleratorPresentLabels 는 node-device-detector 가 실제로 쓰는 present 라벨
-// 전체 집합이다(node-device-detector/label.go computeLabels 가 정본). gpu.present
-// 는 장치가 있으면 항상, furiosa-family.present 는 PCI 0x1ed2 를 공유하는
-// Warboy·RNGD 공통으로 붙는다. 나머지는 등록된 벤더마다 vendorPresentLabel(vendor)
-// 하나씩이다 — 단 furiosa 안에서 rngd 만 detector 의 vendorKey 가 별도 키("rngd")를
-// 쓰는 유일한 product 라 따로 더한다. Warboy 는 vendorKey 가 벤더 이름 그대로
-// ("furiosa")를 쓰므로 이미 vendorPresentLabel("furiosa")로 잡힌다 —
-// "kcloud.ai/warboy.present" 는 detector 어디에서도 쓰지 않는다.
+// acceleratorPresentLabels 는 node-device-detector 가 실제로 쓰는 present 라벨 전체
+// 집합이다(node-device-detector/label.go computeLabels 가 정본). gpu.present 는 장치가
+// 있으면 항상, furiosa-family.present 는 PCI 0x1ed2 를 공유하는 Warboy·RNGD 공통으로
+// 붙는다. 나머지는 등록된 벤더마다 vendorPresentLabel(vendor) 하나씩이다 — 단 furiosa
+// 안에서 rngd 만 detector 의 vendorKey 가 별도 키("rngd")를 쓰는 유일한 product 라 따로
+// 더한다(Warboy 는 vendorKey 가 "furiosa" 그대로라 "kcloud.ai/warboy.present" 는 안 쓴다).
 func acceleratorPresentLabels() map[string]bool {
 	m := map[string]bool{
 		"kcloud.ai/gpu.present":               true,
@@ -246,11 +237,10 @@ func (r *AcceleratorHealthReconciler) collectHealthInputs(ctx context.Context, n
 	return in, nil
 }
 
-// usableBaseline 은 근거의 광고 기준선을 지금도 쓸 수 있는지다.
-//
-// 라이브에서 드러난 것(2026-08-04): 정책이 지워져도 근거는 남는다. 그 근거의 기준선(예: MPS 배수
-// 광고 4)을 계속 비교하면 정책이 없는 정상 노드가 영영 "광고 불일치" 가 되고, 쓸모없는 재검증
-// 작업이 반복 생성된다. 만료된 근거도 같다 — 그래서 둘 다 거른다.
+// usableBaseline 은 근거의 광고 기준선을 지금도 쓸 수 있는지다. 정책이 지워져도 근거는
+// 남는다 — 그 근거의 기준선(예: MPS 배수 광고 4)을 계속 비교하면 정책이 없는 정상 노드가
+// 영영 "광고 불일치" 가 되고, 쓸모없는 재검증 작업이 반복 생성된다. 만료된 근거도 같은
+// 이유로 거른다.
 func (r *AcceleratorHealthReconciler) usableBaseline(ctx context.Context,
 	ev *npuv1alpha1.AcceleratorEvidence, now time.Time) bool {
 	if len(ev.Status.AdvertisedResources) == 0 {
@@ -310,17 +300,12 @@ func deviceInputsFromNDR(devs []npuv1alpha1.DeviceEntry) []health.DeviceInput {
 	return out
 }
 
-// devicePluginReady 는 "이 노드의 NVIDIA 광고 주체가 살아 있는가" 다.
-//
-// 라이브에서 두 번 고쳤다(2026-08-04).
-//
-//  1. pod 라벨만 보면 NVIDIA 가 아닌 노드가 전부 장애가 된다 — Furiosa·Tenstorrent plugin 은 그
-//     라벨을 달지 않고, control-plane 은 GPU 광고 자체가 제외돼 맡는 pod 이 없다.
-//     → 맡는 pod 이 없으면 **판정 대상이 아니다**(없는 것은 고장이 아니다).
-//  2. "노드가 뭔가 광고하고 있으면 정상" 으로 두면 **혼재 노드에서 오탐의 반대가 난다** — worker1 은
-//     NVIDIA + Warboy 를 함께 달고 있어, Furiosa 광고(beta.furiosa.ai/npu)가 살아 있는 한 NVIDIA
-//     plugin 이 죽어도 정상으로 읽혔다(80초 동안 nvidia.com/gpu=0 인데 Healthy).
-//     → 광고 판정을 **nvidia.com/ 축으로 좁힌다.**
+// devicePluginReady 는 "이 노드의 NVIDIA 광고 주체가 살아 있는가" 다. pod 라벨만 보면
+// Furiosa·Tenstorrent plugin(그 라벨 없음)과 control-plane(GPU 광고 자체 제외)이 전부
+// 장애로 잡힌다 — 맡는 pod 이 없으면 판정 대상이 아니다(없는 것은 고장이 아니다). "노드가
+// 뭔가 광고하면 정상" 으로 두면 혼재 노드에서 반대 오판정이 난다 — NVIDIA+Warboy 노드는
+// Furiosa 광고가 살아 있는 동안 NVIDIA plugin 이 죽어도 정상으로 읽힌다. 그래서 광고 판정을
+// nvidia.com/ 축으로 좁힌다.
 func (r *AcceleratorHealthReconciler) devicePluginReady(ctx context.Context, node string,
 	advertised map[string]int32) (bool, error) {
 	var pods corev1.PodList
@@ -427,9 +412,8 @@ func (r *AcceleratorHealthReconciler) ensureRecovery(ctx context.Context, node *
 	// 드라이버 업그레이드 사이클 안이면 드라이버 복구를 요청하지 않는다. 그 구간의
 	// driverLoaded=false 는 설치가 스스로 구 모듈을 내린 예정된 상태이지 고장이 아니다.
 	// 참가자 쪽에도 같은 가드가 있지만(recoverdevice_participant.go) 애초에 만들지 않는 편이 낫다 —
-	// 작업이 생기면 조정자·저널·검증이 모두 돌고, 쿨다운 버킷에 남은 작업이 업그레이드가 끝난 뒤
-	// 뒤늦게 실행될 여지도 생긴다. 2026-08-10 라이브에서 이 경로가 설치 Job pod 을 지워 노드의
-	// apt 를 죽였다.
+	// 작업이 생기면 조정자·저널·검증이 모두 돌고, 쿨다운 버킷에 남은 작업이 업그레이드가 끝난
+	// 뒤 뒤늦게 실행될 여지도 생긴다. 이 경로가 설치 Job pod 을 지우면 노드의 apt 가 깨진다.
 	if plan.Type == operation.RecoverDevice {
 		if _, upgrading := node.Labels[upgrade.DriverUpgradingLabelKey]; upgrading {
 			logf.FromContext(ctx).Info("드라이버 업그레이드 중 — 복구 작업 생략",
@@ -480,13 +464,12 @@ func healthOperationName(txID string) string {
 	return name
 }
 
-// driverRecoveryVendor 는 RecoverDevice 작업을 이 노드의 어느 벤더로 좁힐지다.
-//
-// 드라이버가 안 올라온 장치가 한 벤더뿐이면 그 벤더로 좁힌다 — 안 그러면 혼재 노드(예:
-// NVIDIA+Furiosa)에서 한 벤더의 드라이버 고장이 멀쩡한 다른 벤더의 드라이버 pod 까지 쿨다운마다
-// 지운다. 두 벤더가 같이 고장이거나(장치 축이 원인을 특정 못 하는 노드 단위 판정) 장치 판정
-// 자체가 없으면(res.Devices 가 비어 있는 노드 단위 조기 종료 경로) 비워 둔다 — 비우면 참가자가
-// 노드의 드라이버 pod 전부를 대상으로 한다(브랜치 이전과 같은, 전부 고장일 때 옳은 동작).
+// driverRecoveryVendor 는 RecoverDevice 작업을 이 노드의 어느 벤더로 좁힐지다. 드라이버가 안
+// 올라온 장치가 한 벤더뿐이면 그 벤더로 좁힌다 — 안 그러면 혼재 노드(예: NVIDIA+Furiosa)에서
+// 한 벤더의 드라이버 고장이 멀쩡한 다른 벤더의 드라이버 pod 까지 쿨다운마다 지운다. 두 벤더가
+// 같이 고장이거나(노드 단위 판정이라 원인 특정 불가) 장치 판정 자체가 없으면(res.Devices 가
+// 빈 노드 단위 조기 종료 경로) 비워 둔다 — 비우면 참가자가 노드의 드라이버 pod 전부를
+// 대상으로 한다(전부 고장일 때 옳은 동작).
 func driverRecoveryVendor(t operation.Type, devices []health.DeviceResult) string {
 	if t != operation.RecoverDevice {
 		return ""
@@ -534,7 +517,7 @@ func (r *AcceleratorHealthReconciler) devicePCIs(ctx context.Context, node strin
 }
 
 // writeHealth 는 판정을 영속한다. **상태가 그대로면 쓰지 않는다** — 타임스탬프만 다른 status 를
-// 매번 쓰면 watch 이벤트가 자기 자신을 재큐잉해 핫루프가 된다(U-1 교훈).
+// 매번 쓰면 watch 이벤트가 자기 자신을 재큐잉해 핫루프가 된다.
 func (r *AcceleratorHealthReconciler) writeHealth(ctx context.Context, node *corev1.Node,
 	prev *npuv1alpha1.AcceleratorHealth, res health.Result, opRef string, in health.Inputs) error {
 	ah := prev.DeepCopy()

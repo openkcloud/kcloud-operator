@@ -1,11 +1,8 @@
 # ============================================================
 # descriptor.yaml: Blackhole p150 을 SW 시분할(replicas 2)로 광고하는 AcceleratorDescriptor
-# 상세: vendor=tenstorrent·product=blackhole-p150 으로 리소스명 tenstorrent/blackhole-p150 을
-#       광고하고, sharing timeSliced replicas 2 로 장치 1개를 2개로 광고한다(격리 없는 SW 시분할).
-#       deviceNodes 를 /dev/tenstorrent/0 하나로 고정해 두 소비자 파드가 같은 물리 장치를 받게 한다.
-#       backends=devicePlugin. 생성물 DaemonSet 이름: kcloud-generated-tt-timeslice-throughput-dp.
-#       레지스트리 tenstorrent timeSlicing 이 Software 여야 컨트롤러가 sharing 광고를 켠다(v0.7.52 충족).
-# 생성일: 2026-09-22
+# 상세: deviceNodes 를 /dev/tenstorrent/0 하나로 고정해 두 소비자 파드가 같은 물리 장치를 받는다 —
+#       생성물 DS 이름은 kcloud-generated-tt-timeslice-throughput-dp, 전제는 timeSlicing=Software.
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: npu.ai/v1alpha1
 kind: AcceleratorDescriptor

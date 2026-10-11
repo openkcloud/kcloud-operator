@@ -1,16 +1,8 @@
 # ============================================================
 # descriptor.yaml: Rebellions ATOM 을 SW 시분할(replicas 2)로 광고하는 AcceleratorDescriptor
-# 상세: vendor=rebellions·product=atom 으로 리소스명 rebellions/atom 을 광고하고,
-#       sharing timeSliced replicas 2 로 장치 1개를 2개로 광고한다(격리 없는 SW 시분할).
-#       deviceNodes 를 /dev/rbln0(물리 NPU)·/dev/rsd0(공유 제어 장치) 둘로 고정해(템플릿 {{id}}
-#       미사용) 두 소비자가 같은 물리 장치를 받게 한다 — 장치가 두 장인 node5 에서 서로 다른
-#       장치를 잡아 시분할을 증명 못하는 것을 막는 고정점이다. 두 장치 노드는 node5 의
-#       /etc/cdi/rbln.yaml 이 정의하는 벤더 CDI 컨테이너 편집과 같은 목록이다 — 하나만 넣으면
-#       컨테이너 안 NPU 자동탐지·런타임 초기화가 실패한다.
-#       backends=devicePlugin. 생성물 DaemonSet 이름: kcloud-generated-rebellions-timeslice-dp.
-#       레지스트리 rebellions timeSlicing 이 Software 여야 컨트롤러(sharingRefusal)가 이
-#       광고를 켠다.
-# 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거)
+# 상세: deviceNodes 를 /dev/rbln0·/dev/rsd0 둘로 고정해 두 소비자가 같은 물리 장치를 받는다 —
+#       하나만 넣으면 자동탐지가 실패한다. 레지스트리 rebellions timeSlicing=Software 가 전제다.
+# 생성일: 2026-09-25 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: npu.ai/v1alpha1
 kind: AcceleratorDescriptor

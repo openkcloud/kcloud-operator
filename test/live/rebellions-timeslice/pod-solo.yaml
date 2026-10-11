@@ -1,11 +1,9 @@
 # ============================================================
 # pod-solo.yaml: solo 소비자 — descriptor 가 광고한 rebellions/atom 1개로 /dev/rbln0·/dev/rsd0 를
 #                받아 workload.py 를 DEVICE_ID=0 으로 혼자 실행(기준 처리량)
-# 상세: pod-a.yaml 과 같은 이미지·마운트·리소스 요청을 쓰되 PHASE=solo 로 돌아 배리어 없이
-#       즉시 시작한다(START_AT 항목 자체가 없다). corun-a·corun-b 의 처리량을 이 solo 기준과
-#       비교해 시분할 동시 진행 여부를 판정한다(run.sh compute_verdict). 이미지·마운트·
-#       RBLN_NPU_NAME·RBLN_COMPILED_PATH 의 근거는 pod-a.yaml 상세 참고.
-# 생성일: 2026-09-29
+# 상세: pod-a.yaml 과 같은 이미지·마운트·리소스 요청을 쓰되 PHASE=solo 로 배리어 없이 즉시
+#       시작한다(START_AT 없음). corun 처리량을 이 solo 기준과 비교해 동시 진행 여부를 판정한다.
+# 생성일: 2026-09-29 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: v1
 kind: Pod

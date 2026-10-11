@@ -1,28 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # refresh-image-digests.sh: 발행 뒤 image-manifest.yaml 의 digest 를 레지스트리 조회로 갱신
-# 상세: deploy/integration/image-manifest.yaml kcloud: 절에서 digest 키를 가진 항목마다
-#       레지스트리에 매니페스트 digest 를 물어 파일을 갱신한다. 조회만 하고 push 는 하지 않는다.
-#       레지스트리 주소는 deploy/helm/values.yaml 의 global.registry 에서 읽고 KCLOUD_REGISTRY
-#       환경변수로 덮어쓴다(사설 미러·내부 레지스트리를 볼 때. 주소를 코드에 적지 않는다).
-#       매니페스트 조회는 hack/registry-head.sh 의 head_manifest 를 쓴다(익명 토큰 처리 공유).
-#       404 는 그 태그가 발행되지 않았다는 레지스트리의 확답이라 어긋남으로 센다. 유효
-#       레지스트리가 chart_registry(values.yaml 의 global.registry, KCLOUD_REGISTRY 로
-#       덮어쓰기 전 값)와 같을 때만 — 즉 KCLOUD_REGISTRY 를 안 썼을 때만 — 401·403(익명
-#       조회 거부)도 공개 경로로 당길 수 없다는 확답이라 어긋남으로 센다(image-tag-check.sh
-#       의 own 접두 대조와 같은 가드). KCLOUD_REGISTRY 로 사설 미러를 보는 중이면 401 은
-#       그 미러의 자격 증명 문제일 뿐이라 건너뜀으로 둔다 — 안 그러면 허용 목록 밖 항목이
-#       전부 거짓으로 미발행 보고된다. ALLOWED_PRIVATE(hack/registry-head.sh 에서 source,
-#       image-tag-check.sh 와 공유) 목록에 있는 항목만 예외로 건너뛴다(조건부 기능 전용이라
-#       GHCR 발행 계획이 없는 이미지). 그 밖의 응답(빈 값·429·5xx)과 네트워크 실패는 조회를
-#       못 한 것이라 항목을 건드리지 않고 건너뛴 목록으로 보고한다 — 조회 실패를 "digest
-#       없음" 으로 적지 않는다.
-#       벤더 절은 대상이 아니다(upstream 태그 고정이고 digest 키도 대부분 없다).
-#       --check 는 파일을 고치지 않고 어긋난 항목만 세어 종료 코드로 알린다.
+# 상세: deploy/integration/image-manifest.yaml 의 kcloud: 절 중 digest 키가 있는 항목마다
+#       레지스트리에 물어 digest 를 갱신한다(조회만, push 없음). 판정 근거(404 확답·
+#       401/403 예외·KCLOUD_REGISTRY 사설 미러 구분)는 본문 주석 참고.
 # 용법: [KCLOUD_REGISTRY=<host>[:<port>]/<project>] hack/refresh-image-digests.sh [--check]
-# 생성일: 2026-10-03 | 수정일: 2026-10-04 (발행 접두 아래 401·403 어긋남 판정을
-#         KCLOUD_REGISTRY 미사용 시로 한정, 그 문구가 release-prepare 완화 경로를
-#         안 타게 수정, ALLOWED_PRIVATE 를 registry-head.sh 공유 자리로 이동)
+# 생성일: 2026-10-03 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -140,7 +123,7 @@ echo ">> ${registry} 기준 — 일치 ${ok}건, 어긋남 ${mismatch}건, 건�
 
 if [ "$check" -eq 1 ]; then
   [ "$mismatch" -eq 0 ] || exit 1
-  # 전부 건너뛰었다면 이 검사는 아무것도 확인하지 못했다. 초록으로 넘기지 않는다.
+  # 전부 건너뛰면 이 검사는 아무것도 확인하지 못한다. 초록으로 넘기지 않는다.
   if [ "$ok" -eq 0 ]; then
     echo "!! 확인한 항목이 0건이다. 레지스트리에 닿지 못했거나 전부 자격 증명이 필요하다." >&2
     exit 1

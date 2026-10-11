@@ -1,14 +1,8 @@
 // allocation.go: pkg/npuctl allocation API 노출 상태 조회
-// 상세: 어느 API(devicePlugin|dra)가 각 벤더 장치를 광고하는지, 선언과 관측을 함께 옮긴다.
-//
-//	선언은 NPUClusterPolicy.spec.<vendor>.advertiseBy(AdvertiseSpec.AdvertisedBy()),
-//	관측은 노드의 kcloud.ai/<vendor>.dra-owned 라벨이다(둘 다 없으면 devicePlugin). 둘은
-//	어긋날 수 있다 — dra 로 선언했지만 아직 이 노드가 넘어가지 않았거나
-//	(NPUClusterPolicyStatus.AdvertiseSwitch 가 거절 사유를 따로 담는다) 거절된 경우다.
-//	AcceleratorPartitionPolicy.status.targets[].devices[].allocationAPIs 는 "이 장치를
-//	노출할 수 있는 API"(MVP 는 항상 devicePlugin 값 하나)라 이 물음과 다르다 — 쓰지 않는다.
-//
-// 생성일: 2026-09-28 | 수정일: 2026-10-09 (Furiosa 혼재 노드 present 판정 수정)
+// 상세: 어느 API(devicePlugin|dra)가 각 벤더 장치를 광고하는지, 선언(spec.<vendor>.advertiseBy)
+// 과 관측(노드의 dra-owned 라벨)을 함께 옮긴다. 둘은 어긋날 수 있다 — dra 로 선언했지만
+// 아직 이 노드가 넘어가지 않았거나 거절된 경우다(거절 사유는 status.AdvertiseSwitch).
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -36,14 +30,12 @@ type AllocationRow struct {
 	// 각 API 가 실제로 광고 중(관측)인 노드다. 이름순으로 정렬한다.
 	DevicePluginNodes []string `json:"devicePluginNodes,omitempty"`
 	DRANodes          []string `json:"draNodes,omitempty"`
-	// AmbiguousProductNodes 는 furiosa(Warboy)·rngd 에서만 생긴다. 통합
-	// DaemonSet(FuriosaSpec.Unified)은 개별 present 라벨 대신 자립 라벨
-	// kcloud.ai/furiosa-family.present 하나로 Warboy·RNGD 노드 모두에 스케줄되므로, 그
-	// 라벨만 있는 노드는 어느 product 인지 라벨에서 복원할 수 없다(이 조회는
-	// NPUClusterPolicy·Node 만 읽어 능력 뷰(CollectVendorCapabilities)보다 판단 근거가
-	// 적다). NodeDeviceReport 가 있으면 그 장치 모델로 먼저 가른다. 그래도 확정 못 한
-	// 노드를 devicePlugin·dra 어느 쪽으로도 단정하지 않고 여기 담는다 — 틀린 벤더에 틀린
-	// API 를 적는 것보다 모른다고 적는 편이 낫다(review 정정).
+	// AmbiguousProductNodes 는 furiosa(Warboy)·rngd 에서만 생긴다. 통합 DaemonSet(Unified)
+	// 은 개별 present 라벨 대신 자립 라벨 furiosa-family.present 하나로 두 product 노드
+	// 모두에 스케줄되므로, 그 라벨만 있는 노드는 어느 product 인지 못 가린다.
+	// NodeDeviceReport 의 장치 모델로 가를 수 있으면 가르고, 그래도 확정 못 하면
+	// devicePlugin·dra 어느 쪽으로도 단정하지 않고 여기 담는다 — 틀린 벤더에 틀린 API 를
+	// 적는 것보다 모른다고 적는 편이 낫다.
 	AmbiguousProductNodes []string `json:"ambiguousProductNodes,omitempty"`
 	// RetiredNodes 는 이 벤더의 광고를 device-plugin 으로 되돌렸지만 dra.enabled 가 아직
 	// true 라 DRA 드라이버 파드가 물러나는 중이거나 물러난 노드다(kcloud.ai/<vendor>.dra-retired,
@@ -160,7 +152,7 @@ func CollectAllocationStatusWith(ctx context.Context, r client.Reader) ([]Alloca
 	return out, nil
 }
 
-// vendorPresent 는 이 노드에 그 벤더 장치가 있는지를 본다(review I-1). furiosa(Warboy)·rngd 는
+// vendorPresent 는 이 노드에 그 벤더 장치가 있는지를 본다. furiosa(Warboy)·rngd 는
 // 자립 라벨 하나로 못 끝난다 — 통합 DaemonSet 노드가 kcloud.ai/furiosa-family.present 만 가질
 // 때는 NodeDeviceReport 의 장치 모델(warboy|rngd)로 한 번 더 가른다. 두 제품이 한 노드에 섞여도
 // 모호가 아니라 둘 다 present 다 — 관측이 전혀 없을 때만(product 라벨도 모델도 없음)

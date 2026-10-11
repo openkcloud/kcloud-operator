@@ -1,10 +1,8 @@
 // ============================================================
 // timeslicing.go: NVIDIA device-plugin time-slicing config 렌더 + 기대 allocatable 계산
-// 상세: DP 의 --config-file 스키마(sharing.timeSlicing.resources[].replicas)를 최소 필드로 렌더한다.
-//
-//	CLI 플래그(--mig-strategy)는 config 파일 값을 덮으므로 flags 는 렌더하지 않는다.
-//
-// 생성일: 2026-07-29 | 수정일: 2026-07-31
+// 상세: DP 의 --config-file 스키마(sharing.timeSlicing.resources[].replicas)를 최소 필드로
+// 렌더한다. CLI 플래그(--mig-strategy)는 config 파일 값을 덮으므로 flags 는 렌더하지 않는다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -139,10 +137,10 @@ const (
 	dpNamespace = "kube-system"
 
 	// MigActiveNodeLabel 은 이 노드에 ACPP 가 실제로 관리 중인 MIG GI 가 있는지를 나타낸다.
-	// device-plugin 은 이 라벨로 두 DaemonSet(mixed/flat) 중 어느 쪽이 그 노드를 맡을지 가른다
-	// (라이브 결함 D-8 근본해결 — upstream 이 --mig-strategy=mixed 와 sharing.mps 동시 사용을
-	// 거부해, 이 operator 가 그 플래그를 무조건 렌더하던 시절엔 MPS 가 클러스터 전역에서
-	// 구조적으로 막혔다). 값은 정확히 "true" 문자열이거나 부재(= flat)다.
+	// device-plugin 은 이 라벨로 두 DaemonSet(mixed/flat) 중 어느 쪽이 그 노드를 맡을지 가른다 —
+	// upstream 이 --mig-strategy=mixed 와 sharing.mps 동시 사용을 거부하므로, 그 플래그를 모든
+	// 노드에 무조건 렌더하면 MPS 가 클러스터 전역에서 구조적으로 막힌다. 값은 정확히 "true"
+	// 문자열이거나 부재(= flat)다.
 	MigActiveNodeLabel = "kcloud.ai/nvidia.mig-active"
 
 	// DevicePluginNameMixed 는 기존 dpName 값과 동일 — 라이브 리소스 이름을 바꾸지 않는다.
@@ -220,13 +218,11 @@ func (b *Backend) ExpectedSharedAllocatable(base map[string]int32, l partition.S
 }
 
 // ApplySharing 은 sharing ConfigMap 을 쓰고 DP DaemonSet 에 배선 + owner 어노테이션을 남긴다.
-// 반환 state 는 rollback 용 스냅샷(이전 ConfigMap 내용·존재 여부)이다.
-// 순서 주의: 검증 → 소유 확인 → ConfigMap → DS. 어떤 mutation 보다 먼저 fail-closed 한다
-// (RenderSharingConfig 는 replicas 를 검증하지 않으므로 여기서 막지 않으면 DP 가 기동 실패한다).
-//
-// ConfigMap 단계는 ApplySharingConfig 로 분리돼 있다(D-12) — mps-control-daemon 이 그 CM 을
-// 마운트해 기동하므로 호출자는 daemon 을 띄우기 전에 CM 만 먼저 쓸 수 있어야 한다. 여기서 다시
-// 부르는 것은 멱등이다(같은 소유자·같은 렌더 결과).
+// 반환 state 는 rollback 용 스냅샷(이전 ConfigMap 내용·존재 여부)이다. 순서 주의: 검증 → 소유
+// 확인 → ConfigMap → DS — 어떤 mutation 보다 먼저 fail-closed 한다(RenderSharingConfig 는
+// replicas 를 검증하지 않으므로 여기서 막지 않으면 DP 가 기동 실패한다). ConfigMap 단계는
+// ApplySharingConfig 로 분리돼 있다 — mps-control-daemon 이 그 CM 을 마운트해 기동하므로
+// 호출자는 daemon 을 띄우기 전에 CM 만 먼저 쓸 수 있어야 한다. 여기서 다시 부르는 것은 멱등이다.
 func (b *Backend) ApplySharing(t partition.Target, l partition.SharingLayout, base map[string]int32) (*partition.SharingRollbackState, error) {
 	st, err := b.ApplySharingConfig(t, l, base)
 	if err != nil {
@@ -254,7 +250,7 @@ func (b *Backend) ApplySharing(t partition.Target, l partition.SharingLayout, ba
 
 // ApplySharingConfig 는 ApplySharing 의 ConfigMap 단계까지만 수행한다(DS 배선은 하지 않는다).
 // mps-control-daemon 은 이 ConfigMap 을 마운트해 기동하므로 daemon 보다 먼저 존재해야 한다 —
-// 거꾸로면 daemon pod 이 ContainerCreating(ConfigMap not found)에 갇혀 준비 게이트를 못 넘는다(D-12).
+// 거꾸로면 daemon pod 이 ContainerCreating(ConfigMap not found)에 갇혀 준비 게이트를 못 넘는다.
 // DS 소유 확인은 여기 남아 있다: 남의 DS 를 겨냥한 요청이면 ConfigMap 조차 쓰지 않아야 한다.
 func (b *Backend) ApplySharingConfig(t partition.Target, l partition.SharingLayout, base map[string]int32) (*partition.SharingRollbackState, error) {
 	if err := b.ValidateSharing(l); err != nil {
@@ -316,16 +312,12 @@ func (b *Backend) ApplySharingConfig(t partition.Target, l partition.SharingLayo
 	return st, nil
 }
 
-// resolveRollbackTarget 은 rollback 대상 DS/CM 이름을 정한다. apply 는 그 시점 노드 라벨로 대상을
-// 고르는데, 그 사이 라벨이 뒤집히면(예: 형제 MIG 정책 삭제로 syncMigActiveLabel(false)) 지금 라벨을
-// 다시 읽는 것만으론 자기가 만든 DS/CM 을 잃는다(C-1, 조용한 no-op). 그래서 소유 표시부터 찾는다 —
-// mixed/flat 두 이름을 훑어 SharingOwnerAnnotation==t.Owner 인 DS 를 찾고, 그 DS 에 실제로 배선된
-// CM(SharingConfigMapNameOf)을 대상으로 삼는다.
-//
-// DS 도 소유를 주장하지 않으면(DS 재생성으로 어노테이션이 사라진 창 — preserveNvidiaSharing 은 live
-// 어노테이션이 있을 때만 보존) CM 소유 표시로 재시도한다(N-1) — 소유 표시는 소유물에 붙인다는 원칙의
-// 대칭 적용. 그마저 없으면(부분 적용 rollback 등 소유 표시 자체가 없던 경우) 현재 노드 라벨 기반
-// 해석으로 fallback 한다.
+// resolveRollbackTarget 은 rollback 대상 DS/CM 이름을 정한다. apply 는 그 시점 노드 라벨로
+// 대상을 고르는데, 그 사이 라벨이 뒤집히면(형제 MIG 정책 삭제로 syncMigActiveLabel(false))
+// 지금 라벨을 다시 읽는 것만으론 자기가 만든 DS/CM 을 잃는다(조용한 no-op). 그래서 소유
+// 표시부터 찾는다 — mixed/flat 을 훑어 SharingOwnerAnnotation==t.Owner 인 DS 를 찾고, 그
+// DS 에 실제로 배선된 CM 을 대상으로 삼는다. DS 도 소유를 주장하지 않으면 CM 소유 표시로
+// 재시도하고, 그마저 없으면 현재 노드 라벨 기반 해석으로 fallback 한다.
 func (b *Backend) resolveRollbackTarget(t partition.Target) (dsName, cmName string, err error) {
 	for _, name := range []string{DevicePluginNameMixed, DevicePluginNameFlat} {
 		var ds appsv1.DaemonSet

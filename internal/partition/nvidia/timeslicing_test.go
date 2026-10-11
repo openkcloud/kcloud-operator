@@ -1,7 +1,7 @@
 // ============================================================
 // timeslicing_test.go: NVIDIA device-plugin sharing config 렌더 테스트
-// 상세: 스키마 정본은 operator 작업트리의 reference/nvidia-k8s-device-plugin/api/config/v1/{sharing,replicas}.go.
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: 스키마 정본은 upstream NVIDIA device-plugin 의 api/config/v1(sharing·replicas 정의)다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -126,7 +126,7 @@ func TestExpectedShared_MPSMultiplies(t *testing.T) {
 	}
 }
 
-// F4(review): upstream device-plugin(api/config/v1/config.go)은 sharing.mps.failRequestsGreaterThanOne
+// upstream device-plugin(api/config/v1/config.go)은 sharing.mps.failRequestsGreaterThanOne
 // 이 미설정(nil)이면 true 로 승격한다(historical MPS 안전장치 — replicas>1 요청 거부). 우리는 이 필드를
 // 항상 명시값으로 렌더하므로 그 nil-승격 경로를 절대 못 탄다 — 렌더링 시점에 같은 기본값을 직접 내야
 // upstream 의 안전 기본값을 조용히 뒤집지 않는다. MPSSpec 에는 이를 뒤집을 스펙 필드가 없으므로(범위 밖)
@@ -147,7 +147,7 @@ func TestBackendSatisfiesSharingBackend(t *testing.T) {
 }
 
 // sharingFingerprint 는 WireSharing 이 건드리는 모든 필드(arg/env/mount/volume)의 이름 집합이다.
-// F5(review): 개수만 비교하면 엉뚱한 이름을 지우고도 개수가 맞아떨어지면 통과한다 — 이름 집합
+// 개수만 비교하면 엉뚱한 이름을 지우고도 개수가 맞아떨어지면 통과한다 — 이름 집합
 // 자체를 비교해야 "붙인 것을 정확히 그대로 뗐다"를 증명한다.
 func sharingFingerprint(ds *appsv1.DaemonSet) map[string]bool {
 	ctr := ds.Spec.Template.Spec.Containers[0]
@@ -179,11 +179,11 @@ func TestWireUnwireSharing_IsSymmetricForMPS(t *testing.T) {
 	}
 }
 
-// F1(review, blocker): upstream DP 바이너리는 sharing strategy 가 mps 면 --mps-root/MPS_ROOT 가
-// 없으면 기동 자체를 거부한다(cmd/nvidia-device-plugin/main.go:231-232). env 가 없으면 DP 가
-// crash-loop 한다 — 조용한 no-op 이 아니다.
-// F2(review, major): upstream(daemonset-device-plugin.yml)은 DP 컨테이너에 mps-shm(→/dev/shm)도
-// 마운트한다 — "MPS daemon health-checking" 에 필요하다는 upstream 자신의 주석.
+// upstream DP 바이너리는 sharing strategy 가 mps 면 --mps-root/MPS_ROOT 가 없으면 기동 자체를
+// 거부한다(cmd/nvidia-device-plugin/main.go:231-232). env 가 없으면 DP 가 crash-loop 한다 —
+// 조용한 no-op 이 아니다. upstream(daemonset-device-plugin.yml)은 DP 컨테이너에
+// mps-shm(→/dev/shm)도 마운트한다 — "MPS daemon health-checking" 에 필요하다는 upstream
+// 자신의 주석.
 func TestWireSharing_MPSSetsRootEnvAndShmMount(t *testing.T) {
 	ds := dpDaemonSet()
 	WireSharing(ds, v1alpha1.SharingModeMPS, SharingConfigMapNameMixed)
@@ -210,17 +210,12 @@ func TestWireSharing_MPSSetsRootEnvAndShmMount(t *testing.T) {
 	}
 }
 
-// 라이브 결함: DP 가 MPS daemon 과 통신하지 못했다("error waiting for MPS daemon: ...
-// failed to send command to MPS daemon: exit status 1"). DP 컨테이너 안에 /mps 가 없었다.
-//
-// upstream 은 두 값을 **다른 용도로** 쓴다:
-//   - mps.ContainerRoot("/mps", cmd/mps-control-daemon/mps/root.go:26)는 DP **자신의 컨테이너 뷰**다.
-//     internal/plugin/mps.go:55 가 health-check 용 daemon 을 이 경로로 만든다.
-//   - MPS_ROOT(--mps-root)는 **호스트 경로**다. internal/plugin/mps.go:56 의 hostRoot 로만 쓰이며,
-//     updateReponse 가 워크로드 pod 에 주입하는 마운트의 HostPath 가 된다.
-//
-// 따라서 마운트 경로는 /mps 하나이고(upstream daemonset-device-plugin.yml 도 mps-root→/mps 뿐),
-// MPS_ROOT 는 호스트 경로로 남아야 한다 — /mps 로 바꾸면 워크로드 pod 에 없는 호스트 경로가 주입된다.
+// 이 결함은 DP 가 MPS daemon 과 통신하지 못하는 증상으로 나타난다("...failed to send command
+// to MPS daemon") — DP 컨테이너 안에 /mps 가 없으면 이 에러가 난다. upstream 은 두 값을 다른
+// 용도로 쓴다: mps.ContainerRoot("/mps")는 DP 자신의 컨테이너 뷰(health-check daemon 생성 경로,
+// internal/plugin/mps.go:55)이고, MPS_ROOT(--mps-root)는 호스트 경로로 워크로드 pod 마운트의
+// HostPath 가 된다(같은 파일:56). 그래서 마운트 경로는 /mps 하나이고 MPS_ROOT 는 호스트 경로로
+// 남아야 한다 — 바꾸면 워크로드 pod 에 없는 호스트 경로가 주입된다.
 func TestWireSharing_MPSMountsRootAtContainerRoot(t *testing.T) {
 	ds := dpDaemonSet()
 	WireSharing(ds, v1alpha1.SharingModeMPS, SharingConfigMapNameMixed)
@@ -245,10 +240,9 @@ func TestWireSharing_MPSMountsRootAtContainerRoot(t *testing.T) {
 	}
 }
 
-// 이번 결함의 본질은 daemon 쪽과 DP 쪽의 **비대칭**이었다 — daemon 은 호스트 MPS root 를 /mps 로
-// 보는데 DP 는 /tmp/nvidia-mps 로 봤다. 둘은 같은 파이프 디렉터리를 봐야 통신이 성립한다.
-// 렌더러가 둘로 나뉘어 있으므로(controller / nvidia 패키지) 상수 단일 출처만으론 부족하고,
-// 실제로 렌더된 두 오브젝트를 맞대어 고정한다(controller 패키지 쪽 절반).
+// daemon 쪽과 DP 쪽이 다른 경로를 보면 통신이 끊긴다 — 둘은 같은 파이프 디렉터리를 봐야
+// 통신이 성립한다. 렌더러가 둘로 나뉘어 있으므로(controller / nvidia 패키지) 상수 단일
+// 출처만으론 부족해, 실제로 렌더된 두 오브젝트를 맞대어 고정한다(controller 패키지 쪽 절반).
 func TestMPSRootIsSameHostPathAndContainerPath(t *testing.T) {
 	ds := dpDaemonSet()
 	WireSharing(ds, v1alpha1.SharingModeMPS, SharingConfigMapNameMixed)
@@ -403,7 +397,7 @@ func TestRollbackSharingRestoresPriorConfig(t *testing.T) {
 }
 
 // TestApplySharingRefusesForeignConfigMap: 남의 소유 표시가 붙은 sharing config 는 덮지 않는다
-// (I-3: 스냅샷은 프로세스 메모리뿐이라 삭제 경로에서 복원 불가 — 조용한 파기 금지).
+// (스냅샷은 프로세스 메모리뿐이라 삭제 경로에서 복원 불가 — 조용한 파기 금지).
 func TestApplySharingRefusesForeignConfigMap(t *testing.T) {
 	ctx := context.Background()
 	foreign := &corev1.ConfigMap{
@@ -431,7 +425,7 @@ func TestApplySharingRefusesForeignConfigMap(t *testing.T) {
 }
 
 // TestRollbackSharingLeavesForeignConfigMapIntact: 타 소유 상태에서 zero-state 로 원복이 불려도
-// ConfigMap 을 지우면 안 된다 — DP DaemonSet 은 전역 1개라 전 노드 광고가 사라진다(I-1).
+// ConfigMap 을 지우면 안 된다 — DP DaemonSet 은 전역 1개라 전 노드 광고가 사라진다.
 func TestRollbackSharingLeavesForeignConfigMapIntact(t *testing.T) {
 	ctx := context.Background()
 	ds := dpDaemonSet()
@@ -622,10 +616,10 @@ func TestApplySharingTargetsFlatDaemonSetForNonMigNode(t *testing.T) {
 	}
 }
 
-// C-1(리뷰): apply 는 노드 라벨로 dsName/cmName 을 정하는데, rollback 이 호출 시점에 라벨을 다시
-// 읽으면 그 사이 라벨이 뒤집힌 창에서 자기가 만든 DS/CM 을 잃는다(조용한 no-op). 라이브 재현:
-// 형제 MIG 정책 삭제 → syncMigActiveLabel(false) 가 노드를 flat 으로 뒤집는다 — sharing 은 이미
-// mixed 에 배선된 채로.
+// apply 는 노드 라벨로 dsName/cmName 을 정하는데, rollback 이 호출 시점에 라벨을 다시 읽으면
+// 그 사이 라벨이 뒤집힌 창에서 자기가 만든 DS/CM 을 잃는다(조용한 no-op). 형제 MIG 정책 삭제
+// → syncMigActiveLabel(false) 가 노드를 flat 으로 뒤집으면, sharing 은 이미 mixed 에 배선된
+// 채로 이 창에 놓인다.
 func TestRollbackSharingFindsOwnedDaemonSetWhenNodeLabelFlips(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(scheme()).WithObjects(dpDaemonSet(), worker1Node()).Build()
@@ -663,10 +657,10 @@ func TestRollbackSharingFindsOwnedDaemonSetWhenNodeLabelFlips(t *testing.T) {
 	}
 }
 
-// N-1(재리뷰): DS 가 재생성돼(NPUClusterPolicy 재렌더 — preserveNvidiaSharing 은 live 어노테이션이
-// 있을 때만 보존) 소유 어노테이션을 잃은 창에 노드 라벨까지 뒤집히면(형제 MIG 정책 삭제), DS scan 도
-// 라벨 fallback 도 자기가 만든 mixed ConfigMap 을 못 찾아 영구 고아로 남는다 — C-1 과 같은 모양의
-// 조용한 no-op(미봉된 절반). CM 자체의 소유 표시로 재시도하는 단계가 없으면 이 테스트가 실패한다.
+// DS 가 재생성돼(NPUClusterPolicy 재렌더 — preserveNvidiaSharing 은 live 어노테이션이 있을 때만
+// 보존) 소유 어노테이션을 잃은 창에 노드 라벨까지 뒤집히면(형제 MIG 정책 삭제), DS scan 도 라벨
+// fallback 도 자기가 만든 mixed ConfigMap 을 못 찾아 영구 고아로 남는다(조용한 no-op). CM
+// 자체의 소유 표시로 재시도하는 단계가 없으면 이 테스트가 실패한다.
 func TestRollbackSharingFindsOwnedConfigMapAfterDaemonSetRecreationAndLabelFlip(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(scheme()).WithObjects(dpDaemonSet(), worker1Node()).Build()
@@ -711,7 +705,7 @@ func TestRollbackSharingFindsOwnedConfigMapAfterDaemonSetRecreationAndLabelFlip(
 	}
 }
 
-// N-2(재리뷰): 소유 DS 가 flat 일 때 rollback 이 SharingConfigMapNameOf(ds) 로 실제 배선된 CM(flat)을
+// 소유 DS 가 flat 일 때 rollback 이 SharingConfigMapNameOf(ds) 로 실제 배선된 CM(flat)을
 // 따라가는지 고정한다. 이 값을 mixed 로 하드코딩해도 통과하던 이전 가드(소유 DS 가 항상 mixed)와
 // 달리, 이 테스트는 소유 DS 가 flat 이라 그 뮤테이션이 flat CM 삭제 누락으로 드러난다.
 func TestRollbackSharingFindsOwnedFlatDaemonSet(t *testing.T) {
@@ -749,9 +743,9 @@ func TestRollbackSharingFindsOwnedFlatDaemonSet(t *testing.T) {
 	}
 }
 
-// N-3(재리뷰): scan 이 mixed 를 먼저 훑는데, mixed 는 acpp-2 소유·flat 은 acpp-1 소유인 교차 소유
-// 상태에서 acpp-1 의 rollback 이 순서상 먼저 만난 mixed 를 (동등비교가 무력화되면) 잘못 채택하지
-// 않는지 고정한다.
+// scan 이 mixed 를 먼저 훑는데, mixed 는 acpp-2 소유·flat 은 acpp-1 소유인 교차 소유 상태에서
+// acpp-1 의 rollback 이 순서상 먼저 만난 mixed 를(동등비교가 무력화되면) 잘못 채택하지 않는지
+// 고정한다.
 func TestRollbackSharingSkipsForeignOwnedDaemonSetInScanOrder(t *testing.T) {
 	ctx := context.Background()
 	mixedDS := dpDaemonSet()

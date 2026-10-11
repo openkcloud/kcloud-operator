@@ -1,37 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: TT Job-모드 업그레이드 전이 kind 재현 — install Job 트리거·성공 수렴·롤백 소진
-# 상세: `.91` 에서는 tt-kmd 가 2.8.0 에 고정돼 있어(baked TT_KMD_VERSION) 실제 하드웨어로는
-#       상태기계의 업그레이드 전이(Upgrading→Validating→Uncordoning/Rollback→Failed)를 켤 수
-#       없다(README 의 제약 참고). 이 스크립트는 `test/lab/kind/setup.sh` 가 띄운 kind 클러스터
-#       위에 가짜 NodeDeviceReport·DriverInstallPolicy·DriverUpgradeState 를 직접 적용해 실제
-#       apiserver·controller-runtime 위에서 같은 제어 흐름을 재현한다. 두 시나리오를 순차 실행한다:
-#       (1) 성공 — Idle 에서 버전 불일치를 감지시켜 install Job 생성을 확인하고, Job 완료 직후
-#           NDR 을 목표 버전으로 패치해 Validating→Uncordoning→Idle 수렴을 관찰한다.
-#       (2) 롤백 — Idle 트리거는 (1)이 이미 증명했으므로 생략하고 UpgradeRequired 부터 시작한다
-#           (NDR.driverLoaded=false 를 Idle 부터 주면 handleIdle 의 Job-모드 self-heal 분기가
-#           먼저 발동해 PreviousVersion 을 비워 MaxRollbackAttempts 검증 자체가 무의미해진다 —
-#           이는 회피가 아니라 self-heal 과 버전-불일치 두 분기가 같은 신호(driverLoaded)를
-#           다르게 쓰는 데서 오는 자연스러운 경계다). NDR 을 계속 driverLoaded=false 로 두어
-#           검증 실패→Rollback→(rollback Job 도 실패)→RollbackAttempts 소진→Failed 를 관찰하고,
-#           Failed 가 자기치유되지 않고 유지되는지(handleFailed 의 가드가 조건 미충족으로 닫힘)
-#           확인한다.
-#       설치 Job 은 실제 컨테이너를 실행하므로(HostPID/HostNetwork/Privileged) 실제 장치·드라이버는
-#       전혀 건드리지 않는 stub 이미지(stub/Dockerfile, busybox 기반, DRIVER_VERSION 과 무관하게
-#       baked exit code 로 즉시 종료)를 kind 로 kind load 해 사용한다. installer=ngc 를 택해
-#       reconstructPrevImage 의 태그-스왑 경로를 태워 install/rollback 이 서로 다른 이미지
-#       (성공/실패)를 쓰게 한다 — apt/script installer 는 롤백도 같은 이미지를 재사용해 이 둘을
-#       분리할 수 없다.
-#       DriverUpgradeState/NodeDeviceReport 는 +kubebuilder:subresource:status 라 생성 후 status
-#       를 별도 patch 해야 한다 — 이때 매칭되는 DriverInstallPolicy 가 아직 없으면 reconcile 이
-#       "매칭 정책 없음"으로 즉시 no-op 반환하므로(driver_upgrade_controller.go Reconcile 3단계),
-#       DIP 를 항상 마지막에 적용해 status 패치 전 reconcile 이 빈 상태를 관측하는 경합을 피한다.
-#       DevicePluginValidator 통과에 필요한 가짜 device-plugin 은 Pod 대신 DaemonSet 으로 둔다 —
-#       handleValidatingJob 의 restartStaleDevicePluginPods 가 Job 완료 시각보다 먼저 뜬 device-
-#       plugin Pod 를 1회 삭제해 재스캔을 유도하므로(state_machine_job.go), 맨 Pod 라면 그걸로
-#       끝이지만 DaemonSet 이면 자동으로 재생성된다(자기제한적: 새 Pod 는 그 Job 완료 이후 시각).
-#       실제 장치·드라이버는 건드리지 않는다. `.91` 은 이 스크립트 어디서도 참조하지 않는다.
-# 생성일: 2026-09-20
+# 상세: kind 클러스터에 가짜 NDR·DIP·DUS 를 적용해 install Job 트리거→성공 수렴/롤백 소진까지
+#       상태기계 제어 흐름을 재현한다(스텁 이미지·가짜 리소스 설계는 README 참고).
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

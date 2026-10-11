@@ -1,4 +1,4 @@
-<!-- README.md: k8s-worker3 tt-kmd 사전 컴파일 이미지 왕복(2.11.0→2.8.0→2.11.0) 실행·복구 절차 | 생성일: 2026-09-22 | 수정일: 2026-09-24 -->
+<!-- README.md: k8s-worker3 tt-kmd 사전 컴파일 이미지 왕복(2.11.0→2.8.0→2.11.0) 실행·복구 절차 | 생성일: 2026-09-22 | 수정일: 2026-10-11 -->
 
 # Tenstorrent tt-kmd 사전 컴파일 이미지 왕복 (k8s-worker3)
 
@@ -19,11 +19,11 @@ driverVersion·`/sys/module/tenstorrent/version`·tt-smi probe)를 확인한 뒤
 
 ## 전제
 
-- 오퍼레이터 v0.7.53 이 라이브(helm 릴리스 `kcloud-operator`, 네임스페이스 `kcloud`). 태스크 2 의
+- 오퍼레이터 v0.7.53 이 라이브(helm 릴리스 `kcloud-operator`, 네임스페이스 `kcloud`).
   `kernelImages` 렌더링과 preflight resolvedImage 설정 코드가 이 이미지에 포함돼 있어야 한다.
 - k8s-worker3: 커널 `5.15.0-190-generic`(kernelAllowlist `5.15.*`·`6.8.*` 안), tt-kmd 2.11.0 로드,
   DUS `k8s-worker3-tenstorrent` Idle/2.11.0, tenstorrent 자원을 요청하는 파드 0, Secure Boot 비활성.
-- 레지스트리에 사전 컴파일 이미지 두 개 존재(태스크 3 이 빌드):
+- 레지스트리에 사전 컴파일 이미지 두 개 존재:
   `<레지스트리>:5100/kcloud/tenstorrent-driver-ds:2.8.0-k5.15.0-190-generic-v1`,
   `…:2.11.0-k5.15.0-190-generic-v1`.
 - DIP 기본값은 `mode: job`·`imageVersionBaked: true` 이다. `kernelImages` 는 `mode: job` 에서만

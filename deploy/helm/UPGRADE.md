@@ -1,5 +1,5 @@
 # UPGRADE.md: NPU Operator Helm Chart 업그레이드 가이드
-# 생성일: 2026-04-10 | 수정일: 2026-09-14 (다루는 범위 명시)
+# 생성일: 2026-04-10 | 수정일: 2026-10-11
 
 # NPU Operator Upgrade Guide
 
@@ -144,15 +144,15 @@ kubectl get npuclusterpolicy,dip -A
 
 ## v0.3.1-rename → v0.5.4-nvrtc 업그레이드 주의사항
 
-### ⚠️ 사고 사례: NPUClusterPolicy CR 일시 삭제 (2026-04-22)
+### ⚠️ 사고 사례: NPUClusterPolicy CR 일시 삭제
 
-이전 chart 버전(0.4.4 이하)에서 `helm upgrade` 수행 시 다음 시나리오로 장애가 발생했습니다.
+chart 버전 0.4.4 이하에서 `helm upgrade` 를 수행하면 다음 시나리오로 장애가 발생합니다.
 
 1. `clusterpolicy.yaml`에 설정된 `helm.sh/hook-delete-policy: before-hook-creation` 으로 인해
    `helm upgrade` 시작 시점에 기존 `NPUClusterPolicy` CR이 자동 삭제됩니다.
 2. `post-upgrade` hook이 CR 재생성에 실패하면 `NPUClusterPolicy` CR이 부재 상태가 됩니다.
 3. Operator가 CR 부재를 감지하고 `kube-system`의 모든 `npu-op-device-plugin-*` DaemonSet을
-   일시 삭제하는 사고가 발생했습니다.
+   일시 삭제합니다.
 
 ### 변경 내용 (chart 0.4.5 / v0.5.4-nvrtc)
 
@@ -185,11 +185,11 @@ kubectl get ds -n kube-system | grep npu-op
 
 ---
 
-## v0.5.6 → v0.5.7 (chart 0.5.0 → 0.5.1, 2026-04-22)
+## v0.5.6 → v0.5.7 (chart 0.5.0 → 0.5.1)
 
 ### 변경 내용
 
-**DeviceSpec (DS) 이름 재정렬 (US-R1/R2)**
+**DeviceSpec (DS) 이름 재정렬**
 
 벤더별 device plugin DaemonSet 이름을 일관된 패턴으로 변경합니다:
 - 이전: `npu-op-<vendor>-device-plugin` (예: `npu-op-nvidia-device-plugin`)
@@ -202,7 +202,7 @@ kubectl get ds -n kube-system | grep npu-op
 | RNGD | `npu-op-furiosa-rngd-device-plugin` | `npu-op-device-plugin-furiosa-rngd` |
 | Rebellions | `npu-op-rbln-device-plugin` | `npu-op-device-plugin-rbln` |
 
-**Tester 샘플 Pod namespace 변경 (US-R5)**
+**Tester 샘플 Pod namespace 변경**
 
 - 이전: `npu-operator` (운영자 namespace)
 - 신규: `default` (사용자 workload namespace)
@@ -410,14 +410,14 @@ kubectl apply -f /tmp/npucp-backup.yaml
 
 ---
 
-## v0.5.9 → v0.5.10 (chart 0.5.9 → 0.5.10, 2026-05-11)
+## v0.5.9 → v0.5.10 (chart 0.5.9 → 0.5.10)
 
 ### 변경 내용
 
 - **RNGD driver 이미지 전환**: `driverInstallPolicies.rngd.driver.image` 를
   `furiosa-driver-ds-rngd:2026.1.0-v2` → `furiosa-rngd-driver-installer:2026.1.0` 로 변경.
-  신규 installer 이미지는 `furiosa-smi` 패키지 추가 설치 및 동일 host driver 설치 결과를
-  E2E 검증(2026-05-11) 완료한 이미지입니다.
+  신규 installer 이미지는 `furiosa-smi` 패키지를 추가로 설치하며, 동일한 host driver 설치
+  결과를 내도록 E2E 검증을 완료한 이미지입니다.
 
 ### Breaking Changes
 
@@ -437,7 +437,7 @@ helm upgrade kcloud-operator ./helm/kcloud-operator \
 
 ---
 
-## v0.5.22 → v0.5.23 (chart 0.5.13 → 0.5.14, 2026-06-02)
+## v0.5.22 → v0.5.23 (chart 0.5.13 → 0.5.14)
 
 ### 변경 내용 — 관리 리소스 이름 + values 스키마 전면 변경
 

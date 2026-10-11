@@ -1,11 +1,11 @@
-<!-- README.md: 벤더 중립 동시 open 탐침 사용법 | 생성일: 2026-09-19 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
+<!-- README.md: 벤더 중립 동시 open 탐침 사용법 | 생성일: 2026-09-19 | 수정일: 2026-10-11 -->
 # 동시 open 탐침
 
 ## 왜
 
-Round 2 는 `internal/vendorcap/registry.go` 의 `CapTimeSlicing`(SW 시분할)을 `Software` 로 선언
-하려면 "두 프로세스가 같은 장치 파일을 동시에 열 수 있다"(EBUSY 없음)는 실측 근거를 요구한다.
-`test/live/rngd-multiprocess/probe.sh` 가 RNGD 전용으로 이미 이 방식을 썼다(2026-07-29, 결과는
+`internal/vendorcap/registry.go` 의 `CapTimeSlicing`(SW 시분할)을 `Software` 로 선언하려면
+"두 프로세스가 같은 장치 파일을 동시에 열 수 있다"(EBUSY 없음)는 실측 근거가 필요하다.
+`test/live/rngd-multiprocess/probe.sh` 가 RNGD 전용으로 이미 이 방식을 썼다(결과는
 배타적 open으로 `Unsupported`) — 이 디렉터리는 그 `os.open(O_RDWR)` 판정 방식을 벤더 중립으로
 일반화해 Warboy·Tenstorrent·Rebellions 에도 쓴다.
 
@@ -60,11 +60,10 @@ B 가 성공했어도 `verdict` 는 `error` 다** — 보유자가 없는 상태
 
 - **승격한다**: 연결 동작을 라이브로 보인 뒤. descriptor `spec.sharing` → 생성 device-plugin replicas
   → 파드 여럿이 같은 장치를 나눠 쓰는 것까지 확인하면 그때 올린다. Tenstorrent 가 이 경로로
-  2026-09-20 승격됐다(판정 R2-8, 2026-09-19 tenstorrent 실측 추기).
+  승격됐다.
 - **보류한다**: 탐침 자체가 confound 된 경우. Rebellions 는 외부 holder(`atomplus-vllm.service`)가
-  이미 장치를 쥐고 있어 통제된 2-프로세스 프로토콜을 못 돌렸으므로 `ok` 여도 `Unknown` 이다
-  (2026-09-19 rebellions 실측). 연결 여부가 아니라 근거의 성격이
-  보류 사유다 — 외부 holder 없는 구간에서 재실측해야 풀린다.
+  이미 장치를 쥐고 있어 통제된 2-프로세스 프로토콜을 못 돌렸으므로 `ok` 여도 `Unknown` 이다.
+  연결 여부가 아니라 근거의 성격이 보류 사유다 — 외부 holder 없는 구간에서 재실측해야 풀린다.
 
 레지스트리 값은 descriptor sharing 게이트(`internal/controller/acceleratordescriptor_controller.go`
 의 `sharingRefusal`)와 ACPP sharing 게이트(`internal/webhook/acceleratorpartitionpolicy.go`)가 그대로
@@ -110,19 +109,15 @@ time HOLD=089 bash test/live/concurrent-open/probe.sh selfcheck localhost /dev/n
 time HOLD=abc bash test/live/concurrent-open/probe.sh selfcheck localhost /dev/null
 ```
 
-넷 다 스크립트가 중간에 죽지 않고(`set -e` 하에서도) JSON 한 줄을 끝까지 낸다는 것을 보여준다 —
-이전 버전은 ssh 자체가 실패한 경우 아무 출력 없이 조용히 종료했고(리뷰 fix round 1),
-`HOLD=089` 는 `(( ))` 가 8진수로 읽어 실패하면서 clamp 가 통째로 건너뛰어져 89초를 보유했다.
+넷 다 스크립트가 중간에 죽지 않고(`set -e` 하에서도) JSON 한 줄을 끝까지 낸다는 것을 보여준다.
 
 ## 한계
 
-- open 성공/실패만 본다 — 실제 동시 추론 처리량, 지연, 격리는 측정하지 않는다(2단계 측정이
-  필요하면 별도 태스크. `test/live/rngd-multiprocess/README.md` 의 "2단계 측정" 절 참고).
+- open 성공/실패만 본다 — 실제 동시 추론 처리량, 지연, 격리는 측정하지 않는다(2단계 측정은
+  `test/live/rngd-multiprocess/README.md` 의 "2단계 측정" 절 참고).
 - 대조군(idle 상태의 다른 장치로 같은 프로토콜을 돌려 계측기 자체가 유효한지 확인)은 벤더 노드에
-  같은 성격의 두 번째 idle 장치가 있을 때만 의미가 있다 — 2026-09-19 실측 세 벤더 모두 그런
+  같은 성격의 두 번째 idle 장치가 있을 때만 의미가 있다 — 세 벤더 모두 그런
   장치가 없어(Warboy·Tenstorrent 는 장치가 하나뿐, Rebellions 는 둘 다 이미 vLLM 이 점유) 생략했다.
 - `MODE=single` 은 외부 holder 의 정체·개수를 검증하지 않는다 — 호출자가 사전에 `fuser`/
   `systemctl status` 등으로 직접 확인하고 `CONFOUND` 에 근거를 남겨야 한다.
 - 절대 재부팅하지 않고, 드라이버를 건드리지 않는다.
-- 2026-09-19 실측 JSON 은 `firstOpen`
-  필드 도입 전 스키마다.

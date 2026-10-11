@@ -5,8 +5,7 @@
 #       sudo -n docker 로 먼저 시도하고 실패하면 plain docker, 그것도 실패하면
 #       "docker: unavailable" 로 표시한다 — docker 조회 성공 여부는 종료 코드에 영향을 주지
 #       않는다. 종료 코드는 오직 여유율이 --min-free-percent 미만인지로만 결정한다.
-# 용법: build-host-disk-check.sh [--min-free-percent N(기본 20)] [--json]
-# 생성일: 2026-09-23 | 수정일: 2026-09-23
+# 생성일: 2026-09-23 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

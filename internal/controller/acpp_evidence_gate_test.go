@@ -1,10 +1,8 @@
 // ============================================================
 // acpp_evidence_gate_test.go: 근거 불일치 시 commit 거부 envtest
 // 상세: 광고가 실제로 수렴한 노드(프로덕션이 만들 수 있는 상태)에서 Ready + 근거 기록을 확인하고,
-//
-//	장치 관측을 spec 과 어긋나게 주입하면 Ready 로 승격되지 않음을 확인한다.
-//
-// 생성일: 2026-07-31 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 작업공간 경로 인용 제거)
+// 장치 관측을 spec 과 어긋나게 주입하면 Ready 로 승격되지 않음을 확인한다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -69,15 +67,12 @@ var _ = Describe("ACPP evidence commit gate", func() {
 
 		acpp := mkNvidiaACPP("nv-evidence-acpp", labels)
 		Expect(k8sClient.Create(ctx, acpp)).To(Succeed())
-		// 이 node/NDR 는 처음부터 목표 geometry+광고를 갖고 있다(디바이스가 이미 파티션돼 있고
-		// device-plugin 도 이미 광고 중인 상태) — 그런데 이 ACPP 는 아직 그 GI 를 소유했다는 저널이
-		// 없다. 그 상태로 첫 reconcile 을 돌리면 routeNvidiaNoDiff 가 "geometry 는 맞지만 이 ACPP 가
-		// 만든 게 아니다" 로 읽어 ExistingMigConfiguration(Failed, terminal)로 거절한다 — 그건 정확히
-		// 의도된 안전장치이지 이 스펙이 재현하려는 결함이 아니다. 그래서 "이 ACPP 가 이전 세션에
-		// 이미 이 레이아웃을 적용해 소유하고 있다"는 저널을 먼저 심어, managed no-diff 재검증 경로
-		// (기존 ACPP nvidia MIG journal 스펙의 "stays Ready on a reused reconcile"과 같은 경로)로
-		// 들어가게 한다. 이게 근거 게이트가 실제로 지켜야 할 상태다: 이미 적용된 것으로 기록된
-		// 파티션이 지금도 여전히 맞는지 재확인하는 pass.
+		// 이 node/NDR 는 처음부터 목표 geometry+광고를 갖고 있지만 이 ACPP 는 아직 그 GI 를 소유했다는
+		// 저널이 없다 — 그 상태로 첫 reconcile 을 돌리면 routeNvidiaNoDiff 가 "geometry 는 맞지만 이
+		// ACPP 가 만든 게 아니다" 로 읽어 ExistingMigConfiguration(Failed, terminal)로 거절한다(의도된
+		// 안전장치이지 이 스펙의 표적이 아니다). 그래서 이미 소유·적용했다는 저널을 먼저 심어 managed
+		// no-diff 재검증 경로로 들어간다 — 근거 게이트가 실제로 지켜야 할 상태는 이미 적용된 것으로
+		// 기록된 파티션이 지금도 여전히 맞는지 재확인하는 이 pass 다.
 		acpp.Status.ApplyRecords = []npuv1alpha1.ApplyRecord{{
 			NodeName: "nv-evidence-node", GPUPCIs: []string{"0000:41:00.0"}, OwnerUID: string(acpp.UID),
 			BaselineGPUCount: 1, ExpectedMigCount: 4, ExpectedFullGPUCount: 1,
@@ -105,18 +100,12 @@ var _ = Describe("ACPP evidence commit gate", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		labels := map[string]string{sel + "-bad": "true"}
-		// 장치 geometry 는 spec 과 실제로 어긋나게(2g.12gb x2 관측, 정책은 1g.6gb x4 요구) 시드하되,
-		// 이 시드 그대로 첫 reconcile 을 돌리면(브리핑 원안) 이 테스트가 검증하려는 게이트가 아니라
-		// 전혀 다른 기존 안전장치(nvidiaHWBlock 의 MigUnsafe — "누구 것인지 모르는 기존 GI 를
-		// 함부로 덮어쓰지 않는다")에 먼저 걸려 WaitingForDrain 에 멈춘다. 그 상태로는 게이트가
-		// 하는 일 없이도 이 스펙이 통과해 버린다 — 다섯 번째 "통과하지만 규칙 절반을 못 보는
-		// 픽스처"가 될 뻔한 지점이다(뮤테이션으로 실제 확인함).
-		//
-		// 그래서 positive 스펙과 같은 저널(이미 이 ACPP 가 소유·Ready 로 기록된 managed no-diff
-		// 상태 — geometry 도 처음부터 일치)을 심어 nvidiaHWBlock 자체를 타지 않게 하고, 대신
-		// **광고만 비워 둔다.** fakeVerifier 는 실제 allocatable 을 보지 않고 항상 성공을 돌려주므로
-		// (광고만 보는) 기존 verifySucceeded 판정으로는 이 상태도 통과해 버린다 — 새 게이트만이
-		// 실제 node.status.allocatable 을 읽어 이 불일치를 잡는다.
+		// 장치 geometry 는 spec 과 어긋나게(2g.12gb x2 관측, 1g.6gb x4 요구) 시드한다. 이 시드로
+		// 바로 reconcile 하면 이 게이트보다 먼저 nvidiaHWBlock 의 MigUnsafe 에 걸려 WaitingForDrain
+		// 에 멈춰, 게이트 없이도 스펙이 통과해 버린다(뮤테이션으로 확인). positive 스펙과 같은
+		// 저널(이미 소유·Ready, geometry 일치)을 심어 MigUnsafe 를 피하고 **광고만 비워 두면**,
+		// 광고만 보는 fakeVerifier/기존 verifySucceeded 는 그래도 통과시킨다 — 실제 allocatable 을
+		// 읽는 새 게이트만이 이 불일치를 잡는다.
 		seedNvidiaNode("nv-evidence-bad", labels, true,
 			a30Device(nvidia.GeometrySummary("1g.6gb", 4), "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("nv-evidence-bad") })
@@ -153,7 +142,7 @@ var _ = Describe("ACPP evidence commit gate", func() {
 })
 
 // flatDevicePluginDS 는 sharing-only 경로가 대상화하는 flat nvidia device-plugin DS 다
-// (기존 D-9 스펙의 시드와 동일 — 새 fixture 를 만들지 않는다).
+// (다른 sharing 스펙의 시드와 동일 — 새 fixture 를 만들지 않는다).
 func flatDevicePluginDS() *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: nvidia.DevicePluginNameFlat, Namespace: "kube-system"},
@@ -191,9 +180,8 @@ func timeSlicedACPP(name string, sel map[string]string, replicas int32) *npuv1al
 	}
 }
 
-// runSharingOnly(layout 없는 순수 공유 정책)는 이전까지 근거 게이트가 완전히
-// 비켜가는 구멍이었다(ec.Verified 가 세워지지 않았다). 이 두 스펙은 그 구멍이 닫혔음을 앙방향으로
-// 고정한다.
+// runSharingOnly(layout 없는 순수 공유 정책)도 근거 게이트를 피해 가는 구멍이 없어야 한다
+// (ec.Verified 가 세워져야 한다). 이 두 스펙은 그 구멍이 막혀 있음을 양방향으로 고정한다.
 var _ = Describe("ACPP sharing-only evidence gate", func() {
 	const sel = "kcloud.ai/nv-sharing-evidence"
 
@@ -202,9 +190,9 @@ var _ = Describe("ACPP sharing-only evidence gate", func() {
 		DeferCleanup(wipeACPPs)
 		labels := map[string]string{sel: "true"}
 		// A2 처럼 MIG 불가 장치는 nvidia backend 의 target 목록(MigDevice)에 아예 안 잡혀
-		// ec.ObservedGeometry 가 항상 비어 DeviceObservation 체크가 무조건 실패한다(장치 관측
-		// 축과 무관한 픽스처 버그였다 — 실측으로 확인함). MIG 가능(A30, mode Enabled) 장치를 써야
-		// 공유 전용 정책이라도 관측이 존재한다.
+		// ec.ObservedGeometry 가 항상 비어 DeviceObservation 체크가 무조건 실패한다 — 장치 관측
+		// 축과 무관한 픽스처 문제다. MIG 가능(A30, mode Enabled) 장치를 써야 공유 전용 정책이라도
+		// 관측이 존재한다.
 		seedNvidiaNode("nv-sharing-node", labels, false, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("nv-sharing-node") })
 		dp := flatDevicePluginDS()

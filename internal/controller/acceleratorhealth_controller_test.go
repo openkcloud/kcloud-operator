@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorhealth_controller_test.go: health 감시 컨트롤러 envtest
 // 상세: 정상 노드·관측 부재·플러그인 장애·격리 해제까지 상태 기록과 부작용(라벨·작업)을 고정한다.
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -134,8 +134,8 @@ func healthOpsForNode(node string) []npuv1alpha1.AcceleratorOperation {
 }
 
 var _ = Describe("AcceleratorHealth", func() {
-	// 증명: 이 노드를 맡는 관리 대상 device-plugin 이 없으면 장애로 부르지 않는다.
-	// 라이브(2026-08-04)에서 NVIDIA 가 아닌 노드 전부가 Unhealthy 로 뜨고 복구 작업까지 생겼다.
+	// 증명: 이 노드를 맡는 관리 대상 device-plugin 이 없으면 장애로 부르지 않는다 — 없으면
+	// NVIDIA 가 아닌 노드 전부가 Unhealthy 로 뜨고 복구 작업까지 생기는 회귀를 막는다.
 	It("does not call a node unhealthy when no managed device-plugin targets it", func() {
 		node := "health-nodp-node"
 		seedHealthyNodeWithoutDP(node)
@@ -152,8 +152,8 @@ var _ = Describe("AcceleratorHealth", func() {
 		Expect(healthOpsForNode(node)).To(BeEmpty(), "대상 밖 노드에 복구 작업을 만들었다")
 	})
 
-	// 증명: 출처 정책이 사라진 근거의 광고 기준선은 비교에 쓰지 않는다.
-	// 라이브(2026-08-04)에서 지워진 MPS 정책의 기준선(gpu 4)이 남아 정상 노드가 불일치로 판정됐다.
+	// 증명: 출처 정책이 사라진 근거의 광고 기준선은 비교에 쓰지 않는다 — 지워진 MPS 정책의
+	// 기준선(gpu 4)이 남으면 정상 노드가 불일치로 잘못 판정된다.
 	It("ignores an advertisement baseline whose source policy is gone", func() {
 		node := "health-orphan-baseline-node"
 		seedHealthyNode(node)
@@ -226,7 +226,7 @@ var _ = Describe("AcceleratorHealth", func() {
 		node := "health-dp-node"
 		seedHealthyNode(node)
 		// 실제 장애 모습을 만든다: plugin pod 이 Ready 가 아니고 **광고도 사라졌다**.
-		// 광고가 남아 있는 동안에는 주체가 살아 있는 것으로 보는 것이 옳다(2026-08-04 라이브).
+		// 광고가 남아 있는 동안에는 주체가 살아 있는 것으로 보는 것이 옳다.
 		var pod corev1.Pod
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "dp-" + node, Namespace: "default"}, &pod)).To(Succeed())
 		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
@@ -267,15 +267,12 @@ var _ = Describe("AcceleratorHealth", func() {
 		Expect(labeled.Labels).To(HaveKeyWithValue(QuarantineLabel, "true"))
 	})
 
-	// 증명: 상태가 그대로면 시간이 흘러도 status 를 다시 쓰지 않는다(핫루프 방지).
-	//
-	// 시계를 pass 마다 10초씩 민다 — 실제 시각으로 돌리면 세 pass 가 같은 초 안에 끝나 타임스탬프가
-	// 우연히 같아지고, 그러면 이 시험은 "안 썼다" 가 아니라 "우연히 같았다" 를 통과시킨다.
-	// 다만 보고서 신선도 임계(90초)는 넘기지 않는다 — 넘기면 상태가 Unknown 으로 바뀌는 것이
-	// 정상이라 이 시험이 다른 것을 재게 된다(실측으로 확인함).
-	// 이 성질은 방벽이 둘이라(변화 없으면 write 생략 + status 의 바이트 안정성) 한쪽만 망가뜨려서는
-	// 실패하지 않는다 — 실측으로 확인했다. 그래도 남기는 이유는 운영자가 겪는 것이 "churn 이 있나
-	// 없나" 이고, 두 방벽이 함께 무너지는 순간을 이 시험이 잡기 때문이다.
+	// 증명: 상태가 그대로면 시간이 흘러도 status 를 다시 쓰지 않는다(핫루프 방지). 시계를 pass
+	// 마다 10초씩 민다 — 실제 시각으로 돌리면 세 pass 가 같은 초 안에 끝나 타임스탬프가 우연히
+	// 같아져, 이 시험이 "안 썼다" 가 아니라 "우연히 같았다" 를 통과시킬 수 있다. 다만 보고서
+	// 신선도 임계(90초)는 넘기지 않는다 — 넘기면 Unknown 으로 바뀌는 것이 정상이라 이 시험이
+	// 다른 것을 재게 된다. 방벽이 둘이라(변화 없으면 write 생략 + status 의 바이트 안정성) 한쪽만
+	// 망가져도 안 잡힐 수 있지만, 운영자가 겪는 것은 churn 유무이고 둘 다 무너지는 순간을 잡는다.
 	It("does not rewrite the status when nothing changed", func() {
 		node := "health-idle-node"
 		seedHealthyNode(node)
@@ -328,12 +325,10 @@ var _ = Describe("AcceleratorHealth", func() {
 		Expect(after.Status.AllocationAllowed).To(BeFalse())
 	})
 
-	// 증명: 사람이 해제를 표시하면 격리가 풀린다 — 표시가 없으면 나갈 길이 아예 없다.
-	//
-	// 이 시험이 없던 동안 세 규칙(반복 실패 우선 판정 / 그 원인에는 작업 없음 / 격리에서
-	// Recovering 으로만 나감)이 합쳐져 **영구 격리**가 됐다. 실패 작업을 손으로 지워도 전이
-	// 게이트가 막아 풀리지 않는다.
-	//
+	// 증명: 사람이 해제를 표시하면 격리가 풀린다 — 표시가 없으면 나갈 길이 아예 없다. 이 시험이
+	// 없으면 세 규칙(반복 실패 우선 판정 / 그 원인에는 작업 없음 / 격리에서 Recovering 으로만
+	// 나감)이 합쳐져 **영구 격리**가 된다 — 실패 작업을 손으로 지워도 전이 게이트가 막아
+	// 풀리지 않는다.
 	// 깨는 뮤테이션: prevState 초기화(주석 해제 분기)를 지우면 Quarantined 에 머물러 실패한다.
 	//               recoveryHistory 의 releasedAt 필터를 지우면 실패 3건이 계속 세어져 실패한다.
 	It("releases a quarantined node once a human acknowledges the failures", func() {
@@ -393,9 +388,9 @@ var _ = Describe("AcceleratorHealth", func() {
 })
 
 var _ = Describe("AcceleratorHealth mixed-vendor node", func() {
-	// 증명: 혼재 노드에서 다른 벤더 광고가 NVIDIA plugin 장애를 가리지 않는다.
-	// 라이브(2026-08-04): worker1 의 Warboy 광고(beta.furiosa.ai/npu=1)가 살아 있어 nvidia.com/gpu 가
-	// 80초 동안 0인데도 Healthy 로 읽혔다.
+	// 증명: 혼재 노드에서 다른 벤더 광고가 NVIDIA plugin 장애를 가리지 않는다 — worker1 처럼
+	// Warboy 광고(beta.furiosa.ai/npu=1)가 살아 있으면 nvidia.com/gpu 가 0 인데도 Healthy 로
+	// 읽힐 위험이 있다.
 	It("does not let another vendor's advertisement mask a dead nvidia plugin", func() {
 		node := "health-mixed-node"
 		seedHealthyNode(node)

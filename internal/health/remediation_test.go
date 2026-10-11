@@ -1,6 +1,6 @@
 // ============================================================
 // remediation_test.go: 원인→작업 매핑과 중복 억제 시험
-// 생성일: 2026-08-04 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -63,11 +63,10 @@ func TestNoOperationForObservationStale(t *testing.T) {
 }
 
 // TestRecoverDeviceForDriverNotLoaded 는 드라이버 미로드에 복구를 한 번 요청하는지 본다.
-//
-// 본체가 없던 동안에는 **작업을 만들지 않는 것**이 옳았다(H-1): 만들면 "no participant registered"
-// 로 즉시 종점이 되고 그 종점이 실패로 세어져 세 번 만에 멀쩡한 노드가 격리됐다. 본체를 등록한
-// 뒤에는 반대가 옳다 — 흔한 원인은 재시작으로 낫고, 안 나으면 반복 실패가 격리로 올린다.
-//
+// 본체(recoverdevice_participant.go)가 등록되지 않은 상태에서 이 작업을 만들면 "no
+// participant registered" 로 즉시 종점이 되고, 그 종점이 실패로 세어져 세 번 만에 멀쩡한
+// 노드가 격리된다 — 그래서 본체 등록 전에는 만들지 않는다. 등록된 뒤에는 반대가 옳다:
+// 흔한 원인은 재시작으로 낫고, 안 나으면 반복 실패가 격리로 올린다.
 // 깨는 뮤테이션: operationForReason 의 ReasonDriverNotLoaded 갈래를 지우면 Create 가 거짓이 되어 실패한다.
 func TestRecoverDeviceForDriverNotLoaded(t *testing.T) {
 	got := PlanRecovery("worker1", ReasonDriverNotLoaded, []string{"0000:18:00.0"}, time.Now(), DefaultPolicy())
@@ -85,7 +84,7 @@ func TestRecoverDeviceForDriverNotLoaded(t *testing.T) {
 }
 
 // TestNoOperationForPartialDeviceFailure 는 부분 실패 전용 원인이 조치표에 없어 작업을 만들지
-// 않는지 본다(2026-08-04 최종 리뷰 C2) — 이 원인은 일부러 조치표에 넣지 않았다: 넣으면 노드
+// 않는지 본다 — 이 원인은 일부러 조치표에 넣지 않았다: 넣으면 노드
 // 범위 RecoverDevice 가 만들어져, 혼재 노드에서 고장난 장치 하나가 멀쩡한 다른 장치의 드라이버
 // pod 까지 지운다.
 // 깨는 뮤테이션: operationForReason 이나 defaultRemediation 에 ReasonPartialDeviceFailure 를

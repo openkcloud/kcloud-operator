@@ -1,11 +1,8 @@
 // ============================================================
 // consumers.go: 가속기 소비자(Pod) 조회 — GET /api/v1/consumers
-// 상세: 귀속 정밀도가 할당 API 마다 다르다. DRA 는 ResourceClaim 이 장치를 지목하므로
-// 장치 단위로 알고, device-plugin 은 pod spec 에 수량만 있어 노드 단위까지만 안다.
-// 그 차이를 attribution 으로 노출하고, 모르는 것은 추측해 채우지 않는다(fail-closed).
-// AcceleratorView 에 consumers 를 달지 않는 이유도 같다 — 장치 행에 소비자를 달면
-// device-plugin 경로에서 거짓 신호가 된다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-09 (claim 분기 순서 근거 주석 추가)
+// 상세: 귀속 정밀도가 할당 API 마다 다르다 — DRA 는 장치 단위, device-plugin 은 노드
+// 단위까지만 안다. 모르는 것은 추측해 채우지 않는다(fail-closed).
+// 생성일: 2026-08-07 | 수정일: 2026-10-11
 // ============================================================
 package apiserver
 
@@ -58,6 +55,8 @@ const ClaimStatusReservedElsewhere = "reserved-elsewhere"
 
 // ConsumerView 는 가속기를 요청한 Pod 하나다.
 // pkg/npuctl.ConsumerView(장치를 쥔 컨테이너 하나, describe node CONSUMERS)와 이름만 같고 단위가 다르다.
+// AcceleratorView(장치 행)에는 이 소비자 목록을 달지 않는다 — device-plugin 경로에서는
+// 장치별 소비자를 알 수 없어 달면 거짓 신호가 된다.
 type ConsumerView struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`

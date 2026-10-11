@@ -1,10 +1,8 @@
 // ============================================================
 // state_machine_reboot_test.go: cross-major reboot 전이 단위 테스트
-// 상세: 재부팅 트리거/완료 판정(bootID 가드), 재부팅 예산, needs-reboot 마커의
-//
-//	신선도 판정(install Job 완료 이후 관측인가) 검증.
-//
-// 생성일: 2026-07-20 | 수정일: 2026-08-07
+// 상세: 재부팅 트리거/완료 판정(bootID 가드), 재부팅 예산, needs-reboot 마커의 신선도 판정을
+// 검증한다.
+// 생성일: 2026-07-20 | 수정일: 2026-10-11
 // ============================================================
 package upgrade
 
@@ -49,14 +47,14 @@ func readyNode(ready bool) *corev1.Node {
 // bootIDPre 는 재부팅 직전 캡처된 bootID 를 모사하는 테스트 상수.
 const bootIDPre = "boot-A"
 
-// readyNodeBootID 는 Ready 상태 + 지정한 bootID 를 가진 노드를 만든다(P2 premature-Ready 가드 테스트용).
+// readyNodeBootID 는 Ready 상태 + 지정한 bootID 를 가진 노드를 만든다(premature-Ready 가드 테스트용).
 func readyNodeBootID(bootID string) *corev1.Node {
 	n := readyNode(true)
 	n.Status.NodeInfo.BootID = bootID
 	return n
 }
 
-// P2: reboot Job 생성 직전에 node bootID 를 DUS status 에 persist 한다(persist-then-Job).
+// reboot Job 생성 직전에 node bootID 를 DUS status 에 persist 한다(persist-then-Job).
 func TestHandleRebootRequired_PersistsBootID(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateRebootRequired, verNew, verNew)
 	dip := makeJobDIP(verNew, imgNew, true, true)
@@ -77,7 +75,7 @@ func TestHandleRebootRequired_PersistsBootID(t *testing.T) {
 	}
 }
 
-// P2 premature-Ready 가드: Ready 이나 bootID 가 캡처값과 동일 → 전진 보류(Rebooting 유지).
+// premature-Ready 가드: Ready 이나 bootID 가 캡처값과 동일 → 전진 보류(Rebooting 유지).
 func TestHandleRebooting_BootIDUnchanged_Waits(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateRebooting, verNew, verNew)
 	dus.Status.RebootRequestedTime = metav1.Now()
@@ -97,7 +95,7 @@ func TestHandleRebooting_BootIDUnchanged_Waits(t *testing.T) {
 	}
 }
 
-// P2 premature-Ready 가드: Ready + bootID 변경 관측 → Upgrading 전진.
+// premature-Ready 가드: Ready + bootID 변경 관측 → Upgrading 전진.
 func TestHandleRebooting_BootIDChanged_ToUpgrading(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateRebooting, verNew, verNew)
 	dus.Status.RebootRequestedTime = metav1.Now()
@@ -113,7 +111,7 @@ func TestHandleRebooting_BootIDChanged_ToUpgrading(t *testing.T) {
 	}
 }
 
-// P2 fallback: bootID 빈 값(캡처 실패) → 기존 isNodeReady 로 보수 전진(교착 방지).
+// bootID 빈 값(캡처 실패)이면 기존 isNodeReady 로 보수 전진한다(교착 방지).
 func TestHandleRebooting_EmptyBootID_Fallback(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateRebooting, verNew, verNew)
 	dus.Status.RebootRequestedTime = metav1.Now()
@@ -264,13 +262,9 @@ func TestTransitionState_FirstValidation_TriggersReboot(t *testing.T) {
 }
 
 // ── needs-reboot 마커의 신선도 ────────────────────
-//
-// 재부팅 후에는 "사이클당 1회" 규율이 needsReboot=true 를 전부 stale 로 간주해 왔다. 그런데
-// 재부팅 뒤에 다시 돈 install Job 이 새로 남긴 마커는 stale 이 아니라 진짜다.
-// 라이브 실측(2026-08-07 `.91` k8s-worker1): 05:43 에 시작한 580.173.02 install Job 이
-// 05:49 에 마커를 남기고 정상 종료했는데, 앞선 불필요한 재부팅이 예산을 이미 써버린 탓에
-// 상태기계가 Validating 에서 나가지 못했고 사람이 노드를 재부팅할 때까지 9분을 멈춰 있었다.
-// 판별 기준은 시도 횟수가 아니라 "관측이 이번 install Job 완료보다 나중인가" 다.
+// 재부팅 후 "사이클당 1회" 규율만으로는 needsReboot=true 를 전부 stale 로 간주해, 재부팅 뒤에
+// 다시 돈 install Job 이 새로 남긴 진짜 마커까지 무시한다. 판별 기준은 시도 횟수가 아니라
+// "관측이 이번 install Job 완료보다 나중인가" 다.
 
 // rebootNDRAt 는 관측 시각(ObservedAt)이 붙은 NDR 이다.
 func rebootNDRAt(needsReboot bool, observedAt time.Time) *v1alpha1.NodeDeviceReport {
@@ -388,11 +382,10 @@ func TestNodeNeedsReboot_And_MaxReboots(t *testing.T) {
 	}
 }
 
-// 라이브(2026-08-11)에서 detector 가 제품명을 싣기 시작하자 NodeDeviceReport 는 "a30" 을,
-// DriverUpgradeState.spec.model 은 생성 시점 값인 "generic" 을 갖게 됐다. 그 조합에서
-// 두 게이트가 모든 장치를 걸러 항상 false 를 냈고, 증상이 "아무 일도 안 일어남" 이라
-// 아무도 알아채지 못했다. 헬퍼 단위 시험만으로는 호출부가 헬퍼를 실제로 쓰는지 고정되지
-// 않으므로 게이트 두 곳을 직접 부른다.
+// detector 가 제품명을 실으면 NodeDeviceReport 는 "a30" 을, DriverUpgradeState.spec.model 은
+// 생성 시점 값인 "generic" 을 유지한다. 그 조합에서 두 게이트가 모든 장치를 걸러 항상 false 를
+// 내면 증상이 "아무 일도 안 일어남" 이라 드러나지 않는다. 헬퍼 단위 시험만으로는 호출부가
+// 헬퍼를 실제로 쓰는지 고정되지 않으므로 게이트 두 곳을 직접 부른다.
 func TestGatesSurviveDeviceModelBecomingSpecific(t *testing.T) {
 	ndr := &v1alpha1.NodeDeviceReport{
 		ObjectMeta: metav1.ObjectMeta{Name: jNode},

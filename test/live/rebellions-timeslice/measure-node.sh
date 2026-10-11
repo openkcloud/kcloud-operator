@@ -2,13 +2,9 @@
 # ============================================================
 # measure-node.sh: node5 에서 vLLM 서비스를 멈추고 두 rebel 프로세스를 같은 장치(0)에 붙여
 #                  동시 실행 여부를 실측(run.sh 가 ssh 로 이 스크립트를 node5 에서 실행)
-# 상세: SERVICE 를 멈추고 /dev/rbln* 를 붙잡은 프로세스가 없어질 때까지 기다린 뒤, workload.py 를
-#       solo 1회 → co-run 2회(같은 DEVICE_ID, 같은 START_AT 배리어)로 돌린다. co-run 측정 창
-#       중간에 rbln-smi 를 찍어 두 PID 가 같은 NPU(0)에 컨텍스트를 올렸는지 남긴다(같은 물리
-#       장치 공유 증거). 출력은 run.sh 가 파싱하도록 SOLO_RESULT/CORUN_A_RESULT/... 접두 줄로
-#       낸다. 트랩이 EXIT·시그널에서 SERVICE 를 반드시 복원한다 — ssh 세션이 끊겨도 노드에서
-#       서비스가 되살아난다. 저장소 산출물이며 test/live/rebellions-timeslice 아래에 둔다.
-# 생성일: 2026-09-25
+# 상세: workload.py 를 solo 1회→co-run 2회로 돌리고 SOLO_RESULT/CORUN_A_RESULT/... 접두 줄로
+#       낸다(run.sh 가 파싱). 트랩이 EXIT·시그널에서 SERVICE 를 복원해 ssh 세션이 끊겨도 되살아난다.
+# 생성일: 2026-09-25 | 수정일: 2026-10-11
 # ============================================================
 set -u
 

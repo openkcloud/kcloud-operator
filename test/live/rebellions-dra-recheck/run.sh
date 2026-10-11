@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: Rebellions rbln-k8s-dra-driver 벤더 CDI 수정 반영 여부 재확인(읽기 전용)
-# 상세: kubelet plugin(cmd/npu-kubelet-plugin/cdi.go)의 rblnRuntimeSpec 구조체가 CDI 스펙
-#       최상위 containerEdits 를 읽도록 고쳐졌는지, 벤더 최신 릴리스와 main 브랜치를 GitHub
-#       에서 조회해 확인한다. 미반영이면 BLOCKED(external)로 끝난다 — 벤더 릴리스 일정에
-#       달린 외부 차단이라 이 스크립트로는 풀 수 없다. node5 는 atomplus-vllm.service 가
-#       ATOM 장치를 점유하므로 이 스크립트는 장치를 열거나 클러스터를 건드리지 않는다
-#       (kubectl 미사용) — GitHub 릴리스 메타데이터와 소스 파일만 읽는다.
-#       SCENARIO_DESTRUCTIVE="no" — 읽기 전용. DRY_RUN=1 이면 실행할 명령만 출력한다.
-# 생성일: 2026-09-20
+# 상세: kubelet plugin(cdi.go)의 rblnRuntimeSpec 이 CDI 최상위 containerEdits 를 읽도록
+#       고쳐졌는지 GitHub 에서 읽기 전용으로 확인한다(판정·안전 범위는 README 참고).
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

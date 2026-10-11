@@ -1,11 +1,9 @@
 // ============================================================
 // npuclusterpolicy_delegated_test.go: managementMode=delegated 의 컨트롤러 동작 고정
 // 상세: delegated 는 kcloud 가 배포하지 않고 벤더 operator 에 위임한다. device-plugin·
-//
-//	dcgm-exporter·DRA 드라이버를 만들지 않고, 위임 대상(벤더 operator)을 감지하지 못하면
-//	(Absent) 경고하며, 판정 수단이 없으면(Unknown) 경고하지 않는 것을 고정한다.
-//
-// 생성일: 2026-09-28 | 수정일: 2026-09-28
+// dcgm-exporter·DRA 드라이버를 만들지 않고, 위임 대상을 감지하지 못하면(Absent) 경고하며,
+// 판정 수단이 없으면(Unknown) 경고하지 않는 것을 고정한다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 // ============================================================
 
 package controller

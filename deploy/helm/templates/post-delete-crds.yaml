@@ -1,10 +1,8 @@
 {{/*
 post-delete-crds.yaml: helm uninstall 뒤 npu.ai CRD 를 지우는 post-delete Job.
-상세: Helm 은 설계상 crds/ 를 삭제하지 않는다. Magnum Add-on 은 helm uninstall 한 번으로
-      설치물이 남지 않아야 하므로 이 Job 이 CRD 를 지운다.
-      CR 은 pre-delete 게이트가 이미 지웠으므로 여기서는 정의만 남는다.
-      CRD 를 남기고 싶으면 uninstall.purgeCRDs=false 로 끈다.
-생성일: 2026-09-10 | 수정일: 2026-09-10
+상세: Helm 은 crds/ 를 삭제하지 않는다. CR 은 pre-delete 게이트가 이미 지웠으므로 이 Job 은
+      깨끗한 uninstall 을 위해 CRD 정의만 지운다(uninstall.purgeCRDs=false 로 끈다).
+생성일: 2026-09-10 | 수정일: 2026-10-11
 */}}
 {{- if .Values.uninstall.purgeCRDs }}
 ---

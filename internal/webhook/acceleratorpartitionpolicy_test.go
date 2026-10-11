@@ -1,12 +1,8 @@
 // ============================================================
 // acceleratorpartitionpolicy_test.go: ACPPValidator 시험
-// 상세: 정상/형식오류/노드부재/빈요청 거부 + fail-open(제품 미확인 통과) +
-//
-//	vendorcap 레지스트리 기반 partition/sharing 미지원·Unknown 거절, 검사 순서 고정 못박기,
-//	삭제 중 오브젝트 재검증 생략, 되돌릴 능력 없는 벤더의 exclusive 되돌리기 거절,
-//	partition backend 없는 벤더의 ACPP sharing 자체 거절.
-//
-// 생성일: 2026-08-24 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 거절 주체를 게이트 함수 이름으로 명시; 거절 시험 머리말의 낡은 벤더 예시·계획 항목 토큰 제거)
+// 상세: 정상/형식오류/노드부재/빈요청 거부, fail-open(제품 미확인 통과), vendorcap 기반
+// partition/sharing 미지원·Unknown 거절과 검사 순서, 삭제 중 재검증 생략, 되돌리기·sharing 자체 거절을 고정한다.
+// 생성일: 2026-08-24 | 수정일: 2026-10-11
 // ============================================================
 package webhook
 
@@ -65,11 +61,8 @@ func specSharing(node string) npuv1alpha1.AcceleratorPartitionPolicySpec {
 }
 
 // TestACPPValidator: worker1 에 a30, master 에(제품 미확인 표시용) geforce-gtx-970 이 있는
-// NodeDeviceReport 를 fake client 에 넣어 정상/거부/fail-open 경로를 함께 확인한다.
-//
-// brief 의 예시는 "nodeSelector 가 아무 노드도 안 고름" 케이스의 wantMsg 를 한국어 "노드"로
-// 들었으나, 이 구현의 거부 메시지는 저장소의 다른 validator 들과 같이 영어로 통일했다
-// (spec.nodeSelector ... matches no node) — wantMsg 를 "node" 로 맞춰 실제 메시지와 일치시켰다.
+// NodeDeviceReport 를 fake client 에 넣어 정상/거부/fail-open 경로를 함께 확인한다. 거부 메시지는
+// 저장소의 다른 validator 들과 같이 영어로 통일돼 있으므로 wantMsg 도 "node" 로 맞춘다.
 func TestACPPValidator(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -116,7 +109,7 @@ func TestACPPValidatorWrongType(t *testing.T) {
 }
 
 // 입구가 클러스터 상태에 의존해 정상 요청을 막으면 안 된다 — NodeList 조회 자체가 실패해도
-// (API 서버 일시 오류 등) 판정을 보류하고 통과시켜야 한다. 이 시험이 없으면 :67 의
+// (API 서버 일시 오류 등) 판정을 보류하고 통과시켜야 한다. 이 시험이 없으면 acceleratorpartitionpolicy.go:138 의
 // `return nil` 을 `return err` 로 뒤집어도 아무것도 깨지지 않는다.
 func TestACPPValidatorNodeListFailurePasses(t *testing.T) {
 	injected := errors.New("injected list failure")
@@ -139,7 +132,7 @@ func TestACPPValidatorNodeListFailurePasses(t *testing.T) {
 	}
 }
 
-// 같은 이유로 NodeDeviceReport 조회 실패도 그 노드에 대한 판정만 건너뛰어야 한다 — :80 의
+// 같은 이유로 NodeDeviceReport 조회 실패도 그 노드에 대한 판정만 건너뛰어야 한다 — acceleratorpartitionpolicy.go:151 의
 // `continue` 를 거절로 뒤집어도 이 시험이 없으면 잡히지 않는다.
 func TestACPPValidatorNDRGetFailurePasses(t *testing.T) {
 	injected := errors.New("injected get failure")
@@ -163,13 +156,11 @@ func TestACPPValidatorNDRGetFailurePasses(t *testing.T) {
 }
 
 // vendorcap 레지스트리가 그 벤더의 partition 을 Native/Software 로 선언하지 않으면
-// ValidateLayoutShape 의 일반 형식 오류보다 먼저, 사유·근거 문서와 함께 거절해야 한다.
-//
-// layout 을 2개 엔트리로 준다 — ValidateLayoutShape 는 비어 있지 않은 layout 이 2개 이상이면
-// 벤더와 무관하게 "mixed placement unsupported" 로 거절한다(profiles.go:37-39). 검사 순서가
-// 뒤집혀 레지스트리 검사가 ValidateLayoutShape 뒤로 밀리면 이 테스트는 그 일반 오류를 받게 돼
-// 실패한다 — 즉 이 픽스처가 순서 자체를 고정한다(1개 엔트리로는 두 벤더 모두 형식 검사를
-// 통과해 순서가 뒤집혀도 우연히 통과했다).
+// ValidateLayoutShape 의 일반 형식 오류보다 먼저, 사유·근거 문서와 함께 거절해야 한다. layout 을
+// 2개 엔트리로 준다 — ValidateLayoutShape 는 비어 있지 않은 layout 이 2개 이상이면 벤더와 무관하게
+// "mixed placement unsupported" 로 거절한다(profiles.go:37-39). 검사 순서가 뒤집혀 레지스트리
+// 검사가 ValidateLayoutShape 뒤로 밀리면 이 테스트는 그 일반 오류를 받아 실패한다 — 이 픽스처가
+// 순서 자체를 고정한다(1개 엔트리면 두 검사 모두 통과해 순서가 뒤집혀도 우연히 통과할 수 있다).
 func TestValidateACPPRejectsUnsupportedPartitionVendorWithReason(t *testing.T) {
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 		Vendor: "rebellions",
@@ -184,8 +175,8 @@ func TestValidateACPPRejectsUnsupportedPartitionVendorWithReason(t *testing.T) {
 	}
 }
 
-// 순서 고정 픽스처는 위 테스트와 같은 이유로 2개 엔트리를 쓴다. tenstorrent 는 조사(2026-09-22)로
-// partition 이 Unknown 에서 Unsupported 로 바뀌었고, 사유가 근거 문서를 인용한다.
+// 순서 고정 픽스처는 위 테스트와 같은 이유로 2개 엔트리를 쓴다. tenstorrent 의 partition 은 조사
+// 결과 Unsupported 로 선언돼 있고, 사유가 근거 문서를 인용한다.
 func TestValidateACPPRejectsUnsupportedPartitionVendorTenstorrent(t *testing.T) {
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 		Vendor: "tenstorrent",
@@ -208,12 +199,10 @@ func TestValidateACPPRejectsUnsupportedPartitionVendorTenstorrent(t *testing.T) 
 
 // rebellions 의 sharing-only 요청은 layout 유무로 게이트를 건너뛰지 않고 사유와 함께 거절돼야
 // 한다 — 건너뛰면 컨트롤러의 backendFor 까지 흘러가 "unknown vendor" 같은 일반 런타임 오류로만
-// 실패한다. rebellions 의 timeSlicing 은 2026-09-22 유휴 재실측으로 Unknown→Software 가 됐지만,
-// rebellions 는 partition backend 가 없어(nvidia·furiosa 만 있음) ACPP 경로 자체를 못 쓴다 —
-// 그래서 이 sharing-only 요청은 timeSlicing 능력 검사(이제 통과)에 닿기 전에
-// requirePartitionBackendForSharing(partition backend 부재)에 걸려 AcceleratorDescriptor
-// 경로로 안내된다. 이 시험이 지키려는 성질("사유 있는 거절, 일반 오류 아님")은 그대로이고,
-// 메시지는 그 사유(sharing + AcceleratorDescriptor 안내)다.
+// 실패한다. rebellions 는 partition backend 가 없어(nvidia·furiosa 만 있음) ACPP 경로 자체를
+// 못 쓴다 — 그래서 이 요청은 timeSlicing 능력 검사에 닿기 전에 requirePartitionBackendForSharing
+// (partition backend 부재)에 걸려 AcceleratorDescriptor 경로로 안내된다. 이 시험이 지키려는
+// 성질은 "사유 있는 거절, 일반 오류 아님" 이고 메시지는 그 사유(sharing + AcceleratorDescriptor 안내)다.
 func TestValidateACPPRejectsUnsupportedSharingVendorWithReason(t *testing.T) {
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 		Vendor:  "rebellions",
@@ -272,14 +261,12 @@ func TestACPPValidateUpdateSkipsObjectBeingDeleted(t *testing.T) {
 	}
 }
 
-// layout 없는 sharing.mode=exclusive 는 "되돌리기" 요청이다 — 되돌릴 능력이 하나도 없는
-// 벤더에서만 거절해야 한다. furiosa/warboy 는 partition(단일 코어)·timeSlicing(배타적 open,
-// EBUSY)·multiProcess(벤더 broker 없음) 셋 다 Native/Software 가 아니라 내릴 것이 없다.
-// rebellions 는 2026-09-22 유휴 재실측으로 timeSlicing 이 Software 가 돼(되돌릴 공유 능력이 생겨)
-// 이 예시에서 빠졌다 — rebellions 의 exclusive 되돌리기는 이제 partition backend 부재로
-// (아래 TestValidateACPPRejectsSharingForNonPartitionBackendVendor)가 대신 거절한다. warboy 는
-// 벤더 아래 제품이 갈리므로(rngd 는 partition Native) nodeSelector 가 고르는 노드의 NDR 로
-// 제품을 warboy 로 특정해야 이 "아무 능력도 없음" 경로가 성립한다.
+// layout 없는 sharing.mode=exclusive 는 "되돌리기" 요청이다 — 되돌릴 능력이 하나도 없는 벤더에서만
+// 거절해야 한다. furiosa/warboy 는 partition(단일 코어)·timeSlicing(배타적 open, EBUSY)·
+// multiProcess(벤더 broker 없음) 셋 다 Native/Software 가 아니라 내릴 것이 없다. rebellions 는
+// timeSlicing 이 Software 라 되돌릴 공유 능력이 있으므로 이 예시에 들지 않는다 — rebellions 의
+// exclusive 되돌리기는 partition backend 부재로 TestValidateACPPRejectsSharingForNonPartitionBackendVendor
+// 가 대신 거절한다. warboy 는 제품이 갈리므로(rngd 는 Native) NDR 로 제품을 특정해야 이 경로가 성립한다.
 func TestValidateACPPRejectsExclusiveRevertForVendorWithNothingToRevert(t *testing.T) {
 	const node = "k8s-furiosa-warboy-revert"
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{
@@ -370,8 +357,8 @@ func TestValidateACPPProductAwareFuriosaPartition(t *testing.T) {
 }
 
 // nodeSelector 가 rngd·warboy 두 노드를 동시에 고르면(또는 selector 가 비어 둘 다 대상이면)
-// 보수적으로 판정돼야 한다(review round 1) — rngd 하나만 봤다면 Native 로 통과시켰을 요청을
-// warboy 가 섞여 있다는 이유로 거절해야 하고, 반대로 rngd 노드만 고르면 그대로 통과해야 한다.
+// 보수적으로 판정돼야 한다 — rngd 하나만 봤다면 Native 로 통과시켰을 요청을 warboy 가 섞여
+// 있다는 이유로 거절해야 하고, 반대로 rngd 노드만 고르면 그대로 통과해야 한다.
 func TestValidateACPPProductAwareFuriosaPartitionMixedNodes(t *testing.T) {
 	const rngdNode, warboyNode = "k8s-furiosa-mix-rngd", "k8s-furiosa-mix-warboy"
 	c := build(t,
@@ -406,14 +393,12 @@ func TestValidateACPPProductAwareFuriosaPartitionMixedNodes(t *testing.T) {
 	})
 }
 
-// ACPP 는 partition backend 가 있는 벤더(backendFor 가 있는 nvidia·furiosa)만 쓸 수
-// 있다 — spec.sharing 이 어느 모드든(exclusive 되돌리기 포함) partition 을 Native/Software 로
-// 선언하지 않은 벤더는 이 경로 자체를 거절해야 한다. 이 게이트가 없으면 rebellions 처럼
-// timeSlicing 은 Software 인데 partition 은 Unsupported 인 벤더의 요청이 아래 sharing 능력
-// 검사는 통과했다가 partition backend 부재로 컨트롤러의 backendFor 에서 "unknown vendor"
-// 일반 오류로만 죽는다 — 그 대신 AcceleratorDescriptor spec.sharing(generic device-plugin
-// replicas) 경로로 보내야 한다. 픽스처가 tenstorrent 인 것은 partition 이 Unsupported 인
-// 벤더면 timeSlicing 선언과 무관하게 같은 자리에서 거절되기 때문이다.
+// ACPP 는 partition backend 가 있는 벤더(nvidia·furiosa)만 쓸 수 있다 — partition 을
+// Native/Software 로 선언하지 않은 벤더는 sharing 요청(exclusive 되돌리기 포함) 자체를 거절해야
+// 한다. 이 게이트가 없으면 timeSlicing 은 Software 인데 partition 은 Unsupported 인 벤더의 요청이
+// sharing 능력 검사는 통과하고 partition backend 부재로 backendFor 에서 "unknown vendor" 로만
+// 죽는다 — 대신 AcceleratorDescriptor spec.sharing(generic device-plugin replicas) 경로로 보낸다.
+// 픽스처가 tenstorrent 인 이유는 partition Unsupported 벤더는 timeSlicing 값과 무관하게 여기서 걸리기 때문이다.
 func TestValidateACPPRejectsSharingForNonPartitionBackendVendor(t *testing.T) {
 	t.Run("tenstorrent timeSliced 는 partition backend 가 없어 거절", func(t *testing.T) {
 		acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
@@ -426,10 +411,10 @@ func TestValidateACPPRejectsSharingForNonPartitionBackendVendor(t *testing.T) {
 		}
 	})
 
-	// tenstorrent 는 timeSlicing 이 Unsupported 로 내려가(2026-09-23 co-run 직렬화 실측)
-	// partition·timeSlicing·multiProcess 가 모두 미지원이라, exclusive 되돌리기는 위
-	// "되돌릴 능력이 없다" 규칙(TestValidateACPPRejectsExclusiveRevertForVendorWithNothingToRevert)에
-	// 먼저 걸린다. timeSliced 는 그 규칙을 지나 partition backend 부재로 거절된다.
+	// tenstorrent 는 timeSlicing 이 Unsupported 라(vendorcap 레지스트리 참고) partition·timeSlicing·
+	// multiProcess 가 모두 미지원이라, exclusive 되돌리기는 위 "되돌릴 능력이 없다" 규칙
+	// (TestValidateACPPRejectsExclusiveRevertForVendorWithNothingToRevert)에 먼저 걸린다.
+	// timeSliced 는 그 규칙을 지나 partition backend 부재로 거절된다.
 	t.Run("tenstorrent exclusive 되돌리기는 되돌릴 능력이 없어 거절", func(t *testing.T) {
 		acpp := &npuv1alpha1.AcceleratorPartitionPolicy{Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 			Vendor:  "tenstorrent",
@@ -474,14 +459,12 @@ func TestValidateACPPRejectsSharingForNonPartitionBackendVendor(t *testing.T) {
 	})
 }
 
-// 게이트(requirePartitionBackendForSharing)는 partition backend 가 있는 벤더를
-// 통과시킬 뿐 그 자체가 sharing 을 허용하는 건 아니다 — furiosa/rngd 는 partition Native 라
-// 이 게이트는 통과하지만, timeSlicing 은 레지스트리상 Unsupported(배타적 open, EBUSY) 라
-// 그 아래 기존 sharing 능력 검사가 레지스트리 Reason 과 함께 거절해야 한다.
-// TestValidateACPPRejectsUnsupportedSharingVendorWithReason 가 rebellions 로 이 경로를
-// 봤었으나, rebellions 는 partition backend 도 없어 이제 그 게이트에 먼저 걸린다 — partition
-// backend 는 있는데 그 능력 자체가 Unsupported 인 벤더가 이 경로(통과 후 사유 있는
-// 거절)를 여전히 타는지는 이제 아무 시험도 못박지 않아 따로 고정한다.
+// 게이트(requirePartitionBackendForSharing)는 partition backend 가 있는 벤더를 통과시킬 뿐
+// 그 자체가 sharing 을 허용하는 건 아니다 — furiosa/rngd 는 partition Native 라 이 게이트는
+// 통과하지만, timeSlicing 은 레지스트리상 Unsupported(배타적 open, EBUSY) 라 그 아래 기존
+// sharing 능력 검사가 레지스트리 Reason 과 함께 거절해야 한다. partition backend 는 있는데 그
+// 능력 자체가 Unsupported 인 벤더가 이 경로(게이트 통과 후 사유 있는 거절)를 타는지는 다른
+// 시험이 다루지 않으므로 여기서 고정한다.
 func TestValidateACPPRejectsFuriosaRngdTimeSlicedWithRegistryReason(t *testing.T) {
 	const node = "k8s-furiosa-rngd-timesliced"
 	acpp := &npuv1alpha1.AcceleratorPartitionPolicy{

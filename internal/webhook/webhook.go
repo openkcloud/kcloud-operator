@@ -2,7 +2,7 @@
 // webhook.go: Admission webhook 핸들러 (DIP/NCP/AcceleratorClass/AcceleratorWorkload/
 // AcceleratorPartitionPolicy validating + Pod mutating)
 // 상세: spec 검증 거부 + 추상 워크로드 변환 검증 + opt-in 라벨 Pod 에 NVIDIA runtimeClass 주입
-// 생성일: 2026-07-20 | 수정일: 2026-09-28 (managementMode 검증을 delegated 포함 세 값으로 확장)
+// 생성일: 2026-07-20 | 수정일: 2026-10-11
 // ============================================================
 
 package webhook
@@ -125,7 +125,7 @@ func validateDIP(obj runtime.Object) error {
 	if err := validateImageRef(s.Driver.Image); err != nil {
 		return fmt.Errorf("spec.driver.image: %w", err)
 	}
-	// trackOnly=true 는 설치 경로를 만들지 않으므로 job 모드와만 정합(계획 P3).
+	// trackOnly=true 는 설치 경로를 만들지 않으므로 job 모드와만 정합한다.
 	if s.Driver.TrackOnly && s.Driver.Mode != "" && s.Driver.Mode != "job" {
 		return fmt.Errorf("spec.driver.trackOnly=true requires spec.driver.mode=job (got %q)", s.Driver.Mode)
 	}

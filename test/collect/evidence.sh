@@ -5,7 +5,7 @@
 #       한 테스트 명령의 실행 결과를 모아 §3.6 필드의 JSON/Markdown 짝을 만든다.
 #       측정값을 지어내지 않는다 — NDR 에 없는 필드는 "미수집" 으로 남긴다.
 #       --validate 는 schema.json 의 필수 키·verdict enum 으로 레코드를 검사한다.
-# 생성일: 2026-09-20 | 수정일: 2026-10-11 (doc_id/title 충돌 방지 --id-suffix 추가; 세션 전용 식별자 제거)
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -84,12 +84,11 @@ jq_field() {
 }
 
 # read_build_commit — 라이브 operator 의 빌드 커밋을 읽는다. 순서:
-#  (1) Deployment 로그의 "starting manager" 줄(zap console: <시각>\tINFO\tsetup\tstarting manager\t{"commit": "<sha>"}).
-#  (2) 컨테이너 안의 바이너리에 직접 질의(`/manager --version`, v0.7.52 이후 이미지). 이전 이미지는
-#      모르는 플래그라 usage 만 내고 종료 코드 2 로 끝나므로 stdout 이 비어 다음으로 넘어간다.
-#  (3) 로컬 체크아웃 HEAD 에 "-checkout" 을 붙여 라이브 빌드 커밋이 아님을 값 자체로 드러낸다.
-# 커밋을 baked 한 ldflags(-X main.buildCommit) 가 (1)(2)를 채운다 — 이미지에 baked 된 ENV 는
-# kubectl get pod -o jsonpath 로 보이지 않으므로(PodSpec 의 env 만 보임) 이 둘만이 경로다.
+#  (1) Deployment 로그의 "starting manager" 줄의 commit 필드.
+#  (2) 안 되면 컨테이너 안 `/manager --version`(이전 이미지는 모르는 플래그라 종료 코드 2로
+#      끝나 stdout 이 비어 다음으로 넘어간다).
+#  (3) 둘 다 없으면 로컬 체크아웃 HEAD 에 "-checkout" 을 붙여 라이브 커밋이 아님을 드러낸다.
+# baked ldflags(-X main.buildCommit) 값은 kubectl 의 PodSpec env 로 보이지 않아 이 두 경로를 쓴다.
 read_build_commit() {
   local log_line live_commit local_head
   log_line="$(kubectl -n kcloud logs deploy/kcloud-operator 2>/dev/null | grep -m1 'starting manager' || true)"

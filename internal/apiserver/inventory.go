@@ -1,15 +1,8 @@
 // ============================================================
 // inventory.go: 가속기 인벤토리 집약 — 노드·ACPP·NDR → 물리 장치 목록
-// 상세: 정직성 계약(R&D v1.0 §19.3)을 코드로 고정한다. (1) 물리 장치당 정확히 1행 —
-//       time-slicing replica 는 절대 행이 되지 않고 sharingReplicas 숫자로만 나타난다.
-//       (2) SharingModeView.Verified 는 supported && verification==verified 일 때만 true 라
-//       UI 가 "주장" 을 "지원" 으로 렌더할 수 없다. (3) stale/미수렴 데이터는 숨기지 않는다 —
-//       ACPP 가 타깃하지만 아직 장치를 보고하지 않은(수렴 중) 노드는 미관리로 떨어뜨리지 않고
-//       Source=ACPP + Stale 행으로 남기며, 미수렴 ACPP 의 낡은 장치 데이터는 애초에 노출하지
-//       않는다(nc.Devices 가 intent.applyACPPStatus 의 게이트를 통과한 값만 담는다). 장치
-//       사실의 1순위 출처는 ACPP status 이고, ACPP 가 관리하지 않는 노드는 NDR 집계 행에서
-//       합성 ID 로 채우되 source 로 구분한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-11 (attachDRAAllocation 이 발행 쪽 풀 이름으로 조회; allocated 주석의 키 표기 노드→풀 정정; 풀 여럿일 때 할당 합산)
+// 상세: 정직성 계약(R&D v1.0 §19.3)을 코드로 고정한다 — 물리 장치당 정확히 1행, stale·
+//       미수렴 데이터는 숨기지 않고 표시한다. 세부 규칙은 아래 필드 주석에 있다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -90,8 +83,7 @@ type AcceleratorView struct {
 	VendorID string `json:"vendorId"`
 	// ResourceNames 는 이 노드가 이 벤더로 광고하는 확장 자원 이름 전부다(값 0 인 옛 등록 포함 —
 	// 화면이 잔재를 판단할 수 있어야 한다). 정렬. 노드 allocatable 에서 직접 읽는다 —
-	// NodeAdvertised 는 카탈로그 밖 이름을 담지 않는다(intent.BuildSnapshot 의 fail-closed
-	// 필터, 리뷰 Important).
+	// NodeAdvertised 는 카탈로그 밖 이름을 담지 않는다(intent.BuildSnapshot 의 fail-closed 필터).
 	ResourceNames []string `json:"resourceNames,omitempty"`
 	PCIAddress    string   `json:"pciAddress,omitempty"`
 	// Policy/Phase 는 이 장치를 관리하는 ACPP 다(없으면 빈 문자열 = 미관리).
@@ -104,8 +96,8 @@ type AcceleratorView struct {
 	// Stale 은 이 노드를 타깃한 ACPP 가 수렴하지 않았음을 뜻한다(status.observedGeneration 이
 	// metadata.generation 을 못 따라갔거나 target phase != Ready). true 면 Model/PCIAddress/
 	// SharingMode/Capability 가 비어 있거나(수렴 중) 낡은 값(스펙 변경 후 미반영)일 수 있다 —
-	// SharingMode 는 특히 stale 행에서 초기화 기본값(exclusive)로 채워진 채 나갈 수 있다(applyACPPStatus
-	// 가 실제 ApplyRecord 를 읽기 전에 반환하므로, 리뷰 Important #2). UI 는 이 값들을 "정상" 으로
+	// SharingMode 는 특히 stale 행에서 초기화 기본값(exclusive)로 채워진 채 나갈 수 있다
+	// (applyACPPStatus 가 실제 ApplyRecord 를 읽기 전에 반환한다). UI 는 이 값들을 "정상" 으로
 	// 렌더하면 안 된다. 미관리(Source=NodeDeviceReport) 행은 항상 false 다.
 	Stale       bool   `json:"stale"`
 	StaleReason string `json:"staleReason,omitempty"`
@@ -166,12 +158,10 @@ func toCapabilityView(d v1alpha1.DeviceStatus) CapabilityView {
 }
 
 // devicesForNode 는 이 노드를 타깃한 ACPP 의 이름·phase·ResolvedLayout 이다(없으면 빈 값). 장치
-// 목록은 여기서 돌려주지 않는다 — 호출자는 전부 nc.Devices(intent.BuildSnapshot 산출, 수렴 게이트를
-// 이미 통과한 값)를 대신 쓴다. 선택 규칙은 intent.applyACPPStatus 의 채택 규칙과 반드시 같아야
-// 한다(수렴+Ready 정책 우선, 사전순) — 다르면 여기서 고른 정책의 layout 이 저쪽이 채택한 Devices
-// 와 다른 TargetStatus 에서 와 짝이 어긋난다(라이브 결함 D-4: 사전순 앞의 Failed 정책이 Ready
-// 정책의 행을 뭉갰다). Ready 가 없으면 사전순 첫 정책으로 폴백해 governed-but-pending/failed
-// 상태를 정직하게 드러낸다. 어느 쪽이든 결정론적 선택일 뿐 소유권 판정이 아니다(owner-lock 은
+// 목록은 nc.Devices(intent.BuildSnapshot 산출)를 대신 쓴다. 선택 규칙은 intent.applyACPPStatus
+// 의 채택 규칙과 반드시 같아야 한다(수렴+Ready 정책 우선, 사전순) — 다르면 여기서 고른 정책의
+// layout 과 저쪽이 채택한 Devices 가 서로 다른 TargetStatus 에서 와 짝이 어긋난다. Ready 가
+// 없으면 사전순 첫 정책으로 폴백한다. 결정론적 선택일 뿐 소유권 판정이 아니다(owner-lock 은
 // 컨트롤러 몫).
 func devicesForNode(acpps []v1alpha1.AcceleratorPartitionPolicy, nodeName string) (policy, phase string, layout []v1alpha1.ResolvedLayoutEntry) {
 	sorted := make([]v1alpha1.AcceleratorPartitionPolicy, len(acpps))
@@ -271,8 +261,8 @@ func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPo
 		if policy != "" {
 			// ACPP 가 이 노드를 타깃한다. 장치 목록은 devicesForNode 의 원시 TargetStatus.Devices
 			// 가 아니라 nc.Devices(intent.BuildSnapshot 산출)를 쓴다 — applyACPPStatus 가 이미
-			// generation 불일치·phase!=Ready 를 걸러 두었으므로(리뷰 Critical #1) 여기서 같은
-			// 수렴 판정을 다시 구현하면 판정이 어긋날 여지가 생긴다.
+			// generation 불일치·phase!=Ready 를 걸러 두었으므로 여기서 같은 수렴 판정을
+			// 다시 구현하면 판정이 어긋날 여지가 생긴다.
 			if len(nc.Devices) > 0 {
 				for _, d := range nc.Devices {
 					v := base
@@ -285,8 +275,8 @@ func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPo
 				}
 			} else {
 				// 장치를 아직 보고하지 않았다(수렴 중) 또는 stale 하다 — 미관리(NDR)로 오분류
-				// 하지 않고 governed-but-pending 상태를 한 행으로 정직하게 낸다(리뷰 Critical #2).
-				// base.Stale/StaleReason 이 이미 이 상태를 담고 있다.
+				// 하지 않고 governed-but-pending 상태를 한 행으로 정직하게 낸다. base.Stale/
+				// StaleReason 이 이미 이 상태를 담고 있다.
 				v := base
 				v.Source = SourceACPP
 				v.Policy, v.Phase = policy, phase
@@ -303,7 +293,7 @@ func BuildInventory(nodes []corev1.Node, acpps []v1alpha1.AcceleratorPartitionPo
 		// 펼치고 합성 ID 를 준다.
 		// 색인은 (벤더, 모델) 별로 노드 전체에서 이어 붙인다. 집계 행마다 0 으로 되돌리면
 		// 같은 모델 카드가 여러 행으로 보고될 때(카드마다 PCI 주소가 달라 detector 가 행을
-		// 나눈다) 합성 ID 가 충돌한다 — 실측: A30 2장이 모두 ".../nvidia/generic#0".
+		// 나눈다) 합성 ID 가 충돌한다 — 예: A30 2장이 모두 ".../nvidia/generic#0" 이 된다.
 		next := map[string]int32{}
 		for _, e := range ndrEntriesFor(ndrs, name) {
 			for range int(e.Count) {
@@ -352,12 +342,11 @@ func ndrEntriesFor(ndrs []v1alpha1.NodeDeviceReport, nodeName string) []v1alpha1
 }
 
 // deviceVendor 는 ACPP 장치 한 대의 벤더다. DeviceStatus 에는 벤더 필드가 없어 모델명으로
-// NDR 집계 행과 매칭해 되짚는다 — 멀티벤더 노드(예: NVIDIA A30/A2 + Furiosa RNGD 카드가 한 노드에
-// 공존)에서 vendorForNode(노드 단위 벤더 하나, 리소스명 사전순 첫 값)를 장치마다 그대로 복사하면
-// 오답이 난다(task-2-review Important #3 — worker1 에서 NVIDIA 장치에 furiosa 가 찍히는 재현
-// 사례). 매칭되는 NDR 행이 없으면(detector 미관측 등) vendorForNode 로 폴백한다 — 그 경우엔
-// 여전히 오답 가능성이 남는다(DeviceStatus 에 device 단위 벤더 필드가 없는 한 완전한 해결은
-// 불가 — 스키마 범위 밖).
+// NDR 집계 행과 매칭해 되짚는다 — 멀티벤더 노드(NVIDIA + Furiosa RNGD 카드가 한 노드에 공존하는
+// 경우 등)에서 vendorForNode(노드 단위 벤더 하나, 리소스명 사전순 첫 값)를 장치마다 그대로
+// 복사하면 오답이 난다. 매칭되는 NDR 행이 없으면(detector 미관측 등) vendorForNode 로
+// 폴백한다 — 그 경우엔 여전히 오답 가능성이 남는다(DeviceStatus 에 device 단위 벤더 필드가
+// 없는 한 완전한 해결은 불가 — 스키마 범위 밖).
 func deviceVendor(nc intent.NodeCapability, ndrs []v1alpha1.NodeDeviceReport, nodeName, model string) string {
 	for _, e := range ndrEntriesFor(ndrs, nodeName) {
 		if e.Model == model {
@@ -395,7 +384,7 @@ type HealthView struct {
 }
 
 // HealthView.Scope 값. 이 둘 외의 값을 만들지 않는다 — goconst: "node"/"device" 리터럴을
-// 비교마다 새로 쓰지 않고 이 상수로 모은다(review I-4 가드 추가로 리터럴이 3회를 넘었다).
+// 비교마다 새로 쓰지 않고 이 상수로 모은다.
 const (
 	healthScopeNode   = "node"
 	healthScopeDevice = "device"
@@ -434,7 +423,7 @@ func attachHealth(items []AcceleratorView, healths []v1alpha1.AcceleratorHealth)
 			view.State = "Unknown"
 		}
 		// device 범위에는 시각이 없다(DeviceHealth 에 필드 자체가 없다) — 노드 전이 시각을
-		// 장치 판정 옆에 사실처럼 보이면 안 된다(review I-4).
+		// 장치 판정 옆에 사실처럼 보이면 안 된다.
 		if view.Scope == healthScopeNode && !h.Status.DetectedAt.IsZero() {
 			view.DetectedAt = h.Status.DetectedAt.UTC().Format(time.RFC3339)
 		}
@@ -444,7 +433,7 @@ func attachHealth(items []AcceleratorView, healths []v1alpha1.AcceleratorHealth)
 
 // allocatableContainers 는 파드가 가속기를 쥐고 있는 동안 차지하는 컨테이너 목록이다 — 일반
 // 컨테이너와 재시작형(사이드카) 초기화 컨테이너(RestartPolicy=Always, K8s 1.28+)를 더한다.
-// 재시작하지 않는 초기화 컨테이너는 시작 단계를 지나면 반환하므로 세지 않는다(review I-3).
+// 재시작하지 않는 초기화 컨테이너는 시작 단계를 지나면 반환하므로 세지 않는다.
 func allocatableContainers(p *corev1.Pod) []corev1.Container {
 	out := append([]corev1.Container{}, p.Spec.Containers...)
 	for _, c := range p.Spec.InitContainers {
@@ -508,15 +497,12 @@ func attachAllocation(items []AcceleratorView, pods []corev1.Pod) {
 // draKeyPrefix 는 NodeAdvertised·NodeAllocated·NodeFree 에서 DRA 드라이버 축을 확장 자원과 구분한다.
 const draKeyPrefix = "dra:"
 
-// attachDRAAllocation 은 노드가 ResourceSlice 로 발행한 장치 수와 그 노드 풀에 할당된 claim 결과 수를
-// 행에 더한다. 확장 자원 구분(attachAllocation)과 독립이다 — DRA 로만 광고하는 노드는 allocatable 에
-// 키가 없어 attachAllocation 만으로는 nodeFree 가 비어 있었다.
-//
-// 키는 ResourceSlice 쪽(SlicesByNodeDriver)에서만 만든다 — 슬라이스가 있는 드라이버면 키를 만들고,
-// 할당 쪽은 키를 만들지 않는다(광고 없는 할당이 음수 free 로 둔갑하지 않게). 할당 조회는
-// DRACapability.PoolsByNodeDriver 에 담긴 발행 쪽 풀 이름 전부에 대해 더한다 — 한 노드·드라이버가
-// 풀 여럿으로 광고하면 광고 수가 모든 풀의 합이므로, 할당도 한 풀만 보면 여유를 과대 보고한다.
-// 풀 이름을 모르면(슬라이스에서 못 채웠으면) 종전 규약대로 노드명을 풀 이름으로 써서 조회한다.
+// attachDRAAllocation 은 노드가 ResourceSlice 로 발행한 장치 수와 그 노드 풀에 할당된 claim 결과
+// 수를 행에 더한다. 확장 자원 구분(attachAllocation)과 독립이다 — DRA 로만 광고하는 노드는
+// allocatable 에 키가 없어 attachAllocation 만으로는 nodeFree 가 비게 된다. 키는 ResourceSlice
+// 쪽(SlicesByNodeDriver)에서만 만든다 — 할당 쪽은 키를 만들지 않아 광고 없는 할당이 음수 free 로
+// 둔갑하지 않는다. 할당 조회는 PoolsByNodeDriver 의 발행 쪽 풀 이름 전부를 더한다 — 풀이 여럿이면
+// 한 풀만 보면 여유를 과대 보고하기 때문이다. 풀 이름을 모르면 노드명을 풀 이름으로 써서 조회한다.
 func attachDRAAllocation(items []AcceleratorView, dra intent.DRACapability, claims []resourcev1.ResourceClaim) {
 	allocated := map[string]map[string]int32{} // 풀 → 드라이버 → 할당 결과 수
 	for i := range claims {

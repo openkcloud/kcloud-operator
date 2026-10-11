@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-10-11 (§ 인용 문서명 보강; 계획서 항목 토큰 제거; mode-enable 저널 분기 주석에 Failed 못 박힘 명시)
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -178,15 +178,12 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 	if gerr := r.gateReady(ctx, &acpp, &ts, target, ec); gerr != nil {
 		logger.Error(gerr, "evidence gate failed", "node", target.NodeName)
 	}
-	// cordon 복원 단일 choke-point — mode enable 이 잠근 노드는 종점에서 반드시 풀려야 한다.
-	// runTarget 의 종점은 갈래가 많아(터미널 5 + rollback 후 2) 개별 return 마다 흩뿌리면 새 갈래가
-	// 생길 때마다 노드가 unschedulable 로 남는다. terminal 갈래는 재시도해도 결과가 같으므로 영구다.
-	// restoreSchedulable 은 멱등이고 CordonedByPolicy=false(외부 cordon)면 no-op 이라 여기서 한 번에 닫는다.
-	//
-	// 단, rollback + non-nil err = 재시도가 예약된 상태다. GI apply 는 cordon 을 전제로 하고(변경시-전제
-	// NodeCordoned) 스스로 cordon 하지 않으므로, 여기서 풀면 다음 reconcile 이 NodeNotCordoned 로 영구
-	// 차단되고 CordonedByPolicy 까지 지워져 나중에 성공해도 되돌릴 주체가 없다. verify 실패 rollback 은
-	// verr 이 nil 이라 재시도가 없으므로 이 조건에서 복원 대상으로 남는다.
+	// cordon 복원 단일 choke-point — mode enable 이 잠근 노드는 종점에서 반드시 풀려야 한다. 개별
+	// return 마다 복원을 흩뿌리면 새 terminal 갈래가 생길 때마다 노드가 unschedulable 로 남는다.
+	// restoreSchedulable 은 멱등이라 여기서 한 번에 닫는다. 단, rollback + non-nil err(재시도 예약)
+	// 은 예외다 — GI apply 는 cordon 을 전제하고 스스로 cordon 하지 않으므로 여기서 풀면 다음
+	// reconcile 이 NodeNotCordoned 로 영구 차단되고, CordonedByPolicy 기록도 지워져 이후 수동
+	// 개입으로 풀려도 복원 주체가 없다. verify 실패 rollback 은 err 가 nil 이라 복원 대상으로 남는다.
 	if runErr == nil || (ts.Phase != npuv1alpha1.ACPPPhaseRollingBack && ts.Phase != npuv1alpha1.ACPPPhaseRollbackFailed) {
 		switch ts.Phase {
 		case npuv1alpha1.ACPPPhaseFailed, npuv1alpha1.ACPPPhaseUnsupported, npuv1alpha1.ACPPPhaseRollingBack,
@@ -218,25 +215,23 @@ func (r *AcceleratorPartitionPolicyReconciler) Reconcile(ctx context.Context, re
 		// 능동 재확인이 없으면 기본 resync(~10h)까지 잠들어 재부팅 후에도 수렴하지 못한다.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	case npuv1alpha1.ACPPPhaseRestored:
-		// 미수렴 sharing 이 원복된 종점. verifier 는 미수렴을 에러가 아니라 결과로 돌려주므로
-		// runErr 이 nil 이고, 재확인이 없으면 기본 resync(~10h)까지 여기 눌러앉는다.
-		//
-		// 간격이 긴 이유: 저널이 원복돼 있어 재진입은 멱등 게이트를 못 타고 처음부터 재적용한다
-		// (ConfigMap+DS patch → 전 nvidia 노드 rollout → DP 재시작 → 180s 검증 → 실패 → 원복 rollout).
-		// 즉 한 번의 재시도가 클러스터 전역 rollout 2회다 — MIG 경로(VerifyingAllocatable)는 재검증만
-		// 하므로 15s 로 짧아도 되지만 여기는 재-mutation 이라 대칭이 성립하지 않는다.
+		// 미수렴 sharing 이 원복된 종점. verifier 는 미수렴을 에러가 아니라 결과로 돌려주므로 runErr
+		// 이 nil 이고, 재확인이 없으면 기본 resync(~10h)까지 여기 눌러앉는다. 간격이 긴 이유: 저널이
+		// 원복돼 있어 재진입은 멱등 게이트를 못 타고 처음부터 재적용한다(ConfigMap+DS patch → 전
+		// nvidia 노드 rollout → DP 재시작 → 180s 검증 → 실패 → 원복 rollout) — 한 번의 재시도가
+		// 클러스터 전역 rollout 2회다. MIG 경로(VerifyingAllocatable)는 재검증만 하므로 15s 로
+		// 짧아도 되지만 여기는 재-mutation 이라 대칭이 성립하지 않는다.
 		return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 	}
 	return ctrl.Result{}, runErr
 }
 
-// shouldReverify 는 재검증 필요 여부를 판정한다(spec §3 evidence 재사용 게이트).
-// observedGeneration·resolved config 가 직전과 같고 직전 phase 가 Ready 면 false(재검증 skip).
-// 하나라도 다르면(또는 prev 가 없으면) true — 매 reconcile 마다 테스트 Pod 를 새로 만들지 않기 위함(MVP-1).
-//
-// Degraded 를 Ready 와 같이 정상상태로 본다. 광고 붕괴는 **감지 전용** 이라 재적용으로 이어지면
-// 안 되는데, Degraded 를 비정상으로 보면 여기서 true 가 나와 다음 pass 가 처음부터 다시 적용한다
-// (GI 재생성·device-plugin 재시작). 되돌리는 것은 Stage 4 remediation 의 몫이다.
+// shouldReverify 는 재검증 필요 여부를 판정한다(spec §3 evidence 재사용 게이트). observedGeneration·
+// resolved config 가 직전과 같고 직전 phase 가 Ready 면 false(재검증 skip) — 하나라도 다르면(또는
+// prev 가 없으면) true 다. Degraded 도 Ready 와 같이 정상상태로 본다 — 광고 붕괴는 감지 전용이라
+// 재적용으로 이어지면 안 되는데, Degraded 를 비정상으로 보면 여기서 true 가 나와 다음 pass 가
+// 처음부터 다시 적용한다(GI 재생성·device-plugin 재시작). 되돌리는 것은 Stage 4 remediation 의
+// 몫이다.
 func (r *AcceleratorPartitionPolicyReconciler) shouldReverify(acpp *npuv1alpha1.AcceleratorPartitionPolicy, prev *npuv1alpha1.TargetStatus) bool {
 	if prev == nil {
 		return true
@@ -420,7 +415,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runTarget(acpp *npuv1alpha1.Accel
 	setCond(&ts, npuv1alpha1.ACPPCondVerified, metav1.ConditionTrue, "AllocationTestSucceeded", "test pod allocated", acpp.Generation)
 	ts.Phase = npuv1alpha1.ACPPPhaseReady
 	// owner-lock 확정 — changed-apply 경로는 backend.Apply 가 이미 찍지만, no-diff 채택 경로는
-	// 여기서만 찍힌다(finding #1: no-diff happy-path 도 소유권을 주장해야 NCP 재탈환을 막는다).
+	// 여기서만 찍힌다. no-diff happy-path 도 소유권을 주장해야 NCP 재탈환을 막는다.
 	if acpp.Spec.Vendor == vendorFuriosa {
 		r.ensureOwnerLock(t.Ctx, acpp)
 	}
@@ -447,7 +442,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 		setCond(&ts, npuv1alpha1.ACPPCondApplied, metav1.ConditionFalse, "ApplyFailed", "nvidia backend type assertion failed", acpp.Generation)
 		return ts, nil
 	}
-	// MIG 관측(spec §16.3)은 runTarget 이 Validate 전에 이미 수행해 backend 에 주입/재Discover 했다.
+	// MIG 관측(spec §16.3)은 runTarget 이 Validate 전에 이미 수행해 backend 에 주입·재Discover 한다.
 
 	// (1) 항상-전제(어느 상태서나).
 	if reason, msg, blocked := nvidiaAlwaysBlock(nvidia.CheckAlways(nvb.Targets(), ts.DriverVersion != "")); blocked {
@@ -511,9 +506,9 @@ func (r *AcceleratorPartitionPolicyReconciler) runNvidiaTarget(acpp *npuv1alpha1
 		if herr != nil {
 			return ts, herr
 		}
-		// cordon 주체는 정책이다. mode 가 이미 Enabled 인 노드는 유일한 cordon 주체였던
+		// cordon 주체는 정책이다. mode 가 이미 Enabled 인 노드는 유일한 cordon 주체인
 		// ensureMigModeEnabled 를 건너뛰므로, 여기서 cordon 을 남에게 맡기면 오지 않는 외부 주체를
-		// 기다리며 WaitingForDrain 을 영원히 반복한다(U-1). 진행 가능한 상태(mode Enabled + 관리 밖
+		// 기다리며 WaitingForDrain 을 영원히 반복한다. 진행 가능한 상태(mode Enabled + 관리 밖
 		// GI 없음)에서 cordon 만 없다면 스스로 잠근다. 배출은 하지 않으므로 GPU 를 쥔 pod 가 남아
 		// 있으면 아래 idle 전제가 그대로 걸러 "배출 대기" 로 정직하게 보고된다 — 달라지는 것은
 		// "누군가 cordon 해 주기를 기다리는" 상태가 더는 없다는 점이다.
@@ -735,7 +730,7 @@ func observedGeometryOf(devs []nvidia.MigDevice) (map[string]string, map[string]
 // 그래도 관측 자체가 없으면 evalDeviceObservation 이 "관측 전무" 로 읽어 등급 없는 근거가 되므로,
 // Discover 가 이미 찾은 장치 PCI 존재만 여기서 알려준다.
 // 키는 PCI 가 있으면 PCI, 없으면 장치 ID 다 — Furiosa 는 detector 가 PCI 를 채우지 않아
-// PCI 만 받으면 관측이 통째로 사라진다(라이브 실측, 2026-08-04).
+// PCI 만 받으면 관측이 통째로 사라진다.
 func rngdObservedPCIs(devs []npuv1alpha1.DeviceStatus) map[string]string {
 	out := make(map[string]string, len(devs))
 	for _, d := range devs {
@@ -1063,14 +1058,12 @@ func (r *AcceleratorPartitionPolicyReconciler) restartNvidiaDevicePlugin(ctx con
 	return nil
 }
 
-// computeBaseline 은 apply 전 노드 상태에서 baseline·기대 allocatable 을 계산해 ApplyRecord 를 만든다(spec §15.2).
-//
-// ExpectedFullGPUCount 는 **apply 후** mixed device-plugin 이 광고할 온전한 GPU 수다 —
-// 물리 GPU 수에서 이 정책이 조각낼 대상 수를 뺀 값. apply 직전 allocatable(BaselineGPUCount)을
-// 그대로 기대값으로 쓰면 안 된다: mode 가 Enabled 여도 GI 가 없는 동안은 flat device-plugin 이
-// 그 GPU 를 온전한 GPU 로 계속 광고하므로(라이브 실측, 2026-08-04) baseline 이 물리 수와 같고,
-// 조각낸 뒤에는 mixed 가 그 GPU 를 빼고 광고해 기대값이 영원히 충족되지 않는다 — verify 가
-// 180초를 채우고 rollback 하면서 GI 생성·파괴만 반복한다.
+// computeBaseline 은 apply 전 노드 상태에서 baseline·기대 allocatable 을 계산해 ApplyRecord 를
+// 만든다(spec §15.2). ExpectedFullGPUCount 는 apply 후 mixed device-plugin 이 광고할 온전한 GPU
+// 수다 — 물리 GPU 수에서 이 정책이 조각낼 대상 수를 뺀 값이다. apply 직전 allocatable
+// (BaselineGPUCount)을 그대로 기대값으로 쓰면 안 된다: mode 가 Enabled 여도 GI 가 없는 동안은
+// flat device-plugin 이 그 GPU 를 온전한 GPU 로 계속 광고해 baseline 이 물리 수와 같아지고, 조각낸
+// 뒤에는 mixed 가 그 GPU 를 빼고 광고해 기대값이 영원히 충족되지 않아 GI 생성·파괴만 반복한다.
 func (r *AcceleratorPartitionPolicyReconciler) computeBaseline(ctx context.Context, node string, acpp *npuv1alpha1.AcceleratorPartitionPolicy, resolved []partition.ResolvedEntry, targets []nvidia.MigDevice) (npuv1alpha1.ApplyRecord, error) {
 	var rec npuv1alpha1.ApplyRecord
 	if len(resolved) != 1 {
@@ -1310,12 +1303,12 @@ var rngdPresentNodeLabel = vendorPresentLabel(vendorRngd)
 // labelValueTrue 는 노드 라벨의 참 값 "true"(goconst 회피용 공용 상수).
 const labelValueTrue = "true"
 
-// dsManagedNodes 는 RNGD 파티션 scope 판정 대상 노드명 목록을 반환한다.
-// unified DS(A' 방안)는 Warboy·RNGD 를 한 DaemonSet 으로 관리하므로 pod nodeSelector
-// (furiosa-family)만으로는 Warboy 노드까지 포함된다. 그러나 RNGD_PARTITION_POLICY 는
-// RNGD 노드에만 영향(Warboy 바이너리는 무시)하므로, scope 는 DS 관리 노드 중
-// **RNGD 노드(kcloud.ai/rngd.present=true)**로 한정한다(mixed unified DS 오분류 방지).
-// DS 에 nodeSelector 가 없으면 scope 제약을 걸지 않는다(빈 슬라이스 → selectorCoversAll 무조건 통과).
+// dsManagedNodes 는 RNGD 파티션 scope 판정 대상 노드명 목록을 반환한다. unified DS 는 Warboy·RNGD
+// 를 한 DaemonSet 으로 관리하므로 pod nodeSelector(furiosa-family)만으로는 Warboy 노드까지
+// 포함된다. 그러나 RNGD_PARTITION_POLICY 는 RNGD 노드에만 영향(Warboy 바이너리는 무시)하므로,
+// scope 는 DS 관리 노드 중 **RNGD 노드(kcloud.ai/rngd.present=true)**로 한정한다(mixed unified DS
+// 오분류 방지). DS 에 nodeSelector 가 없으면 scope 제약을 걸지 않는다(빈 슬라이스 →
+// selectorCoversAll 무조건 통과).
 func (r *AcceleratorPartitionPolicyReconciler) dsManagedNodes(ctx context.Context) ([]string, error) {
 	var ds appsv1.DaemonSet
 	if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err != nil {
@@ -1413,15 +1406,12 @@ func setCond(ts *npuv1alpha1.TargetStatus, ctype string, status metav1.Condition
 	})
 }
 
-// writeTargetStatus 는 target status 1개(MVP-1 단일 target)를 영속하는 유일한 지점이다.
-//
-// 기록 전에 반드시 LastTransitionTime 을 직전 status 에서 승계한다. runTarget 은 매 reconcile 마다
-// TargetStatus 를 새로 만들고(Conditions 는 빈 슬라이스) apimeta.SetStatusCondition 은 목록에 없는
-// condition 을 "전이"로 보아 LastTransitionTime=now 를 찍는다 — 그래서 아무것도 바뀌지 않은
-// reconcile 조차 타임스탬프만 다른 status 를 만들고, 이 Update 는 매번 실제 write 가 된다. 그 write
-// 의 watch 이벤트가 같은 객체를 즉시 재큐잉하고, 다음 reconcile 이 낡은 informer 캐시를 읽으면
-// resourceVersion conflict 까지 나면서 정책이 영원히 같은 자리를 돈다(U-1 핫루프). 상태가 그대로면
-// 바이트 단위로 같은 status 를 만들어 apiserver 가 write 자체를 no-op 하게 만드는 것이 유일한 차단점이다.
+// writeTargetStatus 는 target status 1개(MVP-1 단일 target)를 영속하는 유일한 지점이다. 기록 전에
+// 반드시 LastTransitionTime 을 직전 status 에서 승계한다 — runTarget 이 매 reconcile 마다 빈
+// Conditions 로 TargetStatus 를 새로 만들면 apimeta.SetStatusCondition 이 모든 condition 을
+// "전이"로 보아 아무것도 안 바뀐 reconcile 도 매번 실제 write 를 낸다. 그 write 의 watch 이벤트가
+// 재큐잉하고 낡은 캐시로 resourceVersion conflict 가 나면 정책이 영원히 같은 자리를 돈다. 바이트
+// 단위로 같은 status 를 만들어 apiserver 의 write 자체를 no-op 시키는 것이 유일한 차단점이다.
 func (r *AcceleratorPartitionPolicyReconciler) writeTargetStatus(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy, ts npuv1alpha1.TargetStatus) error {
 	carryCondTimes(findTargetStatus(acpp, ts.NodeName), &ts)
 	acpp.Status.Targets = []npuv1alpha1.TargetStatus{ts}
@@ -1505,7 +1495,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 		var ds appsv1.DaemonSet
 		if err := r.Get(ctx, client.ObjectKey{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &ds); err == nil {
 			// 이 ACPP 가 실제 소유자일 때만 lock 해제 — TargetConflict 패자 삭제가 승자의 lock 을
-			// 지우면 안 된다(finding #2). value 는 소유 ACPP 의 .metadata.name.
+			// 지우면 안 된다. value 는 소유 ACPP 의 .metadata.name.
 			if ds.Annotations[rngd.PartitionOwnerAnnotation] == acpp.Name {
 				delete(ds.Annotations, rngd.PartitionOwnerAnnotation)
 				if err := r.Update(ctx, &ds); err != nil {
@@ -1533,8 +1523,8 @@ func (r *AcceleratorPartitionPolicyReconciler) handleDeletion(ctx context.Contex
 func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy) error {
 	// 삭제가 끝까지 간 뒤에는 우리가 잡은 노드 Lease 를 돌려준다. 안 돌려주면 정책은 사라졌는데
 	// Lease 객체에는 죽은 소유자가 남아, 다음 작업이 만료(60초)를 기다려야 하고 운영자에게는
-	// 유령 소유자로 보인다(라이브 실측 2026-08-04: 공유 전용 정책 삭제 후 Lease 잔존).
-	// 중간에 실패하면 돌려주지 않는다 — 되돌리기가 아직 진행 중이므로 잠금을 유지하는 것이 맞다.
+	// 유령 소유자로 보인다. 중간에 실패하면 돌려주지 않는다 — 되돌리기가 아직 진행 중이므로
+	// 잠금을 유지하는 것이 맞다.
 	var held []string
 	for _, rec := range acpp.Status.ApplyRecords {
 		// 삭제는 Reconcile 의 위임 분기보다 먼저 처리돼(:123-125) 위임 모드에서도 여기까지 그대로
@@ -1548,15 +1538,12 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 		if took {
 			held = append(held, rec.NodeName)
 		}
-		// 공유 원복은 소유권 판정보다 **위**다. 공유는 하드웨어를 바꾸지 않으므로 MIG 노드 lock 을
-		// 잡지 않는데(layout 없는 공유 정책이 그렇다), 아래 소유권 분기 뒤에 두면 그런 정책은 항상
-		// continue 로 건너뛰어 ConfigMap·배선·소유 표시가 영구히 남는다 — daemon 만 회수되므로
-		// 배수 광고는 남고 그것을 받칠 MPS 서버는 사라진 상태가 된다. 소유 표시가 남으면 다른 이름의
-		// 새 정책이 소유 검사에서 영구 apply 실패하고, 그 정책의 해제 경로는 저널이 비어 no-op 이라
-		// 자가치유도 없다. 안전하다: RollbackSharing 은 DS/CM 의 소유 표시가 남의 것이면 곧바로
-		// 반환하므로, 소유하지 않은 노드의 record 를 돌아도 아무것도 건드리지 않는다.
-		// 원복이 GI 제거보다 앞서야 하는 이유도 그대로다 — 광고 배수가 남아 있으면 GI 제거 후
-		// baseline allocatable 복원 확인(assertMigEmptyAndBaseline)이 성립하지 않는다.
+		// 공유 원복은 소유권 판정보다 **위**다 — 공유는 하드웨어를 안 바꿔 MIG 노드 lock 을 잡지
+		// 않으므로(layout 없는 공유 정책), 소유권 분기 뒤에 두면 그런 정책은 항상 continue 로
+		// 건너뛰어 ConfigMap·배선·소유 표시가 영구히 남아 daemon 없는 배수 광고가 계속 나가고,
+		// 다른 이름의 새 정책마저 소유 검사에서 막힌다. 안전하다: RollbackSharing 은 DS/CM 의
+		// 소유 표시가 남의 것이면 곧바로 반환하므로 소유하지 않은 노드를 돌아도 건드리지 않는다.
+		// GI 제거보다 앞서야 하는 이유도 같다 — 광고 배수가 남으면 baseline 복원 확인이 성립하지 않는다.
 		if rec.SharingMode == npuv1alpha1.SharingModeTimeSliced || rec.SharingMode == npuv1alpha1.SharingModeMPS {
 			st := partition.Target{Ctx: ctx, NodeName: rec.NodeName, Owner: acpp.Name}
 			if err := nvidia.New(r.Client).RollbackSharing(st, partition.SharingRollbackState{}); err != nil {
@@ -1605,7 +1592,7 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 			}
 			continue
 		}
-		// cordon 주체는 정책이다(D-10). 성공한 apply 는 종점에서 노드를 되돌려 놓으므로 삭제 시점의
+		// cordon 주체는 정책이다. 성공한 apply 는 종점에서 노드를 되돌려 놓으므로 삭제 시점의
 		// 노드는 schedulable 이고, 여기서 cordon 을 남에게 맡기면 assertNodeQuiesced 가 오지 않는
 		// 외부 주체를 기다리며 영구히 막는다 — finalizer 가 빠지지 않아 ACPP 가 영원히 Terminating 이다.
 		// 배출은 하지 않으므로 GPU 를 쥔 pod 이 남아 있으면 아래 quiesce 전제가 그대로 걸러 낸다.
@@ -1644,17 +1631,17 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 	}
 	// control daemon 정리는 저널 상태·소유권과 무관하게 멱등이다 — 참조 카운트(anyPolicyStillUsesMPS)가
 	// "다른 정책이 아직 쓰는가" 를 이미 지키므로 무조건 불러도 안전하다. 그래서 루프 밖에서 정확히
-	// 한 번 부른다(D-13): 루프 안에 두면 sharing-only 정책은 MIG 노드 lock 을 잡지 않아 소유권 분기에서
-	// 항상 continue 하고, ApplyRecords 가 비면 루프 자체가 돌지 않아 daemon 이 영구히 남았다.
+	// 한 번 부른다 — 루프 안에 두면 sharing-only 정책은 MIG 노드 lock 을 잡지 않아 소유권 분기에서
+	// 항상 continue 하고, ApplyRecords 가 비면 루프 자체가 돌지 않아 daemon 이 영구히 남는다.
 	// 위치가 루프 뒤인 이유는 순서다 — DP 배선(RollbackSharing)을 먼저 걷어야 클라이언트가 죽은
 	// daemon 을 물고 남지 않는다. node 인자는 exclusive 경로에서 쓰이지 않으므로 빈 값이면 된다.
 	if err := r.ensureMpsControlDaemon(ctx, npuv1alpha1.SharingModeExclusive, acpp.Name, ""); err != nil {
 		return err
 	}
-	// finding #2: owner-lock 은 Diff/Apply 이전에 선취득(runNvidiaTarget)되나 ApplyRecord 는 mutation
-	// 직전에야 영속된다. 그 사이 hardware-block(MigModeNotEnabled/NotCordoned/GPUBusy)으로 조기 반환되면
-	// lock 만 남고 record 가 없어, record 순회만으로는 이 노드 lock 을 해제하지 못해 누수된다(삭제 후 재-ACPP
-	// 영구 TargetConflict). record 없는 lock 은 hardware 미변경이므로 rollback 없이 lock 만 해제한다.
+	// owner-lock 은 Diff/Apply 이전에 선취득(runNvidiaTarget)되나 ApplyRecord 는 mutation 직전에야
+	// 영속된다. 그 사이 hardware-block(MigModeNotEnabled/NotCordoned/GPUBusy)으로 조기 반환되면
+	// lock 만 남고 record 가 없어, record 순회만으로는 이 노드 lock 을 해제하지 못해 누수된다(삭제 후
+	// 재-ACPP 영구 TargetConflict). record 없는 lock 은 hardware 미변경이므로 rollback 없이 해제한다.
 	if err := r.releaseOrphanOwnerLocks(ctx, string(acpp.UID)); err != nil {
 		return err
 	}
@@ -1692,8 +1679,8 @@ func (r *AcceleratorPartitionPolicyReconciler) releaseDeletionLeases(ctx context
 	return nil
 }
 
-// releaseOrphanOwnerLocks 는 이 ACPP UID 로 잠긴 노드 중 ApplyRecord 로 정리되지 않은 lock 을 스캔·해제한다
-// (finding #2). nodeSelector 재평가가 아니라 UID annotation 매칭이므로 spec §14.3(snapshot only)을 위반하지 않고,
+// releaseOrphanOwnerLocks 는 이 ACPP UID 로 잠긴 노드 중 ApplyRecord 로 정리되지 않은 lock 을 스캔·해제한다.
+// nodeSelector 재평가가 아니라 UID annotation 매칭이므로 spec §14.3(snapshot only)을 위반하지 않고,
 // releaseNodeOwnerLockUID 가 값 일치 시에만 지우므로 타 소유자 노드는 건드리지 않는다. 이미 해제된 노드는 no-op.
 func (r *AcceleratorPartitionPolicyReconciler) releaseOrphanOwnerLocks(ctx context.Context, uid string) error {
 	var nodes corev1.NodeList
@@ -1736,33 +1723,17 @@ func (r *AcceleratorPartitionPolicyReconciler) releaseNodeOwnerLockUID(ctx conte
 // migModeDisableAction 은 mode disable Job 의 결정론적 이름에 들어가는 action 토큰이다(GI apply/enable 과 구분).
 const migModeDisableAction = "mig-mode-disable"
 
-// restoreMigModeDisabled 는 GI 회수 뒤 MIG mode 자체를 Disabled 로 되돌린다(deletionPolicy=RestoreMode).
-//
-// 완료 판정은 **재관측**이다 — 재부팅 성공보다 직접적인 신호이기 때문이다. 재부팅이 됐어도 mode 가
-// 안 내려갔으면 끝난 게 아니고, 그 판정은 BootID 로 할 수 없다. MIG mode enable 경로가 같은 이유로
-// 재관측을 쓴다.
-//
-// 재부팅 횟수는 저널의 DisableRebootAttempts 로 제한한다 — enable 경로의 RebootAttempts 와는
-// 별도 예산이다. enable 이 상한을 소진하고 Failed 로 끝난 정책을 RestoreMode 로 지우면, 공유
-// 카운터로는 disable 이 재부팅을 한 번도 시도하지 못한 채 상한에 걸려 finalizer 가 영구 유지된다
-// — 두 작업은 방향이 반대인 별개 작업이므로 예산도 분리한다. 상한을 넘으면 오류로 올려 finalizer
-// 를 유지한다 — 재부팅을 더 쏘는 대신 운영자를 부른다.
-//
-// 재부팅 Job 이 이미 있으면 이번 사이클은 이미 쏜 것이다 — enable 경로(ensureAcppRebootJob)와
-// 같은 규율로 존재 여부를 먼저 본다. 이 확인이 없으면 재부팅 하나가 끝나기도 전에(노드가 아직
-// 안 돌아왔거나 돌아왔지만 mode 재관측이 아직 Enabled 를 보고하는 매 pass 마다) 명령을 다시 쏘고
-// DisableRebootAttempts 를 다시 올려, 실제로는 한 번도 재시도하지 않았는데 상한을 금방 소진해버린다.
 // finishNvidiaDeletionRollback 은 GI rollback 뒤 baseline 확인과(deletionPolicy 에 따라) MIG
-// mode 복원까지를 한 단계로 묶는다. handleNvidiaDeletion 밖으로 뽑은 이유는 그 함수 하나가 이미
-// 복잡도 상한에 가까웠기 때문이다(gocyclo) — 로직은 그대로이고 나누기만 했다.
+// mode 복원까지를 한 단계로 묶는다. handleNvidiaDeletion 밖으로 뽑은 이유는 그 함수의 복잡도가
+// 상한에 가깝기 때문이다(gocyclo) — 로직은 그대로이고 나누기만 한다.
 func (r *AcceleratorPartitionPolicyReconciler) finishNvidiaDeletionRollback(ctx context.Context,
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) error {
 	restoreMode := acpp.Spec.DeletionPolicy == npuv1alpha1.DeletionPolicyRestoreMode
 	// RestoreMode 는 mode 복원을 baseline 확인보다 **먼저** 한다. mixed 전략에서 MIG mode 가 켜진
 	// 채 조각이 없는 GPU 는 아무것도 광고하지 않으므로, mode 를 끄기 전의 allocatable 은 baseline
 	// 보다 반드시 적다 — 순서가 반대면 baseline 확인이 mode 복원을 막고 mode 복원만이 baseline 을
-	// 만들 수 있어 서로를 기다린다(2026-08-05 라이브: finalizer 영구 잔존, 노드 cordon 고착).
-	// mode 복원이 끝난 뒤의 pass 에서 아래 baseline 확인이 그대로 판정한다 — 확인을 건너뛰지 않는다.
+	// 만들 수 있어 서로를 기다린다. mode 복원이 끝난 뒤의 pass 에서 아래 baseline 확인이 그대로
+	// 판정한다 — 확인을 건너뛰지 않는다.
 	if restoreMode {
 		if err := r.enforceRestoreModeOnDeletion(ctx, acpp, rec); err != nil {
 			// 차단 이벤트는 enforceRestoreModeOnDeletion 이 실패 시에만 남긴다 — 재부팅 대기는
@@ -1789,7 +1760,7 @@ func (r *AcceleratorPartitionPolicyReconciler) enforceRestoreModeOnDeletion(ctx 
 		return merr
 	}
 	if !done {
-		// 아직 mode 가 Disabled 로 관측되지 않았다 — finalizer 를 유지해 다음 pass 에 이어간다.
+		// 아직 mode 가 Disabled 로 관측되지 않는다 — finalizer 를 유지해 다음 pass 에 이어간다.
 		// 여기서 통과시키면 mode 가 켜진 채 정책만 사라져, 그 노드는 공유를 못 쓰는데 이유를
 		// 알려줄 객체도 없는 상태가 된다.
 		return fmt.Errorf("cleanup waiting for MIG mode restore on node %s", rec.NodeName)
@@ -1797,6 +1768,12 @@ func (r *AcceleratorPartitionPolicyReconciler) enforceRestoreModeOnDeletion(ctx 
 	return nil
 }
 
+// restoreMigModeDisabled 는 GI 회수 뒤 MIG mode 를 Disabled 로 되돌린다(deletionPolicy=RestoreMode).
+// 완료 판정은 재관측이다 — 재부팅 성공만으로는 mode 가 실제로 내려갔는지 알 수 없다(MIG mode
+// enable 경로와 같은 이유). 재부팅 횟수는 저널의 DisableRebootAttempts 로 제한한다 — enable 경로의
+// RebootAttempts 와는 별도 예산이다(공유하면 enable 이 상한을 소진하고 Failed 로 끝난 정책에서
+// disable 이 한 번도 못 쏴 보고 막힌다). 재부팅 Job 이 이미 있으면 이번 사이클은 이미 쏜 것이다 —
+// 존재 여부를 먼저 봐야 완료 전에 명령과 카운터가 매 pass 다시 오르지 않는다.
 func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx context.Context,
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) (bool, error) {
 	devs, oerr := r.observeDevicesForNode(ctx, rec.NodeName, rec.GPUPCIs)
@@ -1857,9 +1834,9 @@ func (r *AcceleratorPartitionPolicyReconciler) assertNodeQuiesced(ctx context.Co
 	return nil
 }
 
-// emitDeletionBlockedEvent 는 삭제 rollback 이 막힌 이유를 Warning 이벤트로 남긴다(review-d10 M-1).
+// emitDeletionBlockedEvent 는 삭제 rollback 이 막힌 이유를 Warning 이벤트로 남긴다.
 // MigPhase/status 는 건드리지 않는다 — 삭제 경로의 저널은 "무엇을 되돌려야 하는가"의 유일한
-// 근거라 phase 를 덮으면 D-10 이 막은 것과 같은 종류의 자기유발 상태 오염이 재발한다.
+// 근거라 phase 를 덮으면 소유권 충돌 차단과 같은 종류의 자기유발 상태 오염이 재발한다.
 func (r *AcceleratorPartitionPolicyReconciler) emitDeletionBlockedEvent(acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string, err error) {
 	if r.Recorder == nil {
 		return
@@ -1868,17 +1845,12 @@ func (r *AcceleratorPartitionPolicyReconciler) emitDeletionBlockedEvent(acpp *np
 		"node %s: MIG rollback during deletion is blocked: %v (finalizer held until resolved)", node, err)
 }
 
-// assertMigEmptyAndBaseline 은 rollback 후 fresh NDR 로 대상 PCI 전부 MIG Enabled + GI 없음
-// (geometry 빈 문자열) 이고 노드 nvidia.com/gpu allocatable 이 baseline 으로 복원됐는지 확인한다(모델 B §17.1).
-// mode 는 끄지 않는다(GI 만 제거). 하나라도 아니면 err.
-// assertMigEmptyAndBaseline 은 GI 회수가 baseline 으로 정확히 돌아갔는지 확인한다.
-//
-// allowModeDisabled 는 deletionPolicy=RestoreMode 에서만 true 다 — 그 정책은 이 확인 뒤에
-// mode 자체를 Disabled 로 되돌리므로(restoreMigModeDisabled), 그 이후의 모든 재진입 pass 에서
-// 이 함수가 다시 불릴 때 mode 는 이미 Disabled 로 관측된다. "mode 는 반드시 Enabled" 를 그대로
-// 두면 mode 복원이 **성공한 바로 그 순간부터** 이 확인이 "MIG not enabled after rollback" 으로
-// 영구히 거절해, 정리가 다시는 끝나지 못한다(복원이 잘 됐는데 그 사실 때문에 막히는 역설).
-// Retain(allowModeDisabled=false)은 mode 를 절대 건드리지 않으므로 기존 그대로 Enabled 만 받는다.
+// assertMigEmptyAndBaseline 은 rollback 후 fresh NDR 로 대상 PCI 전부 MIG Enabled + GI 없음(geometry
+// 빈 문자열)이고 노드 nvidia.com/gpu allocatable 이 baseline 으로 복원됐는지 확인한다(모델 B §17.1).
+// mode 는 끄지 않는다(GI 만 제거) — 하나라도 아니면 err. allowModeDisabled 는 deletionPolicy=
+// RestoreMode 에서만 true 다 — 그 정책은 이 확인 뒤에 mode 를 Disabled 로 되돌리므로, 이후 재진입은
+// mode 가 이미 Disabled 로 관측된다. "반드시 Enabled" 를 그대로 두면 mode 복원이 성공한 순간부터
+// 이 확인이 영구 거절돼 정리가 못 끝나는 역설이 된다. Retain 은 mode 를 안 건드려 Enabled 만 받는다.
 func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx context.Context, rec npuv1alpha1.ApplyRecord, allowModeDisabled bool) error {
 	// MIG 상태는 detector 가 못 채우므로(spec §16) apply 경로와 동일하게 observer(nsenter Job)로 관측한다.
 	obs, err := r.nvidiaObserver().Observe(ctx, rec.NodeName, rec.GPUPCIs)
@@ -1912,7 +1884,7 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 	got := int32(q.Value())
 	// mode 까지 되돌리는 경로(RestoreMode)는 baseline 보다 **많이** 돌아온다 — mode 를 끄면 조각
 	// 대상이던 GPU 가 온전한 GPU 로 다시 광고되기 때문이다. 정확 일치를 요구하면 복원이 성공한
-	// 그 사실 때문에 정리가 막힌다(라이브 실측 2026-08-04). 부족한 것만 실패로 본다.
+	// 그 사실 때문에 정리가 막힌다. 부족한 것만 실패로 본다.
 	if allowModeDisabled {
 		if got < rec.BaselineGPUCount {
 			return fmt.Errorf("node %s allocatable %s=%d not restored to baseline %d",
@@ -1920,13 +1892,11 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 		}
 		return nil
 	}
-	// Retain 은 MIG mode 를 켠 채 둔다. mode 가 Enabled 인 GPU 는 조각을 모두 회수해도 full GPU 로
-	// 광고되지 않으므로, 돌아올 수 있는 값은 **MIG 대상이 아닌 GPU 수**(ExpectedFullGPUCount)다.
-	//
-	// 여기서 BaselineGPUCount 를 요구하면 안 된다 — 그 값은 baseline 을 잡던 시점의 광고량이고,
-	// mode 가 Disabled 인 노드에서 시작하면 조각 대상 GPU 까지 포함한 수다(A30 2장 노드에서 2).
-	// mode 를 켠 뒤에는 그 수가 원리상 다시 나올 수 없어 finalizer 가 영구 보유되고 노드가 cordon
-	// 된 채 남는다. deletionPolicy 기본값이 Retain 이라 노출이 넓다(2026-08-06 실측).
+	// Retain 은 MIG mode 를 켠 채 둔다 — mode 가 Enabled 인 GPU 는 조각을 모두 회수해도 full GPU 로
+	// 광고되지 않으므로, 돌아올 수 있는 값은 MIG 대상이 아닌 GPU 수(ExpectedFullGPUCount)다. 여기서
+	// BaselineGPUCount 를 요구하면 안 된다 — 그 값은 baseline 을 잡던 시점의 광고량이라 mode 가
+	// Disabled 인 노드에서 시작하면 조각 대상 GPU 까지 포함한 수다. mode 를 켠 뒤에는 그 수가
+	// 원리상 다시 나올 수 없어 finalizer 가 영구 보유되고 노드가 cordon 된 채 남는다.
 	if got != rec.ExpectedFullGPUCount {
 		return fmt.Errorf("node %s allocatable %s=%d not restored to expected full-gpu count %d",
 			rec.NodeName, nvidiaGPUResource, got, rec.ExpectedFullGPUCount)
@@ -1936,7 +1906,7 @@ func (r *AcceleratorPartitionPolicyReconciler) assertMigEmptyAndBaseline(ctx con
 
 // migGeometryEmpty 는 "조각이 없다" 의 두 표기를 함께 받는다. 관측기는 mode 가 꺼진 GPU 를
 // geometry "disabled" 로 보고하는데(NodeDeviceReport 계약과 같은 어휘), 빈 문자열만 받으면
-// mode 복원이 끝난 노드가 "아직 조각이 남았다" 로 읽힌다(라이브 실측 2026-08-04).
+// mode 복원이 끝난 노드가 "아직 조각이 남았다" 로 읽힌다.
 func migGeometryEmpty(g string) bool {
 	return g == "" || strings.EqualFold(g, "disabled")
 }
@@ -2009,13 +1979,11 @@ func OperationNameFor(acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string)
 	return name + suffix
 }
 
-// delegateToOperation 은 위임 모드에서 정책 대신 트랜잭션을 만든다.
-//
-// **여기서 runTarget 을 부르지 않는다.** 위임 모드의 유일한 mutation 호출자는 participant 이고,
-// 그래서 두 경로가 동시에 존재하지 않는다(분기가 아니라 호출자의 이동이다).
-//
-// 이미 수렴한 정책에는 트랜잭션을 만들지 않는다. 이 가드가 없으면 gate 를 켜는 순간 클러스터의
-// 모든 Ready 정책이 재적용된다 — 이 기능에서 폭발 반경이 가장 큰 지점이다.
+// delegateToOperation 은 위임 모드에서 정책 대신 트랜잭션을 만든다. 여기서 runTarget 을 부르지
+// 않는다 — 위임 모드의 유일한 mutation 호출자는 participant 이고, 그래서 두 경로가 동시에
+// 존재하지 않는다(분기가 아니라 호출자의 이동이다). 이미 수렴한 정책에는 트랜잭션을 만들지
+// 않는다 — 이 가드가 없으면 gate 를 켜는 순간 클러스터의 모든 Ready 정책이 재적용된다(이 기능에서
+// 폭발 반경이 가장 큰 지점이다).
 func (r *AcceleratorPartitionPolicyReconciler) delegateToOperation(ctx context.Context,
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy, t partition.Target) (ctrl.Result, error) {
 	var prev *npuv1alpha1.TargetStatus

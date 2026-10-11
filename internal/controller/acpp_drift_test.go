@@ -4,7 +4,7 @@
 //
 //	건드리지 않는지(재적용 0회) 확인한다. 정상 롤아웃 중에는 Degraded 로 가지 않는다.
 //
-// 생성일: 2026-07-31
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -80,9 +80,9 @@ func degradedReason(name string) string {
 
 // TestMonitorDriftSkipsDRAOwnedNode 는 DRA 소유 라벨이 붙은 노드를 monitorDrift 가 드리프트로
 // 오판하지 않는지 본다. DRA 로 전환한 노드는 자원을 ResourceSlice 로 광고해 allocatable 이 0 이다
-// — draOwnedNode 게이트 없이 그 0 을 그대로 재면 항상 "장치 다 사라짐" 으로 읽는다. 적용 경로
-// (runTarget:270)에는 이 게이트가 있었지만 재검증 경로(shouldReverify 가 false 인 pass)는 그보다
-// 먼저 return 해 우회하고 있었다.
+// — draOwnedNode 게이트 없이 그 0 을 그대로 재면 항상 "장치 다 사라짐" 으로 읽는다. 이 게이트는
+// runTarget 의 적용 경로에만 있고, 재검증 경로(shouldReverify 가 false 인 pass)는 그보다 먼저
+// return 해 그 경로를 타지 않으므로 monitorDrift 자신도 같은 판정을 걸어야 한다.
 func TestMonitorDriftSkipsDRAOwnedNode(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -109,8 +109,8 @@ func TestMonitorDriftSkipsDRAOwnedNode(t *testing.T) {
 }
 
 // TestMonitorDriftStillWatchesNonDRANode 는 DRA 라벨이 없는 일반 노드에서는 monitorDrift 가
-// 여전히 기존 감시 경로를 타는지 본다(회귀 가드) — draOwnedNode 확인을 추가하면서 모든 노드를
-// 건너뛰게 만들지 않았는지 확인한다.
+// 여전히 기존 감시 경로를 타는지 본다 — draOwnedNode 확인이 모든 노드를 건너뛰게 하지 않는지
+// 보는 회귀 가드다.
 func TestMonitorDriftStillWatchesNonDRANode(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}} // DRA 라벨 없음
 	c := fake.NewClientBuilder().WithScheme(sharingScheme()).WithObjects(node).Build()

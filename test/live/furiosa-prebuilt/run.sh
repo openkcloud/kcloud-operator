@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: rngd-1 Furiosa RNGD 사전 컴파일 이미지 같은 버전 왕복(2026.3.1) 실행·관측
-# 상세: 라이브 DIP furiosa-rngd-ds 에 driver.kernelImages(노드 커널→사전 컴파일 태그)와
-#       upgradePolicy.drainEnabled=false 를 kubectl patch 로 주입한다(차트가 furiosa
-#       kernelImages 를 렌더하지 않아 helm 오버레이 불가). 노드에서 유일한 모듈 보유자인
-#       테스트 파드를 지워 참조 카운트를 0 으로 만든 뒤 rmmod 로 driverLoaded=false 를
-#       만들면 상태기계 self-heal 이 install Job(사전 컴파일 이미지)을 돌린다. DUS 전이·
-#       status.resolvedImage·Job 이미지·Job 소요·`prebuilt module for <kernel> installed
-#       (dkms skipped)` 로그·NDR driverVersion·furiosa-smi 종료 코드를 확인한다. restore 는
-#       DIP 를 원복하고(kernelImages 제거·drainEnabled=true) 테스트 파드를 재생성해 기준선을
-#       검증한다. DRY_RUN=1 은 변경 명령만 출력한다(클러스터 무변경).
-# 생성일: 2026-09-24 | 수정일: 2026-09-24
+# 상세: DIP 에 kernelImages·drainEnabled=false 를 주입하고(차트가 furiosa kernelImages 를
+#       렌더하지 않아 helm 오버레이 불가), 참조 카운트를 0 으로 만든 뒤 rmmod 로 self-heal
+#       install Job 을 유도해 전이·이미지·로그·종료 코드를 확인한다(단계별 근거는
+#       phase_transition()·phase_restore() 등 섹션 주석 참고). DRY_RUN=1 은 클러스터 무변경.
+# 생성일: 2026-09-24 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

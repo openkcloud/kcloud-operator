@@ -83,9 +83,8 @@ func TestDiscoverFillsCapabilityAxesRngd(t *testing.T) {
 
 // TestRngdIsolationRejectsMinimumIsolation 는 미실측 격리가 배치 게이트에서 실제로
 // fail-closed 로 작동하는지를 소비자(intent.CheckRequirements) 쪽에서 확인한다.
-// 주의: 이 변경은 승인/거절 결과를 뒤집지 않는다 — memory 축이 원래 미실측이라
-// minimumIsolation 이 걸린 요청은 예전에도 전부 거절됐다. 달라진 것은 거절이 지목하는
-// 축(memory → compute)뿐이며, 그 지목이 사실과 맞는지가 여기서 고정하는 값이다.
+// memory 축이 미실측이므로 minimumIsolation 이 걸린 요청은 항상 거절돼야 한다 — 이 시험이
+// 고정하는 것은 거절이 올바른 축(compute)을 지목하는지다.
 func TestRngdIsolationRejectsMinimumIsolation(t *testing.T) {
 	nc := intent.NodeCapability{NodeName: "rngd-1", Vendor: "furiosa",
 		Devices: []v1alpha1.DeviceStatus{deviceStatusFor("furiosa", "rngd")}}
@@ -274,7 +273,7 @@ func TestRngdDiscover(t *testing.T) {
 
 // TestDiscoverAcceptsLowercaseModel 은 detector 가 보내는 실제 표기("rngd")로도 장치가 잡히는지
 // 고정한다. 정확 일치("RNGD")로 거르면 status.devices 가 비고, 그 위에 얹힌 검증이 "관측 전무"
-// 로 영구 실패한다 — 2026-08-04 라이브에서 실제로 그렇게 막혔다.
+// 로 영구 실패한다.
 func TestDiscoverAcceptsLowercaseModel(t *testing.T) {
 	ndr := &v1alpha1.NodeDeviceReport{
 		ObjectMeta: metav1.ObjectMeta{Name: "rngd-1"},

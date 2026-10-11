@@ -1,28 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2086,SC2029
-# SC2086: SSH_OPTS 는 호출자가 여러 공백분리 옵션("-o X -o Y")을 넣을 수 있어야 해 의도적으로
-#         unquoted 다. SC2029: $PY 는 로컬(USE_SUDO)에서 정하는 값이라 client-side 확장이 의도다.
+# SC2086: SSH_OPTS 는 공백분리 옵션 여러 개가 와야 해 의도적으로 unquoted. SC2029: $PY 는 로컬(USE_SUDO)에서 정해 client-side 확장이 의도다.
 # ============================================================
-# probe.sh: 같은 장치 파일을 두 프로세스가 동시에 열 수 있는지(SW 시분할 안전 조건) 실측
-# 상세: rngd-multiprocess/probe.sh 의 os.open(O_RDWR) 방식을 벤더 중립으로 일반화.
-#       부하를 주지 않고 open 만 한다(비파괴 — ioctl 없음, HOLD<=5s, 드라이버·재부팅 미개입).
-#       결과는 JSON 한 줄(evidence 수집용) — ssh 자체가 실패해도(권한·타임아웃·unreachable)
-#       예외 없이 verdict:"error" 한 줄을 낸다.
-#       MODE=hold(기본): 이 스크립트가 프로세스 A(보유)·B(2차 open)를 모두 SSH 로 띄운다.
-#       MODE=single: 장치를 이미 외부 프로세스가 쥐고 있을 때(예: node5 의 vLLM 서비스) 쓴다 —
-#       여기서 A 를 새로 띄우면 그 외부 holder 를 건드리므로, 이 모드는 B 역할의 단발 open 만
-#       한다(첫 open 이 곧 "두 번째 opener"). 이 경우 호출자가 CONFOUND 에 사유를 채워야 한다
-#       (비어 있으면 사용법 오류로 즉시 종료 — confound 없는 single 실행은 의미가 없다).
-#       USE_SUDO=1: 장치노드가 root:root 0600 이라 python3 를 sudo -n 으로 실행해야 할 때.
-#       SSH_OPTS: ssh 에 그대로 전달할 추가 옵션(예 "-o ConnectTimeout=2"), 기본 없음.
-#       verdict: OPEN_OK→ok, EBUSY(만)→exclusive(드라이버 배타 잠금), 그 외(EACCES 포함,
-#       ssh 실패 포함)→error — EACCES 는 권한 문제라 "배타적 open" 근거가 아니므로 분리한다.
-#       hold 모드는 프로세스 A(보유)의 결과도 firstOpen 으로 함께 남기고, A 가 못 열었으면
-#       B 가 성공했어도 verdict 를 error 로 낮춘다 — A 없이 성공한 B 는 "동시" 근거가 아니라
-#       단발 open 이라 single 모드와 구분되지 않기 때문이다.
-# 생성일: 2026-09-19 | 수정일: 2026-09-20(리뷰 fix round 1 — ssh 실패 처리·EACCES 분리·
-#       HOLD 상한·CONFOUND 필수화; fix round 2 — HOLD 정수 검증 후 clamp, SSH_FAILED 표식을
-#       tail -1 뒤에 붙여 다줄 stderr 에서도 보존; final fix — HOLD 10진 강제, firstOpen 기록)
+# probe.sh: 같은 장치 파일을 두 프로세스가 동시에 열 수 있는지(SW 시분할 안전 조건) 비파괴로 실측
+# 상세: MODE=hold(기본)·single 두 모드로 os.open(O_RDWR) 성공/실패를 보고 JSON 한 줄을 낸다.
+#       verdict 판정 기준과 환경변수는 README.md 참고.
+# 생성일: 2026-09-19 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 VENDOR="${1:?vendor}"; HOST="${2:?ssh host}"; DEV="${3:?device path e.g. /dev/tenstorrent/0}"

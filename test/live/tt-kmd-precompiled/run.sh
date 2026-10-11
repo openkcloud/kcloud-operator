@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: k8s-worker3 tt-kmd 사전 컴파일 이미지 왕복(2.11.0→2.8.0→2.11.0) 실행·관측
-# 상세: values 오버레이 파일로 driver.kernelImages(노드 커널→사전 컴파일 태그)·allowDowngrade·
-#       upgradePolicy.autoUpgrade 를 주어 helm upgrade 로 상태기계 전이를 시작한다. DUS 전이·
-#       status.resolvedImage(사전 컴파일 태그)·install Job 이미지·Job 소요 시간·`prebuilt module
-#       for <kernel> installed (dkms skipped)` 로그·previousImage·NDR driverVersion·
-#       /sys/module/tenstorrent/version·tt-smi probe 를 확인한다. restore 는 사용자 값을 기준선으로
-#       되돌려 tenstorrent 오버레이·지표 스위치를 제거하고 기준선 상태를 검증한다.
-#       DRY_RUN=1 은 변경 명령과 생성 values 파일만 출력한다(클러스터 무변경).
-# 생성일: 2026-09-22 | 수정일: 2026-09-24
+# 상세: values 오버레이로 kernelImages·allowDowngrade·autoUpgrade 를 줘 전이를 시작한다(phase 별
+#       기록 항목은 README 참고). DRY_RUN=1 은 명령만 출력한다(클러스터 무변경).
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

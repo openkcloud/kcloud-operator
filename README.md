@@ -1,4 +1,4 @@
-<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-06 (화면용 ServiceAccount 묶음 값 추가) -->
+<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-11 -->
 <!-- cdocs-profile: blog -->
 
 # kcloud operator
@@ -386,7 +386,7 @@ RBAC 은 DaemonSet, Job, ConfigMap, Pod, Node 라벨 patch 권한을 포함합�
 
 ## 🤝 Contributing
 
-작업 브랜치에서 `make lint test` 를 통과시킨 뒤 PR 을 엽니다. 리뷰어와 승인자는 `OWNERS` 에 있습니다.
+작업 브랜치에서 `make lint test` 를 통과시킨 뒤 PR 을 엽니다. 검토자와 승인자는 `OWNERS` 에 있습니다.
 
 ---
 

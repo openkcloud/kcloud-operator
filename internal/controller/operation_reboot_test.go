@@ -1,7 +1,7 @@
 // ============================================================
 // operation_reboot_test.go: 재부팅 작업 본체 envtest
 // 상세: 재부팅은 되돌릴 수 없다 — 상한·BootID 검증·중복 방지가 이 스펙의 전부다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-11 (가리킬 곳 없는 보고서 참조 제거)
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -236,8 +236,7 @@ var _ = Describe("node reboot participant", func() {
 	// 증명: 재진입 안전 — 조정자가 완료를 이미 저널(StepRebootObserved)에 남긴 뒤 이 participant
 	// 를 다시 부르면(WaitingForReboot → Applying 전이 다음 pass), 노드 상태가 그대로라도
 	// BootObserved 를 다시 판정해 EventBootObserved 를 또 내면 안 된다. Applying 에는 그 전이가
-	// 없어(operation.Next 참고) "정의되지 않은 전이" 에러 루프가 된다 — 브리핑 코드를 그대로
-	// 옮기면 재현되는 결함이었다. ApplyDone 으로 마감해야 한다.
+	// 없어(operation.Next 참고) "정의되지 않은 전이" 에러 루프가 된다 — ApplyDone 으로 마감해야 한다.
 	// 깨는 뮤테이션: StepRebootObserved 가드를 지우면 이 테스트가 EventBootObserved 를 받고 실패한다.
 	It("does not re-report boot observed once it is already journaled (reentrancy)", func() {
 		node := "reboot-part-d"
@@ -261,9 +260,7 @@ var _ = Describe("node reboot participant", func() {
 		}
 	})
 
-	// 증명: Rollback 은 아직 실행 대기 중인 재부팅 Job 을 실제로 취소한다. 브리핑이 준 4개 It 는
-	// Rollback 을 한 번도 부르지 않았다 — 이 Stage 에서 되풀이된 "메서드 하나가 통째로 미검증"
-	// 패턴이라 추가한다.
+	// 증명: Rollback 은 아직 실행 대기 중인 재부팅 Job 을 실제로 취소한다.
 	// 깨는 뮤테이션: Delete 호출을 지우면 Job 이 남아 있어 이 테스트가 실패한다.
 	It("cancels the pending reboot job on rollback", func() {
 		node := "reboot-part-e"

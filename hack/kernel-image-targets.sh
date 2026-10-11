@@ -2,38 +2,27 @@
 # ============================================================
 # kernel-image-targets.sh: 커널별 사전 컴파일 이미지의 발행 대상을 유도한다
 # 상세: deploy/kernel-image-targets.yaml 의 커널·벤더 목록과 deploy/helm/values.yaml 의
-#       버전·variant·저장소 경로를 합쳐 조합마다 전체 이미지 참조를 만든다. 태그 규약은
-#       internal/upgrade 의 assembleKernelImage 와 같다 —
-#       "<version>[-<variant>]-k<커널>-<빌드 개정>". 두 자리가 어긋나면
-#       internal/upgrade/kernel_image_targets_test.go 가 잡는다.
-#       이 목록이 operator 저장소에 있는 이유는 그것을 보는 게이트(hack/image-tag-check.sh)가
-#       여기 있고 CI 에는 형제 images 저장소가 없기 때문이다. images 저장소의
-#       release-bundle.yaml 에는 이 목록에서 유도한 묶음을 두고, 두 저장소가 다 있을 때
-#       --check-bundle 이 둘의 어긋남을 잡는다.
-#       대상이 0건이면(커널 목록이 비었거나 targets 가 비었거나) 아무 줄도 내지 않는다 —
-#       호출부가 조회·대조를 건너뛴다. 이것은 사전 컴파일 경로를 끄는 수단이 아니다 —
-#       끄기는 차트의 driver.kernelImageBuildRevision 이고 네 벤더 모두 기본이 빈 값이다.
-#       목록을 비우면 기본 게이트가 빨강이 된다(deploy/kernel-image-targets.yaml 머리말 참고).
-# 용법: hack/kernel-image-targets.sh --bundle-name     묶음 이름(release-prepare 가 받는다)
-#       hack/kernel-image-targets.sh --refs            전체 이미지 참조(한 줄에 하나)
-#       hack/kernel-image-targets.sh --bundle          공개 묶음 항목 "<images.yaml 키><TAB><태그>"
-#       hack/kernel-image-targets.sh --check-bundle <release-bundle.yaml 경로|->
-#                                                      images 저장소 묶음과 대조(어긋나면 1)
-#       KERNEL_IMAGE_TARGETS=<경로> 로 목록 파일을 바꿀 수 있다(시험용).
-# 생성일: 2026-10-05 | 수정일: 2026-10-05 (publicBundle 이 참·거짓이 아니면 거절,
-#         묶음 이름을 내주는 --bundle-name 모드 추가)
+#       버전·variant·저장소 경로를 합쳐 조합마다 전체 이미지 참조를 만든다(태그 규약은
+#       internal/upgrade 의 assembleKernelImage 와 동일). 이 목록이 이 저장소에 있는 이유·
+#       대상 0건의 의미는 derive()·--bundle-name 분기·deploy/kernel-image-targets.yaml 참고.
+# 생성일: 2026-10-05 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 targets="${KERNEL_IMAGE_TARGETS:-deploy/kernel-image-targets.yaml}"
 values=deploy/helm/values.yaml
+# 이 목록이 operator 저장소에 있는 이유: 이를 읽는 게이트(hack/image-tag-check.sh)가
+# 여기 있고, CI 에는 형제 images 저장소가 없다.
 # images 저장소 release-bundle.yaml 에서 이 묶음 하나만 본다. 다른 묶음은 이 검사 대상이 아니다.
 bundle_name=kernel-images
 
 [ -f "$targets" ] || { echo "!! 발행 대상 목록이 없다 — ${targets}" >&2; exit 1; }
 [ -f "$values" ] || { echo "!! ${values} 가 없다" >&2; exit 1; }
 
+# 대상이 0건(커널 목록이나 targets 가 비었으면)이면 아무 줄도 내지 않는다 — 호출부가
+# 조회·대조를 건너뛴다. 이것은 사전 컴파일 경로를 끄는 수단이 아니다(그 스위치는 차트의
+# driver.kernelImageBuildRevision, 네 벤더 모두 기본 빈 값).
 # "<images.yaml 키><TAB><태그><TAB><전체 참조><TAB><공개 묶음 여부>" 를 조합마다 한 줄.
 # snap yq 는 /tmp 를 읽지 못한다. YAML 파싱은 python3 PyYAML 로 한다.
 derive() {
@@ -102,8 +91,8 @@ lines() { [ -z "$1" ] || printf '%s\n' "$1"; }
 case "${1:-}" in
   --bundle-name)
     # 묶음 이름을 내주는 모드. hack/release-prepare.sh 가 태그 생성을 막을 묶음을 이것으로
-    # 받는다 — 전에는 이 파일의 bundle_name 할당을 정규식으로 긁었고, 선언에 따옴표가 붙으면
-    # 값에 따옴표가 섞여 비교가 어긋나 그쪽 가드가 조용히 사라졌다. 셸이 값을 풀어 주는
+    # 받는다 — 이 파일의 bundle_name 할당을 정규식으로 긁으면, 선언에 따옴표가 붙을 때
+    # 값에 따옴표가 섞여 비교가 어긋나 가드가 조용히 사라진다. 셸이 값을 풀어 주는
     # 모드로 내주면 선언 형식이 어떻게 바뀌어도 받는 쪽이 깨지지 않는다.
     printf '%s\n' "$bundle_name"
     ;;

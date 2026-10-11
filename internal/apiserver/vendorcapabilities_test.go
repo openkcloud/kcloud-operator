@@ -44,7 +44,7 @@ func TestHandleVendorCapabilitiesReturnsRegistryRows(t *testing.T) {
 
 	// assurance 는 VendorCapabilityRow 를 그대로 인코딩해 REST 에 실린다(핸들러에 변환 코드가
 	// 없다). 타입 디코드만으로는 json 태그가 바뀌어도(값이 빈 문자열로 새 조용히) 못 잡으므로
-	// 원문 키 유무를 직접 본다(review M-3).
+	// 원문 키 유무를 직접 본다.
 	var raw []map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)

@@ -1,11 +1,11 @@
-<!-- README.md: Rebellions ATOM descriptor SW 시분할 라이브 데모 사용법 | 생성일: 2026-09-22 -->
+<!-- README.md: Rebellions ATOM descriptor SW 시분할 라이브 데모 사용법 | 생성일: 2026-09-22 | 수정일: 2026-10-11 -->
 # Rebellions ATOM descriptor SW 시분할 데모 (node5)
 
 ## 왜
 
 node5 의 ATOM 카드가 유휴일 때(외부 holder `atomplus-vllm.service` 중지) 두 프로세스가 같은
-`/dev/rbln0` 을 동시에 열 수 있음을 `test/live/concurrent-open/probe.sh` 가 hold 모드로 실측했다
-(2026-09-22 동시 open 실측, verdict ok, confound 없음). 이 데모는
+`/dev/rbln0` 을 동시에 열 수 있음을 `test/live/concurrent-open/probe.sh` 가 hold 모드로
+확인한다(confound 없음). 이 데모는
 그 근거가 실제 광고로 이어지는지를 라이브로 보인다 — AcceleratorDescriptor `spec.sharing` 하나로
 device-plugin 코드 없이 `rebellions/atom` 을 replicas 개로 광고하고, 소비자 파드 둘이 같은 장치를
 나눠 여는 것까지 확인한다.

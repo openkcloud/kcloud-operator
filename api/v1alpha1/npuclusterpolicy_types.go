@@ -17,7 +17,7 @@ limitations under the License.
 // ============================================================
 // npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
 // 상세: Detector/Nvidia/Furiosa/Rebellions/Tenstorrent vendor spec 포함
-// 생성일: 2025-01-01 | 수정일: 2026-10-09
+// 생성일: 2025-01-01 | 수정일: 2026-10-11
 // ============================================================
 
 package v1alpha1
@@ -43,20 +43,18 @@ type FuriosaSpec struct {
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ConfigMapName     string            `json:"configMapName,omitempty"`
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
-	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다.
-	// nodeSelector 는 양성 선택이라 노드 하나를 빼려면 나머지 전부에 라벨을 붙여야
-	// 한다 — 노드가 늘수록 나빠진다. 이 축은 그 반대 방향이다.
-	// control-plane 배제는 이 필드와 무관하게 항상 걸린다(정책으로 끌 수 없다).
+	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다 — nodeSelector(양성 선택)는
+	// 노드 하나를 빼려면 나머지 전부에 라벨이 필요해 노드가 늘수록 나빠지는데, 이 축은 반대
+	// 방향이다. control-plane 배제는 이 필드와 무관하게 항상 걸린다(정책으로 끌 수 없다).
 	// +optional
 	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
 	Rngd                RngdSpec              `json:"rngd,omitempty"`
 	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
 	// +optional
 	DRA *DRASpec `json:"dra,omitempty"`
-	// Unified: true 면 Warboy/RNGD 를 두 개의 개별 DaemonSet 대신 하나의 통합 DaemonSet 으로
-	// 배포한다(A' 방안 — 동봉 바이너리 + PCI 감지 exec). 기본 false = 기존 2-DS 경로(fallback).
-	// 통합 DS 는 자립 라벨(kcloud.ai/furiosa-family.present, node-manager 부여)로 양 노드에 스케줄되며,
-	// 리소스명(beta.furiosa.ai/npu / furiosa.ai/rngd)은 각 바이너리가 광고하므로 불변.
+	// Unified: true 면 Warboy/RNGD 를 하나의 통합 DaemonSet(동봉 바이너리 + PCI 감지 exec)으로
+	// 배포한다. 기본 false = 기존 2-DS 경로. 통합 DS 는 자립 라벨(furiosa-family.present)로
+	// 양 노드에 스케줄되며, 리소스명(beta.furiosa.ai/npu / furiosa.ai/rngd)은 바이너리가 광고한다.
 	// +optional
 	Unified bool `json:"unified,omitempty"`
 	// UnifiedDevicePluginImage: 통합 DS 가 사용할 동봉 이미지. Unified=true 일 때만 사용.
@@ -82,15 +80,9 @@ type RngdSpec struct {
 	// +kubebuilder:validation:Enum=none;single-core;dual-core;quad-core
 	// +optional
 	PartitionPolicy string `json:"partitionPolicy,omitempty"`
-	// DebugMode 는 device plugin 바이너리에 --debugMode 를 넘길지 정한다.
-	//
-	// 벤더 이미지 세대마다 받는 flag 가 다르다. 사내에서 쓰는 파티션 지원 빌드는 이 flag 를
-	// 요구하고(없으면 "couldn't recognize any furiosa devices" 로 종료), 공개
-	// ghcr.io/furiosa-ai/furiosa-device-plugin(v0.0.12·v0.0.13·rc0)은 flag 를 아예 받지
-	// 않아 `unknown flag: --debugMode` 로 즉시 죽는다(2026-09-09 실측).
-	//
-	// 기본값은 nil 이고 그때는 켠 것으로 읽는다 — 기존 배포의 동작을 그대로 둔다.
-	// 공개 이미지를 쓰려면 false 로 명시한다.
+	// DebugMode 는 device plugin 바이너리에 --debugMode 를 넘길지 정한다. 사내 파티션 지원 빌드는
+	// 이 flag 가 없으면 장치를 인식 못하고, 공개 이미지는 이 flag 를 받으면 즉시 종료한다 —
+	// 이미지에 따라 정반대로 작동한다. 기본값 nil=켠 것(기존 유지), 공개 이미지는 false 로 명시.
 	// +optional
 	DebugMode *bool `json:"debugMode,omitempty"`
 	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
@@ -109,10 +101,9 @@ type NvidiaSpec struct {
 	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
 	// +optional
 	ExcludeNodeSelector *metav1.LabelSelector `json:"excludeNodeSelector,omitempty"`
-	// DcgmExporter 는 NVIDIA GPU 텔레메트리(온도/사용률/메모리/전력) exporter 설정이다.
-	// NPU 4벤더는 node-manager 가 hwmon 으로 수집하지만 NVIDIA 드라이버는 hwmon 을 등록하지
-	// 않아 NVML 경로가 필요하므로, upstream dcgm-exporter 를 operand 로 배포한다.
-	// 미지정(nil) 또는 Enabled=false 면 DS 를 만들지 않고 기존 것이 있으면 제거한다.
+	// DcgmExporter 는 NVIDIA GPU 텔레메트리(온도/사용률/메모리/전력) exporter 설정이다. NPU 4벤더는
+	// hwmon 으로 수집하지만 NVIDIA 드라이버는 hwmon 을 등록하지 않아 NVML 경로의 dcgm-exporter 가
+	// 필요하다. 미지정 또는 Enabled=false 면 배포하지 않고 기존 DS 가 있으면 제거한다.
 	// +optional
 	DcgmExporter *DcgmExporterSpec `json:"dcgmExporter,omitempty"`
 	// DRA 는 이 벤더의 DRA 드라이버 배포 여부다. 광고 주체(AdvertiseBy)와 독립이다.
@@ -141,7 +132,7 @@ type RebellionsSpec struct {
 	DevicePluginImage string            `json:"devicePluginImage"`
 	ResourceName      string            `json:"resourceName,omitempty"`   // default "ATOM"
 	ResourcePrefix    string            `json:"resourcePrefix,omitempty"` // default "rebellions.ai"
-	Namespace         string            `json:"namespace,omitempty"`      // default "kube-system" (rbllnsResolveNamespace; 벤더 공식 배포물 기본값 rbln-system 과 다르다)
+	Namespace         string            `json:"namespace,omitempty"`      // default "kube-system"(벤더 기본값 rbln-system 과 다름)
 	ConfigMapName     string            `json:"configMapName,omitempty"`  // default "rbln-device-plugin-config"
 	NodeSelector      map[string]string `json:"nodeSelector,omitempty"`
 	// ExcludeNodeSelector 는 이 벤더의 배포 대상에서 뺄 노드를 고른다. FuriosaSpec.ExcludeNodeSelector 참조.
@@ -181,9 +172,8 @@ type NPUClusterPolicySpec struct {
 	Rebellions  RebellionsSpec  `json:"rebellions,omitempty"`
 	Tenstorrent TenstorrentSpec `json:"tenstorrent,omitempty"`
 
-	// ImagePullSecrets 는 operator 가 런타임 생성하는 모든 자식 DaemonSet
-	// (detector/device-plugin) pod spec 및 생성 ServiceAccount 에 부착되는
-	// pull secret 목록입니다. helm `imagePullSecrets` 값이 CR 을 통해 전파됩니다.
+	// ImagePullSecrets 는 operator 가 생성하는 자식 DaemonSet(detector/device-plugin) pod spec 과
+	// ServiceAccount 에 부착되는 pull secret 목록입니다. helm `imagePullSecrets` 값이 CR 로 전파됩니다.
 	// 미지정 시 빈 목록 — 노드레벨(containerd) 인증 경로를 유지하는 하위호환 동작입니다.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
@@ -288,10 +278,9 @@ func (a AdvertiseSpec) AdvertisedBy() string {
 // device-plugin/DRA 를 만들지도 지우지도 않는다. 장치 발견·라벨과 descriptor 중재는
 // 그대로 관리 중으로 본다.
 type ManagementSpec struct {
-	// ManagementMode 는 managed(기본)·delegated·external 이다. 미지정 = managed.
-	//   managed   : kcloud 가 벤더 operand 를 직접 배포하고 소유한다.
-	//   delegated : 벤더 operator 가 이미 배포를 맡고 있다. kcloud 는 배포하지 않고 그 존재만 확인한다.
-	//   external  : 드라이버·런타임이 kcloud 밖에서 설치됐다. 노드만 관측한다.
+	// ManagementMode 는 managed(기본)·delegated·external 이다. managed 는 kcloud 가 벤더
+	// operand 를 직접 배포, delegated 는 벤더 operator 가 이미 배포해 존재만 확인, external 은
+	// 드라이버·런타임이 kcloud 밖에서 설치되어 노드만 관측한다. 미지정 시 managed.
 	// +kubebuilder:validation:Enum=managed;delegated;external
 	// +optional
 	ManagementMode string `json:"managementMode,omitempty"`

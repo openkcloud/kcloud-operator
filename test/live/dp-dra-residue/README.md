@@ -1,4 +1,4 @@
-<!-- README.md: device-plugin↔DRA 전환 잔재 스냅샷 도구 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 (run.sh 사용법·partial 상태 추가; 식별자 제거) -->
+<!-- README.md: device-plugin↔DRA 전환 잔재 스냅샷 도구 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 -->
 # device-plugin ↔ DRA 전환 잔재 스냅샷
 
 ## 왜

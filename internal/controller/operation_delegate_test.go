@@ -1,10 +1,8 @@
 // ============================================================
 // operation_delegate_test.go: delegate 모드 envtest (이음매 포함)
 // 상세: gate 가 꺼진 기본 상태의 회귀 0, 켰을 때의 단일 mutation, 이미 수렴한 정책의 무동작,
-//
-//	그리고 정책부터 근거까지 전 구간을 한 번에 통과시키는 이음매 시험.
-//
-// 생성일: 2026-08-01 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 작업공간 경로 인용 제거; 줄폭 재접음; 가리킬 곳 없는 참조 제거)
+// 그리고 정책부터 근거까지 전 구간을 한 번에 통과시키는 이음매 시험.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -109,16 +107,12 @@ var _ = Describe("delegate mode", func() {
 		})
 	})
 
-	// 증명: 이미 수렴한 정책은 gate 를 켜도 트랜잭션을 만들지 않는다.
-	//       (이걸 빠뜨리면 gate 를 켜는 순간 클러스터의 모든 Ready 정책이 재적용된다 — 가장 큰 폭발 반경.)
+	// 증명: 이미 수렴한 정책은 gate 를 켜도 트랜잭션을 만들지 않는다(빠뜨리면 gate 를 켜는 순간
+	// 클러스터의 모든 Ready 정책이 재적용된다 — 가장 큰 폭발 반경). 노드를 처음부터 목표
+	// geometry 로 시드해 "이미 수렴" 을 흉내내면 안 된다 — ApplyRecords 없이 시작하면
+	// routeNvidiaNoDiff 가 ExistingMigConfiguration(Failed, terminal)로 거절해 Ready 에 못
+	// 도달한다. "aop-off" 처럼 geometry 를 비운 채 시작해 실제 apply 경로로 자연 수렴시켜야 한다.
 	// 깨는 뮤테이션: delegateToOperation 의 shouldReverify 가드를 지우면 트랜잭션이 생겨 실패한다.
-	//
-	// 픽스처 수정(브리핑 원안 이탈): 브리핑 원안은 노드를 처음부터 목표
-	// geometry 로 시드해 "이미 수렴" 을 흉내내려 했지만, ApplyRecords 없이 시작하면 첫 reconcile
-	// 이 routeNvidiaNoDiff 의 ExistingMigConfiguration(Failed, terminal)에 걸려 Ready 에 못
-	// 도달한다(실측 확인: Eventually 가 20s 타임아웃, phase=Failed). "aop-off" 스펙과 같은 방식대로
-	// geometry 를 비운 채 시작해 실제 apply 경로로 자연 수렴시킨다 — 이래야 "이미 수렴했다" 는
-	// 전제가 이 코드가 실제로 만들 수 있는 상태가 된다.
 	It("does not create an operation for an already converged policy", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -175,19 +169,11 @@ var _ = Describe("delegate mode", func() {
 	})
 
 	// ==== 이음매 ====
-	// 증명: 정책 → 트랜잭션 → 작업 본체 → 기존 적용 경로 → 검증기 → 근거 → 정책 status 가
-	//       한 줄로 이어진다. 각 태스크가 따로 통과해도 이 줄이 끊기면 아무 소용이 없다.
-	// 깨는 뮤테이션: participant 등록에서 PartitionReconfigure 를 빼거나, gateReady 호출을
-	//       runOnce 에서 제거하면(근거 미생성) 실패한다.
-	//
-	// 픽스처 수정(브리핑 원안 이탈): 브리핑 원안은 노드/NDR 을 처음부터
-	// 목표 geometry+광고를 가진 상태로 시드하고 ApplyRecords 는 비워 둔 채 바로 reconcile 한다.
-	// acpp_evidence_gate_test.go 의 "records evidence and reaches Ready" 케이스가 이미 문서화한
-	// 것과 똑같은 함정이다 — 그 상태에서 첫 reconcile 은 routeNvidiaNoDiff 가 "geometry 는 맞지만
-	// 이 ACPP 가 만든 게 아니다" 로 읽어 ExistingMigConfiguration(Failed, terminal)로 거절하고,
-	// operation 은 Succeeded 가 아니라 실패/롤백 경로로 빠진다(Eventually 가 40s 타임아웃). 그래서
-	// 같은 파일의 기존 패턴대로 "이 ACPP 가 이미 이 레이아웃을 적용해 소유하고 있다"는 저널을
-	// 먼저 심어 managed no-diff 재검증 경로로 들어가게 한다.
+	// 증명: 정책 → 트랜잭션 → 작업 본체 → 기존 적용 경로 → 검증기 → 근거 → 정책 status 가 한
+	// 줄로 이어진다. 깨는 뮤테이션: participant 등록·gateReady 호출을 지우면(근거 미생성) 실패한다.
+	// 노드/NDR 을 목표 geometry+광고로 미리 시드하고 ApplyRecords 는 비운 채 reconcile 하면 안
+	// 된다 — routeNvidiaNoDiff 가 "이 ACPP 가 만든 게 아니다" 로 거절한다. 이미 이 레이아웃을 적용해
+	// 소유하고 있다는 저널을 먼저 심어 managed no-diff 경로로 들어가게 한다.
 	It("carries a policy through the coordinator to a recorded evidence", func() {
 		withDelegateMode(func() {
 			wipeACPPs()
@@ -214,12 +200,10 @@ var _ = Describe("delegate mode", func() {
 			}}
 			Expect(k8sClient.Status().Update(ctx, acpp)).To(Succeed())
 
-			// acppR 은 evidenceReconciler() 가 아니라 nvidiaReconciler() 다(브리핑 원안 이탈) —
-			// participant 의 runOnce 는 gateReady 를 통해 acppR.Verification 이
-			// 있으면 자체적으로도 근거를 쓴다. 그러면 이 근거가 Coordinator 의 stepVerify(아래
-			// opR.Verification)에서 온 것인지, participant 내부의 낡은 ACPP-직접 게이트에서 온 것인지
-			// 이 스펙만으로는 구분할 수 없다(실측: 둘 중 하나만 없애도 스펙이 통과한다 — 뮤테이션이
-			// 둘 다 죽여야만 실패). "이 스펙이 검증하려는 것은 Coordinator 경로" 이므로 acppR 에는
+			// acppR 은 evidenceReconciler() 가 아니라 nvidiaReconciler() 다 — participant 의 runOnce 는
+			// gateReady 를 통해 acppR.Verification 이 있으면 자체적으로도 근거를 쓴다. 이 스펙만으로는
+			// 근거가 Coordinator 의 stepVerify 에서 왔는지 participant 내부의 낡은 ACPP-직접 게이트에서
+			// 왔는지 구분할 수 없다(둘 중 하나만 없애도 통과하고, 둘 다 없애야 실패한다). acppR 에는
 			// Verification 을 심지 않아 근거의 유일한 출처를 opR(Coordinator)로 고정한다.
 			acppR := nvidiaReconciler()
 			opR := opReconciler(NewACPPParticipant(acppR))
@@ -264,16 +248,11 @@ var _ = Describe("delegate mode", func() {
 	})
 
 	// ==== 이음매: 충돌하는 두 정책 ====
-	// 증명: 같은 노드를 노리는 두 정책이 delegate 모드에서 동시에 적용되지 않는다.
-	//       (마스터의 Stage 2 완료 기준 첫 줄을 정책 수준에서 확인한다.)
-	//
-	// 뮤테이션 정정(브리핑 원안 이탈): 브리핑은 "ResourceKeysForACPP 가
-	// 빈 슬라이스를 돌려주면 충돌이 안 잡혀 실패한다" 고 주장하지만 실측하면 그렇지 않다 —
-	// ResourceKeysForACPP 를 nil 로 고정해도 이 스펙은 통과한다. 두 operation 이 같은 노드를
-	// 노리므로 Admit(자원 키 충돌 판정)이 통과시켜도 stepAcquire 의 노드 Lease가 독립적으로
-	// 같은 노드에 대한 두 번째 획득을 막는다 — 이 픽스처(같은 노드)에서는 Lease 가 이미 충분한
-	// 방어선이라 ResourceKeys 단독으로는 이 스펙을 깰 수 없다(실측 확인).
-	// ResourceKeys/Admit 고유 로직은 internal/operation/conflict_test.go 가 별도로 고정한다.
+	// 증명: 같은 노드를 노리는 두 정책이 delegate 모드에서 동시에 적용되지 않는다. ResourceKeysForACPP
+	// 를 nil 로 고정해도 이 스펙은 통과한다 — 두 operation 이 같은 노드를 노리므로 Admit(자원 키
+	// 충돌 판정)이 통과시켜도 stepAcquire 의 노드 Lease 가 독립적으로 두 번째 획득을 막는다. 이
+	// 픽스처에서는 Lease 가 이미 충분한 방어선이고, ResourceKeys/Admit 고유 로직은
+	// internal/operation/conflict_test.go 가 별도로 고정한다.
 	It("serializes two policies that claim the same device", func() {
 		withDelegateMode(func() {
 			wipeACPPs()
@@ -332,14 +311,14 @@ var _ = Describe("delegate mode", func() {
 	})
 })
 
-// 최종 리뷰 수정(I-3): 작업 객체 이름에 UID 가 없으면 삭제 후 같은 이름으로 재생성된 정책이
-// 고아로 남은 옛 operation 과 이름이 충돌해 새 정책이 영원히 적용되지 않는다.
+// 작업 객체 이름에 UID 가 없으면 삭제 후 같은 이름으로 재생성된 정책이 고아로 남은 옛
+// operation 과 이름이 충돌해 새 정책이 영원히 적용되지 않는다.
 var _ = Describe("delegate mode operation identity", func() {
 	// 증명: ACPP 를 지웠다가 같은 이름으로 다시 만들어도(generation 이 1로 되돌아간다) 새
 	// 정책은 옛(고아, 이미 종점인) operation 과 이름이 겹치지 않고 자신만의 새 operation 을 만든다.
-	// 깨는 뮤테이션: OperationNameFor 에서 UID 접미사를 빼면(리뷰 이전 원본 형태) 실패한다 —
-	// Create 가 옛 이름과 충돌해 AlreadyExists 를 돌려주고 그게 조용히 삼켜져 새 정책 소유의
-	// operation 이 아예 안 생긴다.
+	// 깨는 뮤테이션: OperationNameFor 에서 UID 접미사를 빼면 실패한다 — Create 가 옛 이름과
+	// 충돌해 AlreadyExists 를 돌려주고 그게 조용히 삼켜져 새 정책 소유의 operation 이 아예
+	// 안 생긴다.
 	It("does not collide with an orphaned operation after the policy is deleted and recreated under the same name", func() {
 		withDelegateMode(func() {
 			wipeACPPs()
@@ -363,7 +342,7 @@ var _ = Describe("delegate mode operation identity", func() {
 				_ = k8sClient.Delete(ctx, &opA, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			})
 			// 옛 트랜잭션을 종점으로 만든다 — envtest 에는 GC 컨트롤러가 없어 ownerRef 로도 안
-			// 지워지므로(리뷰가 지적한 "회수되지 않는다"), 고아로 영구히 남는 실제 조건을 그대로 시뮬레이션한다.
+			// 지워지므로, 고아로 영구히 남는 실제 조건을 그대로 시뮬레이션한다.
 			opA.Status.Phase = npuv1alpha1.OpPhaseSucceeded
 			Expect(k8sClient.Status().Update(ctx, &opA)).To(Succeed())
 
@@ -402,14 +381,13 @@ var _ = Describe("delegate mode operation identity", func() {
 	})
 })
 
-// 최종 리뷰 수정(삭제 경로 우회, 리뷰 §2.2): 위임 모드에서도 ACPP 삭제는 Reconcile 의 위임
-// 검사보다 먼저 처리돼 조정자를 거치지 않는다. 조정자가 같은 노드를 Applying 중(Lease 보유)일 때
-// 삭제가 그대로 진행되면 두 주체가 동시에 하드웨어를 만진다 — 최소한의 방어로 삭제 경로도 같은
-// 노드 Lease 를 잡게 한다.
+// 위임 모드에서도 ACPP 삭제는 Reconcile 의 위임 검사보다 먼저 처리돼 조정자를 거치지 않는다.
+// 조정자가 같은 노드를 Applying 중(Lease 보유)일 때 삭제가 그대로 진행되면 두 주체가 동시에
+// 하드웨어를 만진다 — 최소한의 방어로 삭제 경로도 같은 노드 Lease 를 잡게 한다.
 var _ = Describe("delegate mode deletion lease guard", func() {
 	// 증명: 조정자가 노드의 Lease 를 쥐고 있으면 삭제 경로는 하드웨어를 되돌리지 않고 대기한다.
-	// 깨는 뮤테이션: handleNvidiaDeletion 의 Lease 획득 검사를 지우면(리뷰 이전 원본 형태) 실패한다
-	// — Lease 가 남의 것인데도 rollback 이 진행돼 finalizer 가 즉시 제거된다.
+	// 깨는 뮤테이션: handleNvidiaDeletion 의 Lease 획득 검사를 지우면 실패한다 — Lease 가 남의
+	// 것인데도 rollback 이 진행돼 finalizer 가 즉시 제거된다.
 	It("waits for the node lease instead of rolling back hardware while the coordinator holds it", func() {
 		withDelegateMode(func() {
 			wipeACPPs()

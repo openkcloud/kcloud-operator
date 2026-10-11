@@ -1,69 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================
 # helm-values-option-check.sh: helm upgrade 의 --reuse-values 단독 사용을 금지한다
-# 상세: Helm v4.0.1 에서 --reuse-values 는 직전 릴리스가 계산해 둔 값을 통째로 재사용해,
-#       사용자 값으로 덮지 않은 차트 기본값 변경이 반영되지 않는다. 그래서 차트만 고치고
-#       반영한 변경이 조용히 빠진다. 대신 --reset-then-reuse-values 를 쓴다.
-#       --reset-then-reuse-values 는 --reuse-values 를 부분 문자열로 포함하지 않는다
-#       ("then-" 뒤가 대시 하나짜리 "-reuse-values"가 되기 때문) — 그래서 별도 제외 없이도
-#       오탐이 없다. 검사 대상은 *.sh 파일뿐이고, 같은 셸 문장(줄 끝 \ 로 이어진 줄 포함)에
-#       helm 과 --reuse-values 가 함께 있을 때만 위반으로 센다 — 금지를 설명하는 문서
-#       문장까지 걸리지 않게 하기 위해서다. 물리적 줄만 보면 `helm upgrade ... \` 다음
-#       줄에 `--reuse-values` 가 오는 실제 흔한 형태(이 저장소의 실제 결함이 이 모양이었다)를
-#       놓치므로, \ 로 이어진 물리적 줄들을 하나의 셸 문장으로 합친 뒤에 판정한다.
-# 상세(검사 2): 문서가 권하는 값 키(`--set`/`--set-string` 과 Configuration 표의 키
-#       칸)가 실재하는지 본다 — 문서가 없는 키를 적으면 helm 이 조용히 버리거나
-#       values.schema.json 이 helm upgrade 자체를 거절하는데, 운영자는 둘 다 모른 채
-#       바꿨다고 믿는다. 대상은 README.md·deploy/helm/README.md·deploy/helm/INSTALL.md·
-#       deploy/helm/UPGRADE.md·deploy/helm/templates/NOTES.txt·deploy/helm/install.sh —
-#       없는 파일은 건너뛴다.
-#
-#       "실재"의 판정 기준은 values.yaml 데이터(기본값이 선언된 키) **또는**
-#       values.schema.json(기본값은 없지만 스키마가 허용하는 키, 예: toolkit.image)
-#       중 하나라도 있으면 허용이다(합집합) — 한쪽만 보면 두 방향으로 틀린다. values.yaml
-#       만 보면 "기본값은 없지만 스키마가 허용하는" 키를 오탐으로 잡고(예:
-#       driverInstallPolicies.nvidia.toolkit.image), 스키마만 보면 스키마 쪽이 빠뜨린
-#       키를 못 잡는다. 둘 다 python3 PyYAML/json 으로 읽는다(snap yq 는 /tmp 를 못
-#       읽는다). 둘 중 하나가 없으면(예: 이 스크립트 자신의 시험 픽스처) 검사 2 를
-#       건너뛴다 — values.yaml 이 없으면 비교할 기준이 없다.
-#
-#       스키마 쪽은 `$ref`/`allOf` 를 따라간다. `allOf` 가지 중 하나가 어떤 키를
-#       `false` 로 닫아 두면(벤더별 제외, 예: dipWithoutToolkit) 다른 가지가 그 키를
-#       허용해도 교집합 의미로 거절 — 그 외에는 가지 중 하나라도 허용하면 허용.
-#       properties 가 없는 리프(또는 "열어 둔" 블록 — affinity, resources.limits/
-#       requests 같은 임의 키 블록)에서 더 깊은 세그먼트가 남으면 통과시킨다(오탐보다
-#       누락이 낫다는 원칙, 못 알아듣는 형태는 보수적으로 검사 제외).
-#
-#       키 형태 둘을 지원한다. "a.b[0].c" 처럼 배열 인덱스가 섞이면 인덱스가 나온
-#       세그먼트에서 자르고 그 앞까지만 본다(리스트 원소 하나의 스키마까지는 모른다 —
-#       리스트 키 자체의 존재만 확인). "<vendor>" 처럼 꺾쇠로 감싼 세그먼트와
-#       "kubectl*" 처럼 끝에 별표가 붙은 세그먼트는 그 위치의 자식 키 중 하나(또는
-#       그 접두사로 시작하는 키 중 하나)라도 나머지 경로를 만족하면 허용으로 본다
-#       (Configuration 표가 벤더 공통 키·접두사 묶음 키를 이렇게 적는다).
-#
-#       값("=" 뒤, `<자리표시자>` 포함)은 --set/--set-string 양쪽 모두 애초에 보지
-#       않는다 — 키만 본다. `--set "key=${VAR}"` 처럼 인용부호로 감싸인 경우를 위해
-#       추출한 키의 앞뒤 인용부호를 벗긴다.
-#
-#       Configuration 표는 헤더 셀(구분선 `|---|...` 바로 위 행)의 첫 칸이
-#       "파라미터"/"값"/"values 키"/"values key" 일 때만 그 표의 데이터 행을 본다 —
-#       이 저장소에는 키가 아닌 것(CRD Kind 이름, Reconciler 이름, 리네임 전/후 이름)을
-#       첫 칸에 코드체로 적는 표도 있어서, 헤더로 거르지 않으면 그 표들이 전부 오탐이
-#       된다. 데이터 행의 첫 칸에서 코드체(`` ` ``)로 감싼 조각을 전부 뽑는다 — 첫
-#       조각은 그대로 키 경로, 그 뒤 조각("`b`"/"`.b`" 처럼 "/" 로 이어 붙는 같은 칸의
-#       나머지)은 그 자체로 독립 경로를 먼저 시도하고(예: "furiosa.devicePluginImage"
-#       처럼 뒤 조각도 완결된 경로인 경우), 아니면 앞 조각의 마지막 세그먼트 k=1개부터
-#       차례로 더 떼어내고 그 자리에 이 조각을 끼워 넣어 본다(예: "driverInstallPolicies.
-#       furiosa.driver" / ".rngd.driver" 는 k=2 에서 "driverInstallPolicies.rngd.driver"
-#       로 성립). 이 저장소 문서에는 이 규칙으로 못 푸는 형태가 없어 예외 목록은 비어
-#       있다 — 오탐이 나오면 그때 이 블록 안에 사유와 함께 추가한다.
-# 용법: helm-values-option-check.sh [검사할 디렉터리(기본: 저장소 루트)]
-# 생성일: 2026-09-24 | 수정일: 2026-10-04 (검사 2: Configuration 표 키·--set-string·
-#         values.schema.json 대조 추가, 대상 문서에 UPGRADE.md·install.sh 추가)
+# 상세: 검사 1 은 *.sh 파일에서 helm 과 --reuse-values 가 한 셸 문장에 같이 있으면 거부한다
+#       (--reset-then-reuse-values 를 쓴다). 검사 2 는 문서가 권하는 값 키(--set/--set-string,
+#       Configuration 표)가 values.yaml 또는 values.schema.json 에 실재하는지 본다. 판정
+#       근거는 각 함수의 본문 주석 참고.
+# 생성일: 2026-09-24 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
+# Helm v4.0.1 에서 --reuse-values 는 직전 릴리스 계산값을 통째로 재사용해, 사용자 값으로
+# 덮지 않은 차트 기본값 변경이 반영되지 않는다 — 차트만 고친 변경이 조용히 빠진다. 대신
+# --reset-then-reuse-values 를 쓴다("then-" 뒤가 대시 하나짜리 "-reuse-values" 라 부분
+# 문자열로 걸리지 않아 오탐이 없다). \ 로 이어진 줄들을 하나의 셸 문장으로 합쳐서 판정하는
+# 이유는 `helm upgrade ... \` 다음 줄에 `--reuse-values` 가 오는 실제 흔한 형태를 물리적
+# 줄 단위로는 놓치기 때문이다.
 hits="$(find "$root" -type f -name '*.sh' \
     -not -path '*/.git/*' -not -path '*/.superpowers/*' \
     -not -name 'helm-values-option-check*' -print0 \
@@ -99,6 +51,8 @@ import re
 import sys
 
 import yaml
+# PyYAML/json 으로 직접 읽는다 — snap 으로 설치된 yq 는 /tmp 를 못 읽어 이 스크립트의
+# 임시 트리(self-test, CI)에서 쓸 수 없다.
 
 root = sys.argv[1]
 values_path = os.path.join(root, "deploy/helm/values.yaml")
@@ -152,6 +106,9 @@ def branches_of(node):
     return [node]
 
 
+# <vendor> 처럼 꺾쇠로 감싼 세그먼트와 kubectl* 처럼 끝에 별표가 붙은 세그먼트는 Configuration
+# 표가 벤더 공통 키·접두사 묶음 키를 적는 방식이다 — 해당 위치의 자식 키 중 하나(또는 그
+# 접두사로 시작하는 키 중 하나)라도 나머지 경로를 만족하면 허용으로 본다.
 def seg_matches(seg, k):
     if seg.startswith("<") and seg.endswith(">"):
         return True
@@ -223,6 +180,8 @@ def path_exists_schema(node, segs):
 
 
 def declared(raw_key):
+    # 값("=" 뒤)은 보지 않고 키만 본다 — --set "key=${VAR}" 처럼 인용부호로 감싸인 호출을
+    # 위해 추출한 키 앞뒤의 따옴표를 벗긴다.
     segs = raw_key.strip("\"'").split(".")
     return path_exists_data(data_tree, segs) or path_exists_schema(schema_tree, segs)
 
@@ -240,6 +199,9 @@ bad = []
 checked = {"set": 0, "table": 0}
 
 set_re = re.compile(r"--set(?:-string)?\s+([^\s=]+)=")
+# 헤더 셀(구분선 바로 위 행)의 첫 칸이 이 중 하나일 때만 그 표의 데이터 행을 본다 — 이
+# 저장소에는 키가 아닌 것(CRD Kind 이름, Reconciler 이름, 리네임 전/후 이름)을 첫 칸에
+# 코드체로 적는 표도 있어, 헤더로 거르지 않으면 그 표들이 전부 오탐이 된다.
 ALLOWED_TABLE_HEADERS = {"파라미터", "값", "values 키", "values key"}
 
 
@@ -249,6 +211,12 @@ def is_sep_row(line):
 
 
 def check_table_cell(doc, lineno, cell1):
+# 데이터 행 첫 칸의 코드체(`...`) 조각을 전부 뽑는다 — 첫 조각은 그대로 키 경로, 그 뒤
+# 조각("`b`"/"`.b`" 처럼 이어 붙는 조각)은 먼저 독립 경로로 시도하고, 아니면 앞 조각의
+# 마지막 세그먼트부터 차례로 떼어내 그 자리에 끼워 넣어 본다(예: "driverInstallPolicies.
+# furiosa.driver" / ".rngd.driver" 는 "driverInstallPolicies.rngd.driver" 로 성립).
+# 이 저장소 문서에는 이 규칙으로 못 푸는 형태가 아직 없다 — 오탐이 나오면 그때 사유와
+# 함께 예외를 추가한다.
     frags = re.findall(r"`([^`]+)`", cell1)
     if not frags:
         return

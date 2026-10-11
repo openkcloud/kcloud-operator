@@ -1,17 +1,8 @@
-// control.go: pkg/npuctl 제어(control) 로직 — 모두 CR patch로 귀결
-// 상세: DriverInstallPolicy.spec.driver.version 변경(업그레이드),
-//
-//	NPUClusterPolicy.spec.<vendor>.enabled 토글, DriverUpgradeState.metadata 에 롤백 요청
-//	어노테이션(RollbackRequestedAnnotation) patch(롤백 트리거). status 는 컨트롤러만 쓴다는
-//	규칙에 따라 CLI 는 metadata 만 patch하며 operator 재조정(reconcile)이 실제 작업을
-//	수행한다 — 외부 상태 이원화 없음(.omc/plans/management-api.md §7 리스크 완화 원칙).
-//	롤백 요청 어노테이션은 internal/upgrade.UpgradeStateMachine.TransitionState 가 읽어
-//	Rollback 으로 전이한 뒤 지운다 — 새 메커니즘이 아니라 기존 상태전이 경로를 외부에서
-//	트리거할 뿐이다.
-//	⚠️ 라이브 클러스터에서 이 경로를 실행하는 검증은 금지되어 있다(가드레일) — fake client
-//	단위 테스트로만 검증한다.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (UpgradeVendor patch 에 FieldManager 명시)
+// control.go: pkg/npuctl 제어(control) 로직 — 모두 CR patch 로 귀결된다
+// 상세: 드라이버 버전 변경·벤더 enabled 토글·롤백 요청 어노테이션 patch 를 제공한다.
+// status 는 컨트롤러만 쓰므로 CLI 는 metadata/spec 만 patch 하고 실제 작업은 operator
+// 재조정이 한다. 라이브 클러스터 실행 검증은 금지(가드레일).
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -252,19 +243,12 @@ type RollbackResult struct {
 	PreviousVersion string `json:"previousVersion,omitempty"`
 }
 
-// resolveRollbackTarget은 TriggerDriverRollback·PreviewDriverRollback이 공유하는
-// 해석 단계다 — DUS 를 찾고, 그 정책이 TrackOnly 면 거절하고, 결과 요약을 만든다.
-// 아무것도 쓰지 않는다(미리보기와 실제 트리거가 같은 판정을 쓰게 하기 위해서다).
-//
-// TrackOnly 벤더(예: Tenstorrent)는 설치 경로가 없다 — ensureTrackOnlyState
-// (internal/controller/driver_upgrade_controller.go)가 매 reconcile 마다 status.state
-// 를 Idle 로 강제 되돌리므로, 여기서 Rollback 으로 patch 해도 조용히 취소된다. 그 전에
-// 걸러 "롤백을 시작했다"는 거짓 신호를 내지 않는다.
-//
-// resolveDIP 는 DriverInstallPolicySpec.Vendor 원시값이 아니라 vendorKeyForDIP 가 만드는
-// 다섯 벤더 키(furiosa+model=rngd 만 "rngd", 그 외엔 raw vendor) 기준으로 찾는다. DUS 의
-// 원시 (vendor,model) 을 그대로 넘기면 furiosa 벤더에 warboy·rngd 두 DriverInstallPolicy
-// 가 공존할 때 rngd DUS 에 warboy 정책이 잘못 붙는다 — key 로 먼저 바꾼다.
+// resolveRollbackTarget은 TriggerDriverRollback·PreviewDriverRollback이 공유하는 해석
+// 단계다 — DUS 를 찾고 TrackOnly 정책이면 거절하고 결과 요약을 만든다(쓰지 않는다,
+// 미리보기·실제 트리거가 같은 판정을 쓰도록). TrackOnly 벤더는 설치 경로가 없어
+// ensureTrackOnlyState 가 매 reconcile 마다 status.state 를 Idle 로 되돌리므로, 거르지
+// 않으면 patch 는 조용히 취소돼 거짓 신호가 된다. resolveDIP 조회는 vendorKeyForDIP 의
+// 다섯 벤더 키로 한다 — raw vendor 를 쓰면 furiosa 혼재 시 rngd DUS 가 warboy 정책에 잘못 매칭된다.
 func (c *Client) resolveRollbackTarget(ctx context.Context, node, vendor, model string) (
 	*npuv1alpha1.DriverUpgradeState, *RollbackResult, error,
 ) {
@@ -324,13 +308,10 @@ func (c *Client) PreviewDriverRollback(ctx context.Context, node, vendor, model 
 }
 
 // TriggerDriverRollback은 (node[,vendor[,model]])에 대응하는 단일 DriverUpgradeState의
-// metadata 에 롤백 요청 어노테이션(RollbackRequestedAnnotation)을 patch합니다.
-//
-// 이전 버전으로의 실제 복구(DaemonSet 이미지 되돌리기 등)는 이 함수가 하지 않습니다 —
-// status 는 컨트롤러만 쓴다는 규칙에 따라 CLI 는 요청 사실만 기록하고, 상태 기계
-// (internal/upgrade.UpgradeStateMachine.TransitionState)가 다음 reconcile 에서 이
-// 어노테이션을 읽어 Rollback 으로 전이한 뒤 지웁니다. 이 함수는 그 진입점에 신호만
-// 보냅니다(새 메커니즘을 만들지 않습니다).
+// metadata 에 롤백 요청 어노테이션(RollbackRequestedAnnotation)을 patch합니다. 이전
+// 버전으로의 실제 복구는 이 함수가 하지 않습니다 — CLI 는 요청 사실만 기록하고,
+// 상태 기계(internal/upgrade.UpgradeStateMachine.TransitionState)가 다음 reconcile 에서
+// 이 어노테이션을 읽어 Rollback 으로 전이한 뒤 지웁니다.
 func (c *Client) TriggerDriverRollback(ctx context.Context, node, vendor, model string) (*RollbackResult, error) {
 	dus, result, err := c.resolveRollbackTarget(ctx, node, vendor, model)
 	if err != nil {
@@ -351,10 +332,8 @@ func (c *Client) TriggerDriverRollback(ctx context.Context, node, vendor, model 
 }
 
 // resolveDUS는 node(+선택적 vendor,model)에 대응하는 단일 DriverUpgradeState를 찾습니다.
-//
-// DriverUpgradeState는 (node,vendor)로만 유일합니다(driverUpgradeStateName, internal/
-// controller/driver_upgrade_controller.go) — DriverInstallPolicy와 달리 model 별로
-// 나뉘지 않습니다. 그래서 vendor를 생략하면 그 노드의 DUS 전체에서 정확히 하나만 찾고
+// DriverUpgradeState는 (node,vendor)로만 유일합니다 — DriverInstallPolicy와 달리 model
+// 별로 나뉘지 않습니다. vendor를 생략하면 그 노드의 DUS 전체에서 정확히 하나만 찾고
 // (둘 이상이면 하이브리드 노드이므로 에러로 후보를 안내), model이 주어지면 찾은
 // DUS.spec.model과 대조만 합니다(선별 기준이 아니라 오타 방지용 확인).
 func (c *Client) resolveDUS(ctx context.Context, node, vendor, model string) (*npuv1alpha1.DriverUpgradeState, error) {

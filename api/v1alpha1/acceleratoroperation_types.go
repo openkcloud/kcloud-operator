@@ -1,10 +1,7 @@
 // ============================================================
 // acceleratoroperation_types.go: AcceleratorOperation CRD 타입 (트랜잭션 단위)
 // 상세: R&D base v0.1 §7.3~§7.6. 장치 변경 한 건의 허가증·저널·펜싱 토큰이다. 실제 mutation 은
-//
-//	participant 가 기존 적용 경로로 수행하고, 이 객체는 그것을 언제 해도 되는지와
-//	어디까지 갔는지를 담는다.
-//
+// participant 가 기존 적용 경로로 수행하고, 이 객체는 언제 해도 되는지와 어디까지 갔는지를 담는다.
 // 생성일: 2026-08-01
 // ============================================================
 package v1alpha1
@@ -58,10 +55,9 @@ type AcceleratorOperationSpec struct {
 	// +kubebuilder:validation:Enum=nvidia;furiosa;rebellions;tenstorrent
 	// +optional
 	Vendor string `json:"vendor,omitempty"`
-	// TransactionID 는 요청 정체성이다. 같은 의도의 재요청은 같은 값을 갖고, 그래서 중복
-	// operation 이 만들어지지 않는다. 빈 값을 막는 이유: DeviceReset 의 Job 이름이 이 값을
-	// 해시에 담아 작업마다 갈리는데, 비면 이름이 (노드, 벤더)로 붕괴해 앞선 작업의 성공 Job
-	// 을 자기 성공으로 오인한다.
+	// TransactionID 는 요청 정체성이다. 같은 의도의 재요청은 같은 값을 가져 중복 operation 을
+	// 막는다. 빈 값을 금지하는 이유: DeviceReset 의 Job 이름이 이 값을 해시에 담는데, 비면
+	// 이름이 (노드,벤더)로 붕괴해 앞선 작업의 성공 Job 을 자기 성공으로 오인한다.
 	// +kubebuilder:validation:MinLength=1
 	TransactionID string         `json:"transactionID"`
 	Owner         OperationOwner `json:"owner"`

@@ -1,10 +1,8 @@
 // ============================================================
 // journal_test.go: 선행 기록 저널 테스트
 // 상세: append-only·멱등·순서 보존을 고정한다. 크래시 복구가 이 이력만 보고 판정하므로
-//
-//	한 줄이라도 유실되거나 뒤집히면 판정이 틀린다.
-//
-// 생성일: 2026-08-01
+// 한 줄이라도 유실되거나 뒤집히면 판정이 틀린다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package operation
 
@@ -61,10 +59,8 @@ func TestAppendRecordsSameStepInNewEpoch(t *testing.T) {
 	}
 }
 
-// 증명: HasStep 은 epoch 과 무관하게 전 이력을 본다. 복구 판정이 "옛 epoch 에서 이미 적용을
-//
-//	시작했다" 를 알아야 하기 때문이다.
-//
+// 증명: HasStep 은 epoch 과 무관하게 전 이력을 본다 — 복구 판정이 "옛 epoch 에서 이미 적용을
+// 시작했다" 를 알아야 하기 때문이다.
 // 깨는 뮤테이션: HasStep 을 현재 epoch 으로 한정하면 크래시 후 적용 이력이 사라져 실패한다.
 func TestHasStepSpansEpochs(t *testing.T) {
 	j := []v1alpha1.OperationJournalEntry{{Step: StepApplyStarted, Epoch: 1, At: at(1)}}
@@ -90,10 +86,10 @@ func TestLastStep(t *testing.T) {
 	}
 }
 
-// 증명: 여러 단계를 실제 콜사이트가 부르는 순서 그대로 쌓아도(계획→lease→스냅샷→적용) 그
-// 순서가 그대로 보존된다 — 브리핑 원본 테스트는 3단계만 확인해 중간에 순서가 한 번 뒤집혀도
-// 우연히 들키지 않을 수 있다(예: 뒤에서 두 번째와 마지막만 바뀌는 뮤테이션). 전 단계 이름을
-// 인접 쌍으로 대조해 전체 순서를 고정한다.
+// 증명: 여러 단계를 실제 콜사이트가 부르는 순서 그대로 쌓아도(계획→lease→스냅샷→적용) 그 순서가
+// 그대로 보존된다 — TestAppendKeepsOrder 는 3단계만 확인해 중간에 순서가 한 번 뒤집혀도 우연히
+// 들키지 않을 수 있다(예: 뒤에서 두 번째와 마지막만 바뀌는 뮤테이션). 전 단계 이름을 인접 쌍으로
+// 대조해 전체 순서를 고정한다.
 // 깨는 뮤테이션: AppendJournal 이 정렬되지 않은 위치(예: 두 번째)에 끼워 넣으면 실패한다.
 func TestAppendPreservesFullCallOrder(t *testing.T) {
 	steps := []string{StepPlanned, StepLeaseAcquired, StepSnapshotTaken, StepQuiesced,

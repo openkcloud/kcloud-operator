@@ -1,12 +1,10 @@
 // ============================================================
 // toolkit_daemonset_controller.go: Container Toolkit DaemonSet 컨트롤러
 // 상세: DriverInstallPolicy.spec.toolkit.enabled=true 인 정책에 대해 vendor 별
-//       container-toolkit DaemonSet 을 생성/업데이트합니다. NVIDIA 는
-//       nvidia-container-toolkit 이미지를 통해 containerd 에 nvidia runtime 을
-//       등록합니다. toolkit 은 driver Ready 이후 시작하도록 init container 로
-//       host driver 존재를 대기합니다. containerd 변경은 toolkit 이미지가 수행하며
-//       nvidia-ctk 의 idempotent 특성상 이미 등록된 노드에서는 no-op 입니다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// container-toolkit DaemonSet 을 생성/업데이트합니다. NVIDIA 는 nvidia-container-toolkit
+// 이미지로 containerd 에 nvidia runtime 을 등록하며, driver Ready 이후 시작하도록 init
+// container 로 host driver 존재를 대기합니다(nvidia-ctk 는 이미 등록된 노드에서 no-op).
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -200,7 +198,7 @@ func renderToolkitDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.Daemon
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
-			// #21: nvidia-container-toolkit 는 3rd party 공식 이미지(nvidia/container-toolkit)라
+			// nvidia-container-toolkit 는 3rd party 공식 이미지(nvidia/container-toolkit)라
 			// device-plugin 과 동일하게 kube-system 고정(분류 정합: 3rd party SW→kube-system).
 			Namespace: naming.KubeSystemNamespace,
 			Labels:    labels,

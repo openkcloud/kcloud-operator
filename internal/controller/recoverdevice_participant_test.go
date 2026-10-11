@@ -1,7 +1,7 @@
 // ============================================================
 // recoverdevice_participant_test.go: RecoverDevice 본체 envtest
 // 상세: 드라이버 pod 을 지우는지, 지울 대상이 없을 때 조용히 성공하지 않는지 고정한다.
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -21,12 +21,11 @@ import (
 )
 
 // TestDriverRecoveryVendorNarrowsToTheBrokenVendorOnly 는 driverRecoveryVendor 가 고장난
-// 벤더 하나만 골라내는지, 두 벤더가 같이 고장이면 비우는지(=참가자가 전부 대상) 본다.
-// enum 밖 벤더도 비운다 — 좁혔다가 op.Spec.Vendor 가 CRD enum 검증에 걸려 AcceleratorOperation
-// 생성 자체가 거절되면 그 노드의 health 감시가 통째로 멈춘다.
-// 깨는 뮤테이션: "vendor != "" && vendor != d.Vendor" 갈래를 지우면 두 벤더 케이스에서
-// 첫 벤더만 남아 실패한다. acceleratorOperationVendors 화이트리스트 체크를 지우면 enum 밖
-// 벤더 케이스가 그대로 새 나가 실패한다.
+// 벤더 하나만 골라내는지, 두 벤더가 같이 고장이면 비우는지(=참가자가 전부 대상) 본다. enum
+// 밖 벤더도 비운다 — 좁혔다가 op.Spec.Vendor 가 CRD enum 검증에 걸리면 AcceleratorOperation
+// 생성 자체가 거절돼 그 노드의 health 감시가 통째로 멈춘다.
+// 깨는 뮤테이션: vendor 비교 갈래를 지우면 두 벤더 케이스에서 첫 벤더만 남고, enum 화이트리스트
+// 체크를 지우면 enum 밖 벤더가 새 나가 실패한다.
 func TestDriverRecoveryVendorNarrowsToTheBrokenVendorOnly(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -144,7 +143,7 @@ var _ = Describe("RecoverDevice participant", func() {
 			"되살릴 대상이 없는데 성공을 보고하면 같은 요청이 영원히 반복된다")
 	})
 
-	// 증명(C2): op.Spec.Vendor 가 지정되면 다른 벤더의 드라이버 pod 은 건드리지 않는다 —
+	// 증명: op.Spec.Vendor 가 지정되면 다른 벤더의 드라이버 pod 은 건드리지 않는다 —
 	// 혼재 노드에서 한 벤더의 드라이버 고장이 멀쩡한 다른 벤더의 드라이버 pod 까지 지우면 안 된다.
 	// 깨는 뮤테이션: restartDriverPods 의 vendor 필터(lbls[driverVendorLabel] = vendor)를 지우면
 	// 다른 벤더 pod 도 지워져 실패한다.
@@ -176,7 +175,7 @@ var _ = Describe("RecoverDevice participant", func() {
 		Expect(gotFuriosa.DeletionTimestamp).To(BeNil(), "다른 벤더의 드라이버 pod 을 지웠다")
 	})
 
-	// 증명(C2 재리뷰): 벤더 필터가 라벨과 어긋나 0건이면, 필터 없이 한 번 더 찾아서라도 지운다.
+	// 증명: 벤더 필터가 라벨과 어긋나 0건이면, 필터 없이 한 번 더 찾아서라도 지운다.
 	// NDR 이 준 벤더값(detector 소문자화)과 pod 라벨(DIP Spec.Vendor 소문자)은 서로 다른
 	// 주체가 만들어 어긋날 수 있다 — 어긋난 채로 조용히 deleted==0 을 내면 ApplyFailed → 3회 →
 	// 영구 격리(Recovering 으로만 나가는데 그 상태가 다시 안 온다)로 간다.
@@ -203,7 +202,7 @@ var _ = Describe("RecoverDevice participant", func() {
 
 	// 증명: health 가 만든 작업은 검증을 요구하지 않는다.
 	// 정책이 없으면 장치 관측 주체도 없어 검증이 구조적으로 실패하고, 그러면 이 작업은 항상
-	// RolledBack 이 되어 세 번 만에 멀쩡한 노드가 격리된다(HL-3·HL-5 가 두 번 재현한 결함).
+	// RolledBack 이 되어 세 번 만에 멀쩡한 노드가 격리된다.
 	It("does not demand verification for a health-owned operation", func() {
 		p := NewRecoverDeviceParticipant(&AcceleratorPartitionPolicyReconciler{Client: k8sClient})
 		_, applicable, err := p.VerifyRequest(ctx, recoverDeviceOp("recover-verify", "any-node"))

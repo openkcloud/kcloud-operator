@@ -20,8 +20,8 @@ type HealthChecks struct {
 	// +optional
 	RepeatedFailureThreshold int32 `json:"repeatedFailureThreshold,omitempty"`
 	// MonitorIntervalSeconds 는 이 노드를 다시 볼 간격이다(기본 30초). 짧게 잡으면 짧은 장애도
-	// 잡히지만 API 부하가 는다. 라이브에서 확인된 사실 하나: operator 의 자가치유가 13초 안에
-	// 끝나는 장애가 있어, 기본 주기로는 그 창을 아예 못 본다(2026-08-04).
+	// 잡히지만 API 부하가 는다. operator 의 자가치유 중 13초 안에 끝나는 장애가 있어, 기본
+	// 주기로는 그 창을 아예 못 본다.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MonitorIntervalSeconds int32 `json:"monitorIntervalSeconds,omitempty"`

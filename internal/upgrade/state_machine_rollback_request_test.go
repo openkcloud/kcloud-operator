@@ -1,10 +1,8 @@
 // ============================================================
 // state_machine_rollback_request_test.go: 관리자 롤백 요청 어노테이션의 수용 시험
 // 상세: Idle 에서 어노테이션을 보면 Rollback 으로 전이하며 어노테이션을 지우고, 전이 중 상태는
-//
-//	요청을 보류한다.
-//
-// 생성일: 2026-09-30 | 수정일: 2026-10-09 (리터럴 버전 문자열을 기존 verOld 상수 참조로 정리)
+// 요청을 보류한다.
+// 생성일: 2026-09-30 | 수정일: 2026-10-11
 // ============================================================
 package upgrade
 
@@ -61,7 +59,7 @@ func TestTransitionStateHonorsRollbackRequestInIdle(t *testing.T) {
 // TestTransitionStateRollbackRequestRetriesAfterStatusPersistFailure 는 상태 전이(Rollback)
 // 영속이 실패하면 어노테이션이 지워지지 않고 남아, 다음 reconcile(새 Get 으로 시작)이 같은
 // 요청을 다시 전이 시도하는지 본다 — 어노테이션을 먼저 지우고 상태 영속을 나중에 하면, 영속이
-// 실패했을 때 요청 신호가 사라진 채 상태만 Idle 로 멈춰 재시도할 방법이 없어진다(판정 T-2A).
+// 실패했을 때 요청 신호가 사라진 채 상태만 Idle 로 멈춰 재시도할 방법이 없어진다.
 func TestTransitionStateRollbackRequestRetriesAfterStatusPersistFailure(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(scheme); err != nil {

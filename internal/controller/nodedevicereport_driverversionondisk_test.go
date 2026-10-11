@@ -1,12 +1,10 @@
 // ============================================================
 // nodedevicereport_driverversionondisk_test.go: DeviceEntry.DriverVersionOnDisk CRD 왕복 시험
-// 상세: detector 가 채우는 driverVersionOnDisk(디스크에 설치된 드라이버 버전, 2026-09-17
-//
-//	드리프트 사고 형태 규명 필드)가 구조적 스키마에 없으면 API 서버가 조용히 잘라낸다
-//	(pruning). 단위시험은 in-memory map만 봐서 이 형태를 못 잡으므로, envtest(config/crd/bases
-//	로 기동)에 실제로 쓰고 다시 읽어 값이 유지되는지 본다.
-//
-// 생성일: 2026-09-18
+// 상세: detector 가 채우는 driverVersionOnDisk(디스크에 설치된 드라이버 버전, 드리프트 규명용
+// 필드)가 구조적 스키마에 없으면 API 서버가 조용히 잘라낸다(pruning). 단위시험은 in-memory
+// map 만 봐서 이 형태를 못 잡으므로, envtest(config/crd/bases 로 기동)에 실제로 쓰고 다시
+// 읽어 값이 유지되는지 본다.
+// 생성일: 2026-09-18 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

@@ -1,5 +1,5 @@
 # rbac.yaml: NPU Operator RBAC 리소스
-# 생성일: 2026-03-25 | 수정일: 2026-10-11 (벤더 operator ClusterPolicy 류 CR get·list 추가; 계획서 항목 토큰 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-11
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -75,13 +75,10 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["acceleratordescriptors/status"]
     verbs: ["get", "update", "patch"]
-  # 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러(migobservation_controller.go)
-  # 가 특권 Job 의 관측 결과를 이 보고서에 직접 기록한다(detector 는 비특권이라 MIG 를 못 봐서
-  # 대신 쓴다) — status 에 update/patch 가 없으면 그 기록이 조용히 거절되고, 보고서가 영영
-  # 안 바뀌어 재관측이 필요하다고 계속 판단해 특권 Job 이 반복 생성된다(2026-08-04 라이브 핫루프,
-  # config/rbac/role.yaml 은 이미 이 verb 를 갖고 있었지만 실제 배포는 이 파일이라 반영이 안 됐다).
-  # status 서브리소스는 list/watch 를 안 받는다(생성본 config/rbac/role.yaml 과 동일 — 서브리소스는
-  # 컬렉션이 아니라 list/watch 가 의미가 없다).
+  # 최소화(get/list/watch) 이후 확장: 정책과 무관한 MIG 관측 컨트롤러가 특권 Job 의 관측 결과를
+  # 이 보고서에 직접 기록한다(detector 는 비특권이라 MIG 를 못 봐 대신 쓴다). status 에
+  # update/patch 가 없으면 그 기록이 거절되고, 보고서가 안 바뀌어 특권 Job 이 반복 생성된다.
+  # status 서브리소스는 list/watch 를 받지 않는다(서브리소스는 컬렉션이 아니라 의미가 없다).
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports"]
     verbs: ["get", "list", "watch", "update", "patch"]
@@ -102,7 +99,7 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # A6.1: quiesce-on-driver-upgrade — Cordoning 진입 시 라벨 가진 Deployment 의 replicas 를 0 으로 patch, Idle/Failed 진입 시 복구
+  # quiesce-on-driver-upgrade: Cordoning 진입 시 라벨 가진 Deployment 의 replicas 를 0 으로 patch, Idle/Failed 진입 시 복구
   # create: AcceleratorWorkload 컨트롤러가 사용자 워크로드 Deployment 를 만든다(삭제는 ownerReference GC 몫이라 delete 불필요).
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -120,14 +117,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # P1: PDB-aware drain via Eviction API. pods/eviction create 만 있으면 되고, PDB 는 API
+  # PDB-aware drain via Eviction API. pods/eviction create 만 있으면 되고, PDB 는 API
   # server 가 eviction 요청에서 대신 검사하므로 operator 가 직접 읽지 않는다.
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
   # events: 컨트롤러가 발행(create/patch)하고, 관리 API 의 /api/v1/events 가 읽는다(get/list/watch).
   # 읽기 권한이 없으면 UI 의 History 탭이 조용히 500 을 낸다 — 마커만 고치고 여기를 빠뜨리면
-  # 코드는 맞고 배포는 틀린 상태가 된다(이 저장소에서 이미 두 번 발생).
+  # 코드는 맞고 배포는 틀린 상태가 된다.
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch", "create", "patch"]
@@ -154,7 +151,7 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"]
-  # P4 관리 REST API: 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
+  # 관리 REST API: 외부 관리툴 Bearer 토큰 인증(TokenReview)·인가(SubjectAccessReview).
   # api.enabled=false 여도 무해하며, 누락 시 모든 API 요청이 500(리뷰 생성 실패)이 되므로 항상 부여.
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
@@ -220,11 +217,11 @@ rules:
   - apiGroups: ["npu.ai"]
     resources: ["nodedevicereports", "nodedevicereports/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # node-agent NFD/GFD 라벨링(§5.3): 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
+  # node-agent NFD/GFD 라벨링: 자기 prefix(kcloud.ai/*) 라벨만 patch. 비특권 유지.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # node-agent Validation ③ device-plugin/allocatable 관찰용.
+  # node-agent 가 device-plugin/allocatable 관찰에 쓴다.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
@@ -241,7 +238,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: kcloud-node-manager
-    # detector SA 는 operator 부속으로 release namespace(=OPERATOR_NAMESPACE, kcloud)에 생성됨(#16).
+    # detector SA 는 operator 부속으로 release namespace(=OPERATOR_NAMESPACE, kcloud)에 생성된다.
     namespace: {{ .Release.Namespace }}
 
 ---

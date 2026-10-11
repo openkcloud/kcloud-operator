@@ -1,16 +1,10 @@
 // ============================================================
-// recoverdevice_upgrade_guard_test.go: 업그레이드 중 노드에서 RecoverDevice 가 설치 Job pod 을
-//
-//	죽이지 않는지 고정하는 envtest.
-//
-// 상세: 2026-08-10 라이브에서 드라이버 버전 전환 중 dpkg 가 구 DKMS 모듈을 내리자 health 가
-//
-//	DriverNotLoaded 로 읽고 RecoverDevice 를 발행했고, 그 본체가 설치 Job pod 을 지워
-//	노드의 apt-get install 이 DKMS 빌드 도중 죽었다. 패키지가 half-configured 로 남아
-//	버전 보고가 막히고 검증이 영원히 실패하는 자기강화 루프가 됐다.
-//	업그레이드 중의 driverLoaded=false 는 고장이 아니라 예정된 상태다.
-//
-// 생성일: 2026-08-10
+// recoverdevice_upgrade_guard_test.go: 업그레이드 중 노드에서 RecoverDevice 가 설치 Job pod 을 죽이지 않는지 고정
+// 상세: 드라이버 버전 전환 중에는 dpkg 가 스스로 구 DKMS 모듈을 내리는 구간이 있어
+// driverLoaded=false 가 뜬다 — 고장이 아니라 예정된 상태다. 이때 RecoverDevice 가 설치 Job
+// pod 을 지우면 apt-get install 이 DKMS 빌드 도중 죽어 패키지가 half-configured 로 남고,
+// 버전 보고가 막혀 검증이 영원히 실패하는 자기강화 루프가 된다.
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -41,11 +35,8 @@ func seedUpgradingNode(name string) *corev1.Node {
 }
 
 var _ = Describe("RecoverDevice 는 업그레이드 중인 노드를 건드리지 않는다", func() {
-	// 증명: 업그레이드 라벨이 붙은 노드에서는 설치 Job pod 을 지우지 않는다.
-	//
-	// 이것이 2026-08-10 실패의 방아쇠였다. 설치가 스스로 모듈을 내리는 구간을 health 가
-	// 고장으로 읽고 설치 주체를 죽였다.
-	//
+	// 증명: 업그레이드 라벨이 붙은 노드에서는 설치 Job pod 을 지우지 않는다. 설치가 스스로
+	// 모듈을 내리는 구간을 health 가 고장으로 읽고 설치 주체를 죽이면 이 가드가 막아야 한다.
 	// 깨는 뮤테이션: restartDriverPods 의 업그레이드 라벨 확인을 지우면 pod 이 지워져 실패한다.
 	It("업그레이드 중이면 설치 Job pod 을 지우지 않는다", func() {
 		node := "recover-guard-upgrading-node"
@@ -101,17 +92,12 @@ var _ = Describe("RecoverDevice 는 업그레이드 중인 노드를 건드리�
 			"업그레이드 중이 아닌 노드의 드라이버 pod 을 되살리지 않았다")
 	})
 
-	// 증명: 노드가 아예 없어도 가드 조회 실패로 복구를 막지 않는다.
-	//
-	// 노드 조회가 실패했다고 복구를 건너뛰면, 노드 객체가 잠시 안 보이는 순간마다 복구가
-	// 조용히 사라진다. 못 읽었으면 "업그레이드 중 아님" 으로 본다.
-	//
-	// 깨는 뮤테이션: `upgradingDriver` 의 조회 실패 갈래를 `return true` 로 바꾸면 실패한다.
-	// (함수 끝의 `return upgrading` 만 건드리는 뮤테이션은 이 갈래에 닿지 못해 무의미하다 —
-	//  노드가 없으면 조회 실패 갈래에서 이미 돌아간다.)
-	//
-	// **결과 이벤트만으로는 부족하다.** 건너뛰기도 `EventApplyDone` 을 돌려주므로 이벤트만
-	// 보면 "진행했다" 와 "건너뛰었다" 가 구분되지 않는다. pod 이 실제로 지워졌는지를 본다.
+	// 증명: 노드가 아예 없어도 가드 조회 실패로 복구를 막지 않는다. 조회 실패로 복구를 건너뛰면
+	// 노드 객체가 잠시 안 보이는 순간마다 복구가 조용히 사라진다 — 못 읽었으면 "업그레이드 중
+	// 아님" 으로 본다.
+	// 깨는 뮤테이션: `upgradingDriver` 의 조회 실패 갈래를 `return true` 로 바꾸면 실패한다(함수
+	// 끝의 `return upgrading` 만 바꾸는 뮤테이션은 노드가 없으면 이미 조회 실패 갈래에서 돌아가
+	// 닿지 못해 무의미하다). 이벤트만 보면 "진행" 과 "건너뜀" 이 구분 안 되므로 pod 삭제 여부로 가른다.
 	It("노드를 못 읽으면 업그레이드 중이 아닌 것으로 보고 진행한다", func() {
 		node := "recover-guard-missing-node"
 		jobPod := seedDriverPod("drv-job-"+node, node, "driver-install")
@@ -132,13 +118,10 @@ var _ = Describe("RecoverDevice 는 업그레이드 중인 노드를 건드리�
 })
 
 var _ = Describe("health 는 업그레이드 중인 노드에 복구 작업을 만들지 않는다", func() {
-	// 증명: 업그레이드 라벨이 붙은 노드에서 DriverNotLoaded 판정이 나와도
-	// AcceleratorOperation 을 만들지 않는다.
-	//
-	// 참가자 쪽 가드만으로는 부족하다. 작업이 만들어지면 조정자·저널·검증이 다 돌고,
-	// 업그레이드가 끝난 뒤 쿨다운 버킷에 남은 작업이 뒤늦게 실행될 여지도 생긴다.
-	// 애초에 만들지 않는 것이 맞다 — 업그레이드 중 driverLoaded=false 는 고장이 아니다.
-	//
+	// 증명: 업그레이드 라벨이 붙은 노드에서 DriverNotLoaded 판정이 나와도 AcceleratorOperation 을
+	// 만들지 않는다. 참가자 쪽 가드만으로는 부족하다 — 작업이 만들어지면 조정자·저널·검증이 다
+	// 돌고, 업그레이드가 끝난 뒤 쿨다운 버킷에 남은 작업이 뒤늦게 실행될 여지도 생긴다. 애초에
+	// 만들지 않는 것이 맞다.
 	// 깨는 뮤테이션: ensureRecovery 의 업그레이드 라벨 확인을 지우면 작업이 만들어져 실패한다.
 	It("업그레이드 중이면 RecoverDevice 를 만들지 않는다", func() {
 		node := "health-guard-upgrading-node"

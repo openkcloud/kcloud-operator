@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # helm-values-option-check_test.sh: helm-values-option-check.sh 의 판정을 시험한다
-# 상세: 가짜 트리를 만들어 *.sh 파일의 같은 줄에 helm 과 --reuse-values 가 함께 있으면
-#       실패하고, 그 외(확장자가 다르거나 같은 줄이 아니거나 --reset-then-reuse-values 만
-#       쓴 경우)는 통과하는지 확인한다(검사 1).
-#       검사 2(값 키 검사)는 별도 픽스처가 필요하다 — deploy/helm/values.yaml 과
-#       values.schema.json 이 없는 트리에서는 검사 2 가 "건너뜀"으로 빠져 버려서,
-#       위 검사 1 용 픽스처로는 검사 2 의 합집합(데이터∪스키마)·표 파싱·와일드카드·
-#       allOf 가지 합치기 로직을 전혀 고정하지 못한다(2026-10-04 재리뷰 적발 —
-#       134줄짜리 로직에 회귀 시험이 0건이었다). run2 는 그 두 파일을 실제로 만들고,
-#       "건너뜀" 문구가 출력에 없는지까지 확인해 건너뜀이 통과로 집계되는 재발을 막는다.
-# 생성일: 2026-09-24 | 수정일: 2026-10-04 (검사 2 전용 픽스처·시험 9종 추가)
+# 상세: 가짜 트리로 검사 1(같은 줄 helm+--reuse-values 조합)을 시험한다. 검사 2(값 키
+#       검사)는 별도 픽스처가 필요하다 — write_min_chart() 가 만드는 values.yaml·
+#       values.schema.json 으로 합집합·표 파싱·와일드카드·allOf 가지 합치기를 run2 로
+#       시험한다(세부 근거는 run2()·write_min_chart() 주석 참고).
+# 생성일: 2026-09-24 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,13 +30,12 @@ run "금지를 설명하는 문장(비 sh, helm 없음)은 통과" 0 prep_commen
 run "금지를 설명하는 문장(비 sh, helm 있음)도 확장자로 통과" 0 prep_doc_with_helm
 run "sh 파일이라도 다른 줄이면 통과" 0 prep_sh_diff_lines
 
-# --- 검사 2(값 키 검사) 전용 픽스처 ---
-# 실제 차트의 driverInstallPolicies.<vendor> allOf 구조(벤더별 제외 제약)를 그대로
-# 축소한 조각이다. nvidia 는 toolkit 허용·trackOnly 금지, tenstorrent 는 반대,
-# furiosa 는 toolkit 자체가 없다 — 이 비대칭이 있어야 "allOf 가지를 합쳐 재귀하는지"
-# "가지를 따로 시도해 하나만 맞아도 통과시키는지"를 가른다. nvidia.toolkit 에는
-# image·nvidia.driver 에는 trackOnly 를 일부러 선언하지 않는다 — 그래야 그 둘의
-# 통과/거절이 데이터가 아니라 스키마 쪽 판정만으로 성립하는지 확인된다.
+# --- 검사 2(값 키 검사) 전용 픽스처: 실제 차트의 driverInstallPolicies.<vendor> allOf 구조
+#     (벤더별 제외 제약)를 그대로 축소한 조각이다. nvidia 는 toolkit 허용·trackOnly 금지,
+#     tenstorrent 는 반대, furiosa 는 toolkit 자체가 없다 — 이 비대칭이 있어야 "가지를
+#     합쳐 재귀하는지"와 "가지를 따로 시도해 하나만 맞아도 통과시키는지"를 가른다.
+#     nvidia.toolkit 에는 image·nvidia.driver 에는 trackOnly 를 일부러 선언하지 않는다 —
+#     그래야 그 둘의 통과/거절이 데이터가 아니라 스키마 쪽 판정만으로 성립하는지 확인된다.
 write_min_chart() {
   mkdir -p "$1/deploy/helm"
   cat > "$1/deploy/helm/values.yaml" <<'YAML'

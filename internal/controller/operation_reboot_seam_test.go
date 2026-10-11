@@ -1,10 +1,8 @@
 // ============================================================
 // operation_reboot_seam_test.go: 재부팅 왕복과 삭제 복원의 이음매
-// 상세: 태스크마다 리뷰가 통과해도 태스크 사이는 아무도 보지 않는다. 대기 상태를 빠져나오는
-//
-//	경로가 둘(명시적 완료 사건 / 대기 이외 사건)이므로 둘 다 여기서 밟는다.
-//
-// 생성일: 2026-08-01
+// 상세: 각 단계가 개별로 검증돼도 단계 사이 전이는 따로 보지 않으면 빠진다. 대기 상태를
+// 빠져나오는 경로가 둘(명시적 완료 사건 / 대기 이외 사건)이므로 둘 다 여기서 밟는다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -63,7 +61,6 @@ func (p rebootThenObservedParticipant) VerifyRequest(context.Context, *npuv1alph
 
 var _ = Describe("reboot round trip seam", func() {
 	// 증명: 재부팅 완료를 명시적으로 알리는 참여자가 대기 상태를 빠져나와 종점에 도달한다.
-	//       (Stage 2 에서 이 경로가 10초 주기 오류 루프에 빠졌고, 그때 이 계층 테스트가 0건이었다.)
 	// 깨는 뮤테이션: stepApply 의 EventBootObserved 처리를 지우면 미정의 전이 오류로 떨어져 실패한다.
 	It("completes when the participant announces the boot explicitly", func() {
 		calls := 0
@@ -134,7 +131,7 @@ var _ = Describe("reboot round trip seam", func() {
 		// 먼저 대기 상태까지 몰아간다. Pending→Planning→Prepared→Quiescing→Applying 각 단계는
 		// 전이할 때마다 정당하게 Requeue:true 를 낸다(operation_controller.go Reconcile 의
 		// "전이했으면 곧바로 다음 단계를 본다") — 이 사실을 놓치고 매 Reconcile 호출에서 바로
-		// Requeue==false 를 기대하면 대기 상태에 도달하기도 전에 이 스펙이 실패한다(이 태스크가
+		// Requeue==false 를 기대하면 대기 상태에 도달하기도 전에 이 스펙이 실패한다(이 시험이
 		// 잡으려는 이음매 결함과는 무관한 오탐).
 		Eventually(func() string { return driveOp(r, "seam-stuck", 1) }, "10s", "100ms").
 			Should(Equal(npuv1alpha1.OpPhaseWaitingForReboot))

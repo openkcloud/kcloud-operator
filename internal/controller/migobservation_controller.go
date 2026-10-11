@@ -1,13 +1,10 @@
 // ============================================================
 // migobservation_controller.go: 정책과 무관한 MIG 관측 컨트롤러
-// 상세: 관측이 정책 주도라 정책이 없으면 아무도 장치를 보지 않는다. 그 성질 하나가
+// 상세: 관측이 정책 주도면 정책 없는 노드는 아무도 보지 않아 고아 라벨·빈 프로파일 목록·침묵
 //
-//	①고아 mig-active 라벨을 못 떼고 ②프로파일 목록이 없어 유효한 MIG 정책을 만들 수 없고
-//	③근거의 보고서 축이 침묵하게 만든다. 이 컨트롤러가 셋을 끊는다.
+//	근거 세 문제가 생긴다 — 이 컨트롤러가 그 사슬을 끊는다. 특권은 그 순간·그 노드에만 쓴다.
 //
-//	특권은 여전히 그 순간·그 노드에만 — 상시 특권 데몬을 만들지 않는다.
-//
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -36,18 +33,11 @@ import (
 const migObservationInterval = 10 * time.Minute
 
 // migObservationAttemptedAtAnnotation 은 이 컨트롤러가 마지막으로 관측 Job 을 **띄운** 시각
-// (RFC3339)이다 — 성공 여부와 무관하다.
-//
-// 이 값 하나가 "다시 띄워도 되는가" 라는 질문에 답하는 유일한 문이다(rate limiter). 성공
-// 시각으로 답하면 안 된다: 관측이 계속 실패하는 노드에서는 성공 시각이 영영 안 남아 그
-// 질문에 항상 "그렇다" 로 답하게 되고, 그러면 노드 watch 이벤트(kubelet 하트비트, ~10초
-// 간격)가 올 때마다 특권 Job 이 다시 뜬다(2026-08-04 라이브 핫루프 — Job 이 5초 간격으로
-// 재생성됐다). "데이터가 신선한가" 는 다른 질문이고, NDR 의 장치별 필드(MigObservationError·
-// MigModeCurrent)가 이미 그 답을 담고 있다 — 이 주석과 뭉개면 안 된다.
-//
-// NDR 에 필드를 추가하지 않는다 — NDR 의 보존 필드 목록(detector 의 carry-list)은 다른
-// 저장소가 관리해서, 거기 필드를 하나 늘리면 이 저장소만 고치고 고쳤다고 믿게 된다. 이 값은
-// 이 컨트롤러가 유일하게 쓰므로 노드 주석으로 직접 소유한다.
+// (RFC3339)이다 — 성공 여부와 무관하다. 이 값 하나가 "다시 띄워도 되는가" 를 막는 유일한
+// 문(rate limiter)이다. 성공 시각으로 답하면 안 된다: 관측이 계속 실패하는 노드에서는 성공
+// 시각이 영영 안 남아 노드 watch 이벤트(kubelet 하트비트)마다 특권 Job 이 다시 뜬다.
+// "데이터가 신선한가" 는 다른 질문이고 NDR 의 장치별 필드가 이미 답을 담는다 — 뭉개면 안
+// 된다. NDR 에 필드를 추가하지 않는 이유는 그 보존 필드 목록을 다른 저장소가 관리해서다.
 const migObservationAttemptedAtAnnotation = "kcloud.ai/mig.observation-attempted-at"
 
 // MigObservationReconciler 는 NVIDIA 노드의 MIG 상태를 정책과 무관하게 관측한다.
@@ -103,8 +93,8 @@ func (r *MigObservationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// 시도 시각을 Job 을 띄우기 **전에**, 성공·실패와 무관하게 찍는다 — 이것이 "다시 띄워도
 	// 되는가" 를 막는 유일한 문이다. 장치 상태는 이 판단에 영향을 주지 않는다: 노드 watch
 	// 이벤트가 몇 초마다 와도(kubelet 하트비트), 이 시각이 최근이면 needsObservation 이 장치가
-	// 아무리 더러워도 false 를 낸다. 성공 여부에 시각을 걸면(예전 판정) 관측이 계속 실패하는
-	// 노드에서 이 문이 영영 안 잠겨 몇 초 간격으로 Job 이 재생성된다(2026-08-04 라이브 핫루프).
+	// 아무리 더러워도 false 를 낸다. 성공 여부에 시각을 걸면 관측이 계속 실패하는 노드에서
+	// 이 문이 영영 안 잠겨 몇 초 간격으로 Job 이 재생성된다.
 	if merr := r.markObservationAttempted(ctx, &node, r.now()); merr != nil {
 		return ctrl.Result{}, merr
 	}
@@ -145,13 +135,11 @@ func (r *MigObservationReconciler) markObservationAttempted(ctx context.Context,
 }
 
 // nvidiaPCIsOf 는 보고서가 아는 NVIDIA 장치 중 MIG 를 관측할 수 있는 PCI 목록이다.
-//
 // passthrough(vfio-pci) 장치는 뺀다 — host 의 nvidia-smi 가 그 GPU 를 보지 못해 관측은 매번
 // fail-closed 로 끝나고, 그 재시도가 폭주의 또 다른 씨앗이 된다. 드라이버 설치 경로의
-// SkipOnPassthrough(2026-07-01)는 정책이 켜야 도는 opt-in 필드이고 판정도 설치 스크립트
-// 안에서 난다 — 여기는 공유 규칙을 물려받은 것이 아니라 독립적으로 무조건 뺀다: 정책이
-// 뭐라 하든 host nvidia-smi 는 vfio GPU 를 못 보므로, 관측에는 opt-in 이 아니라 무조건이
-// 유일하게 옳다.
+// SkipOnPassthrough 는 정책이 켜야 도는 opt-in 필드이고 판정도 설치 스크립트 안에서 난다 —
+// 여기는 공유 규칙을 물려받은 것이 아니라 독립적으로 무조건 뺀다: 정책이 뭐라 하든 host
+// nvidia-smi 는 vfio GPU 를 못 보므로, 관측에는 opt-in 이 아니라 무조건이 유일하게 옳다.
 func nvidiaPCIsOf(ndr *npuv1alpha1.NodeDeviceReport) []string {
 	if ndr.Status.PassthroughReserved {
 		return nil // 노드의 GPU 가 전량 vfio-pci 예약 — MIG 관측 대상이 없다
@@ -173,9 +161,7 @@ func nvidiaPCIsOf(ndr *npuv1alpha1.NodeDeviceReport) []string {
 // needsObservation 은 관측 Job 을 다시 띄워도 되는지다 — 유일한 rate limiter다. 마지막
 // **시도**(성공·실패 무관) 이후 주기(migObservationInterval)가 안 지났으면 장치 상태와
 // 무관하게 false 다. 장치가 더럽다고 이 판정을 건너뛰면 관측이 계속 실패하는 노드에서
-// 다음 watch 이벤트마다 Job 이 다시 뜬다 — 그것이 이 컨트롤러를 무한 루프로 만든 원인이었다
-// (2026-08-04 라이브: kubelet 하트비트가 ~10초마다 노드 status 를 갱신해 watch 이벤트를
-// 만들고, 그때마다 재관측이 필요하다고 판단해 특권 Job 이 5초 간격으로 재생성됐다). 시도
+// 다음 watch 이벤트(kubelet 하트비트, ~10초 간격)마다 Job 이 다시 떠 무한 루프가 된다. 시도
 // 시각이 없거나(첫 관측) 주기를 넘겼으면 다시 본다 — 장치가 깨끗해도 본다: 사람이 손으로
 // 되돌린 모드를 잡으려면 깨끗한 노드도 주기적으로 다시 봐야 한다.
 func needsObservation(node *corev1.Node, now time.Time) bool {

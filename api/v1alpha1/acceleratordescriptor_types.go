@@ -1,11 +1,8 @@
 // ============================================================
 // acceleratordescriptor_types.go: AcceleratorDescriptor CRD 타입
-// 상세: 장치 하나를 backend 중립으로 기술한다. device-plugin 과 DRA 가 같은 장치를
-//
-//	다르게 모델링한 실측(Furiosa DP 4유닛 vs DRA 카드 1개)이 이 타입의 존재
-//	이유다. 할당 단위와 식별자를 여기서 못 박아 두 backend 가 갈리지 않게 한다.
-//
-// 생성일: 2026-08-10 | 수정일: 2026-10-05
+// 상세: 장치 하나를 backend 중립으로 기술한다. device-plugin 과 DRA 는 같은 장치를 다르게
+// 모델링하므로(Furiosa DP 4유닛 vs DRA 카드 1개), 할당 단위와 식별자를 여기서 못 박는다.
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 
@@ -92,14 +89,8 @@ type AcceleratorDescriptorSpec struct {
 	// +optional
 	Sharing *DescriptorSharing `json:"sharing,omitempty"`
 	// Attributes 는 sysfs 로는 알 수 없는 장치 속성 선언이다(제품명 등). 생성 DRA 런타임이
-	// ResourceSlice 의 장치 속성으로 그대로 발행한다. 런타임은 벤더 도구를 모르므로 그런 값은
-	// 여기를 통해서만 들어온다. 같은 이름을 런타임이 sysfs 에서도 읽으면 관측값이 남는다.
-	//
-	// 아래 세 맵의 MaxProperties 합(24)은 런타임의 선언 예산 안이어야 한다 — 그 예산은
-	// generic-dra-driver 의 maxDeclarations 이고 ResourceSlice 장치당 상한 32 에서 런타임이
-	// 자기 몫으로 쓰는 sysfs 관측 자리를 뺀 수다. 그쪽 관측 자리가 늘면 예산이 줄어 여기서 받는
-	// descriptor 가 드라이버를 기동 실패로 만든다. 그 결속을 깨뜨리는 변경은 관측 자리를 늘리는
-	// 쪽이므로 어서션도 그 저장소에 둔다.
+	// ResourceSlice 속성으로 그대로 발행한다. 이 맵과 Capacity·CapacityFiles 의 MaxProperties
+	// 합(24)은 런타임의 sysfs 관측 자리를 뺀 발행 예산 안이어야 한다 — 넘으면 드라이버 기동 실패.
 	// +optional
 	// +kubebuilder:validation:MaxProperties=8
 	Attributes map[string]string `json:"attributes,omitempty"`

@@ -1,14 +1,8 @@
 // ============================================================
-// conformance_test.go: 벤더 온보딩 계약 적합성 시험(이 파일은 1~7·10번, 8·9번은
-// internal/controller 에 따로 있다 — test/conformance/README.md 참조)
-// 상세: "이 operator 에 벤더로 등록돼 있다" 가 무엇을 뜻하는지 기계로 검사한다. 능력
-//
-//	모델(vendorcap)·어댑터(driveradapter)·자원 이름 사상(intent)·이미지 매니페스트·
-//	Helm 기본값·CRD 4종의 Vendor enum, 이 여섯 표층이 한 벤더에 대해 같은 이야기를
-//	하는지 본다. 미지원(Unsupported)은 정상 상태다 — 이 시험은 "전부 지원하는가" 가
-//	아니라 "질문에 답은 했는가" 를 본다. 통과시키는 것이 아니라 어긋남을 잡는 것이 목적이다.
-//
-// 생성일: 2026-09-28 | 수정일: 2026-09-28
+// conformance_test.go: 벤더 온보딩 계약 1~7·10번 적합성 시험(8·9번은 internal/controller, README.md 참조)
+// 상세: 능력 모델·어댑터·자원 이름 사상·이미지 매니페스트·Helm 기본값·CRD enum, 여섯 표층이
+// 한 벤더에 대해 같은 이야기를 하는지 본다. 미지원은 정상 상태다 — "답은 했는가" 만 본다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 // ============================================================
 package conformance
 
@@ -40,17 +34,11 @@ type capKey struct {
 }
 
 // unknownExceptions 는 State 가 Unknown 인 채로 남아 있어도 계약 2번이 실패로 보지 않는
-// (key, capability) 목록이다. Unknown 항목의 Reason 이 비어 있는지는 registry_test.go 의
-// TestEveryEntryIsHonest 가 이미 지킨다 — 여기서는 "이 칸이 왜 아직 미확정인지" 를 다음
-// 읽는 사람이 이 목록만 보고 알 수 있게 사유를 나란히 적는다. 목록에 없는 Unknown 이 새로
-// 생기면 TestEveryVendorSatisfiesConformance 가 그 벤더·능력을 지목해 실패한다 — 조사해
-// 상태를 확정하거나 사유와 함께 이 목록에 등재해야 한다.
-//
-// 지금은 비어 있다 — 유일한 예외였던 rebellions/CapIsolation("환경 차단 — 4/5 노드
-// NotReady 로 측정 불가")은 2026-09-28 node5 에서 연산·용량·대역폭·장애 4축 co-run 을
-// 라이브 실측해 확정했다(Unsupported+AssuranceHardware,
-// 2026-09-28 rebellions 격리 실측). 레지스트리에 Unknown
-// 상태 항목이 더 없다.
+// (key, capability) 목록이다. Reason 이 비어 있지 않은지는 registry_test.go 의
+// TestEveryEntryIsHonest 가 따로 지킨다 — 여기서는 "왜 아직 미확정인지" 사유를 적어 둔다.
+// 목록에 없는 Unknown 이 새로 생기면 TestEveryVendorSatisfiesConformance 가 그 벤더·능력을
+// 지목해 실패하므로, 조사해 상태를 확정하거나 사유와 함께 이 목록에 등재해야 한다. 지금은
+// 비어 있다 — 마지막 항목(rebellions/CapIsolation)이 Unsupported+AssuranceHardware 로 확정돼 있다.
 var unknownExceptions = map[capKey]string{}
 
 // subtestName 은 t.Run 이름이다. product 가 빈 벤더(nvidia·rebellions·tenstorrent)도
@@ -350,9 +338,9 @@ func readCRDVendorEnum(file, path string) ([]string, error) {
 	return out, nil
 }
 
-// crdEnumFiles 는 벤더 enum 을 각자 독립적으로 선언한 CRD 4종이다.
-// `grep -rn 'validation:Enum' api/v1alpha1/*.go` 로 직접 찾았다(2026-09-28) — 다섯째
-// 벤더가 생기면 이 grep 을 다시 돌려 새 CRD 가 늘었는지부터 확인한다.
+// crdEnumFiles 는 벤더 enum 을 각자 독립적으로 선언한 CRD 4종이다. `grep -rn 'validation:Enum'
+// api/v1alpha1/*.go` 로 확인할 수 있다 — 다섯째 벤더가 생기면 이 grep 을 다시 돌려 새 CRD 가
+// 늘었는지부터 확인한다.
 var crdEnumFiles = []struct {
 	file string
 	path string
@@ -386,13 +374,10 @@ func TestVendorEnumsAgreeAcrossCRDsAndRegistry(t *testing.T) {
 
 // TestEveryVendorResourceNameMatchesAnAcceleratorDomain 은 계약 10번이다: 등록된 모든
 // 벤더의 WholeDeviceResource 자원명이 intent.AcceleratorResourceDomains 의 도메인 중
-// 최소 하나와 겹쳐야 한다. 드라이버 업그레이드 drain(internal/upgrade/state_machine.go)과
-// uninstall 게이트(internal/uninstall/gate.go)는 "이 리소스가 가속기인가" 를 이 도메인
-// 집합 하나로 묻는다 — 벤더를 등록하며 자원명은 카탈로그에 넣었는데 그 도메인이 이
-// 집합에서 빠지면 두 판정이 그 벤더를 조용히 놓친다. AcceleratorResourceDomains 자체가
-// productResource 에서 도메인을 뽑아 만들어지므로 이 시험은 평소엔 항상 참이어야
-// 정상이다 — 그래도 두는 이유는 도메인 추출 로직이 깨지는 변화(도메인 하나를 실수로
-// 빠뜨리는 리팩터 등)를 잡기 위해서다.
+// 최소 하나와 겹쳐야 한다. 드라이버 업그레이드 drain 과 uninstall 게이트는 "이 리소스가
+// 가속기인가" 를 이 도메인 집합 하나로 묻는다 — 도메인이 빠지면 두 판정이 그 벤더를 조용히
+// 놓친다. AcceleratorResourceDomains 는 productResource 에서 뽑혀 평소엔 항상 참이지만,
+// 도메인 추출 로직이 깨지는 변화를 잡기 위해 이 시험을 둔다.
 func TestEveryVendorResourceNameMatchesAnAcceleratorDomain(t *testing.T) {
 	domains := intent.AcceleratorResourceDomains()
 	for _, k := range vendorcap.Keys() {

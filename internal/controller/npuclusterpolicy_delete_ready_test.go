@@ -1,14 +1,9 @@
 // ============================================================
-// npuclusterpolicy_delete_ready_test.go: 소유 DaemonSet 회수(비활성 토글) 실패 시
-//       Ready 조건 반영 검증
-// 상세: NVIDIA(mixed/flat 중 하나)·Rebellions·Tenstorrent 각각의 delete-on-disable
-//       경로에서 삭제가 실패하면 Ready=False + 삭제 대상을 식별하는 reason 이 남는지,
-//       error 가 그대로 반환(재큐)되는지를 fake client Delete interceptor 로 검증한다.
-//       envtest 불필요 — 단, Ready.Reason 은 CRD 스키마 패턴(^[A-Za-z]([A-Za-z0-9_,:]*
-//       [A-Za-z0-9_])?$, config/crd/bases/npu.ai_npuclusterpolicies.yaml)이 하이픈을
-//       금지하므로 DaemonSet 이름(예: nvidia-device-plugin)을 그대로 이어붙이지 않고
-//       PascalCase 식별자로 남긴다. 실제 DaemonSet 이름은 Warning 이벤트 메시지에 남는다.
-// 생성일: 2026-09-20
+// npuclusterpolicy_delete_ready_test.go: 소유 DaemonSet 회수 실패 시 Ready 조건 반영 검증
+// 상세: NVIDIA(mixed/flat 중 하나)·Rebellions·Tenstorrent 각각의 delete-on-disable 경로에서
+// 삭제가 실패하면 Ready=False + 식별 reason 이 남는지, error 가 반환(재큐)되는지를 fake
+// client Delete interceptor 로 검증한다. envtest 는 불필요하다.
+// 생성일: 2026-09-20 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -90,7 +85,10 @@ func basePolicy(name string) *npuv1alpha1.NPUClusterPolicy {
 }
 
 // NVIDIA 토글 off 상태에서 mixed DS 회수가 실패하면 Ready=False(reason 에 mixed/flat 구분)로
-// 남고 error 가 반환(재큐)되어야 한다.
+// 남고 error 가 반환(재큐)되어야 한다. Ready.Reason 은 CRD 스키마 패턴(^[A-Za-z]([A-Za-z0-9_,:]*
+// [A-Za-z0-9_])?$, config/crd/bases/npu.ai_npuclusterpolicies.yaml)이 하이픈을 금지해 DaemonSet
+// 이름(예: nvidia-device-plugin)을 그대로 이어붙이지 않고 PascalCase 로 남긴다 — 실제 이름은
+// Warning 이벤트 메시지에 남는다. 아래 Rebellions·Tenstorrent 시험도 같은 규칙을 따른다.
 func TestNPUClusterPolicy_NvidiaRemoveFailure_SetsReadyFalse(t *testing.T) {
 	policy := basePolicy("test-policy")
 	injected := errors.New("injected nvidia delete failure")

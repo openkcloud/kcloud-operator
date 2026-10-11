@@ -1,4 +1,4 @@
-<!-- README.md: 파괴적 장애 주입 3종 kind 재현 사용법 | 생성일: 2026-09-20 -->
+<!-- README.md: 파괴적 장애 주입 3종 kind 재현 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 
 # 파괴적 장애 주입 kind 재현 (fault-injection)
 
@@ -48,9 +48,8 @@ DRY_RUN=1 bash test/live/fault-injection/01-health-degraded/run.sh
 
 ## 공용 헬퍼(`lib.sh`)
 
-시험 관례 §3 은 신규 `run.sh` 가 "`lib/*.sh` 공용 소스를
-쓰지 않고 스크립트 하나로 완결"하도록 규정하지만, 이 세 스크립트는 한 태스크가 만드는
-형제 시나리오이고 그 중 02 는 `test/live/tt-upgrade-transition/run.sh`(같은 저장소의
+신규 `run.sh` 는 보통 `lib/*.sh` 같은 공용 소스를 쓰지 않고 스크립트 하나로 완결하지만, 이
+세 스크립트는 같은 배치로 만들어진 형제 시나리오이고 그 중 02 는 `test/live/tt-upgrade-transition/run.sh`(같은 저장소의
 기존 작업)이 이미 검증한 기법을 그대로 재사용한다. 그 저수준 배관(kubectl `DRY_RUN`
 래퍼, 폴링, 검사 집계, 공통 JSON 요약)을 세 스크립트가 각자 베껴 쓰면 세 벌의 사본이
 생기므로, `lib.sh` 하나로 좁힌 의도적 예외다. 시나리오별 매니페스트(NDR·ACPP·DIP·DUS·

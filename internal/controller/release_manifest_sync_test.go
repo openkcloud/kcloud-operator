@@ -1,20 +1,8 @@
 // ============================================================
 // release_manifest_sync_test.go: deploy/integration/release.yaml 이 차트와 어긋나지 않는지 고정한다.
-// 상세: release.yaml 은 Magnum 같은 외부 자동화가 읽는 진입점이다. 여기의 chartVersion·
-//
-//	operatorTag 가 실제 차트와 어긋나면 외부 자동화가 없는 차트를 당기거나 잘못된
-//	이미지를 배포한다. 그런데 이 파일을 읽는 시험이 없었다 — Chart.yaml 쪽은
-//	chart_version_sync_test.go 가 프리셋과 대조하는데 release.yaml 만 그물 밖이었다.
-//	자동화가 값을 실제로 당기는 곳은 커밋 SHA 로 고정된 valuesURL 이고(helm.install 의
-//	`-f <valuesURL>`), valuesFile 은 helm 명령에 등장하지 않는 사람용 포인터다.
-//	그래서 고정 커밋이 담고 있는 프리셋까지 함께 대조한다.
-//
-// 범위: 이 브랜치가 소유한 프로파일만 본다. 다른 릴리스 라인의 프로파일은 그 브랜치의
-//
-//	Chart.yaml 과 짝이므로 여기서 값을 대조할 수 없고, Chart.yaml 의 paired-release
-//	주석과만 대조한다.
-//
-// 생성일: 2026-09-17
+// 상세: release.yaml 은 Magnum 같은 외부 자동화가 읽는 진입점이다. chartVersion·operatorTag 가
+// 실제 차트와 어긋나면 외부 자동화가 없는 차트를 당기거나 잘못된 이미지를 배포한다.
+// 생성일: 2026-09-17 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -102,14 +90,10 @@ func TestReleaseManifestMatchesChart(t *testing.T) {
 }
 
 // TestReleaseManifestPairedLineMatchesAnnotation 은 다른 릴리스 라인의 프로파일이
-// Chart.yaml 의 paired-release 선언과 일치하는지 본다. 그 라인의 차트는 다른
-// 브랜치에 있으므로 값 자체를 대조할 수 없고, 짝 선언이 유일한 이 브랜치 쪽 근거다.
-//
-// 짝 라인은 operatorTag 접미(line128Suffix)로 직접 집는다. "소유 프로파일이 아닌 것"
-// 으로 고르면 소유 판정이 깨지는 순간 — Chart.yaml 만 올리고 release.yaml 을 두면
-// 그렇게 된다 — 이 브랜치 자신의 프로파일이 짝 라인으로 재분류되고, 그 실패 메시지를
-// 따르면 1.34 라인 프로파일에 1.28 라인 태그를 박게 된다. 접미로 집으면 프로파일이
-// 셋 이상이 되어도 뜻이 유지된다.
+// Chart.yaml 의 paired-release 선언과 일치하는지 본다. 그 라인의 차트는 다른 브랜치에
+// 있으므로 값 자체는 대조할 수 없고, 짝 선언이 유일한 근거다. 짝 라인은 operatorTag
+// 접미(line128Suffix)로 집는다 — "소유 프로파일이 아닌 것"으로 고르면 소유 판정이 깨지는
+// 순간 이 브랜치 자신의 프로파일이 짝 라인으로 잘못 재분류된다.
 // 깨는 뮤테이션: Chart.yaml 의 paired-release 만 올리고 release.yaml 을 두면 실패한다.
 func TestReleaseManifestPairedLineMatchesAnnotation(t *testing.T) {
 	m := loadReleaseManifest(t)
@@ -154,10 +138,9 @@ func repoIsShallow(t *testing.T) bool {
 
 // TestReleaseManifestPinnedValuesMatchOperatorTag 는 외부 자동화가 -f 로 실제로 읽는
 // valuesURL 이 그 프로파일의 operatorTag 와 같은 이미지를 가리키는지 본다.
-//
-// chartVersion·operatorTag·valuesFile 만 대조하면 SHA 를 옛 커밋에 둔 채 나머지를 전부
-// 올려도 통과하고, 자동화는 새 차트에 옛 프리셋의 image.tag 를 먹인다 — release.yaml 이
-// 막으라고 있는 바로 그 사고다.
+// chartVersion·operatorTag·valuesFile 만 대조하면 SHA 를 옛 커밋에 둔 채 나머지를 올려도
+// 통과하고, 자동화는 새 차트에 옛 프리셋의 image.tag 를 먹인다 — release.yaml 이 막아야
+// 하는 사고다.
 // 깨는 뮤테이션: valuesURL 의 SHA 를 image.tag 가 다른 커밋으로 바꾸면 실패한다.
 func TestReleaseManifestPinnedValuesMatchOperatorTag(t *testing.T) {
 	m := loadReleaseManifest(t)
@@ -227,12 +210,10 @@ func TestReleaseManifestValuesFilesExist(t *testing.T) {
 	}
 }
 
-// TestReleaseManifestRangesAreWellFormedAndDisjoint 는 프로파일의 K8s 범위가
-// 형식에 맞고 서로 겹치지 않는지 본다.
-//
-// 범위가 겹치면 Add-on 이 같은 클러스터 버전에 두 프로파일을 모두 맞다고 보아
-// 어느 차트를 설치할지 모호해진다. 이 파일의 다른 시험들은 프로파일 "안" 의 값이
-// 서로 맞는지 보고, 이 시험은 프로파일 "사이" 를 본다.
+// TestReleaseManifestRangesAreWellFormedAndDisjoint 는 프로파일의 K8s 범위가 형식에 맞고
+// 서로 겹치지 않는지 본다. 범위가 겹치면 Add-on 이 같은 클러스터 버전에 두 프로파일을
+// 모두 맞다고 보아 어느 차트를 설치할지 모호해진다. 이 파일의 다른 시험들은 프로파일
+// "안" 의 값을 보고, 이 시험은 프로파일 "사이" 를 본다.
 // 깨는 뮤테이션: 한쪽 range 를 다른 쪽과 겹치게 바꾸면 실패한다.
 func TestReleaseManifestRangesAreWellFormedAndDisjoint(t *testing.T) {
 	m := loadReleaseManifest(t)

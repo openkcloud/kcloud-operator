@@ -3,7 +3,7 @@
 // 상세: spec 에서 dra 로 선언된 벤더의 대상 노드에 dra-owned 라벨을 붙이고, 선언을 되돌리면
 //       회수한다. 그 라벨이 있는 노드에서는 벤더 device-plugin DaemonSet 이 물러난다
 //       (제외는 각 DaemonSet 렌더링에서 affinity 로 건다).
-// 생성일: 2026-08-06 | 수정일: 2026-09-28
+// 생성일: 2026-08-06 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -126,8 +126,8 @@ func (r *NPUClusterPolicyReconciler) reconcileDRAOwnedLabels(
 		draEnabled := vendorDRAEnabled(policy, vendor)
 		// dra.enabled=false 로 retired 를 지우기 전에 그 벤더의 DRA DaemonSet 이 실제로
 		// 사라졌는지 본다 — 아직 있는데 먼저 지우면 그 순간 노드가 다시 스케줄 후보가 돼
-		// DaemonSet 컨트롤러가 새 파드를 잠깐 올렸다 곧 삭제와 함께 지우는 경합이 생긴다
-		// (라이브 관측). 벤더당 한 번만 조회한다 — 노드마다 다시 묻지 않는다.
+		// DaemonSet 컨트롤러가 새 파드를 잠깐 올렸다 곧 삭제와 함께 지우는 경합이 생긴다.
+		// 벤더당 한 번만 조회한다 — 노드마다 다시 묻지 않는다.
 		dsExists, err := r.draDaemonSetExists(ctx, advertiseVendorDRADSName(vendor))
 		if err != nil {
 			return fmt.Errorf("%s DRA DaemonSet 조회 실패: %w", vendor, err)
@@ -215,16 +215,12 @@ func (r *NPUClusterPolicyReconciler) reconcileDRAOwnedLabels(
 	return r.recordAdvertiseSwitch(ctx, policy, switches)
 }
 
-// reconcileDRARetiredLabel 은 노드 하나의 dra-retired 라벨을 dra-owned 회수·재획득에 맞춰
-// 갱신한다. 부여 — want=false 인데 has=true(이번 reconcile 이 dra-owned 를 회수하는 바로 그
-// 순간)이고 draEnabled 면 부여한다. 회수 — want=true(다시 DRA 로)면 dsExists 와 무관하게
-// 바로 지운다(발행자가 그 노드에 다시 스케줄돼야 하므로). !draEnabled(드라이버 자체를
-// 껐음)면 dsExists=false(그 벤더의 DRA DaemonSet 이 실제로 사라졌을 때)에만 지운다 —
-// DaemonSet 이 아직 있는데 먼저 지우면, 그 순간 노드가 다시 스케줄 후보가 돼 DaemonSet
-// 컨트롤러가 새 파드를 잠깐 올렸다 곧 이은 DaemonSet 삭제와 함께 지우는 경합이 생긴다
-// (라이브 관측, 2026-09-28). 그 외(want=false·has=false·draEnabled 이거나
-// !draEnabled·dsExists=true)는 이전 값을 그대로 둔다 — 회수된 채로 남아 있는 동안
-// sticky 해야 다음 reconcile 에서도 DRA DaemonSet 이 이 노드를 계속 피한다.
+// reconcileDRARetiredLabel 은 노드 하나의 dra-retired 라벨을 dra-owned 회수·재획득에 맞춰 갱신한다.
+// 부여: want=false 인데 has=true(dra-owned 회수 시점)이고 draEnabled 면 부여한다.
+// 회수: want=true(다시 DRA 로)면 dsExists 와 무관하게 즉시 지운다. !draEnabled 면 dsExists=false
+// 일 때만 지운다 — DaemonSet 이 아직 있는데 먼저 지우면 노드가 다시 스케줄 후보가 돼 그
+// DaemonSet 컨트롤러가 새 파드를 잠깐 올렸다 삭제와 함께 지우는 경합이 생긴다. 그 외에는 이전
+// 값을 그대로 둔다 — 회수된 채로 있는 동안 sticky 해야 다음 reconcile 도 이 노드를 피한다.
 func (r *NPUClusterPolicyReconciler) reconcileDRARetiredLabel(
 	ctx context.Context, node *corev1.Node, retiredKey string, want, has, draEnabled, dsExists bool,
 ) error {

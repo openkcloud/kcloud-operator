@@ -1,4 +1,4 @@
-# acpp-a30-mig-restoremode.yaml: Round 3 라이브 2회차 적용본 — k8s-worker1 A30 MIG 1g.6gb×4(deletionPolicy RestoreMode 로 MIG mode 복원), probe 파드가 nvidia-smi -L 로 검증(2026-09-20 .91) | 생성일: 2026-09-20
+# acpp-a30-mig-restoremode.yaml: k8s-worker1 A30 MIG 1g.6gb×4 적용 2단계 샘플(deletionPolicy RestoreMode 로 MIG mode 복원) — probe 파드가 nvidia-smi -L 로 검증 | 생성일: 2026-09-20 | 수정일: 2026-10-11
 apiVersion: npu.ai/v1alpha1
 kind: AcceleratorPartitionPolicy
 metadata:

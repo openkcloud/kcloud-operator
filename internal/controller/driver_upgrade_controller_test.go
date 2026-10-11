@@ -2,8 +2,7 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
-//                                        주차 상태 버전 관측·재부팅 예산 시험 추가)
+// 생성일: 2026-04-21 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -136,10 +135,8 @@ func dusWithTransition(name, nodeName, vendor, state string, ago time.Duration) 
 	}
 }
 
-// TestEnsureUpgradeStates_CurrentVersionSyncFromNDR 는 P0-2 버그를 직접 재현합니다.
-// 시나리오: DUS가 Idle 상태이고 currentVersion이 빈 문자열인데
-//
-//	NDR이 desiredVersion과 동일한 버전을 보고하는 경우 → currentVersion이 채워져야 한다.
+// TestEnsureUpgradeStates_CurrentVersionSyncFromNDR 는 DUS 가 Idle 상태이고 currentVersion 이
+// 빈 문자열인데 NDR 이 desiredVersion 과 동일한 버전을 보고하면 currentVersion 이 채워지는지 본다.
 func TestEnsureUpgradeStates_CurrentVersionSyncFromNDR(t *testing.T) {
 	const (
 		nodeName = "worker-1"
@@ -282,8 +279,8 @@ func TestReconcile_GatesOpenEntersUpgrade(t *testing.T) {
 }
 
 // TestEnsureUpgradeStates_ResetsStaleRebootAttempts 는 새 cross-major 사이클 진입(버전 불일치) 시
-// 이전 사이클의 stale RebootAttempts 가 0 으로 리셋됨을 검증한다(P2-2 하드닝).
-// stale 이 남으면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀 자연 재부팅 미발화.
+// 이전 사이클의 stale RebootAttempts 가 0 으로 리셋됨을 검증한다. stale 이 남으면
+// Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀 자연 재부팅이 미발화한다.
 func TestEnsureUpgradeStates_ResetsStaleRebootAttempts(t *testing.T) {
 	const (
 		nodeName     = "worker-1"
@@ -356,8 +353,8 @@ func TestFindPolicy_FallbackFirstWins(t *testing.T) {
 
 // TestFindPolicy_ProductFamilyPrefix 는 detector 가 제품명을 구체화한 뒤에도 제품군 이름으로
 // 쓴 정책이 걸리는지 본다. 표준 PCI DB 계층이 붙으면 NVIDIA 장치 model 이 `a100` 이 아니라
-// `a100-pcie-40gb`(실측 10de:20f1)가 되고, 양쪽 다 "generic" 이 아니어서 와일드카드도 안
-// 걸려 findPolicy 가 nil 을 돌려줬다 — 증상이 "아무 일도 안 일어남" 이라 탐지되지 않는다.
+// `a100-pcie-40gb`(실측 10de:20f1)가 되는데, 양쪽 다 "generic" 이 아니면 와일드카드도 안
+// 걸려 findPolicy 가 nil 을 돌려줄 수 있다 — 증상이 "아무 일도 안 일어남" 이라 탐지되지 않는다.
 // 접두어 경계를 요구하므로 다른 제품군은 걸리지 않아야 한다(과잉 매칭 방어).
 func TestFindPolicy_ProductFamilyPrefix(t *testing.T) {
 	family := *makeNvidiaDIP("nvidia-a100", "a100")
@@ -397,8 +394,8 @@ func makeNvidiaDIP(name, model string) *v1alpha1.DriverInstallPolicy {
 }
 
 // TestSyncDUSModel_FollowsDeviceModel 는 장치 model 표기가 바뀌면 DriverUpgradeState.spec.model
-// 이 따라오는지 본다. spec.model 은 생성 시점 값이라 갱신되지 않아 라이브에서 이미 어긋나 있었고
-// (DUS `generic` 대 장치 `a30`), `update-pciids` 로 표기가 통째로 바뀌면 접두어·와일드카드
+// 이 따라오는지 본다. spec.model 은 생성 시점 값이라 갱신되지 않아 라이브에서 이미 어긋나 있을
+// 수 있고(DUS `generic` 대 장치 `a30`), `update-pciids` 로 표기가 통째로 바뀌면 접두어·와일드카드
 // 규칙으로도 매칭이 끊겨 재부팅 게이트와 자가복구 게이트가 조용히 죽는다.
 func TestSyncDUSModel_FollowsDeviceModel(t *testing.T) {
 	dus := &v1alpha1.DriverUpgradeState{
@@ -551,7 +548,6 @@ func TestEnsureUpgradeStates_UniformModelIsKept(t *testing.T) {
 
 // TestFindPolicy_RngdModelMatch 는 같은 vendor(furiosa) 아래 warboy/rngd 2개 DIP 중
 // vendor=furiosa, model=rngd 요청에 rngd DIP 가 정확히 매칭되는지 검증합니다.
-// (B-5 RNGD 호환성 확인: findPolicy 가 model 기반 분기를 지원해야 함)
 func TestFindPolicy_RngdModelMatch(t *testing.T) {
 	warboy := *makeDIP("furiosa-warboy", "warboy", "1.9.8-3")
 	rngd := *makeDIP("furiosa-rngd", "rngd", "2026.1.0")
@@ -806,7 +802,7 @@ func TestEnsureUpgradingLabelRemoved_NodeNotFound(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// 옵션 A: detector phase-aware blocking label 시나리오
+// detector phase-aware blocking label 시나리오
 // ─────────────────────────────────────────────
 
 // nodeWithBothUpgradingLabels 는 driver-upgrading + driver-upgrading-blocking 라벨 둘 다 붙은
@@ -905,7 +901,7 @@ func TestSweepStuckUpgradingLabels_BlockingShorterGrace(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// Validating self-heal 시나리오 (architectural plan §4.A)
+// Validating self-heal 시나리오
 // ─────────────────────────────────────────────
 
 // makeDriverDS 는 Validating self-heal 테스트용 driver DaemonSet 을 만든다.
@@ -975,8 +971,8 @@ func makeUpgradingDUS(name, nodeName, vendor, desiredVersion string) *v1alpha1.D
 }
 
 // TestUpgrading_PreviousImage_RejectsPlainTag 는 handleUpgrading 이 broken plain tag
-// (예: ":580.126.09") 를 PreviousImage 로 캡처하지 않음을 검증한다.
-// (architectural plan §3.4 — rollback 시 broken Pod 회귀 차단)
+// (예: ":580.126.09") 를 PreviousImage 로 캡처하지 않음을 검증한다 — 캡처하면 rollback 때
+// broken Pod 로 되돌아간다.
 func TestUpgrading_PreviousImage_RejectsPlainTag(t *testing.T) {
 	const (
 		nodeName   = "worker-rollback-guard"
@@ -1042,7 +1038,7 @@ func TestUpgrading_PreviousImage_AcceptsVerifiedTag(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// IdleCooldown 시나리오 (followup plan §F3 — operator 측 P0 가드)
+// IdleCooldown 시나리오(operator 측 핵심 가드)
 // ─────────────────────────────────────────────
 
 // drainRecorderEvents 는 FakeRecorder 의 모든 buffered event 를 비워 channel 을 비운다.
@@ -1109,7 +1105,7 @@ func makeDIPWithCooldown(name, vendor, version string, cooldownSeconds int32) *v
 
 // TestIdle_CooldownDeferred 는 Idle 진입 직후 (LastTransitionTime=now) 버전 불일치를
 // 감지해도 UpgradeRequired 로 전이하지 않고 IdleCooldownDeferred 이벤트와 함께 requeue 만 함을 검증.
-// followup plan §F3 — rolling-update 연속 trigger 시 mid-state 오인 방지의 P0 가드.
+// rolling-update 연속 trigger 시 mid-state 오인 방지의 핵심 가드.
 func TestIdle_CooldownDeferred(t *testing.T) {
 	const (
 		nodeName     = "worker-cooldown-defer"
@@ -1204,8 +1200,7 @@ func TestSweepStuckUpgradingLabels_PreservesActiveCycleBothLabels(t *testing.T) 
 }
 
 // ─────────────────────────────────────────────
-// A6.1 Quiesce-on-Driver-Upgrade 시나리오
-// (architectural plan §A6.1 — opt-in label 기반 자동 scale=0/restore)
+// Quiesce-on-Driver-Upgrade 시나리오 (opt-in label 기반 자동 scale=0/restore)
 // ─────────────────────────────────────────────
 
 // makeQuiesceLabeledDeploy 는 quiesce-on-driver-upgrade 라벨이 붙고 nodeSelector 의 hostname
@@ -1461,7 +1456,7 @@ func TestRestore_DeploymentMissing_Graceful(t *testing.T) {
 
 // TestQuiesce_AnnotationBackup_Persisted 는 quiesce 시 (1) Deployment annotation 으로
 // dual-write 가 발생하고 (2) DUS.Status.QuiescedDeployments backup 이 즉시 영구 저장됨을
-// 검증한다 (followup plan §F2 — operator restart resilience).
+// 검증한다(operator restart resilience).
 func TestQuiesce_AnnotationBackup_Persisted(t *testing.T) {
 	const (
 		nodeName  = "worker-anno-backup"
@@ -1519,7 +1514,7 @@ func TestQuiesce_AnnotationBackup_Persisted(t *testing.T) {
 
 // TestRestore_FromAnnotation_Fallback 은 DUS.Status.QuiescedDeployments 가 비어 있는 상황
 // (operator restart 후 status 손실 시뮬레이션) 에서 Deployment annotation 백업으로부터
-// fallback 복구가 동작함을 검증한다 (followup plan §F2).
+// fallback 복구가 동작함을 검증한다.
 func TestRestore_FromAnnotation_Fallback(t *testing.T) {
 	const (
 		nodeName  = "worker-anno-fallback"
@@ -1590,8 +1585,8 @@ func dipWithGates(autoUpgrade bool, verified ...string) *v1alpha1.DriverInstallP
 }
 
 // TestEnsureUpgradeStates_AutoUpgradeDisabledStaysIdle 는 autoUpgrade=false 인데도 업그레이드가
-// 시작되던 결함을 고정한다. 라이브 실측: autoUpgrade=false 인 정책에서 install Job 이 생성됐다.
-// 판정은 상태기계(handleIdle)가 게이트와 함께 내린다 — 이 sync 경로는 버전만 맞춘다.
+// 시작되지 않는 것을 고정한다. 판정은 상태기계(handleIdle)가 게이트와 함께 내린다 — 이 sync
+// 경로는 버전만 맞춘다.
 func TestEnsureUpgradeStates_AutoUpgradeDisabledStaysIdle(t *testing.T) {
 	const (
 		nodeName     = "worker-9"
@@ -1620,7 +1615,7 @@ func TestEnsureUpgradeStates_AutoUpgradeDisabledStaysIdle(t *testing.T) {
 }
 
 // TestEnsureUpgradeStates_UnverifiedVersionStaysIdle 는 verifiedVersions 화이트리스트 밖 버전으로
-// 업그레이드가 시작되던 결함을 고정한다. 라이브 실측: 목록에 없는 595.84 로 install Job 이 생성됐다.
+// 업그레이드가 시작되지 않는 것을 고정한다.
 func TestEnsureUpgradeStates_UnverifiedVersionStaysIdle(t *testing.T) {
 	const (
 		nodeName     = "worker-10"
@@ -1713,7 +1708,7 @@ func TestEnsureUpgradeStates_NewDUSStartsIdleWhenGated(t *testing.T) {
 
 // TestEnsureUpgradeStates_MismatchSyncIsIdempotent 는 버전이 어긋난 채로 reconcile 이 반복돼도
 // 동기화가 상태를 계속 건드리지 않는 것을 고정한다. 매번 LastTransitionTime 을 갱신하면
-// IdleCooldown 이 영원히 차지 않아 업그레이드가 시작되지 못한다(실측: Idle 에 갇힘).
+// IdleCooldown 이 영원히 차지 않아 업그레이드가 시작되지 못한다.
 func TestEnsureUpgradeStates_MismatchSyncIsIdempotent(t *testing.T) {
 	const (
 		nodeName     = "worker-14"
@@ -1929,13 +1924,13 @@ func TestSyncUpgradeState_UnverifiedVersionKeepsRebootBudget(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// Bug#7 되돌림 vs 롤백 (A2 — 되돌림은 Idle 에서만)
+// 되돌림 vs 롤백 (되돌림은 Idle 에서만)
 // ─────────────────────────────────────────────
 
 // TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget 는 롤백 중(mid-cycle) DUS 에서
-// DesiredVersion(==PreviousVersion)이 DIP 선언 버전과 달라도 Bug#7 분기가 되돌리지 않음을 고정한다.
-// 상태 무관 되돌림은 롤백을 깨고 매 iteration 마다 재부팅 예산을 리셋해 MaxReboots 상한을
-// 무력화했다(라이브 발견, A2).
+// DesiredVersion(==PreviousVersion)이 DIP 선언 버전과 달라도 되돌림 분기가 되돌리지 않음을
+// 고정한다. 상태 무관 되돌림은 롤백을 깨고 매 iteration 마다 재부팅 예산을 리셋해 MaxReboots
+// 상한을 무력화한다.
 func TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget(t *testing.T) {
 	const (
 		nodeName    = "worker-rollback"

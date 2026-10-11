@@ -1,9 +1,7 @@
 // allocation_test.go: CollectAllocationStatus 단위 테스트(fake client, envtest 불필요)
 // 상세: NPUClusterPolicy.spec.<vendor>.advertiseBy(선언)와 노드의 dra-owned 라벨(관측)이
-//
-//	각각 옮겨지는지, 둘이 어긋나는 경우와 벤더가 꺼진/정책이 없는 경우를 검증한다.
-//
-// 생성일: 2026-09-28 | 수정일: 2026-10-09 (혼재 Furiosa 노드 vendorPresent 시험 추가)
+// 각각 옮겨지는지, 둘이 어긋나는 경우와 벤더가 꺼진/정책이 없는 경우를 검증한다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -26,8 +24,8 @@ func findAllocation(rows []AllocationRow, vendor string) AllocationRow {
 	return AllocationRow{}
 }
 
-// nvidia 를 dra 로 선언했지만 노드 n2 는 아직 넘어가지 않은 상태다 — 선언과 관측이 어긋나는
-// 경우를 그대로 옮기는지 본다(team-lead 정정: 이 어긋남 자체가 이 명령을 보는 이유다).
+// nvidia 를 dra 로 선언했지만 노드 n2 는 아직 넘어가지 않은 상태다 — 선언과 관측의 이
+// 어긋남 자체가 이 명령을 보는 이유이므로, 그대로 옮기는지 본다.
 func TestCollectAllocationStatusDeclaredAndObservedCanDisagree(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "ncp"},
@@ -62,7 +60,7 @@ func TestCollectAllocationStatusDeclaredAndObservedCanDisagree(t *testing.T) {
 }
 
 // advertiseBy 를 비워 두면(devicePlugin 이 기본) 실제로 devicePlugin 이 광고 중인 노드가
-// 나와야 한다 — 예전 조회(ACPP 장치별 allocationAPIs)는 이 흔한 경우를 빈 결과로 냈었다.
+// 나와야 한다 — 이 흔한 경우를 빈 결과로 내면 아무것도 광고되지 않는 것처럼 잘못 읽힌다.
 func TestCollectAllocationStatusDefaultsToDevicePluginWhenUnset(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "ncp"},
@@ -87,7 +85,7 @@ func TestCollectAllocationStatusDefaultsToDevicePluginWhenUnset(t *testing.T) {
 }
 
 // 정책이 아예 없어도(또는 벤더가 꺼져 있어도) 빈 목록이 아니라 다섯 벤더 전부를 Enabled=false
-// 로 명시해야 한다 — 빈 결과는 "아무것도 광고하지 않는다"로 잘못 읽힌다(team-lead 정정).
+// 로 명시해야 한다 — 빈 결과는 "아무것도 광고하지 않는다"로 잘못 읽힌다.
 func TestCollectAllocationStatusNoPolicyListsAllVendorsAsDisabled(t *testing.T) {
 	c := newTestClient(t)
 	rows, err := c.CollectAllocationStatus(context.Background())
@@ -136,9 +134,9 @@ func TestCollectAllocationStatusFuriosaWarboyDoesNotBorrowRngdLabel(t *testing.T
 
 // FuriosaSpec.Unified 인 클러스터의 노드는 furiosa.present·rngd.present 대신 자립 라벨
 // kcloud.ai/furiosa-family.present 만 갖는다(npuclusterpolicy_controller.go
-// furiosaFamilyNodeLabel, review I-1). 어느 product 인지 라벨만으로 못 가르면 devicePlugin·
-// dra 어느 쪽으로도 단정하지 않고 AmbiguousProductNodes 에 담는다(review 정정 — 두 API
-// 목록에 넣는 것은 틀린 벤더에 틀린 API 를 적는 것과 같다).
+// furiosaFamilyNodeLabel). 어느 product 인지 라벨만으로 못 가르면 devicePlugin·dra
+// 어느 쪽으로도 단정하지 않고 AmbiguousProductNodes 에 담는다 — 두 API 목록에 넣는 것은
+// 틀린 벤더에 틀린 API 를 적는 것과 같다.
 func TestCollectAllocationStatusUnifiedFamilyLabelIsAmbiguousForBothProducts(t *testing.T) {
 	ncp := &npuv1alpha1.NPUClusterPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "ncp"},

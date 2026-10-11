@@ -1,18 +1,9 @@
 // ============================================================
 // chart_vendor_registry_test.go: 벤더 이미지가 global.vendorRegistry 축을 타는지 고정한다.
-//
-// 상세: 차트는 레지스트리를 두 개로 나눠 쓴다. global.registry 는 우리가 빌드하는
-//
-//	이미지, global.vendorRegistry 는 3rd-party 이미지다. 두 축이 섞이면 공개
-//	기본값으로 설치했을 때 ghcr.io/openkcloud/furiosaai/... 처럼 실재하지 않는
-//	경로가 렌더된다 — helm 은 그것을 오류로 보지 않으므로 ImagePullBackOff 로만
-//	드러난다. 여기서 두 분기(vendorRegistry 있음/없음)를 렌더 결과로 고정한다.
-//
-// 범위: 렌더 결과 문자열만 본다. 그 경로에 이미지가 실재하는지는 레지스트리 조회의
-//
-//	몫이다(여기서 네트워크를 타지 않는다).
-//
-// 생성일: 2026-09-09
+// 상세: global.registry 는 우리가 빌드하는 이미지, global.vendorRegistry 는 3rd-party
+// 이미지다. 두 축이 섞이면 실재하지 않는 경로가 렌더돼 ImagePullBackOff 로만 드러난다.
+// 렌더 결과 문자열만 보고, 그 경로에 이미지가 실재하는지는 네트워크를 타지 않아 보지 않는다.
+// 생성일: 2026-09-09 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -25,7 +16,7 @@ import (
 // 주의: 이 시험은 os/exec 로 helm 을 부른다. Go 테스트 캐시는 그 의존을 보지 못하므로
 // 차트만 고치고 손으로 `go test` 를 돌리면 직전 결과가 재사용돼 초록이 나온다 — 차트가
 // 깨져 있어도 그렇다. 손으로 돌릴 때는 `-count=1` 을 붙일 것. `make test` 는
-// `-coverprofile` 을 쓰고 그 플래그가 캐시를 끄므로 영향이 없다(2026-09-16 실측).
+// `-coverprofile` 을 쓰고 그 플래그가 캐시를 끄므로 영향이 없다.
 // helmTemplate 는 deploy/helm 을 렌더한다. helm 부재 판정은 helm_presence_test.go 의
 // helmBinary 하나다 — 로컬에서는 건너뛰고 CI 에서는 하드 실패한다.
 func helmTemplate(t *testing.T, args ...string) string {

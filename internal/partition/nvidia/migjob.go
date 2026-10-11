@@ -1,11 +1,8 @@
 // ============================================================
 // migjob.go: NVIDIA MIG apply 용 JobExecutor — command-hash 기반 1회성 Job (spec §14.4/§15.4/§13.9)
-// 상세: CommandStep 시퀀스를 nsenter 스크립트로 렌더해 privileged/hostPID 1회성 Job 으로 실행한다.
-//
-//	Job 이름은 (uid,generation,node,action,cmdHash) 로 결정론적 — 동일 의도 재실행은 재사용(idempotent),
-//	동일 이름·다른 cmdHash 는 충돌로 하드 에러 처리한다.
-//
-// 생성일: 2026-07-24 | 수정일: 2026-10-09
+// 상세: CommandStep 시퀀스를 nsenter 스크립트로 렌더해 privileged/hostPID 1회성 Job 으로
+// 실행한다. Job 이름은 (uid,generation,node,action,cmdHash) 로 결정론적이라 동일 의도는 재사용된다.
+// 생성일: 2026-07-24 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -34,12 +31,10 @@ const CmdHashAnnotation = "acpp.npu.ai/cmd-hash"
 
 // NodeBootIDAnnotation 은 Job 을 만든 순간 대상 노드가 돌고 있던 부팅 세대(BootID)다.
 // RebootRestartsAnnotation 은 재부팅에 치여 다시 만든 횟수이며, 재생성 때 이어서 센다.
-//
-// 2026-08-05 라이브(결함 3): mode 복원 재부팅이 GI rollback Job 의 파드를 실행 전에 덮쳤다.
-// 파드는 NodeName 고정 + RestartPolicy=Never 라 재부팅 후에도 Pending 에서 회복하지 못했고,
-// Job 은 Succeeded 도 Failed 도 아닌 채 남았다. 이름이 결정론적이라 이후 모든 pass 가 같은 죽은
-// Job 을 다시 찾아 10분씩 기다렸다 — 자력 탈출 경로가 없어 ACPP 삭제가 finalizer 에 영구히
-// 걸렸고 운영자가 Job 을 수동으로 지워야 풀렸다.
+// mode 복원 재부팅이 GI rollback Job 의 파드를 실행 전에 덮치면, 파드는 NodeName 고정 +
+// RestartPolicy=Never 라 재부팅 후에도 Pending 에서 회복하지 못한다. Job 은 끝나지 않는 채로
+// 남고, 이름이 결정론적이라 이후 모든 pass 가 같은 죽은 Job 을 다시 찾아 기다린다 — 자력
+// 탈출 경로가 없어 ACPP 삭제가 finalizer 에 영구히 걸린다.
 const (
 	NodeBootIDAnnotation     = "acpp.npu.ai/node-boot-id"
 	RebootRestartsAnnotation = "acpp.npu.ai/reboot-restarts"
@@ -99,7 +94,7 @@ func (e *JobExecutor) Run(ctx context.Context, opID, cmdHash, nodeName string, s
 		// 재실행을 위해 삭제 후 재생성한다 — rollback 으로 하드웨어가 되돌려진 뒤 과거 성공을 재사용하면
 		// GI 를 다시 만들지 않아 무한 apply→verify실패→rollback 루프가 된다.
 		if existing.Status.Succeeded == 0 && existing.Status.Failed == 0 {
-			// "실행 중" 과 "재부팅에 치여 영영 안 끝남" 을 여기서 가른다(결함 3, 2026-08-05).
+			// "실행 중" 과 "재부팅에 치여 영영 안 끝남" 을 여기서 가른다.
 			// 노드가 그대로면 아무리 느린 Job 도 건드리지 않는다 — 판정 근거는 파드 phase 가 아니라
 			// 부팅 세대이고, 부팅 세대는 실제로 부팅해야만 바뀐다.
 			if !e.strandedByReboot(ctx, &existing) {
@@ -129,20 +124,11 @@ func (e *JobExecutor) Run(ctx context.Context, opID, cmdHash, nodeName string, s
 }
 
 // strandedByReboot 는 이 Job 이 얹혀 있던 노드가 Job 이 끝나기 전에 재부팅됐는지다.
-//
-// 판정을 BootID 로 하는 이유: operator 는 자기가 재부팅을 **요청했다** 는 것만 알지, 그 재부팅이
-// 실제로 언제 일어났는지도, 이 Job 의 파드보다 앞인지 뒤인지도 모른다. 게다가 재부팅 주체는
-// 우리만이 아니다(드라이버 업그레이드 경로·운영자·정전). BootID 는 그 모든 원인을 하나로 덮는
-// 관측된 사실이다 — "이 Job 이 놓인 기계" 와 "지금 그 자리에 있는 기계" 가 다른가.
-//
-// 건강한 느린 Job 에 오발하지 않는다: 재부팅이 없으면 BootID 는 영원히 그대로다(커널이 부팅마다
-// 새로 만드는 값). 반대로 재부팅이 있었으면 그 Job 은 절대 성공할 수 없다 — 파드는 NodeName 고정
-// + RestartPolicy=Never + backoffLimit=0 이라 재스케줄되지 않고, 재부팅에 잘린 컨테이너는 steps 를
-// 끝까지 실행한 적이 없기 때문이다. 스스로 Failed 로 떨어지는 운 좋은 경우는 기존 재생성 경로가
-// 이미 처리하므로, 이 판정은 "떨어지지도 않는" 나머지만 담당한다.
-//
-// 모르면 건드리지 않는다(fail-safe): 스탬프가 없는 옛 Job, 노드 조회 실패, 빈 BootID 는 전부 false —
-// 기존 동작(대기)으로 남는다. 잘못 지우는 쪽이 잘못 기다리는 쪽보다 나쁘다(특권 Job 중복 실행).
+// BootID 로 판정하는 이유: operator 는 자기가 재부팅을 요청한 것만 알 뿐 그 시점이 이 Job 의
+// 파드보다 앞인지 뒤인지 모르고, 재부팅 주체도 우리만이 아니다(드라이버 업그레이드·운영자·정전).
+// BootID 는 그 모든 원인을 하나로 덮는 관측 사실이다. 재부팅이 없으면 영원히 그대로이고,
+// 있었으면 파드는 NodeName 고정 + RestartPolicy=Never 라 재스케줄되지 않아 그 Job 은 절대
+// 성공할 수 없다. 모르면(스탬프 없음·조회 실패·빈 값) false 로 남는다(fail-safe).
 func (e *JobExecutor) strandedByReboot(ctx context.Context, job *batchv1.Job) bool {
 	placedOn := job.Annotations[NodeBootIDAnnotation]
 	node := job.Spec.Template.Spec.NodeName
@@ -238,7 +224,7 @@ func (e *JobExecutor) wait(ctx context.Context, name string) error {
 			}
 			// 대기 도중 노드가 재부팅되면 이 Job 은 끝나지 않는다 — 남은 timeout 을 다 태울 이유가
 			// 없다. 여기서 바로 빠져나오면 다음 pass 의 Run 이 재생성으로 복구한다. 이 조기 탈출이
-			// 없으면 최초 재부팅 pass 가 10분을 통째로 낭비한다(라이브에서 실제로 관측된 지연).
+			// 없으면 최초 재부팅 pass 가 10분을 통째로 낭비한다.
 			if e.strandedByReboot(ctx, &job) {
 				return fmt.Errorf("nvidia: job %q stranded by node reboot; recreating on the next pass", name)
 			}

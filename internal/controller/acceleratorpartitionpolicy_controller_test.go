@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller_test.go: ACPP reconciler envtest
 // 상세: happy-path(no-diff→Ready) — unified DS(dual-core)+NDR+RNGD 노드 시드.
-// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -143,8 +143,7 @@ var _ = Describe("ACPP reconciler happy path", func() {
 // deleteACPPAndWait 은 ACPP 하나를 finalizer 까지 제거하며 지우고, 실제로 없어질 때까지
 // Eventually 로 기다린다. ACPP 를 만드는 스펙의 cleanup 은 이 helper 로 통일한다 — 맨
 // k8sClient.Delete 만 하면 finalizer 가 남아 DeletionTimestamp 만 찍힌 채 Terminating 으로
-// 남고, nodeHasOwningPolicy 는 그 상태를 가리지 않아 다른 스펙의 오판 재료가 된다(2026-09-20
-// 단독·직렬 실행에서 MigObservation 스펙이 이렇게 남은 ACPP 하나로 1회 FAIL 했다).
+// 남고, nodeHasOwningPolicy 는 그 상태를 가리지 않아 다른 스펙의 오판 재료가 된다.
 func deleteACPPAndWait(name string) {
 	_ = k8sClient.Delete(ctx, &npuv1alpha1.AcceleratorPartitionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}})
 	Eventually(func() bool {
@@ -582,7 +581,7 @@ var _ = Describe("ACPP no-diff and idempotency", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rngdUnifiedDSName, Namespace: rngdUnifiedDSNS()}, &dsAfter)).To(Succeed())
 		// no-diff 여도 env(RNGD_PARTITION_POLICY) 자체는 절대 재기록되면 안 된다(Apply skip 은 여전히 유효).
 		Expect(envValueOf(&dsAfter)).To(Equal(testDualCorePolicy), "Apply must be skipped on no-diff — env must not be rewritten")
-		// finding #1: no-diff 로 Ready 에 도달한 ACPP 도 owner-lock 을 주장해야 한다(ensureOwnerLock 이
+		// no-diff 로 Ready 에 도달한 ACPP 도 owner-lock 을 주장해야 한다(ensureOwnerLock 이
 		// annotation 을 새로 찍으므로, dsBefore 대비 DS 는 한 번 갱신된다 — 그래서 env 값으로만 no-write 를 확인).
 		Expect(dsAfter.Annotations[rngd.PartitionOwnerAnnotation]).To(Equal("no-diff-acpp"), "no-diff Ready must still claim the owner lock")
 	})
@@ -848,7 +847,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 		}, "5s", "200ms").Should(BeTrue(), "finalizer must be removed even when DS is gone")
 	})
 
-	// finding #2 회귀: TargetConflict 패자도 finalizer 를 갖는다(Reconcile 이 충돌 판정 전에 finalizer 를 붙이므로).
+	// TargetConflict 패자도 finalizer 를 갖는다(Reconcile 이 충돌 판정 전에 finalizer 를 붙이므로).
 	// 패자 삭제가 승자의 owner-lock(annotation 값 = 승자 이름)을 지우면 안 된다.
 	It("deleting a TargetConflict loser does not release the winner's owner lock", func() {
 		wipeACPPs()
@@ -863,7 +862,7 @@ var _ = Describe("ACPP deletion (Retain)", func() {
 				Spec: npuv1alpha1.AcceleratorPartitionPolicySpec{
 					NodeSelector: sel,
 					Vendor:       "furiosa",
-					// dual-core(DS 기본값)과 동일 → no-diff 경로로 owner-lock 을 주장(finding #1)해야 이 테스트가 finding #2 를 검증한다.
+					// dual-core(DS 기본값)과 동일 → no-diff 경로로 owner-lock 을 주장해야 이 테스트가 위 결함을 검증한다.
 					Layout:         []npuv1alpha1.PartitionLayout{{Profile: "2core.12gb", CountPerDevice: 4}},
 					DeletionPolicy: "Retain",
 				},
@@ -1079,7 +1078,7 @@ func condTimes(acpp *npuv1alpha1.AcceleratorPartitionPolicy) []string {
 }
 
 var _ = Describe("ACPP nvidia MIG journal", func() {
-	// U-1 BUG A: runTarget 이 매 reconcile 마다 TargetStatus 를 새로 만들면(Conditions 빈 슬라이스)
+	// runTarget 이 매 reconcile 마다 TargetStatus 를 새로 만들면(Conditions 빈 슬라이스)
 	// SetStatusCondition 이 LastTransitionTime=now 를 다시 찍어, 아무것도 바뀌지 않은 reconcile 조차
 	// 타임스탬프만 다른 status write 가 된다. 그 write 의 watch 이벤트가 자기 자신을 즉시 재큐잉하고
 	// (informer 캐시가 낡으면 resourceVersion conflict 까지) 정책은 영원히 같은 자리를 돈다.
@@ -1155,10 +1154,10 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(condReasonOf(&got, npuv1alpha1.ACPPCondApplied)).To(Equal(npuv1alpha1.ReasonObservationUnavailable))
 	})
 
-	// U-1 BUG B: MIG mode 가 이미 Enabled 인 노드는 유일한 cordon 주체(ensureMigModeEnabled)를
-	// 건너뛰므로, GI apply 전제인 cordon 을 아무도 하지 않았다 — 정책은 오지 않는 외부 주체를
-	// 기다리며 NodeNotCordoned/WaitingForDrain 을 영원히 반복했다. 이제는 정책이 저널
-	// (CordonedByPolicy)을 먼저 영속한 뒤 스스로 cordon 하고, 남은 차단 이유만 정직하게 보고한다.
+	// MIG mode 가 이미 Enabled 인 노드에서 cordon 주체(ensureMigModeEnabled)를 건너뛰면, GI apply
+	// 전제인 cordon 을 아무도 하지 않아 정책이 오지 않는 외부 주체를 기다리며
+	// NodeNotCordoned/WaitingForDrain 을 영원히 반복한다. 정책이 저널(CordonedByPolicy)을 먼저
+	// 영속한 뒤 스스로 cordon 하고, 남은 차단 이유만 정직하게 보고해야 한다.
 	It("cordons the node itself for a GI apply when MIG mode is already enabled", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -1212,7 +1211,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(got.Status.ApplyRecords[0].CordonedByPolicy).To(BeFalse())
 	})
 
-	// C-1: liveVerifier 는 180s 미수렴을 에러가 아니라 (AllocatableConverged:false, nil) 로 돌려준다
+	// liveVerifier 는 180s 미수렴을 에러가 아니라 (AllocatableConverged:false, nil) 로 돌려준다
 	// (failVerifier 와 같은 모양). 그러면 rollback 종점의 runErr 이 nil 이라 rate-limited 재시도도
 	// 안 걸리고, 복원 choke-point 가 노드를 풀어 준 뒤 다음 pass 가 다시 cordon → 재-Apply → 재-Verify
 	// → 재-Rollback 으로 돈다. 매 사이클이 실물 GI 생성·파괴 + device-plugin 재시작이므로, 같은
@@ -1277,7 +1276,7 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(condReasonOf(&got, npuv1alpha1.ACPPCondValidated)).To(Equal(npuv1alpha1.ReasonExistingMigConfiguration))
 	})
 
-	// I-1: cordon 하지 않기로 한 노드(관리 밖 GI 존재)는 진짜 차단 사유를 보고해야 한다. 판정 순서가
+	// cordon 하지 않기로 한 노드(관리 밖 GI 존재)는 진짜 차단 사유를 보고해야 한다. 판정 순서가
 	// !NodeCordoned 우선이면 "cordon 해라" 라고 적히는데, 정책은 그 노드를 절대 cordon 하지 않으므로
 	// 도달 불가능한 행동을 지시하는 거짓말이 된다.
 	It("reports the real blocker (not NodeNotCordoned) on an uncordoned node with unmanaged GPU instances", func() {
@@ -1382,8 +1381,8 @@ var _ = Describe("ACPP nvidia MIG journal", func() {
 		Expect(rec.BaselineGPUCount).To(Equal(int32(1)))
 		Expect(rec.ExpectedMigCount).To(Equal(int32(4)))
 		// 이 노드의 유일한 GPU 가 조각 대상이므로 apply 후 온전한 GPU 광고는 0 이다. baseline(=1)을
-		// 그대로 기대값으로 쓰면 mixed device-plugin 이 절대 낼 수 없는 수를 기다리게 된다 —
-		// 2026-08-04 라이브에서 그 전제 때문에 A30 파티션이 매번 rollback 됐다.
+		// 그대로 기대값으로 쓰면 mixed device-plugin 이 절대 낼 수 없는 수를 기다리게 되어, A30
+		// 파티션이 매번 rollback 된다.
 		Expect(rec.ExpectedFullGPUCount).To(Equal(int32(0)), "조각낸 GPU 는 온전한 GPU 로 광고되지 않는다")
 		Expect(rec.OwnerUID).To(Equal(string(got.UID)))
 	})
@@ -1567,7 +1566,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		sel := map[string]string{"kcloud.ai/nv-del-ok": "true"}
 		// 모델 B: 복원 = MIG Enabled + GI 없음(geometry "") + allocatable=1(=baseline) → post-rollback assertions pass.
 		// uncordoned 로 시드한다 — 성공한 apply 는 종점에서 노드를 되돌려 놓으므로 실제 운영의 삭제는
-		// 항상 이 상태에서 시작한다(D-10). 한 Reconcile 안에서 cordon 취득→rollback→uncordon 이 돈다.
+		// 항상 이 상태에서 시작한다. 한 Reconcile 안에서 cordon 취득→rollback→uncordon 이 돈다.
 		seedNvidiaNode("nv-del-ok-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
 		setNodeGPUAllocatable("nv-del-ok-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-ok-node") })
@@ -1747,7 +1746,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		}, "5s", "200ms").Should(BeTrue(), "finalizer removed → object gone (nodeA never blocked)")
 	})
 
-	// finding #2: owner-lock 은 Diff/Apply 이전에 선취득되나 ApplyRecord 는 mutation 직전에야 영속된다.
+	// owner-lock 은 Diff/Apply 이전에 선취득되나 ApplyRecord 는 mutation 직전에야 영속된다.
 	// 그 사이 hardware-block(MigModeNotEnabled 등)으로 조기 반환되면 lock 만 남고 record 가 없다. 이 상태서
 	// 삭제되면 record 순회만으로는 lock 을 못 지워 누수 → 재-ACPP 가 영구 TargetConflict. orphan lock 해제로 방지.
 	It("releases an owner-lock held without any ApplyRecord (blocked before persist) and does not touch other owners", func() {
@@ -1789,16 +1788,16 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		Expect(other.Annotations[migOwnerAnnotation]).To(Equal("someone-else-uid"), "other owner's lock untouched by orphan scan")
 	})
 
-	// D-10(라이브): 삭제 경로는 rollback 전제로 cordon 을 요구하지만(assertNodeQuiesced) 스스로
-	// cordon 하지는 않았다. 성공한 apply 는 종점에서 노드를 uncordon 하므로(restoreSchedulable), 그 뒤의
-	// 삭제는 항상 "node not cordoned; unsafe to rollback MIG" 로 막힌다 — 운영자가 수동 cordon 하지
-	// 않으면 finalizer 가 영구히 남는다(라이브: `kubectl delete acpp` 13분+ 정지, 수동 cordon 으로 해제).
-	// 그래서 snapshot 을 손으로 시드하지 않고 실제 apply(→Ready→uncordon)를 태운 뒤 삭제한다.
+	// 삭제 경로는 rollback 전제로 cordon 을 요구한다(assertNodeQuiesced). 성공한 apply 는 종점에서
+	// 노드를 uncordon 하므로(restoreSchedulable), 삭제가 스스로 cordon 을 취득하지 않으면 그 뒤의
+	// 모든 삭제가 "node not cordoned; unsafe to rollback MIG" 로 막혀 운영자의 수동 cordon 없이는
+	// finalizer 가 영구히 남는다. 그래서 snapshot 을 손으로 시드하지 않고 실제 apply(→Ready→uncordon)
+	// 를 태운 뒤 삭제해, 이 자가-cordon 경로를 실제로 거치게 한다.
 	It("cordons the node itself to roll back MIG on deletion after a completed apply", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/nv-del-cordon": "true"}
-		// uncordoned + mode 이미 Enabled → apply 가 스스로 cordon(D-5)하고 Ready 종점에서 되돌린다.
+		// uncordoned + mode 이미 Enabled → apply 가 스스로 cordon 하고 Ready 종점에서 되돌린다.
 		seedNvidiaNode("nv-del-cordon-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
 		setNodeGPUAllocatable("nv-del-cordon-node", 0)
 		DeferCleanup(func() { cleanupNvidia("nv-del-cordon-node") })
@@ -1859,7 +1858,7 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 		Expect(has).To(BeFalse(), "owner lock released after cleanup")
 	})
 
-	// D-10 대칭: 운영자가 미리 cordon 해 둔 노드(CordonedByPolicy=false)는 삭제가 소유권을 주장하지
+	// 운영자가 미리 cordon 해 둔 노드(CordonedByPolicy=false)는 삭제가 소유권을 주장하지
 	// 않으므로, 정리가 끝나도 uncordon 하지 않는다 — 정비 중인 노드를 정책이 되살리면 안 된다.
 	It("does not uncordon a node that the operator had cordoned before deletion", func() {
 		wipeACPPs()
@@ -1891,14 +1890,14 @@ var _ = Describe("ACPP nvidia MIG deletion (snapshot rollback)", func() {
 	})
 })
 
-// review-d10 M-1: rollback 이 assertNodeQuiesced/Rollback/assertMigEmptyAndBaseline 중 하나에서
-// 막히면 지금까지는 아무 신호 없이 requeue 만 됐다 — Warning 이벤트로 원인을 남긴다.
+// rollback 이 assertNodeQuiesced/Rollback/assertMigEmptyAndBaseline 중 하나에서 막히면 신호 없이
+// requeue 만 되는 대신, Warning 이벤트로 원인을 남긴다.
 var _ = Describe("review-d10 M-1: deletion rollback failure emits a Warning event", func() {
 	It("emits DeletionRollbackBlocked without touching MigPhase when restore verification fails", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
 		sel := map[string]string{"kcloud.ai/m1-test": "true"}
-		// D-10 준비 절차 재사용: uncordoned + mode 이미 Enabled 상태에서 apply 를 Ready 까지 태운다.
+		// 같은 준비 절차 재사용: uncordoned + mode 이미 Enabled 상태에서 apply 를 Ready 까지 태운다.
 		seedNvidiaNode("m1-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("m1-node") })
 
@@ -1914,7 +1913,7 @@ var _ = Describe("review-d10 M-1: deletion rollback failure emits a Warning even
 		var applied npuv1alpha1.AcceleratorPartitionPolicy
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "m1-acpp"}, &applied)).To(Succeed())
 
-		// GI 를 잔존시켜 assertMigEmptyAndBaseline 이 복원 미확인으로 막히게 한다(D-10 pass 1 과 동일).
+		// GI 를 잔존시켜 assertMigEmptyAndBaseline 이 복원 미확인으로 막히게 한다(앞의 삭제 스펙과 동일).
 		var ndr npuv1alpha1.NodeDeviceReport
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "m1-node"}, &ndr)).To(Succeed())
 		ndr.Status.Devices[0] = a30Device("1g.6gb", "Enabled", "Enabled", "")
@@ -1926,7 +1925,7 @@ var _ = Describe("review-d10 M-1: deletion rollback failure emits a Warning even
 		_, err := r.Reconcile(ctx, reconcileReq("m1-acpp"))
 		Expect(err).To(HaveOccurred(), "GI still present → unverified restore → finalizer retained")
 
-		// cordonForRollback 도 NodeCordoned 이벤트를 먼저 남기므로(D-5), 큐에서 매치될 때까지 드레인한다.
+		// cordonForRollback 도 NodeCordoned 이벤트를 먼저 남기므로, 큐에서 매치될 때까지 드레인한다.
 		Eventually(events.Events).Should(Receive(ContainSubstring("DeletionRollbackBlocked")))
 
 		var got npuv1alpha1.AcceleratorPartitionPolicy
@@ -1936,8 +1935,8 @@ var _ = Describe("review-d10 M-1: deletion rollback failure emits a Warning even
 	})
 
 	// cordonForRollback 자체가 실패하면(예: nodeOwnerUID 조회와 cordon 조회 사이에 노드가 삭제되는
-	// 레이스) 다른 실패 경로와 달리 이벤트 없이 그냥 return err 했다 — 운영자에게는 이유 없는
-	// Terminating 만 보였다.
+	// 레이스) 다른 실패 경로와 달리 이벤트 없이 그냥 return err 하면, 운영자에게는 이유 없는
+	// Terminating 만 보인다.
 	It("emits DeletionRollbackBlocked when cordonForRollback itself fails", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -1997,10 +1996,8 @@ func (c *cordonFailClient) Get(ctx context.Context, key client.ObjectKey, obj cl
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 
-// D-3(라이브 §5.1): layout 없는 순수 시분할(sharing-only) 정책이 NVIDIA 에서 구조적으로
-// 불가능했다 — CRD 가 spec.layout 을 Required 로 강제했고, layout: [] 우회도 backend Validate() 가
-// len(layout)==0 이면 Sharing 유무와 무관하게 ErrUnsupported 로 거부했다. sharing-only 는
-// 하드웨어를 바꾸지 않으므로(DP 설정만) cordon·MIG 경로 없이 Ready 에 도달해야 한다.
+// layout 없는 순수 시분할(sharing-only) 정책은 하드웨어를 바꾸지 않으므로(DP 설정만) cordon·MIG
+// 경로 없이 Ready 에 도달해야 한다(spec §5.1).
 var _ = Describe("ACPP sharing-only (no layout)", func() {
 	It("accepts a pure time-slicing policy and reaches Ready without cordoning the node", func() {
 		wipeACPPs()
@@ -2078,9 +2075,9 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 		Expect(n.Spec.Unschedulable).To(BeFalse(), "sharing-only 는 cordon 이 필요 없다(DP 재시작만 필요)")
 	})
 
-	// C-1(리뷰 라운드 2): 공유가 이미 적용된 뒤의 라이브 allocatable 은 배수된 광고량이다 —
-	// 그것을 base 로 다시 읽으면 replicas 편집 재진입마다 expected 가 배수의 배수(4×8=32)로 부풀어
-	// verify 실패 → rollback → 재진입 무한 flap 이 된다. base 는 첫 적용 때 저널에 영속한 물리 수여야 한다.
+	// 공유가 이미 적용된 뒤의 라이브 allocatable 은 배수된 광고량이다 — 그것을 base 로 다시 읽으면
+	// replicas 편집 재진입마다 expected 가 배수의 배수(4×8=32)로 부풀어 verify 실패 → rollback →
+	// 재진입 무한 flap 이 된다. base 는 첫 적용 때 저널에 영속한 물리 수여야 한다.
 	It("converges to the new replicas when a Ready sharing-only policy is edited", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -2185,7 +2182,7 @@ var _ = Describe("ACPP sharing-only (no layout)", func() {
 	})
 })
 
-// d5A2PCI 는 D-5 재현용 비-MIG GPU(A2)의 PCI 다 — 같은 노드의 A30(nvPCI)과 구분한다.
+// d5A2PCI 는 비-MIG GPU(A2)의 PCI 다 — 같은 노드의 A30(nvPCI)과 구분한다.
 const d5A2PCI = "0000:86:00.0"
 
 // d5A2Device 는 MIG 하드웨어가 없는 A2 다(mode N/A, lgip 없음 → MIG target 아님, MPS 가능).
@@ -2217,11 +2214,10 @@ func deleteMpsDaemon() {
 		ObjectMeta: metav1.ObjectMeta{Name: mpsControlDaemonDSName, Namespace: "kube-system"}})
 }
 
-// D-5(라이브 §6.3): MPS 게이트가 "이 정책이 실제로 다루는 장치" 대신 "이 노드의 같은 벤더
-// 전체 장치" 를 검사해, MIG 가 켜진 형제 장치(A30 — 같은 노드의 다른 ACPP 가 소유·Ready) 때문에
-// A2 만 겨냥한 MPS 정책이 discovery 직후 거부됐다. ensureMpsControlDaemon 은 한 번도 호출되지
-// 않았고(kube-system 에 DS 조차 안 생김), 이 클러스터의 worker1 구성에서 MPS 는 영구 도달 불가였다.
-// D-3/D-4 와 같은 계열 — 다중 장치 노드에서 노드 전체와 개별 장치를 혼동한다.
+// MPS 게이트가 "이 정책이 실제로 다루는 장치" 대신 "이 노드의 같은 벤더 전체 장치" 를 검사하면,
+// MIG 가 켜진 형제 장치(A30 — 같은 노드의 다른 ACPP 가 소유·Ready) 때문에 A2 만 겨냥한 MPS 정책이
+// discovery 직후 거부되어 ensureMpsControlDaemon 이 전혀 호출되지 못한다 — 다중 장치 노드에서
+// 노드 전체와 개별 장치를 혼동하는 결함이다(spec §6.3).
 var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 	It("judges MPS capability only on devices no other policy owns", func() {
 		wipeACPPs()
@@ -2247,7 +2243,7 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 		Expect(getApplyRecord(&mig, "d5-node").GPUPCIs).To(Equal([]string{nvPCI}),
 			"MIG 정책은 A30 만 소유한다 — A2 는 MIG target 이 아니다(전제 확인)")
 
-		// D-5 의 MPS 게이트는 노드 라벨을 입력으로 쓴다 — 게이트 결과만 보면 라벨 동기화가
+		// MPS 게이트는 노드 라벨을 입력으로 쓴다 — 게이트 결과만 보면 라벨 동기화가
 		// 깨져도 spec 이 통과한다. 전제를 직접 고정한다.
 		By("MIG 적용 노드에 mig-active 라벨이 붙는다")
 		Eventually(func() string {
@@ -2263,11 +2259,10 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 
 		var got npuv1alpha1.AcceleratorPartitionPolicy
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "d5-mps-acpp"}, &got)).To(Succeed())
-		// MPS 근본해결 이후: A30 가 방금 GI 를 받아 Ready 가 됐으므로 d5-node 는
-		// syncMigActiveLabel 에 의해 이미 mig-active=true 다 — 그 노드 전체를 mixed DS 가
-		// 맡으므로 A2 겨냥 MPS 도 노드 단위로 막혀야 한다. "남의 소유 장치라 무시됐다" 가 아니라
-		// "이 노드가 MIG 관리 중" 이라는 더 정확한 이유로 거절되는 것이 이제는 정상이다 — D-5 가 고친
-		// owned-device 필터링 자체는 I-1/"owned by no one" spec 이 계속 지킨다.
+		// A30 가 방금 GI 를 받아 Ready 가 됐으므로 d5-node 는 syncMigActiveLabel 에 의해 이미
+		// mig-active=true 다 — 그 노드 전체를 mixed DS 가 맡으므로 A2 겨냥 MPS 도 노드 단위로
+		// 막혀야 한다. "남의 소유 장치라 무시됐다" 가 아니라 "이 노드가 MIG 관리 중" 이라는 더
+		// 정확한 이유로 거절되는 것이 정상이다 — owned-device 필터링 자체는 다른 spec 이 계속 지킨다.
 		Expect(got.Status.Phase).To(Equal(npuv1alpha1.ACPPPhaseFailed),
 			"★ d5-node 는 mig-active 라벨이 걸린 노드다 — MPS 게이트가 mutation 이전에 막아야 한다")
 		Expect(condReasonOf(&got, npuv1alpha1.ACPPCondValidated)).To(Equal(npuv1alpha1.ReasonSharingUnsupported))
@@ -2323,10 +2318,10 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 			"모드까지 꺼졌는데 라벨이 남으면 이 노드는 영영 공유 모드를 못 쓴다")
 	})
 
-	// I-1(D-5 잔여 창): 소유 주장(OwnerUID)은 cordon 단계(4)의 journalQuiescing 이 쓰고, 장치 목록
-	// (GPUPCIs)은 그보다 뒤인 computeBaseline(단계 5)이 썼다. 형제 MIG 정책이 그 사이에서 멈추면
-	// (MIG mode 이미 Enabled + GPU 를 쥔 pod → WaitingForDrain, 상한 없음) 저널은 "내 것" 이라고만
-	// 하고 "어느 장치" 인지는 말하지 않아, 장치 단위 소유 판정이 빈 집합을 보고 D-5 가 그대로 재발한다.
+	// 소유 주장(OwnerUID)은 cordon 단계의 journalQuiescing 이 쓰고, 장치 목록(GPUPCIs)은 그보다
+	// 뒤인 computeBaseline 이 쓴다. 형제 MIG 정책이 그 사이에서 멈추면(MIG mode 이미 Enabled +
+	// GPU 를 쥔 pod → WaitingForDrain, 상한 없음) 저널은 "내 것" 이라고만 하고 "어느 장치" 인지는
+	// 말하지 않아, 장치 단위 소유 판정이 빈 집합을 보고 같은 결함이 재발한다.
 	It("names the owned devices in the same journal write that claims ownership", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -2401,7 +2396,7 @@ var _ = Describe("ACPP MPS with a MIG-owned sibling device (D-5)", func() {
 })
 
 // seedRenderedDevicePlugin 은 **이 operator 가 실제로 렌더하는** device-plugin DaemonSet 을 만든다.
-// 손으로 조립한 DS 로는 D-8 판정의 입력(--mig-strategy=mixed)이 프로덕션 산출물이라는 사실을 고정할
+// 손으로 조립한 DS 로는 판정의 입력(--mig-strategy=mixed)이 프로덕션 산출물이라는 사실을 고정할
 // 수 없다 — 렌더러가 플래그를 바꾸면 픽스처만 초록으로 남는다.
 func seedRenderedDevicePlugin(sel map[string]string) {
 	nr := &NPUClusterPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
@@ -2456,12 +2451,12 @@ func cleanupDevicePluginWiring() {
 		ObjectMeta: metav1.ObjectMeta{Name: nvidia.SharingConfigMapNameFlat, Namespace: "kube-system"}})
 }
 
-// D-8(라이브 §6d.4): 업스트림 k8s-device-plugin 은 `--mig-strategy=mixed` 와 `sharing.mps` 를
-// 함께 받으면 시작 시 플래그 검증에서 거부한다(프로세스 단위 배타 — 개별 장치 배타가 아니다).
-// DP DaemonSet·ConfigMap 은 클러스터 전역 단일 객체라, 노드 하나의 A2 를 겨냥한 MPS 정책이 전
-// nvidia 노드의 DP 를 CrashLoopBackOff 로 몰았고 무관한 정책이 소유한 A30 의 MIG 광고까지
-// (mig-1g.6gb 4→0) 떨어뜨렸다. 라이브에서는 apply→verify 실패→rollback→재적용 flap 으로 이 회귀가
-// 반복됐다 — 그래서 판정은 apply 이전(mutation 이전)이어야 한다.
+// 업스트림 k8s-device-plugin 은 `--mig-strategy=mixed` 와 `sharing.mps` 를 함께 받으면 시작 시
+// 플래그 검증에서 거부한다(프로세스 단위 배타 — 개별 장치 배타가 아니다). DP DaemonSet·ConfigMap
+// 은 클러스터 전역 단일 객체라, 노드 하나의 A2 를 겨냥한 MPS 정책이 전 nvidia 노드의 DP 를
+// CrashLoopBackOff 로 몰고 무관한 정책이 소유한 A30 의 MIG 광고까지(mig-1g.6gb 4→0) 떨어뜨릴 수
+// 있다 — apply→verify 실패→rollback→재적용 flap 으로 반복되므로, 판정은 apply 이전(mutation
+// 이전)이어야 한다(spec §6d.4).
 var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed (D-8)", func() {
 	It("rejects the MPS policy before touching the device-plugin", func() {
 		wipeACPPs()
@@ -2531,7 +2526,7 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 	})
 
 	// 가드는 mps 에만 걸려야 한다: 업스트림은 SharingStrategyMPS 에만 이 규칙을 걸고, time-slicing 은
-	// 같은 mixed DP 에서 정상 동작한다(D-3·D-4·D-5 가 라이브에서 통과시킨 조합).
+	// 같은 mixed DP 에서 정상 동작한다.
 	// 가드가 sharing 전체로 넓어지면 이 spec 이 먼저 깨진다.
 	It("still applies time-slicing next to a Ready MIG partition", func() {
 		wipeACPPs()
@@ -2580,11 +2575,11 @@ var _ = Describe("ACPP MPS against a device-plugin running --mig-strategy=mixed 
 	})
 })
 
-// D-8 근본해결(MPS 근본해결 5단계 완료): mixed/flat DS 가 실제로 분리된 뒤에는
-// "클러스터에 mixed DS 가 존재하는가" 가 아니라 "이 노드가 mig-active 라벨을 달고 있는가" 만 봐야
-// 한다. 구 판정(전역 DS 조회)은 mixed DS 가 존재하기만 하면 노드와 무관하게 모든 MPS 요청을
-// 막았다 — 이 spec 은 mixed DS 를 실제로 렌더해 둔 채로(ensureNvidiaDevicePlugin 은 두 DS 를
-// 무조건 만든다) mig-active 라벨이 없는 노드의 MPS 가 통과하는지로 그 회귀를 고정한다.
+// "클러스터에 mixed DS 가 존재하는가" 가 아니라 "이 노드가
+// mig-active 라벨을 달고 있는가" 만 봐야 한다 — 전역 DS 조회로 판정하면 mixed DS 가 존재하기만
+// 해도 노드와 무관하게 모든 MPS 요청이 막힌다. 이 spec 은 mixed DS 를 실제로 렌더해 둔 채로
+// (ensureNvidiaDevicePlugin 은 두 DS 를 무조건 만든다) mig-active 라벨이 없는 노드의 MPS 가
+// 통과하는지로 그 회귀를 고정한다.
 var _ = Describe("ACPP MPS after per-node device-plugin split (D-8 root fix)", func() {
 	It("allows MPS on a node without the mig-active label even though the cluster-wide mixed DS exists", func() {
 		wipeACPPs()
@@ -2596,7 +2591,7 @@ var _ = Describe("ACPP MPS after per-node device-plugin split (D-8 root fix)", f
 		seedNvidiaNode("d8root-flat-node", sel, false, d5A2Device())
 		DeferCleanup(func() { cleanupNvidia("d8root-flat-node") })
 		// mig-active 라벨을 걸지 않는다 — 이 노드는 flat DS 가 맡는다. mixed DS 는 그래도
-		// 존재한다(렌더러가 항상 둘 다 만든다) — 구 판정은 그 존재만으로 이 노드까지 막았다.
+		// 존재한다(렌더러가 항상 둘 다 만든다) — 전역 존재만으로 판정하면 이 노드까지 막힌다.
 		seedRenderedDevicePlugin(sel)
 
 		r := nvidiaReconciler()
@@ -2611,19 +2606,12 @@ var _ = Describe("ACPP MPS after per-node device-plugin split (D-8 root fix)", f
 	})
 })
 
-// review-d8.md I-4: runTarget(layout+sharing 조합)의 거절청소 지점(precheckSharing 실패 분기,
-// controller.go 의 `return r.rejectSharing(...)`)은 sharing-only 지점(acpp_sharing_test.go 의
-// C-1/runSharingOnly)과 별개 코드경로다 — 되돌려도(호출을 빼고 `return rejected, nil` 로 바꿔도)
-// 스위트가 green 이었다. 이 spec 이 그 지점을 처음으로 고정한다.
-//
-// layout 을 가진 MIG-capable 장치(A30, mode Enabled)에 sharing.mps 를 같은 정책에 얹으면
-// deviceStatusFor 가 "MIG 가 켜진 장치에서는 MPS 를 쓸 수 없다" 로 첫 reconcile 부터 항상 거절한다
-// (MIG 와 MPS 는 이 장치에서 상호배타 — apply 될 여지가 없다). 그래서 "이미 적용된 mps 배선" 을
-// 만들 수는 없지만, 거절청소 지점(rejectSharing→disableSharing)이 실제로 불리는지는 여전히
-// 관측 가능하다 — disableSharing 은 저널 상태와 무관하게 항상 먼저 mps-control-daemon 정리
-// (ensureMpsControlDaemon)를 부른다(acpp_sharing.go:282 "control daemon 정리는 저널 상태와
-// 무관하게 멱등이다"). 아무도 안 쓰는 leftover daemon 을 미리 심어 두고, 거절이 그 daemon 을
-// 걷어내는지로 이 호출 지점을 고정한다.
+// runTarget(layout+sharing 조합)의 거절청소 지점(precheckSharing 실패 분기 → rejectSharing)은
+// sharing-only 지점과 별개 코드경로다(이 호출이 없어도 나머지 스위트는 green 이다) — 이 spec 이
+// 그 지점을 처음으로 고정한다. layout 을 가진 MIG-capable 장치(A30, mode Enabled)에 sharing.mps
+// 를 얹으면 deviceStatusFor 가 첫 reconcile 부터 항상 거절해 "이미 적용된 mps 배선" 을 만들 수
+// 없지만, disableSharing 은 저널 상태와 무관하게 항상 먼저 mps-control-daemon 정리를 부르므로,
+// leftover daemon 을 미리 심어 두고 거절이 그 daemon 을 걷어내는지로 이 호출 지점을 고정한다.
 var _ = Describe("ACPP layout+MPS combination rejection cleanup (review-d8 I-4)", func() {
 	It("cleans up a leftover mps control daemon when a layout+sharing policy is rejected by the MPS guard", func() {
 		wipeACPPs()
@@ -2634,7 +2622,7 @@ var _ = Describe("ACPP layout+MPS combination rejection cleanup (review-d8 I-4)"
 		seedNvidiaNode("i4-node", sel, false, a30Device("", "Enabled", "Enabled", ""))
 		DeferCleanup(func() { cleanupNvidia("i4-node") })
 
-		// 아무도 안 쓰는 leftover mps-control-daemon 을 미리 심는다(review-d8 I-4) — 이 spec 이
+		// 아무도 안 쓰는 leftover mps-control-daemon 을 미리 심는다 — 이 spec 이
 		// 유일한 ACPP 이므로 anyPolicyStillUsesMPS 는 항상 false, 거절청소가 돌면 반드시 걷힌다.
 		Expect(k8sClient.Create(ctx, renderMpsControlDaemonDS())).To(Succeed())
 

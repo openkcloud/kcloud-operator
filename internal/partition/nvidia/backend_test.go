@@ -1,6 +1,6 @@
 // ============================================================
 // backend_test.go: NVIDIA backend 단위 테스트 — discovery + Apply/Verify/Rollback/Diff
-// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -133,7 +133,7 @@ func TestValidate(t *testing.T) {
 		in   []partition.Layout
 		ok   bool
 	}{
-		{"empty", nil, false}, // layout 도 sharing 도 없음 — sharing-only 는 controller 가 Validate 를 부르지 않는다(D-3)
+		{"empty", nil, false}, // layout 도 sharing 도 없음 — sharing-only 는 controller 가 Validate 를 부르지 않는다
 		{"mixed", []partition.Layout{{Profile: "1g.6gb", CountPerDevice: 1}, {Profile: "2g.12gb", CountPerDevice: 1}}, false},
 		{"badFormat", []partition.Layout{{Profile: "dual-core", CountPerDevice: 4}}, false},
 		{"zeroCount", []partition.Layout{{Profile: "1g.6gb", CountPerDevice: 0}}, false},
@@ -178,8 +178,8 @@ func TestSharingCapability_MPSNeverClaimsVerified(t *testing.T) {
 		{"MIG 켜짐", modeEnabled, "", false},
 		{"MIG 꺼짐", modeDisabled, "", true},
 		{"관측 실패", "", "exec failed", false},
-		// review 최종 ①: 에러 없이 mode 가 비어 있는 것은 "MIG 가 꺼졌다" 가 아니라 "아무도
-		// 안 봤다" 다. 이전 규칙(ModeCurrent != modeEnabled)은 이 둘을 같게 취급했다.
+		// 에러 없이 mode 가 비어 있는 것은 "MIG 가 꺼졌다" 가 아니라 "아무도 안 봤다" 는 뜻이다 —
+		// 이전 규칙(ModeCurrent != modeEnabled)은 이 둘을 같게 취급한다.
 		{"관측 없음(에러도 없음)", "", "", false},
 		{"mode Unknown", modeUnknown, "", false},
 	} {
@@ -192,9 +192,8 @@ func TestSharingCapability_MPSNeverClaimsVerified(t *testing.T) {
 			if got.Verification == v1alpha1.VerificationVerified {
 				t.Error("실측 전에 verified 를 주장하면 안 된다")
 			}
-			// 지원=true 쪽도 사유가 있어야 한다(review 최종 ①): F5 가 "미지원 + 빈 사유" 를
-			// 결함으로 고쳤는데 반대쪽("MIG 꺼짐 → 지원" 정상 경로)은 빈 사유로 남아 있었고,
-			// 검사가 `!Supported && Reason == ""` 라 아무도 그것을 보지 않았다.
+			// 지원=true 쪽도 사유가 있어야 한다 — "미지원 + 빈 사유" 만 막는 검사(`!Supported &&
+			// Reason == ""`)는 "지원 + 빈 사유" 쪽은 보지 못한다.
 			if got.Reason == "" {
 				t.Errorf("판정 사유가 없다(supported=%v) — 사용자가 왜인지 알 수 없다", got.Supported)
 			}
@@ -202,11 +201,10 @@ func TestSharingCapability_MPSNeverClaimsVerified(t *testing.T) {
 	}
 }
 
-// F5(review): MIG 자체가 없는 장치(A2 등)는 capability 3축 루프를 건너뛰어 MultiProcess 가
-// zero-value(Supported:false, Reason:"")로 남는다 — 이 클러스터의 유일한 MPS-eligible GPU(A2,
-// A30 은 MIG Enabled)가 "미지원, 이유 없음"으로 보이는 셈이다. MIG 가 없으면 MIG-MPS 상호배타
-// 자체가 성립하지 않으므로 지원 가능해야 하고(실측은 없으니 Verification 은 여전히 required), 이유도
-// 남아야 한다.
+// MIG 자체가 없는 장치(A2 등)는 capability 3축 루프를 건너뛰어 MultiProcess 가 zero-value
+// (Supported:false, Reason:"")로 남으면 "미지원, 이유 없음"으로 보인다. MIG 가 없으면 MIG-MPS
+// 상호배타 자체가 성립하지 않으므로 지원 가능해야 하고(실측은 없으니 Verification 은 여전히
+// required), 이유도 남아야 한다.
 func TestNvidiaDiscover_NonMIGDeviceGetsHonestMPSJudgment(t *testing.T) {
 	ndr := &v1alpha1.NodeDeviceReport{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker1"},
@@ -235,15 +233,12 @@ func TestNvidiaDiscover_NonMIGDeviceGetsHonestMPSJudgment(t *testing.T) {
 	}
 }
 
-// 라이브에서 MPS 동시 실행이 실측됐다(물리 GPU 1장당 CUDA 프로세스 2개, v0.5.78). 그 사실을
-// 코드가 스스로 주장하면 "이 클러스터의 A30/A2 에서 됐다"가 "모든 NVIDIA GPU 가 MPS 를
-// 지원한다"로 바뀐다 — RNGD 가 같은 문제를 실측 주입 env 로 풀었고(MultiProcessSupportFromEnv),
-// 같은 규율을 따른다.
-//
-// 승격은 **검증 축만** 올린다. Supported 는 장치별 관측(MIG-MPS 상호배타)이 정하는 값이고,
-// 실측이 말해 주는 것은 "이 배포에서 이 메커니즘이 동작한다" 뿐이다. 그래서 지원 판정이
-// 서지 않은 장치는 주입이 있어도 required 로 남아야 한다 — 그러지 않으면 "MIG 가 켜져 MPS 를
-// 쓸 수 없다"는 판정에 "실측 완료" 가 붙는 모순이 status 에 실린다.
+// 실측 주입(MultiProcessEnv)이 있어도 "모든 GPU 가 지원한다" 를 코드가 스스로 주장하지 않는
+// 이유는 backend.go 의 MultiProcessEnv 주석과 같다(RNGD 의 규율과 동일).
+// 승격은 검증 축만 올린다 — Supported 는 장치별 관측(MIG-MPS 상호배타)이 정하는 값이고, 실측은
+// "이 배포에서 이 메커니즘이 동작한다" 만 말해 준다. 지원 판정이 서지 않은 장치는 주입이 있어도
+// required 로 남아야 한다 — 아니면 "MIG 가 켜져 MPS 를 못 쓴다"는 판정에 "실측 완료" 가 붙는
+// 모순이 생긴다.
 func TestMultiProcessVerification_RequiresMeasurementEnv(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -273,7 +268,7 @@ func TestMultiProcessVerification_RequiresMeasurementEnv(t *testing.T) {
 }
 
 // 비-MIG 장치(A2)는 capability 3축 루프를 건너뛰고 Discover 루프의 else 분기에서 MPS 판정을
-// 받는다 — 승격도 그 사이트에 같이 들어가야 한다. 라이브에서 실제로 MPS 를 돌린 장치가 A2 다.
+// 받는다 — 승격도 그 사이트에 같이 들어가야 한다.
 func TestMultiProcessVerification_NonMIGDevicePromotesToo(t *testing.T) {
 	t.Setenv(MultiProcessEnv, "verified")
 	ndr := &v1alpha1.NodeDeviceReport{
@@ -330,9 +325,9 @@ func TestMultiProcessVerification_NonMIGSiteGatesOnSupport(t *testing.T) {
 	}
 }
 
-// time-slicing 도 같은 규율이다 — 이전 트랙에서 라이브 검증됐으나 코드가 그것을 스스로 주장할
-// 근거는 없다. 별도 env 를 둔다: 두 기능은 서로 다른 실측이라 한 값으로 묶으면 하나만 검증한
-// 배포가 둘 다 검증됐다고 말하게 된다.
+// time-slicing 도 같은 규율이다 — 코드가 스스로 verified 를 주장할 근거는 없다. 별도 env 를
+// 둔다: 두 기능은 서로 다른 실측이라 한 값으로 묶으면 하나만 검증한 배포가 둘 다 검증됐다고
+// 말하게 된다.
 func TestTimeSlicingVerification_RequiresMeasurementEnv(t *testing.T) {
 	b := New(nil).withSupported(map[string]int32{"1g.6gb": 7})
 	if got := b.deviceStatusFor(MigDevice{PCI: "0000:18:00.0", ModeCurrent: modeDisabled}, "NVIDIA A30").
@@ -346,18 +341,12 @@ func TestTimeSlicingVerification_RequiresMeasurementEnv(t *testing.T) {
 	}
 }
 
-// F7(review, 회귀): HardwareSupported=false 는 "MIG 자체가 없다"와 "MIG-capable 인데 관측이
-// 실패해 상태를 확정 못 했다"를 둘 다 포괄한다(migCap = len(profiles)>0 || (mc==Disabled &&
-// obsErr=="") — 관측 주입 모드에서 MIG-capable 장치도 관측 실패로 false 가 될 수 있다). F5 의
-// 수정이 이 둘을 구분 안 하면 실제로 MIG Enabled 인 A30 이 "MIG 없음, 그러니 MPS 확실히 지원"
-// 이라는 confident false positive 를 낸다 — PartitionCapability 축이 이미 지키는 원칙
-// (TestPartitionCapability_ObservationFailureIsNotHardwareVerdict)을 MultiProcess 축에서 어기는 것.
-//
-// 시나리오는 "mode-pending 파싱 실패" 다(review 최종 ⑦): 이전 픽스처는
-// {ModeCurrent: Enabled, Err: "enabled but lgi unparseable"} 를 손으로 꽂았는데, observe.go:93 은
-// 정확히 그 실패에서 ModeCurrent 를 modeUnknown 으로 강등하므로 parseObservation 이 절대 내놓지
-// 않는 삼중항이었다 — 성립하지 않는 전제를 주석으로 문서화하고 있었다. 이제 픽스처를
-// parseObservation 으로 구동해 실재하는 조합만 검증한다.
+// HardwareSupported=false 는 두 가지를 포괄한다: "MIG 자체가 없다"와 "MIG-capable 인데 관측
+// 실패로 상태를 확정 못 했다"(migCap = len(profiles)>0 || (mc==Disabled && obsErr=="")). 둘을
+// 구분하지 않으면 실제 MIG Enabled 인 A30 이 "MIG 없음, 그러니 MPS 지원" 이라는 false positive 를
+// 낸다. 시나리오는 mode-pending 파싱 실패다. 픽스처는 parseObservation 으로 구동한다 —
+// observe.go:93 이 그 실패에서 ModeCurrent 를 modeUnknown 으로 강등하므로, 손으로 꽂은 조합은
+// 실제로 나오지 않는 상태일 수 있다.
 func TestNvidiaDiscover_MIGCapableObservationFailureStaysUnsupported(t *testing.T) {
 	pci := obsTestPCI
 	ndr := &v1alpha1.NodeDeviceReport{
@@ -389,16 +378,12 @@ func TestNvidiaDiscover_MIGCapableObservationFailureStaysUnsupported(t *testing.
 	}
 }
 
-// F7(review, 재발) — 이 클러스터의 실제 상태: detector 가 host nvidia-smi 를 못 읽어 A30 을
-// model="generic" 으로 보고한다. migCapable 은 모델명 정규식이라 "generic" 은 항상 false —
-// 관측된 mode(Enabled/Disabled)가 있는데도 모델만으로 판정하면 이 케이스를 여전히 놓친다.
-// 관측이 실제 모드를 말해주면(Enabled/Disabled) 모델 문자열보다 그 신호를 신뢰해야 한다.
-//
-// ModeCurrent 는 반드시 parseObservation 이 실제로 내놓는 값을 써야 한다 — "enabled but lgi
-// unparseable"(observe.go:93)은 ModeCurrent 를 Enabled 가 아니라 Unknown 으로 낮춘다(fail-closed
-// 파싱 규칙). 이전 버전의 이 테스트는 ModeCurrent:modeEnabled 를 직접 꽂아 넣어(parseObservation
-// 을 우회) 실제로는 절대 안 나오는 조합을 검증했고, 그래서 진짜 결함(model=generic + Unknown)을
-// 못 잡았다.
+// 이 클러스터는 detector 가 host nvidia-smi 를 못 읽어 A30 을 model="generic" 으로 보고한다.
+// migCapable 은 모델명 정규식이라 "generic" 은 항상 false 다 — 관측된 mode(Enabled/Disabled)가
+// 있어도 모델만으로 판정하면 이 케이스를 놓친다. 모드가 실제 신호를 주면 모델 문자열보다
+// 그 신호를 신뢰해야 한다. ModeCurrent 는 parseObservation 이 실제로 내놓는 값을 써야 한다 —
+// "enabled but lgi unparseable"(observe.go:93)은 ModeCurrent 를 Unknown 으로 낮춘다. 손으로
+// 꽂은 modeEnabled 는 parseObservation 을 우회해 실제로 안 나오는 조합을 검증하므로 쓰지 않는다.
 func TestNvidiaDiscover_GenericModelWithFailedObservationStaysUnsupported(t *testing.T) {
 	pci := obsTestPCI
 	ndr := &v1alpha1.NodeDeviceReport{
@@ -427,17 +412,12 @@ func TestNvidiaDiscover_GenericModelWithFailedObservationStaysUnsupported(t *tes
 	}
 }
 
-// review 최종 ④(테스트 갭): 라운드 4·5 가 만든 "관측 mode 우선" 두 arm 은 삭제해도 스위트가
-// 초록이었다 — 남는 코드가 정확히 라운드 3(컨트롤러가 broken 으로 판정한 버전)인데도 그렇다.
-// 여기 두 케이스가 그 두 arm 을 각각 고정한다. 픽스처는 반드시 parseObservation 을 구동해 만든다
-// (라운드 4 교훈: 손으로 조립한 Observation 은 실제 파서가 내놓지 않는 상태일 수 있다).
-//
-// 1) mc == modeNA arm — 프로덕션의 A2 가 항상 밟는 경로다(controller.go:504 가 전 nvidia PCI 를
-// 관측하므로 A2 도 언제나 진짜 mig.mode.current == N/A 를 받는다). 즉 이 클러스터에서 실제로
-// 가장 많이 실행되는 arm 인데 테스트가 하나도 없었다. model 은 "generic" 으로 둬서 model 문자열
-// arm 이 답을 낼 수 없게 한다 — 답을 낸 것이 modeNA arm 임을 증명한다.
-// 두 번째 행은 review 최종 ⑥ 이다: 형제 판정 사이트(deviceStatusFor)는 ObsError 가 있으면
-// 무조건 판정을 거부하는데, 이쪽만 부분 실패한 관측의 N/A 를 신뢰해 supported=true 를 냈다.
+// 두 케이스가 mc==modeNA 분기를 고정한다. 모델은 "generic" 으로 둬서 모델 문자열 분기가 답을
+// 낼 수 없게 하고, 답이 나온다면 modeNA 분기가 낸 것임을 증명한다. 픽스처는 parseObservation
+// 으로 구동한다 — 손으로 조립한 Observation 은 실제 파서가 내놓지 않는 상태일 수 있다.
+// 1) obsErr 없는 N/A: A2 가 실제로 항상 밟는 경로다(controller.go:504 가 전 nvidia PCI 를 관측).
+// 2) obsErr 있는 N/A(부분 실패): 형제 판정 사이트(deviceStatusFor)와 똑같이 거부해야 한다 —
+// ObsError 가 있으면 두 사이트 모두 판정을 거부한다.
 func TestNvidiaDiscover_ModeNAFromDriverIsTrustedForMPS(t *testing.T) {
 	for _, tc := range []struct {
 		name, modeCsv, lgi string
@@ -481,9 +461,9 @@ func TestNvidiaDiscover_ModeNAFromDriverIsTrustedForMPS(t *testing.T) {
 	}
 }
 
-// 2) 관측 mode 가 model 문자열보다 우선한다는 라운드 4 의 명제 자체를 고정한다. model 을 실재하는
-// 비-MIG 문자열("NVIDIA-A2")로 두면 model arm 은 "MPS 지원" 이라고 말하는데 관측된 mode 는
-// Enabled 다 — mode 가 이겨 미지원이어야 한다. 이 명제를 검증하는 테스트가 지금까지 없었다.
+// 관측 mode 가 model 문자열보다 우선함을 고정한다. model 을 실재하는 비-MIG 문자열
+// ("NVIDIA-A2")로 두면 model arm 은 "MPS 지원" 이라고 말하는데 관측된 mode 는 Enabled
+// 다 — mode 가 이겨 미지원이어야 한다.
 func TestNvidiaDiscover_ObservedModeBeatsModelString(t *testing.T) {
 	pci := obsTestPCI
 	obs := parseObservation(pci, "Enabled, bogus", "", "")
@@ -511,9 +491,9 @@ func TestNvidiaDiscover_ObservedModeBeatsModelString(t *testing.T) {
 	}
 }
 
-// F(테스트 갭, review): TestSharingCapability_MPSNeverClaimsVerified 는 deviceStatusFor 를 직접
-// 호출해 Discover()/targetFor() 를 거치지 않는다 — targetFor 를 되돌려도(PCI 만 담긴 빈 MigDevice)
-// 그 테스트는 그대로 통과한다. MIG-Enabled A30 을 관측 주입해 실제 Discover 경로로
+// TestSharingCapability_MPSNeverClaimsVerified 는 deviceStatusFor 를 직접 호출해 Discover()/
+// targetFor() 를 거치지 않는다 — targetFor 를 되돌려도(PCI 만 담긴 빈 MigDevice) 그 테스트는
+// 그대로 통과한다. MIG-Enabled A30 을 관측 주입해 실제 Discover 경로로
 // MultiProcess.Supported == false 를 고정한다(targetFor 가 반영되지 않으면 이 값은 실패한다).
 func TestDiscover_MPSUnsupportedOnMIGEnabledDeviceViaRealPath(t *testing.T) {
 	pci := obsTestPCI
@@ -619,7 +599,7 @@ func TestRollback_DisablesViaPci(t *testing.T) {
 	if err := b.Rollback(target, partition.RollbackState{}); err != nil {
 		t.Fatal(err)
 	}
-	// 모델 B(§17.1): rollback 은 GI 제거(-dgi)만, mode 는 끄지 않는다(-mig 0 금지).
+	// 모델 B: rollback 은 GI 제거(-dgi)만, mode 는 끄지 않는다(-mig 0 금지).
 	wantRemoveGI := []string{"nvidia-smi", "mig", "-i", "0000:41:00.0", "-dgi"}
 	foundGI := false
 	for _, s := range exec.gotSteps {
@@ -840,9 +820,9 @@ func TestPartitionCapability_ObservationFailureIsNotHardwareVerdict(t *testing.T
 	if measured.Verification != v1alpha1.VerificationVerified {
 		t.Errorf("관측 성공은 verification=verified 여야 함: got %q", measured.Verification)
 	}
-	// review 최종 ①: obsErr 만으로는 부족하다. NDR 필드 경로에서 obsErr == "" 는 "detector 가
-	// 에러를 안 적었다" 일 뿐 "detector 가 봤다" 가 아니다 — 아무도 안 본 장치에 verified 를 찍으면
-	// 이 축이 막으려고 존재하는 바로 그 단언을 이 축 자신이 하는 셈이다.
+	// obsErr 만으로는 부족하다. NDR 필드 경로에서 obsErr == "" 는 "detector 가 에러를 안 적었다"
+	// 일 뿐 "detector 가 봤다" 가 아니다 — 아무도 안 본 장치에 verified 를 찍으면 이 축이 막으려고
+	// 존재하는 바로 그 단언을 이 축 자신이 하는 셈이다.
 	unobserved := partitionCapabilityFrom(false, nil, "", false)
 	if unobserved.Verification != v1alpha1.VerificationRequired {
 		t.Errorf("★ 관측하지 않은 장치는 에러가 없어도 verified 가 아니다: got %q", unobserved.Verification)
@@ -859,13 +839,11 @@ func TestPartitionCapability_ObservationFailureIsNotHardwareVerdict(t *testing.T
 	}
 }
 
-// review 최종 ①(fail-open): MIG 관측 Job 이 실패하면 runTarget 은 "관측 없이 돈 첫 Discover" 의
-// devices 를 그대로 status 에 영속한다(WaitingForDrain 조기 반환). 그 순간 NDR 의 MIG 필드는
-// 비어 있거나 Unknown 인데, 이전 규칙(`ModeCurrent != modeEnabled`)은 그것을 "Enabled 아님 →
-// MPS 가능" 으로 읽었고 partitionCapabilityFrom 은 같은 행에 verification: verified 를 찍었다.
-// 즉 아무것도 측정하지 못한 바로 그 순간의 CR·REST·웹 콘솔이 "MPS 가능, 측정됨" 을 말했다.
-// 이 클러스터에서 아직 안 터지는 이유는 detector 가 A30 을 model="generic" 으로 보고해
-// migCap=false 로 떨어지기 때문뿐이다 — detector 가 실 모델명을 보고하는 순간(명시적 목표) 열린다.
+// MIG 관측 Job 이 실패하면 runTarget 은 관측 없이 돈 첫 Discover 의 devices 를 그대로 status 에
+// 영속한다(WaitingForDrain 조기 반환). 그 순간 NDR 의 MIG 필드가 비거나 Unknown 인데 이전
+// 규칙(`ModeCurrent != modeEnabled`)이 그것을 "Enabled 아님 → MPS 가능" 으로 읽으면,
+// partitionCapabilityFrom 은 같은 행에 verified 를 찍어 모순을 만든다. 이 클러스터에서 아직
+// 안 터지는 이유는 detector 가 A30 을 generic 으로 보고해 migCap=false 로 떨어지기 때문뿐이다.
 func TestNvidiaDiscover_UnobservedMIGCapableDeviceClaimsNothing(t *testing.T) {
 	for _, mc := range []string{"", modeUnknown} {
 		t.Run("migModeCurrent="+mc, func(t *testing.T) {
@@ -896,13 +874,12 @@ func TestNvidiaDiscover_UnobservedMIGCapableDeviceClaimsNothing(t *testing.T) {
 	}
 }
 
-// review 재리뷰 NEW-1: mode 가 Enabled 로 읽힌 장치는 드라이버가 MIG capability 를 확인해 준
-// 것이다(Disabled 가 MIG 지원 GPU 에서만 나온다는 것과 같은 논리 — Enabled 는 더욱 그렇다).
-// 그 장치의 lgip 관측만 실패하면 profile 이 0이라 migCap=false 로 떨어지는데, 그때
-// verification=verified 를 찍으면 "측정했고 이 하드웨어는 파티션을 못 한다" 를 단언하게 된다.
-// 픽스처는 parseObservation 을 구동해 만든다 — 손으로 조립한 조합은 실제 경로가 내지 않는
-// 상태일 수 있고, 이 트랙에서 그 함정에 두 번 빠졌다. 아래 입력이 실제로 내는 값은
-// {ModeCurrent: Enabled, Err: "", profiles: 0} 이다(lgi 는 파싱되고 lgip 만 깨진 경우).
+// mode 가 Enabled 로 읽힌 장치는 드라이버가 MIG capability 를 확인해 준 것이다(Disabled 가 MIG
+// 지원 GPU 에서만 나온다는 것과 같은 논리 — Enabled 는 더욱 그렇다). 그 장치의 lgip 관측만
+// 실패하면 profile 이 0이라 migCap=false 로 떨어지는데, 그때 verification=verified 를 찍으면
+// "측정했고 이 하드웨어는 파티션을 못 한다" 를 단언하게 된다. 픽스처는 parseObservation 을
+// 구동해 만든다 — 손으로 조립한 조합은 실제 경로가 내지 않는 상태일 수 있다. 아래 입력이 실제로
+// 내는 값은 {ModeCurrent: Enabled, Err: "", profiles: 0} 이다(lgi 는 파싱, lgip 만 깨진 경우).
 func TestNvidiaDiscover_EnabledModeWithUnreadableLgipStaysUnverified(t *testing.T) {
 	lgi, err := os.ReadFile("testdata/mig_lgi_580.txt")
 	if err != nil {
@@ -961,12 +938,12 @@ func TestMigCapableAcceptsDetectorProductNames(t *testing.T) {
 	}
 }
 
-// detector 가 실제 제품명을 싣기 시작해도 라이브 판정이 달라지지 않아야 한다. 라이브
-// (2026-08-11) 값은 A30 이 migModeCurrent=Disabled, A2 가 NA 다.
+// detector 가 실제 제품명을 싣기 시작해도 판정이 달라지지 않아야 한다. 실측 값은 A30 이
+// migModeCurrent=Disabled, A2 가 NA 다.
 //
-// 첫 판은 generic 호출과 제품명 호출의 결과가 "같은지" 만 봤는데, 분기 순서를 뒤집는
-// 변형에도 통과했다 — 두 입력의 결과가 우연히 같아 항진 단언이었다. 그래서 구체적인
-// 기대값을 못박는다. 값이 무엇인지 적어야 다음 회차가 무엇이 바뀌었는지 안다.
+// 두 입력(generic 호출/제품명 호출)의 결과가 "같은지" 만 보는 식으로는 분기 순서를 뒤집는
+// 변형도 통과한다 — 두 입력이 우연히 같은 값으로 떨어지는 항진 단언이기 때문이다. 그래서
+// 구체적인 기대값을 못박는다 — 값 자체를 적어야 다음에 무엇이 바뀌었는지 드러난다.
 func TestMpsSupportForLiveDeviceValues(t *testing.T) {
 	for _, tc := range []struct {
 		name, mc, model string

@@ -1,10 +1,8 @@
 // ============================================================
 // freshness.go: evidence TTL·무효화 판정 (R&D base v0.1 §8.6)
 // 상세: 근거는 시간이 지나면 만료되고(expiresAt), 감시 축의 환경이 바뀌면 그 자리에서 죽는다.
-//
-//	판정 불가는 전부 "못 믿는다" 쪽으로 떨어뜨린다(fail-closed).
-//
-// 생성일: 2026-07-31
+// 판정 불가는 전부 "못 믿는다" 쪽으로 떨어뜨린다(fail-closed).
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -28,14 +26,11 @@ const (
 // IsFresh 는 이 판정으로 근거를 재사용해도 되는지다.
 func IsFresh(verdict string) bool { return verdict == FreshValid }
 
-// CheckFreshness 는 근거를 지금 재사용해도 되는지 판정하고 사유를 함께 돌려준다.
-//
-// 순서가 의미를 가진다: 부재 → 등급 없음 → 환경 변화 → 만료. 환경 변화를 만료보다 먼저 보는
-// 이유는 사유의 유용성이다 — 재부팅 직후 만료도 함께 왔다면 운영자가 알아야 할 것은 "낡았다"
-// 가 아니라 "재부팅했다" 다.
-//
-// invalidateOn 이 비어 있으면 어떤 축도 감시하지 않는다(환경 변화로는 무효화되지 않는다).
-// 감시 축 선택은 AcceleratorVerificationPolicy 의 몫이고 여기서 기본값을 끼워 넣지 않는다.
+// CheckFreshness 는 근거를 지금 재사용해도 되는지 판정하고 사유를 함께 돌려준다. 순서가 의미를
+// 가진다: 부재 → 등급 없음 → 환경 변화 → 만료. 환경 변화를 만료보다 먼저 보는 이유는 사유의
+// 유용성이다 — 재부팅 직후 만료도 함께 왔다면 운영자가 알아야 할 것은 "낡음" 이 아니라 "재부팅" 이다.
+// invalidateOn 이 비어 있으면 어떤 축도 감시하지 않는다(환경 변화로는 무효화되지 않는다). 감시 축
+// 선택은 AcceleratorVerificationPolicy 의 몫이고 여기서 기본값을 끼워 넣지 않는다.
 func CheckFreshness(ev *v1alpha1.AcceleratorEvidence, now time.Time, cur v1alpha1.EnvironmentFingerprint, invalidateOn []string) (string, string) {
 	if ev == nil {
 		return FreshAbsent, "no evidence recorded for this node"

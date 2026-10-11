@@ -1,14 +1,8 @@
 # ============================================================
 # workload.py: Tenstorrent Blackhole 에서 ttnn matmul 을 반복해 초당 처리량 측정
-# 상세: PHASE·DURATION·DEVICE_ID·MATMUL_DIM·START_AT env 를 읽어 ttnn.open_device 로 장치를 열고
-#       bf16 MATMUL_DIM×MATMUL_DIM 텐서 두 개를 장치에 올린 뒤, 워밍업(커널 컴파일) 몇 회를
-#       타이머 밖에서 돌리고 DURATION 초 동안 ttnn.matmul→synchronize→deallocate 를 반복한다.
-#       측정 후 "RESULT {json}" 한 줄(phase·iters·seconds·iters_per_sec·start·end)과
-#       "metric=matmul_per_s value=<수>" 한 줄을 stdout 에 찍고 exit 0. 예외 시 error 를 담은
-#       RESULT json 을 찍고 exit 1. solo·co-run 파드가 같은 /dev/tenstorrent/0 을 공유해 실행된다.
-#       START_AT(epoch 초)이 있으면 워밍업 뒤 그 시각까지 대기했다 타이머를 시작해 co-run 두 파드의
-#       측정 창을 정렬한다(겹침 보장); 과거로 5초 넘게 지났으면 error 로 실패한다.
-# 생성일: 2026-09-22 | 수정일: 2026-09-23
+# 상세: PHASE·DURATION·DEVICE_ID·MATMUL_DIM·START_AT env 로 ttnn.open_device 를 열어 matmul 을
+#       반복하고 RESULT/metric 줄을 낸다(배리어·측정 계약은 README 참고).
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 import os
 import sys

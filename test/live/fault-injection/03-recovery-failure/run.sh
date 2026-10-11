@@ -1,39 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: 복구 반복 실패 → 격리(Quarantined) kind 재현 — 자동 Healthy 복귀 없음 확인
-# 상세: test/fault/sequence_test.go 의 Sequence D(:141, degraded→recovery→verifier 실패→
-#       quarantine)와 fault_test.go F10(:347, 보상 한도 후 ManualRecoveryRequired)이 envtest
-#       로 증명한 "반복 실패 → 자동 실행 중단" 결론을 실제 apiserver 위에서 재현한다.
-#       신호 자체는 가짜 NodeDeviceReport 하나(driverLoaded=false 고정)뿐이고, 그 뒤로는
-#       손을 대지 않는다 — AcceleratorHealth.status 도, AcceleratorOperation 의 결과도
-#       전부 실제 컨트롤러가 계산한다("hand-patching the state under test" 회피).
-#       driverLoaded=false 는 health 를 Unhealthy/DriverNotLoaded 로 보내고
-#       (evaluate.go), ensureRecovery 가 RecoverDevice AcceleratorOperation 을 만든다
-#       (remediation.go operationForReason). kind 랩에는 이 벤더의 드라이버 pod 이 실제로
-#       하나도 없으므로, RecoverDevice 의 본체(recoverdevice_participant.go Apply)는
-#       "지울 pod 이 없다" 는 이유로 **항상** ApplyFailed 를 낸다 — 이것은 이 스크립트가
-#       흉내 낸 것이 아니라 실제 장치가 없는 랩 환경이 자연스럽게 만드는 실패다.
-#       ApplyFailed 는 곧장 RollingBack 으로(state_machine.go:53-66), Rollback() 은
-#       "되돌릴 것이 없다"로 곧장 RolledBack 으로 넘어간다 — 작업 하나가 완결되는 데 실제
-#       참가자 로직이 필요 없다. health 는 RolledBack/ManualRecoveryRequired 로 끝난
-#       자기 소유 작업 수를 세고(recoveryHistory), 그 수가 RepeatedFailureThreshold 에
-#       닿으면 Quarantined 로 올린다 — 그 뒤로는 AllowedTransition(Quarantined, ...) 이
-#       Recovering 만 허용해 신호가 좋아져도(이 스크립트가 끝에 driverLoaded=true 로 되돌려
-#       확인한다) 자동으로 Healthy 로 안 돌아간다.
-#       기본 정책(RepeatedFailureThreshold=3, RecoveryCooldown=10분)을 그대로 쓰면 한
-#       사이클에 최대 10분이 걸려 라이브 랩 시간 예산을 넘긴다 — 그래서 이 시나리오만 전용
-#       AcceleratorHealthPolicy 로 monitorIntervalSeconds·repeatedFailureThreshold·
-#       DriverNotLoaded 의 recoveryCooldownSeconds 를 줄인다(정책 파라미터일 뿐, 상태기계
-#       로직은 기본값과 동일하다). 같은 정책에 ndrFreshnessSeconds 도 넉넉히 올린다 — 이
-#       시나리오도 실행 시간이 수 분 걸릴 수 있어 이 스크립트가 한 번만 심어 둔 NDR
-#       observedAt 이 도중에 stale 이 될 수 있다(01 번 시나리오의 1차 라이브 실행에서 실측
-#       확인).
-#       상태 확인은 jsonpath 가 아니라 jq 로 한다 — AcceleratorHealthStatus.AllocationAllowed
-#       는 `omitempty` 라 컨트롤러가 실제로 false 를 쓰면 status 에 그 키 자체가 빠진다
-#       (Go 구조체 마샬링). jsonpath 로 읽으면 "false" 문자열이 아니라 빈 문자열이 된다 —
-#       01 번 시나리오 헤더 주석에 상세 설명이 있다.
-#       DRY_RUN=1 이면 클러스터 상태를 바꾸는 명령을 하나도 실행하지 않는다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-20(01 번 1차 라이브 실행에서 드러난 두 가지 발견 반영)
+# 상세: 가짜 NodeDeviceReport 하나(driverLoaded=false)만 쓰고 나머지는 컨트롤러가 계산한다.
+#       드라이버 pod 없는 kind 랩에서 RecoverDevice 가 매번 ApplyFailed 로 끝나 반복 실패→Quarantined 를 만든다.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -138,7 +108,7 @@ recover_op_lines() {
 # health_state_line — state/allocationAllowed/recoveryFailures 를 jq 로 읽는다. jsonpath 가
 # 아니라 jq 인 이유: allocationAllowed=false 는 Go 구조체의 `omitempty` 때문에 컨트롤러가
 # 실제로 쓴 status 에는 키 자체가 빠져 jsonpath 로는 빈 문자열이 된다("false" 문자열이
-# 아니다) — scenario 01 의 1차 라이브 실행에서 처음 드러난 사실이며 여기도 같은 필드를 읽는다.
+# 아니다).
 health_state_line() {
   kubectl get acceleratorhealth "$NODE" -o json 2>/dev/null \
     | jq -r '(.status.state // "") + "/" + ((.status.allocationAllowed // false) | tostring) + "/" + ((.status.recoveryFailures // 0) | tostring)' 2>/dev/null || true

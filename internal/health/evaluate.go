@@ -4,7 +4,7 @@
 //
 //	판정 우선순위가 규칙의 전부다 — 여러 신호가 동시에 깨지면 가장 보수적인 결론을 낸다.
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -117,8 +117,8 @@ func Evaluate(in Inputs, p EffectivePolicy) Result {
 
 	devResults := EvaluateDevices(in.Devices, p)
 	// 반환 경로와 무관하게 항상 싣는다 — 관측 실패 같은 장치 신호는 노드를 막지 않고도 남아야
-	// status 에서 보인다(2026-08-04 라이브: 조기 반환 분기 안에서만 붙였더니 Healthy 로 끝나는
-	// 노드에서 관측 실패 신호가 통째로 사라졌다).
+	// status 에서 보인다. 조기 반환 분기 안에서만 붙이면 Healthy 로 끝나는 노드에서 관측 실패
+	// 신호가 통째로 사라진다.
 	for _, d := range devResults {
 		sigs = append(sigs, d.Signals...)
 	}

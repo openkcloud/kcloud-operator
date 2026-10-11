@@ -1,9 +1,8 @@
 // ============================================================
 // imagepull_test.go: imagePullSecrets 전파 + imagePullPolicy 불변식 회귀 가드
-// 상세: 자식 DS(detector/driver) 빌더가 policy.Spec.ImagePullSecrets 를
-//        pod spec 에 전파하고, air-gap 프리로드용 imagePullPolicy=IfNotPresent 불변식을
-//        건드리지 않음을 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: 자식 DS(detector/driver) 빌더가 policy.Spec.ImagePullSecrets 를 pod spec 에
+// 전파하고, air-gap 프리로드용 imagePullPolicy=IfNotPresent 불변식을 건드리지 않는지 검증한다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 package controller

@@ -1,11 +1,10 @@
 // ============================================================
 // acceleratorworkload_controller.go: AcceleratorWorkload 컨트롤러
-// 상세: 추상 워크로드의 최종 권위 판정. admission webhook 은 failurePolicy=Ignore 라 우회될
-// 수 있고 승인 이후 클러스터 capability 가 바뀔 수도 있으므로, 같은 intent.Translate 를 다시
-// 돌려 결과를 status 에 남긴다. 성공하면 Deployment 하나를 소유하고, 거절되면 Deployment 를
-// 만들지 않고 Condition=False 로 사유를 남긴다(실행 중인 것을 강제로 죽이지는 않는다 —
-// 광고가 사라지면 Pod 은 자연히 Pending 이 되고, 그 판단은 운영자 몫이다).
-// 생성일: 2026-07-30 | 수정일: 2026-10-06
+// 상세: 추상 워크로드의 최종 권위 판정이다. admission webhook 은 우회될 수 있고 승인 후
+// capability 가 바뀔 수도 있어, 같은 intent.Translate 를 다시 돌려 status 에 남긴다. 성공하면
+// Deployment 를 소유하고, 거절되면 Deployment 없이 Condition=False 로 사유만 남긴다 — 실행 중
+// Pod 은 강제로 죽이지 않고, 광고가 사라지면 자연히 Pending 된다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -399,12 +398,10 @@ func renderDeployment(aw *npuv1alpha1.AcceleratorWorkload, res *intent.Result) *
 		}
 	}
 	// NVIDIA 는 runtimeClass 를 여기서 직접 박는다. 노드의 containerd 기본 런타임은 runc 이고
-	// nvidia hook 은 이 핸들러에서만 돌므로, 없으면 컨테이너는 /dev/nvidia* 없이 뜬다 —
-	// 그런데도 Pod 은 Ready 가 되어 status 가 Running 이라고 거짓말한다. PodMutator 는
-	// webhook.enabled=false(차트 기본값)면 아예 불리지 않으므로 거기 기댈 수 없다.
-	// podInjectLabel 은 계속 붙인다 — webhook 이 켜져 있으면 무해한 이중 방어다.
-	// runtimeClass 는 벤더마다 다르고 그 판정은 driveradapter 가 담당한다. Lookup 은 조회 키가
-	// 정확히 일치할 때만 맞으므로 기존 res.Vendor==vendorNvidia 와 같이 대소문자를 구분한다.
+	// nvidia hook 은 이 핸들러에서만 돌므로, 없으면 컨테이너는 /dev/nvidia* 없이 뜨면서도 Pod 은
+	// Ready 가 되어 Running 이라고 거짓말한다. PodMutator 는 webhook.enabled=false(차트 기본값)
+	// 면 아예 불리지 않으므로 거기 기댈 수 없다(podInjectLabel 은 계속 붙여도 무해한 이중 방어다).
+	// runtimeClass 판정은 벤더마다 달라 driveradapter 가 담당하고, 조회 키는 대소문자를 구분한다.
 	var runtimeClass *string
 	if a, ok := driveradapter.Lookup(res.Vendor, ""); ok {
 		if rc := a.RuntimeClass(); rc != "" {

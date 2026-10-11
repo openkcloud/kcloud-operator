@@ -1,4 +1,4 @@
-<!-- README.md: "새 벤더 = device-plugin 코드 0줄" descriptor 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
+<!-- README.md: "새 벤더 = device-plugin 코드 0줄" descriptor 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # 새 벤더 = descriptor 하나 (new-vendor-by-descriptor)
 
 ## 왜
@@ -9,9 +9,7 @@ NPUClusterPolicy 에서 끄고(소유 device-plugin 회수), descriptor 하나�
 device-plugin 이 `tenstorrent/blackhole-p150` 을 광고하며, 소비자 파드가 `/dev/tenstorrent`
 주입을 받는 것을 확인한 뒤 원래대로 되돌린다.
 
-이 데모는 2026-09-20 Round 2 라이브 절차
-와 같은 경로를 재현하되, 공유
-(replicas)를 빼고 단일 replica 로 "새 벤더 정의" 만 보인다.
+이 데모는 공유(replicas)를 빼고 단일 replica 로 "새 벤더 정의" 만 보인다.
 
 ## 무엇을 바꾸고 되돌리는가
 
@@ -28,7 +26,7 @@ device-plugin 이 `tenstorrent/blackhole-p150` 을 광고하며, 소비자 파�
 ## 전제
 
 - operator 빌드에 tenstorrent 의 toggle-off(비활성화 시 소유 device-plugin 삭제) 경로가 있어야
-  한다. 이 경로가 포함된 빌드(Round 4 이후)에서 실행한다.
+  한다. 이 경로가 없는 빌드에서는 `ncp_ds_deleted_on_disable` 검사가 실패한다.
 - descriptor auto-apply 가 켜져 있어야 한다. tenstorrent 를 끄면 벤더가 비관리 상태가 되어
   descriptor 가 중재를 통과하고 생성 device-plugin 이 뜬다. tenstorrent 가 켜져 있거나 external
   이면 descriptor 는 이중 광고 방지로 거절되므로, 스크립트는 그 경우 `BLOCKED` 로 끝낸다.
@@ -107,8 +105,7 @@ DRY_RUN=1 bash test/live/new-vendor-by-descriptor/run.sh
 
 ## 이 데모가 증명하지 않는 것
 
-- 공유(SW 시분할, replicas) — 여기서는 단일 replica 로 "새 벤더 정의" 만 본다. 공유 라이브는
-  2026-09-20 Round 2 실측 레코드에 있다.
+- 공유(SW 시분할, replicas) — 여기서는 단일 replica 로 "새 벤더 정의" 만 본다.
 - DRA backend 경로 — 이 데모는 `backends: [devicePlugin]` 만 쓴다.
 - 실제 새 벤더(operator 가 모르는 벤더)의 드라이버 설치 — descriptor 는 광고·할당 경로를 다루고,
   드라이버는 별도다.

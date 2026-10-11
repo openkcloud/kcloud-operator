@@ -1,9 +1,8 @@
 // ============================================================
 // translate.go: 추상 사용자 의도 → 벤더 device-plugin 리소스 번역
-// 상세: 이 계획의 유일한 번역 함수다. admission webhook 과 컨트롤러가 같은 함수를 부른다.
-// 순수 함수이므로 클러스터 조회는 호출부(Load)가 미리 해 둔다. 실패하면 항상 *Reject 를
-// 돌려주며, 절대 다른 모드·다른 벤더로 조용히 갈아끼우지 않는다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: 유일한 번역 함수다 — admission webhook 과 컨트롤러가 같은 함수를 부른다. 순수 함수이므로
+// 클러스터 조회는 호출부(Load)가 미리 한다. 실패하면 항상 *Reject 를 돌려주고, 조용히 갈아끼우지 않는다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package intent
 
@@ -152,17 +151,12 @@ func TranslateWithDRA(req Request, snap []NodeCapability, dra DRACapability) (*R
 		Message: fmt.Sprintf("no schedulable node advertises an accelerator for any vendor mapped by AcceleratorClass %s (cordoned nodes are not candidates — check whether every candidate is under a driver upgrade)", req.ClassName)}
 }
 
-// nodeIsCandidateFor 는 이 노드가 이 매핑의 후보일 수 있는지 본다. 벤더만 보고 거르면(구
-// nodeHasVendor) 같은 벤더 아래 다른 제품의 노드까지 후보로 들인다 — furiosa 벤더 아래 rngd 와
-// warboy 가 다른 리소스명으로 광고되는데도 벤더가 같다는 이유만으로 Warboy 노드가 RNGD 요청의
-// 후보가 되고, 그 노드의 사소한 "광고 안 함" 거절이 firstReject 를 선점해 실제 RNGD 노드의
-// 거절을 가린다(D-2 라이브 재현: k8s-worker1 이 rngd-1 의 진짜 사유를 가림).
-//
-// 그래서 벤더가 아니라 리소스로 거른다: (a) 이미 이 리소스를 광고하고 있거나, (b) 아직 이
-// 리소스는 광고하지 않지만(파티션 미적용 등 governed-pending) 이 매핑의 전체 장치 리소스는
-// 광고한다 — 이 경우 CheckMode 의 ProfileNotApplied 같은 구체적 축이 열리도록 후보에 남긴다.
-// 전체 장치조차 광고하지 않는 노드는(k8s-worker1 처럼) 이 매핑의 후보가 아니다 — 그 노드의
-// 거절은 이 매핑에서 볼 가치가 없다.
+// nodeIsCandidateFor 는 이 노드가 이 매핑의 후보일 수 있는지 본다. 벤더만 보고 거르면 같은 벤더
+// 아래 다른 제품의 노드까지 들어와, 그 노드의 사소한 거절이 firstReject 를 선점해 진짜 후보의
+// 거절을 가린다(예: furiosa 아래 rngd 요청에 warboy 노드가 섞이면 k8s-worker1 이 rngd-1 의 사유를 가림).
+// 그래서 벤더가 아니라 리소스로 거른다: (a) 이미 이 리소스를 광고하거나, (b) 아직 광고하지 않지만
+// (governed-pending) 전체 장치 리소스는 광고한다 — 이 경우 CheckMode 의 ProfileNotApplied 같은 구체적
+// 축이 열리도록 남긴다. 전체 장치조차 광고하지 않는 노드의 거절은 이 매핑에서 볼 가치가 없다.
 func nodeIsCandidateFor(nc NodeCapability, m v1alpha1.AcceleratorMapping, resolved string) bool {
 	if nc.Advertised[resolved] > 0 {
 		return true
@@ -280,15 +274,11 @@ func translateDRA(req Request, snap []NodeCapability, dra DRACapability) (*Resul
 		}
 		nodes, doubled := draCandidateNodes(snap, m.DRADriver, resourceName, want)
 		if len(nodes) == 0 {
-			// 이중 광고로 전멸한 경우까지 NoCandidateNodes 로 말하면 거짓말이다 — 그 노드는
-			// 장치를 내놓고 있었다(라이브: rngd-1 이 draDevices 1개를 내는 중에 이 메시지를 받음).
-			// 사용자는 멀쩡한 DRA 드라이버를 다시 깔러 가고, 진짜 고칠 곳(그 노드의
-			// device-plugin 광고)은 그대로 남는다.
-			//
-			// 이 사유만은 이미 쌓인 NoCandidateNodes 를 덮는다. 첫-매치 유지가 원칙이지만
-			// (D-2 이후) 그 원칙은 "구체적인 사유가 뭉뚱그린 사유에 가려지지 않게" 하려던 것이고,
-			// 여기서는 방향이 반대다: 노드 이름·충돌 리소스·할 일을 다 가진 쪽이 이것이다.
-			// 다른 구체적 사유(DRADriverMissing 등)는 덮지 않는다 — 그쪽도 이미 고칠 곳을 지목한다.
+			// 이중 광고로 전멸한 경우까지 NoCandidateNodes 로 말하면 거짓말이다 — 그 노드는 장치를 내는 중이다
+			// (rngd-1 이 draDevices 1개를 내는 중에 이 메시지를 받은 사례가 있다). 사용자는 멀쩡한 DRA 드라이버를
+			// 다시 깔러 가고, 진짜 고칠 곳(그 노드의 device-plugin 광고)은 그대로 남는다. 이 사유만은 이미 쌓인
+			// NoCandidateNodes 를 덮는다 — 첫 매치 유지가 원칙이지만, 노드 이름·충돌 리소스·할 일을 다 가진
+			// 쪽이 더 구체적이다. 다른 구체적 사유(DRADriverMissing 등)는 덮지 않는다 — 그쪽도 이미 고칠 곳을 지목한다.
 			if len(doubled) > 0 {
 				if firstReject == nil || firstReject.Reason == v1alpha1.AWReasonNoCandidateNodes {
 					firstReject = &Reject{Axis: AxisCandidates, Reason: v1alpha1.AWReasonDRADoubleAdvertised,
@@ -344,7 +334,7 @@ func rejectUnsupportedDRAAxes(req Request) *Reject {
 }
 
 // requestedRequirements 는 실제로 채워진 requirements 필드를 사람이 읽는 형태로 나열한다
-// (없으면 빈 슬라이스). 클래스에서 상속된 값도 포함된다 — MergeRequirements 가 이미 접었다.
+// (없으면 빈 슬라이스). 클래스에서 상속된 값도 포함된다 — MergeRequirements 가 이미 접어 둔 값이기 때문이다.
 func requestedRequirements(req v1alpha1.AcceleratorRequirements) []string {
 	var out []string
 	if req.MinimumIsolation != "" {
@@ -356,14 +346,11 @@ func requestedRequirements(req v1alpha1.AcceleratorRequirements) []string {
 	return out
 }
 
-// draCandidateNodes 는 그 드라이버로 요청 수 이상을 내놓는 노드다(stale 노드 제외, 정렬).
-// resourceName 으로 벤더를 되짚을 수 있으면 이중 광고 노드(같은 벤더를 device-plugin 으로도
-// 광고 중)도 뺀다.
-//
-// 둘째 반환값은 그렇게 빠진 노드를 "node (충돌 리소스)" 로 적은 목록이다(정렬). 필터 결과만
-// 돌려주면 호출부는 "0개" 와 "0개인데 이유가 있다" 를 구분하지 못하고 사실과 반대인
-// NoCandidateNodes 를 낸다. 노드 이름과 충돌 리소스는 여기서만 알 수 있으므로 여기서 짓는다 —
-// 구조체를 새로 만들 만큼의 데이터가 아니다.
+// draCandidateNodes 는 그 드라이버로 요청 수 이상을 내놓는 노드다(stale 제외, 정렬). resourceName 으로
+// 벤더를 되짚을 수 있으면 이중 광고 노드(같은 벤더를 device-plugin 으로도 광고 중)도 뺀다.
+// 둘째 반환값은 그렇게 빠진 노드를 "node (충돌 리소스)" 로 적은 목록이다(정렬) — 필터 결과만 돌려주면
+// 호출부가 "0개" 와 "0개인데 이유가 있다" 를 구분 못 하고 사실과 반대인 NoCandidateNodes 를 낸다.
+// 노드 이름·충돌 리소스는 여기서만 알 수 있어 여기서 짓는다 — 구조체를 새로 만들 만큼의 데이터는 아니다.
 func draCandidateNodes(snap []NodeCapability, driver string, resourceName string, want int32) (nodes []string, doubleAdvertised []string) {
 	// 전체 장치 리소스명 하나만 보면 두 곳이 샌다: MIG 로 쪼갠 노드는 nvidia.com/gpu 를 광고하지
 	// 않고 nvidia.com/mig-* 만 광고하며, 광고량 0(플러그인 재시작·전 장치 unhealthy)인 노드는
@@ -379,11 +366,10 @@ func draCandidateNodes(snap []NodeCapability, driver string, resourceName string
 		if snap[i].DRADevices[driver] < want {
 			continue
 		}
-		// 같은 벤더 장치가 device-plugin 으로도 광고 중이면 스케줄러가 같은 하드웨어를
-		// 두 자원으로 본다. 배타 요청 두 개가 장치 하나에 겹칠 수 있으므로 후보에서 뺀다.
-		// 광고 주체가 이미 DRA 로 넘어간 벤더라면 device-plugin 은 그 노드에서 물러났다.
-		// allocatable 의 키는 0 으로 굳은 잔재이므로 이중 광고가 아니다 — 이 갈래가 없으면
-		// 스위치를 켜도 그 노드가 영원히 DRA 후보가 되지 못한다(라이브에서 관측).
+		// 같은 벤더 장치가 device-plugin 으로도 광고 중이면 스케줄러가 같은 하드웨어를 두 자원으로 본다.
+		// 배타 요청 두 개가 장치 하나에 겹칠 수 있으므로 후보에서 뺀다. 광고 주체가 이미 DRA 로 넘어간
+		// 벤더라면 device-plugin 은 그 노드에서 물러나 있다 — allocatable 의 키는 0 으로 굳은 잔재이므로
+		// 이중 광고가 아니다. 이 갈래가 없으면 스위치를 켜도 그 노드는 영원히 DRA 후보가 되지 못한다.
 		conflict := ""
 		if vendor != "" && !snap[i].DRAOwnedVendors[vendor] {
 			conflict = vendorResourceOn(snap[i].Advertised, vendor)

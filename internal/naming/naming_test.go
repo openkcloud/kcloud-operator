@@ -2,7 +2,7 @@
 // naming_test.go: DriverDSName 단위 테스트
 // 상세: 드라이버 DaemonSet 이름 생성 규칙 — 벤더/모델 매핑 테이블, 빈 모델 안전성,
 //       대소문자 정규화(내부 lower-case 처리) 검증
-// 생성일: 2026-06-02 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-06-02 | 수정일: 2026-10-11
 // ============================================================
 
 package naming
@@ -12,15 +12,8 @@ import (
 	"testing"
 )
 
-// TestDriverDSName 는 DriverDSName 의 전체 매핑 테이블을 검증한다.
-//
-// 매핑 규칙:
-//   - nvidia(any model)      → "kcloud-nvidia-driver"
-//   - furiosa + warboy       → "kcloud-furiosa-warboy-driver"
-//   - furiosa + rngd         → "kcloud-furiosa-rngd-driver"
-//   - furiosa + ""           → "kcloud-furiosa-driver" (이중 하이픈 없음)
-//   - other + ""             → "kcloud-<vendor>-driver"
-//   - other + model          → "kcloud-<vendor>-<model>-driver"
+// TestDriverDSName 는 DriverDSName 의 벤더/모델 매핑 전체(nvidia 고정, furiosa 모델 보존,
+// 빈 model 이중 하이픈 없음, 그 외 벤더 기본 규칙)를 표 기반으로 검증한다.
 func TestDriverDSName(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -233,7 +226,7 @@ func TestToolkitLegacyDSName(t *testing.T) {
 	}
 }
 
-// TestOperatorNamespace: env 미설정→kube-system(회귀 0), 설정→그 값(#16 ns 재편).
+// TestOperatorNamespace: env 미설정→kube-system(회귀 0), 설정→그 값.
 func TestOperatorNamespace(t *testing.T) {
 	t.Setenv("OPERATOR_NAMESPACE", "")
 	if got := OperatorNamespace(); got != "kube-system" {

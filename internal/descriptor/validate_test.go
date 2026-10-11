@@ -1,11 +1,8 @@
 // ============================================================
 // validate_test.go: descriptor 정합 검증 시험
-// 상세: 유효한 표본 하나를 두고 필드를 하나씩 무너뜨려 각 규칙이 실제로 잡는지 본다.
-//
-//	무효 표본을 따로 손으로 짓지 않는다 - 유효 표본에서 파생시켜야 프로덕션이
-//	만들 수 있는 조합만 시험한다.
-//
-// 생성일: 2026-08-10 | 수정일: 2026-10-05 (생성 CRD 의 선언 맵 maxProperties 어서션 추가)
+// 상세: 유효한 표본 하나를 두고 필드를 하나씩 무너뜨려 각 규칙이 실제로 잡는지 본다. 무효
+// 표본은 손으로 따로 짓지 않고 유효 표본에서 파생시켜, 프로덕션이 만들 수 있는 조합만 시험한다.
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package descriptor
 
@@ -214,11 +211,10 @@ func TestValidateAcceptsLegalDeclarations(t *testing.T) {
 }
 
 // descriptorMaxPropertiesPerMap 은 attributes·capacity·capacityFiles 각각의 CRD
-// MaxProperties 다. 세 맵 합(8 × 3)이 런타임의 선언 예산 안이어야 한다.
-//
-// 같은 수를 어서션하는 자리가 images 저장소에도 있다 — generic-dra-driver/attributes_test.go
-// 의 operatorDeclarationBudget. 거기는 런타임 예산 maxDeclarations 가 이 합을 담는지 보고,
-// 여기는 그 합이 정말 8 × 3 인지 본다. 올리려면 두 자리를 함께 고쳐야 한다 — 한쪽만 올리면
+// MaxProperties 다. 세 맵 합(8 × 3)이 런타임의 선언 예산 안이어야 한다. 같은 수를
+// 어서션하는 자리가 images 저장소의 generic-dra-driver/attributes_test.go
+// operatorDeclarationBudget 에도 있다 — 거기는 런타임 예산이 이 합을 담는지, 여기는
+// 그 합이 정말 8 × 3 인지 본다. 올리려면 두 자리를 함께 고쳐야 한다 — 한쪽만 올리면
 // operator 가 통과시킨 descriptor 를 런타임이 거절해 드라이버가 기동 실패한다.
 const descriptorMaxPropertiesPerMap int64 = 8
 

@@ -1,10 +1,7 @@
 // ============================================================
 // conflict_test.go: 활성 operation 대비 admission 판정 테스트
-// 상세: 충돌 판정표와 1:1. 특히 표가 미뤄 둔 "종속 판정의 범위 한정"
-//
-//	을 여기서 좁힌다.
-//
-// 생성일: 2026-08-01
+// 상세: 충돌 판정표와 1:1. 특히 표가 미뤄 둔 "종속 판정의 범위 한정" 을 여기서 좁힌다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package operation
 
@@ -92,10 +89,8 @@ func TestDependentPairYieldsAdmitAfter(t *testing.T) {
 	}
 }
 
-// 증명: 자원이 하나도 안 겹치는 종속 쌍은 종속이 아니라 병렬이다.
-//
-//	(conflict-matrix.md §3.2 가 Coordinator 구현 시점에 좁히라고 미뤄 둔 바로 그 지점)
-//
+// 증명: 자원이 하나도 안 겹치는 종속 쌍은 종속이 아니라 병렬이다(conflict-matrix.md §3.2 가
+// Coordinator 구현 시점에 좁히라고 미뤄 둔 지점).
 // 깨는 뮤테이션: Admit 에서 키 겹침 확인을 빼고 타입만으로 AdmitAfter 를 돌려주면 실패한다.
 func TestUnrelatedDependentPairIsParallel(t *testing.T) {
 	active := []Claim{partitionClaim("part", pciA, "w1")}

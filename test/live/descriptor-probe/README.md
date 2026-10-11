@@ -104,5 +104,4 @@ Pod 가 자원 광고 0 으로 스케줄되지 못하거나 `tt-smi` 가 장치�
 
 `noop-sample.sh` 는 aev k8s-worker3 의 resourceVersion·observedAt 을 15초 간격 6회 표본 떠
 no-op 쓰기 게이트가 재조정에도 값을 그대로 두는지 확인하는 별도 스크립트다(3번째 표본 뒤 descriptor
-annotate 로 재조정 1회 강제). docs 저장소 `development/evidence/2026-09-21-plan-e-evidence-noop-write`
-레코드가 이 스크립트로 수집됐다.
+annotate 로 재조정 1회 강제).

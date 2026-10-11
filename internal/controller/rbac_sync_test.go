@@ -1,14 +1,10 @@
 // ============================================================
 // rbac_sync_test.go: 생성 RBAC 와 배포 RBAC 가 갈라지지 않는지 고정한다.
-// 상세: `make manifests` 는 config/rbac/role.yaml 만 재생성한다 — 실제 배포되는 것은 손으로
-// 관리하는 deploy/helm/templates/rbac.yaml 이다. 둘이 갈라지면 kubebuilder 마커를 고쳐도
-// 배포에는 반영되지 않는다(2026-08-04 라이브 핫루프의 절반 원인 — nodedevicereports/status
-// 의 update/patch 가 생성본에만 있었다).
-// 대조 방식: 리소스 이름 목록을 시험에 적어 두지 않고 두 파일의 규칙을 통째로 비교한다.
-// 목록을 적는 방식은 목록에 없는 새 리소스를 그냥 통과시킨다 — 2026-09-15 에 실제로 그랬고
-// (acceleratordescriptors), 그 대가는 기능 하나가 아니라 operator 파드 전체의 CrashLoop 였다.
-// 의도한 차이는 knownRBACDivergence 한 곳에 사유와 함께 모은다.
-// 생성일: 2026-08-04 | 수정일: 2026-09-16
+// 상세: `make manifests` 는 config/rbac/role.yaml 만 재생성하고, 실제 배포는 손으로 관리하는
+// deploy/helm/templates/rbac.yaml 이 쓰인다 — 둘이 갈라지면 kubebuilder 마커를 고쳐도 배포에
+// 반영되지 않는다. 대조는 리소스 이름 목록이 아니라 두 파일의 규칙 전체를 비교한다 — 목록
+// 방식은 목록에 없는 새 리소스를 그냥 통과시킨다. 의도한 차이는 knownRBACDivergence 에 모은다.
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -100,12 +96,9 @@ var knownRBACDivergence = map[string][]string{
 
 // TestHelmRBACMatchesGeneratedRole 은 생성본(config/rbac/role.yaml)의 모든 규칙이 실제
 // 배포되는 helm ClusterRole 에도 있는지 두 파일을 통째로 대조한다. 리소스 이름을 시험에
-// 적어 두지 않는 것이 핵심이다 — 적어 두면 목록에 없는 새 리소스가 그냥 통과한다.
-// 이 시험이 대신하는 것: 2026-08-04 nodedevicereports/status 의 update/patch 누락,
-// 2026-08-11 acceleratorpartitionpolicies 의 create/delete 누락(관리 API 정책 라우트가 403),
-// 2026-09-15 acceleratordescriptors 규칙 누락(새 컨트롤러의 informer 가 list/watch 를
-// 거절당하면 그 실패가 mgr.Start 의 반환값으로 올라와 프로세스가 종료 — 죽는 것이 기능
-// 하나가 아니라 operator 파드 전체이고, CrashLoopBackOff 로 들어간다).
+// 적어 두지 않는 것이 핵심이다 — 적어 두면 목록에 없는 새 리소스가 그냥 통과한다. 이런 누락은
+// 기능 하나만 죽이지 않는다: 컨트롤러의 informer 가 list/watch 를 거절당하면 그 실패가
+// mgr.Start 의 반환값으로 올라와 operator 파드 전체가 CrashLoopBackOff 에 들어간다.
 // 깨는 뮤테이션: helm rbac.yaml 에서 아무 규칙이나 하나 지우거나 verb 하나를 빼면 실패한다.
 func TestHelmRBACMatchesGeneratedRole(t *testing.T) {
 	generated := generatedOperatorRules(t)
@@ -138,21 +131,20 @@ func TestHelmRBACMatchesGeneratedRole(t *testing.T) {
 // 반드시 남아 있어야 하는 verb 다. 위 시험은 생성본을 돌며 배포본을 확인하므로, 생성본
 // 쪽에서 리소스가 사라지거나 verb 가 줄면 대조 대상 자체가 함께 줄어 조용히 통과한다 —
 // kubebuilder 마커가 지워지거나 marker 의 verbs 태그가 줄면 두 파일이 함께 줄어 경보가
-// 없다. 과다 부여는 안전한 쪽으로 틀린 것이지만 이쪽은 기준선이 깎이는 것이다. 목록의
-// 근거는 이 파일 헤더가 적은 과거 사고들이다. 새 컨트롤러가 늘 때 여기 더한다.
+// 없다. 과다 부여는 안전한 쪽으로 틀린 것이지만 이쪽은 기준선이 깎이는 것이다. 각 항목의
+// 근거는 옆의 주석에 적는다. 새 컨트롤러가 늘 때 여기 더한다.
 var requiredGeneratedRBAC = map[string][]string{
-	"nodedevicereports/status":     {"get", "patch", "update"},                                      // 2026-08-04 라이브 핫루프
-	"acceleratorpartitionpolicies": {"create", "delete", "get", "list", "patch", "update", "watch"}, // 2026-08-11 관리 API 정책 라우트 403
-	"acceleratordescriptors":       {"get", "list", "watch"},                                        // 2026-09-15 operator 파드 전체 CrashLoop
+	"nodedevicereports/status":     {"get", "patch", "update"},                                      // 누락하면 라이브 핫루프 재발
+	"acceleratorpartitionpolicies": {"create", "delete", "get", "list", "patch", "update", "watch"}, // 누락하면 관리 API 정책 라우트 403
+	"acceleratordescriptors":       {"get", "list", "watch"},                                        // 누락하면 operator 파드 전체 CrashLoop
 }
 
-// TestGeneratedRoleKeepsRequiredRBAC 는 생성본에서 리소스 키가 살아 있는 것과 그
-// 리소스의 필수 verb 가 함께 살아 있는 것, 둘 다를 본다. TestHelmRBACMatchesGeneratedRole
-// 의 전제 — "생성본에 그 리소스와 verb 가 아직 있다" — 를 따로 고정하는 것이 이 시험의
-// 일이다. 둘이 함께 있어야 양쪽 방향이 막힌다.
-// 깨는 뮤테이션 둘: (1) 위 셋 중 하나의 kubebuilder 마커를 지우고 `make manifests` 를
-// 돌리면 실패한다. (2) 마커의 verbs 목록에서 하나를 빼고 `make manifests` 를 돌려도
-// 실패한다 — 리소스 키는 남아도 그 밑의 verb 가 준 것이라 이 시험만 잡는다.
+// TestGeneratedRoleKeepsRequiredRBAC 는 생성본에서 리소스 키가 살아 있는 것과 그 리소스의
+// 필수 verb 가 함께 살아 있는 것, 둘 다를 본다. TestHelmRBACMatchesGeneratedRole 의 전제 —
+// "생성본에 그 리소스와 verb 가 아직 있다" — 를 따로 고정해야 양쪽 방향이 막힌다.
+// 깨는 뮤테이션 둘: (1) 위 셋 중 하나의 kubebuilder 마커를 지우거나 (2) verbs 목록에서
+// 하나를 빼고 `make manifests` 를 돌리면 각각 실패한다 — 리소스 키는 남아도 verb 가 준
+// 경우는 이 시험만 잡는다.
 func TestGeneratedRoleKeepsRequiredRBAC(t *testing.T) {
 	generated := generatedOperatorRules(t)
 	if len(generated) == 0 {

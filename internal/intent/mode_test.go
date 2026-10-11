@@ -2,7 +2,7 @@
 // mode_test.go: 추상 모드 지원 판정 테스트
 // 상세: 정직성 원칙이 코드로 지켜지는지 — 미검증 공유 거절, 시분할 노드에 exclusive 거절,
 // 미적용 profile 거절. 조용한 강등이 일어나면 이 테스트가 깨진다.
-// 생성일: 2026-07-29 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 사실 손실 복구)
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package intent
 
@@ -18,8 +18,7 @@ func nvidiaMapping() v1alpha1.AcceleratorMapping {
 }
 
 // rngdMapping 은 Product 를 명시한다 — furiosa 는 product 없이는 rngd/warboy 를 가릴 수 없다
-// (internal/intent/resources.go 의 ResourceFor 계약). 설계 원안이 그 필드를 빠뜨려 이 단언을
-// 남겼으니 중복으로 보고 지우지 말 것.
+// (internal/intent/resources.go 의 ResourceFor 계약). nvidiaMapping 과 닮아 보여도 중복이 아니다.
 func rngdMapping() v1alpha1.AcceleratorMapping {
 	return v1alpha1.AcceleratorMapping{Vendor: "furiosa", Product: "rngd", NativeProfile: "2core.12gb"}
 }
@@ -90,9 +89,9 @@ func TestCheckModeExclusiveRejectedOnTimeSlicedNode(t *testing.T) {
 	}
 }
 
-// D-1: 광고 수가 물리 장치 수를 넘는다는 관측만으로는 메커니즘(복제 vs 하드웨어 서브유닛)을
-// 증명하지 않는다 — exclusive 는 여전히 fail-closed 로 거절하되, 사유가 "replica" 를 근거로
-// 들면 안 되고 불확실성을 말해야 한다(라이브 RNGD 재현: rngd-1 은 PE 4개를 광고하는 물리 1대다).
+// 광고 수가 물리 장치 수를 넘는다는 관측만으로는 메커니즘(복제 vs 하드웨어 서브유닛)을 증명하지
+// 않는다 — exclusive 는 여전히 fail-closed 로 거절하되, 사유가 "replica" 를 근거로 들면 안 되고
+// 불확실성을 말해야 한다(RNGD 재현: rngd-1 은 PE 4개를 광고하는 물리 1대다).
 func TestCheckModeExclusiveRejectedOnOversubscribedNode(t *testing.T) {
 	nc := NodeCapability{NodeName: "rngd-1", Vendor: "furiosa", Advertised: map[string]int32{"furiosa.ai/rngd": 4},
 		SharingMode: v1alpha1.SharingModeOversubscribed, SharingReplicas: 4}
@@ -108,7 +107,7 @@ func TestCheckModeExclusiveRejectedOnOversubscribedNode(t *testing.T) {
 	}
 }
 
-// D-1: shared 요청도 조용히 통과시키지 않는다 — 공유가 실제로 설정되었다는 것을 보일 수 없다.
+// shared 요청도 조용히 통과시키지 않는다 — 공유가 실제로 설정되었다는 것을 보일 수 없다.
 // 미적용(SharingNotApplied)과는 원인이 다르므로 같은 사유를 재사용하지 않는다.
 func TestCheckModeSharedRejectedOnOversubscribedNode(t *testing.T) {
 	nc := NodeCapability{NodeName: "worker1", Vendor: "nvidia", Advertised: map[string]int32{"nvidia.com/gpu": 8},

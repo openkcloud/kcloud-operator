@@ -1,10 +1,8 @@
 # ============================================================
 # driverinstallpolicy.yaml: DriverInstallPolicy CR 자동 생성
-# 상세: driverInstallPolicies.<vendor>.enabled=true 인 각 벤더에 대해 DIP CR 생성.
-#       Furiosa (warboy) / NVIDIA (generic) 두 벤더 모두 mode=daemonset 기본.
-#       2026-09-24: helm hook 에서 릴리스 자원으로 전환. hook 은 업그레이드마다 삭제·재생성되어
-#       uid 가 바뀌고 소유 DaemonSet 이 연쇄로 다시 만들어졌다.
-# 생성일: 2026-04-10 | 수정일: 2026-10-09 (벤더 4종에 workloadProbe 블록 통과 추가)
+# 상세: driverInstallPolicies.<vendor>.enabled=true 인 벤더마다 DIP CR 을 만든다. helm hook 이
+#       아니라 릴리스 자원이라 업그레이드로 uid 가 바뀌어도 소유 DaemonSet 이 연쇄 재생성되지 않는다.
+# 생성일: 2026-04-10 | 수정일: 2026-10-11
 # ============================================================
 {{- if .Values.driverInstallPolicies.furiosa.enabled }}
 apiVersion: npu.ai/v1alpha1

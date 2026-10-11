@@ -1,11 +1,8 @@
 // ============================================================
 // preview.go: "이렇게 요청하면 어떻게 되는가" 미리보기(POST /api/v1/preview)
-// 상세: R&D v1.0 §15.3 Impact Analysis 화면의 데이터원. 본문을 받기 위해 POST 를 쓸 뿐
-//       아무것도 쓰지 않는다 — SAR 도 읽기 등급(list)이다. 판정은 intent.Translate 를 그대로
-//       호출한다(컨트롤러·webhook 과 같은 함수). 결정 로직을 API 쪽에 복제하면 화면과 실제
-//       결과가 갈라지므로 한 줄도 옮기지 않는다. 거절은 오류가 아니라 정상 응답이다
-//       (항상 200 + rejection).
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 상세: R&D v1.0 §15.3 Impact Analysis 화면의 데이터원이다. 쓰기는 없다 — SAR 도
+//       읽기 등급(list)이다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -40,7 +37,9 @@ type PreviewResponse struct {
 	Rejection *RejectionView               `json:"rejection,omitempty"`
 }
 
-// handlePreview 는 요청을 번역해 결과 또는 거절 축을 돌려준다. 쓰기 없음.
+// handlePreview 는 요청을 번역해 결과 또는 거절 축을 돌려준다. 판정은 intent.Translate 를
+// 그대로 호출한다(컨트롤러·webhook 과 같은 함수) — 결정 로직을 복제하면 화면과 실제 결과가
+// 갈라진다. 거절은 오류가 아니라 정상 응답이다(항상 200 + rejection).
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	var req PreviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {

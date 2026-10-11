@@ -1,35 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh: 라이브 재확인 — aa7a13b 포함 사전 컴파일 이미지로 k8s-worker1 빈 노드 전이
-# 상세: ADR-002 "해소된 결합" 절이 라이브 미확인으로 남겨 둔 것을 닫는다 — images 저장소
-#       커밋 aa7a13b/a40b94e 가 사전 컴파일 정합성 가드에서 apt-cache madison 아카이브
-#       조회를 제거했는데, k8s-worker1 에 떠 있던 -v2 이미지는 그 제거 이전 빌드였다.
-#       이 하네스는 그 제거를 담은 새 이미지(-v3, 이 하네스 밖에서 make build-precompiled
-#       로 미리 빌드·push 해 둔다)를 DIP kernelImages 에 등록하고,
-#       (2026-09-26 실측) 이 실행한
-#       것과 같은 9개 패키지 제거+재부팅으로 노드를 빈 상태로 만든 뒤, operator 자기복구
-#       설치 Job 을 관찰해 (a) apt-cache madison 조회 0회 (b) 실행 중 사용자 공간 apt
-#       설치 0회 (c) dpkg -i 로 동봉 .deb 설치 (d) 모듈·광고·헬스 복귀를 확인한다.
-#       9개 패키지 목록·순서는 images 저장소 driver-installer/nvidia/entrypoint.sh 의
-#       nvidia_prebuilt_cleanup_cmd 와 2026-09-26 실행 기록이 정확히 같다 — 이
-#       하네스에서 환경변수로 덮지 않는다(그 목록 자체가 절차의 근거).
-#       PHASE 로 단계를 하나씩 부를 수 있다. dip-patch·quiesce/unquiesce·rollback-dip 는
-#       all 순서 밖에 따로 있다 — dip-patch 는 all 안에도 포함되지만(전이 트리거 자체가
-#       이 patch 이므로), rollback-dip 는 실패했을 때만 판단해서 쓰는 별도 조치라 all 에
-#       넣지 않는다.
-#       DRY_RUN=1 이면 안전 게이트·상태 조회 등 읽기 전용 확인은 끝까지 돌고, 클러스터·
-#       노드를 바꾸는 명령(DIP patch·cordon·패키지 제거·재부팅)은 출력만 한다.
-#
-# 사용법:
-#   [DRY_RUN=1] [PHASE=] [RUN_ID=] [KERNEL=] [DRIVER_VERSION=] [NEW_VARIANT=]
-#   [REBOOT_TIMEOUT=] [OBSERVE_TIMEOUT=] run.sh
-#   PHASE: verdict(RUN_DIR= 필요, 클러스터 미접속) | precheck | dip-patch | rollback-dip |
-#          quiesce | unquiesce | empty-node | reboot-recover | wait-empty | observe |
-#          all(기본, precheck→dip-patch→quiesce→empty-node→reboot-recover→wait-empty→
-#              observe→unquiesce 순서대로 실행. rollback-dip 은 제외)
-# 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거;
-#                                        reboot_recover 주석에 함정을 겪은 실행일 명시;
-#                                        세션 전용 식별자 제거)
+# run.sh: 라이브 재확인 — 사전 컴파일 이미지로 k8s-worker1 빈 노드 전이
+# 상세: 새 이미지(-v3)를 DIP kernelImages 에 등록하고 패키지 제거+재부팅으로 노드를 비운
+#       뒤 operator 자기복구 설치 Job 을 관찰해 madison 미조회·dpkg 설치·모듈 복귀를
+#       확인한다(PHASE 목록은 case 문 참고, rollback-dip 은 실패 판단 시에만 따로 부른다).
+# 용법: [DRY_RUN=1] [PHASE=] [RUN_ID=] [KERNEL=] [DRIVER_VERSION=] [NEW_VARIANT=] run.sh
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -56,10 +32,9 @@ NEW_VARIANT="${NEW_VARIANT:-v3}"
 REGISTRY_REPO="${REGISTRY_REPO:?REGISTRY_REPO 을 지정하십시오}"
 NEW_TAG="${IMAGE_TAG:-${REGISTRY_REPO}:${DRIVER_VERSION}-k${KERNEL}-${NEW_VARIANT}}"
 
-# PACKAGES — 9개, 순서 고정. entrypoint.sh 의 nvidia_prebuilt_cleanup_cmd 와
-# 2026-09-26 실행 기록이 정확히 이 순서다: 모듈이
-# nvidia-kernel-common 을, 그것이 nvidia-firmware 를 의존하므로 모듈이 앞, firmware 가
-# 맨 뒤. env 로 덮지 않는다 — 목록 자체가 이 절차의 근거다.
+# PACKAGES — 9개, 순서 고정. entrypoint.sh 의 nvidia_prebuilt_cleanup_cmd 와 정확히 이
+# 순서다: 모듈이 nvidia-kernel-common 을, 그것이 nvidia-firmware 를 의존하므로 모듈이 앞,
+# firmware 가 맨 뒤. env 로 덮지 않는다 — 목록 자체가 이 절차의 근거다.
 PACKAGES=(
   "linux-modules-nvidia-${DRIVER_MAJOR}-${KERNEL}"
   "linux-objects-nvidia-${DRIVER_MAJOR}-${KERNEL}"
@@ -91,7 +66,7 @@ verdict() {
     # entrypoint 는 dpkg -i 커맨드 문자열 자체를 로그로 echo 하지 않는다
     # (install_prebuilt_onto_host 가 dpkg -i 를 직접 실행할 뿐이다) — dpkg 가 각 .deb
     # 파일을 처리할 때 찍는 "Preparing to unpack .../<pkg>_<ver>_<arch>.deb ..." 줄
-    # 수를 실제 .deb 설치 건수의 증거로 쓴다(컨트롤러 확인, 2026-09-28). "Unpacking "
+    # 수를 실제 .deb 설치 건수의 증거로 쓴다. "Unpacking "
     # 줄도 같은 개수를 내지만 그쪽은 패키지명만 찍혀 .deb 파일 자체를 가리키지 않는다.
     if dpkg_i="$(grep -cE 'Preparing to unpack .*\.deb' "$dir/install-job.log" 2>/dev/null)"; then :; else dpkg_i=0; fi
   else
@@ -284,8 +259,8 @@ unquiesce() {
   printf 'uncordon %s\n' "$NODE" | evid "UNQUIESCE"
 }
 
-# empty_node — ADR-002 실행 기록과 정확히 같은 9개 패키지를 apt-get remove 로
-# 지운다(순서·이름 고정, PACKAGES 배열). dcgm-exporter·device-plugin DaemonSet 파드는
+# empty_node — PACKAGES 배열에 고정된 9개 패키지(순서·이름 고정)를 apt-get remove 로
+# 지운다. dcgm-exporter·device-plugin DaemonSet 파드는
 # 변경하지 않는다 — 드라이버가 사라지면 CrashLoop 이 정상이고 설치 뒤 스스로 복귀한다.
 empty_node() {
   safety_gate
@@ -321,10 +296,9 @@ empty_node() {
 
 # reboot_recover — 재부팅을 보내고, SSH 로 확인한 uptime 이 600초 미만(=이번 재부팅의
 # 새 boot)인 시점과 kubectl 이 보는 Ready=True 가 "같은 폴링 순간"에 동시에 성립할 때만
-# 성공으로 본다. 2026-09-26 실측 실행에서 "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로
-# 착각하는 함정이 실제로 있었다(uptime 87897s 를 uptime<600 가드로 걸러냈다) — 이 동시
-# 조건이 그 가드와 같은 효과를 낸다: uptime<600 이 참인 순간의 Ready 는 정의상 이번 새
-# 부팅 이후의 관측일 수밖에 없다.
+# 성공으로 본다. "재부팅 전 오래 떠 있던 Ready" 를 새 Ready 로 착각하는 함정이 있다
+# (uptime 87897s 를 uptime<600 가드로 걸러낸다) — 이 동시 조건이 그 가드와 같은 효과를
+# 낸다: uptime<600 이 참인 순간의 Ready 는 정의상 이번 새 부팅 이후의 관측일 수밖에 없다.
 reboot_recover() {
   safety_gate
   if [ "$DRY_RUN" = "1" ]; then
@@ -356,9 +330,8 @@ reboot_recover() {
   return 1
 }
 
-# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다(2026-09-26 실행의
-# "검증 전제 성립" 확인과 같다). 여기서 모듈이 이미 로드돼 있으면 이후 관찰이 성립하지
-# 않으므로 실패로 멈춘다.
+# wait_empty — 재부팅 직후 모듈·사용자 공간이 실제로 비었는지 확인한다. 여기서 모듈이
+# 이미 로드돼 있으면 이후 관찰이 성립하지 않으므로 실패로 멈춘다.
 wait_empty() {
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY_RUN: wait_empty 생략(재부팅을 안 했다)" | evid "WAIT-EMPTY (DRY_RUN)"

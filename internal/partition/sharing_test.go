@@ -1,7 +1,7 @@
 // ============================================================
 // sharing_test.go: 벤더 중립 sharing 계약 테스트
 // 상세: 요청 검증 규칙(replicas 경계·모드 정합)과 미지원 backend 처리.
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package partition
 
@@ -49,9 +49,9 @@ func TestValidateSharingLayout_MPS(t *testing.T) {
 	}
 }
 
-// F1(review): mps 요청은 spec.Sharing.MPS.Replicas 를 읽어야 한다. 안 읽으면 Replicas 가
-// 0으로 남아 ValidateSharingLayout 이 "requires replicas >= 2, got 0" 로 항상 거부한다 —
-// daemon 유무와 무관하게 mps 요청 자체가 apply 단계에 절대 도달 못 한다.
+// mps 요청은 spec.Sharing.MPS.Replicas 를 읽어야 한다. 안 읽으면 Replicas 가 0으로 남아
+// ValidateSharingLayout 이 "requires replicas >= 2, got 0" 로 항상 거부한다 — daemon 유무와
+// 무관하게 mps 요청 자체가 apply 단계에 절대 도달 못 한다.
 func TestSharingLayoutFrom_MPS(t *testing.T) {
 	spec := v1alpha1.AcceleratorPartitionPolicySpec{
 		Sharing: &v1alpha1.SharingSpec{Mode: v1alpha1.SharingModeMPS, MPS: &v1alpha1.MPSSpec{Replicas: 4}},
@@ -65,9 +65,9 @@ func TestSharingLayoutFrom_MPS(t *testing.T) {
 	}
 }
 
-// F6(review): SharingLayoutFrom 의 두 if 가 spec.Sharing.Mode 와 무관하게 독립으로 평가되면,
-// CRD/webhook 어느 쪽도 TimeSlicing/MPS 상호배타를 막지 않으므로(둘 다 있어도 스키마 통과) mode
-// 는 timeSliced 인데 MPS.Replicas 가 조용히 TimeSlicing.Replicas 를 덮어쓸 수 있다 — 에러 없이,
+// SharingLayoutFrom 의 두 if 가 spec.Sharing.Mode 와 무관하게 독립으로 평가되면, CRD/webhook
+// 어느 쪽도 TimeSlicing/MPS 상호배타를 막지 않으므로(둘 다 있어도 스키마 통과) mode 는
+// timeSliced 인데 MPS.Replicas 가 조용히 TimeSlicing.Replicas 를 덮어쓸 수 있다 — 에러 없이,
 // cap 이내라 ValidateSharingLayout 도 못 잡는다.
 func TestSharingLayoutFrom_IgnoresFieldForDeclaredOtherMode(t *testing.T) {
 	spec := v1alpha1.AcceleratorPartitionPolicySpec{

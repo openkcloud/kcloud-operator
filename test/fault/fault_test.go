@@ -4,7 +4,7 @@
 //
 //	사내 판정표 트리가 있으면 거기에 기록된다. 통과하지 못한 항목은 그대로 남긴다.
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package fault
 
@@ -70,7 +70,7 @@ var _ = Describe("F02 적용 직후 status 기록 실패", func() {
 		h.fakes[operation.PartitionReconfigure].OnApply = func(n int,
 			_ *npuv1alpha1.AcceleratorOperation) (operation.Outcome, error) {
 			if n == 1 {
-				return operation.Outcome{}, nil // 아무 이벤트도 못 남기고 죽었다
+				return operation.Outcome{}, nil // 아무 이벤트도 못 남기고 죽는다
 			}
 			return operation.Outcome{Event: operation.EventApplyDone, Message: "관측: 이미 적용돼 있다"}, nil
 		}
@@ -192,12 +192,8 @@ var _ = Describe("F05 파티션 변경 중 드라이버 업그레이드 요청",
 })
 
 var _ = Describe("F06 드라이버 업그레이드 중 health 복구 요청", func() {
-	// 기대: 중복 mutation 이 없다.
-	//
-	// 처음에는 "요청 자체가 장치를 다투지 않는다" 로 통과했다 — 드라이버 미로드가 아예 작업을
-	// 만들지 않았기 때문이다(본체가 없어서). 본체(RecoverDevice)를 등록한 뒤로는 그 회피가
-	// 사라졌고, 이제 이 시나리오가 묻는 것은 **진짜 질문**이다: 같은 장치를 겨냥한 두 작업이
-	// 동시에 들어가는가. 답은 충돌 행렬이 낸다 — 후행 작업이 Blocked 로 선다.
+	// 기대: 중복 mutation 이 없다 — 같은 장치를 겨냥한 두 작업이 동시에 들어가면 안 되고,
+	// 충돌 행렬이 후행 작업을 Blocked 로 세워 막는다.
 	It("never lets a health recovery contend for the device under upgrade", func() {
 		DeferCleanup(cleanupOps)
 		seedNode("f06-node")

@@ -3,8 +3,7 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-10 (handleIdle 주석의 낡은 줄번호 제거; 계획서 항목 토큰 제거;
-//                                        버전 관측·드리프트 감지를 UnverifiedVersion 까지 확장)
+// 생성일: 2026-04-13 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -100,9 +99,9 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				logger.Error(err, "defer cleanup: driver-upgrading 라벨 제거 실패",
 					"node", state.Spec.NodeName, "state", state.Status.State)
 			}
-			// 옵션 A: 두 라벨 모두 제거 invariant — defer 도 동일하게 처리.
-			// blocking 라벨이 잔류하면 detector 가 spawn 안 되므로 sweep 15s 까지의 window
-			// 가 생김. 이 호출로 window 를 0 에 가깝게 줄임.
+			// 두 라벨 모두 제거하는 것이 invariant 다 — defer 도 동일하게 처리한다.
+			// blocking 라벨이 잔류하면 detector 가 spawn 되지 않아 sweep 까지 window(15s)가
+			// 생긴다. 이 호출로 그 window 를 0 에 가깝게 줄인다.
 			if err := r.StateMachine.EnsureUpgradingBlockingLabelRemoved(cleanupCtx, state.Spec.NodeName); err != nil {
 				logger.Error(err, "defer cleanup: driver-upgrading-blocking 라벨 제거 실패",
 					"node", state.Spec.NodeName, "state", state.Status.State)
@@ -150,7 +149,7 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
-	// Bug #6 fix: Furiosa DUS가 watch event를 받지 못하는 경우를 위한 주기적 재체크 (30초)
+	// Furiosa DUS 가 watch event 를 받지 못하는 경우를 위한 주기적 재체크(30초).
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
@@ -241,15 +240,12 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 // v1alpha1.DriverModelUnknown 하나뿐이다 — pkg/npuctl 도 그 상수를 그대로 쓴다.
 const modelUnknown = v1alpha1.DriverModelUnknown
 
-// vendorRepresentativeModels 는 벤더별 대표 model 이다. DriverUpgradeState 는 (노드, 벤더) 당
-// 하나인데 NodeDeviceReport 의 장치는 벤더당 여럿일 수 있다(라이브 worker1 = nvidia a30 + a2).
-// 장치마다 spec.model 을 쓰면 두 장치가 같은 DUS 를 겨눠 매 reconcile 마다 a30 → a2 로 서로를
-// 덮는다 — API 서버에 영구 쓰기 루프다.
-//
-// 벤더 안에서 model 이 갈리면 "generic" 이다. generic 은 이름이 아니라 "모른다" 는 표시이고,
-// 혼재 노드는 벤더 단위로 정말 단일 제품명이 없다(detector 도 같은 이유로 벤더 단위 라벨을
-// generic 으로 둔다). upgrade.DeviceModelMatches 가 generic 을 양방향 와일드카드로 보므로
-// 재부팅 게이트와 자가복구 게이트는 그대로 걸린다 — 기능 손실이 없다.
+// vendorRepresentativeModels 는 벤더별 대표 model 이다. DriverUpgradeState 는 (노드, 벤더) 당 하나인데
+// 장치는 벤더당 여럿일 수 있어(라이브 worker1 = nvidia a30 + a2) 장치마다 spec.model 을 쓰면 두 장치가
+// 같은 DUS 를 겨눠 매 reconcile 마다 서로 덮어쓰는 영구 쓰기 루프가 된다. 벤더 안에서 model 이 갈리면
+// "generic" 이다. generic 은 이름이 아니라 "모른다" 는 표시이고, 혼재 노드는 벤더 단위로 정말 단일
+// 제품명이 없다(detector 도 같은 이유로 벤더 단위 라벨을 generic 으로 둔다). upgrade.DeviceModelMatches
+// 가 generic 을 양방향 와일드카드로 보므로 재부팅·자가복구 게이트는 그대로 걸려 기능 손실이 없다.
 func vendorRepresentativeModels(devices []v1alpha1.DeviceEntry) map[string]string {
 	models := make(map[string]string, len(devices))
 	for _, d := range devices {
@@ -304,7 +300,7 @@ func (r *DriverUpgradeReconciler) syncDUSObservedModels(
 
 // resetRebootTracking 은 새 업그레이드 사이클 진입 시 이전 사이클의 재부팅 추적 상태를 초기화한다.
 // RebootAttempts 가 stale 이면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀
-// cross-major 자연 재부팅이 발화하지 않는다(P2-2 결함). RequestedTime/BootID 는 handleRebootRequired 가
+// cross-major 자연 재부팅이 발화하지 않는다. RequestedTime/BootID 는 handleRebootRequired 가
 // 재부팅 트리거 시 덮어쓰지만 사이클 경계에서 함께 리셋해 stale 관측을 없앤다.
 func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 	s.RebootAttempts = 0
@@ -369,14 +365,12 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	r.syncDUSModel(ctx, &existing, vendorModel)
 	r.syncDUSObservedModels(ctx, &existing, observed)
 
-	// 대역외 드라이버 변경 감지(감지 전용). 정책 선언 버전과 NDR 실측이 어긋난 채 유예를 넘기면
-	// Warning 이벤트로 알린다. 자동 재설치·재부팅은 하지 않는다(호스트 임의 재부팅 방지).
-	// 기준은 policy.Spec.Driver.Version(안정값) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다.
-	//
-	// 상태 조건이 Idle 과 UnverifiedVersion 둘인 이유: 허용 목록 밖 버전은 UnverifiedVersion 에
-	// 주차하므로, Idle 만 보면 자동 업그레이드를 끈 정책의 노드에서 감지가 영구히 꺼진다. 그 상태는
-	// Job 도 cordon 도 만들지 않는 보고 전용 종점이라 관측 갱신이 사이클과 겹치지 않는다.
-	// (억제 판정도 같은 술어를 쓴다 — 조정자와 EvaluateVersionDrift 가 둘로 갈리지 않게.)
+	// 대역외 드라이버 변경 감지(감지 전용) — 정책 선언 버전과 NDR 실측이 어긋난 채 유예를 넘기면
+	// Warning 이벤트로만 알린다(자동 재설치·재부팅 없음, 호스트 임의 재부팅 방지). 기준은
+	// policy.Spec.Driver.Version — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 조건이
+	// Idle·UnverifiedVersion 둘인 이유: 화이트리스트 밖 버전은 UnverifiedVersion 에 주차하므로
+	// Idle 만 보면 자동 업그레이드를 끈 노드에서 감지가 영구히 꺼진다(그 상태는 Job·cordon 을
+	// 만들지 않는 보고 전용 종점이다). 억제 판정은 EvaluateVersionDrift 와 같은 술어를 쓴다.
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
@@ -410,8 +404,8 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		}
 	}
 
-	// Bug #7 fix: desiredVersion이 정책과 다르면 update. 단 State==Idle 에서만 —
-	// mid-cycle 은 상태기계가 DesiredVersion 을 소유하고, 롤백은 그것을 PreviousVersion 으로 놓는다.
+	// desiredVersion 이 정책과 다르면 update 한다. 단 State==Idle 에서만 — mid-cycle 은
+	// 상태기계가 DesiredVersion 을 소유하고, 롤백은 그것을 PreviousVersion 으로 놓는다.
 	// 여기서 되돌리면 롤백을 깨고 매 롤백마다 재부팅 예산이 리셋돼 MaxReboots 상한이 무력화된다.
 	// Idle 새 사이클 리셋은 handleIdle 이 백업한다.
 	desiredVersion := policy.Spec.Driver.Version
@@ -437,12 +431,11 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		return
 	}
 
-	// 버전 불일치를 여기서 UpgradeRequired 로 전이시키지 않는다. 그러면 handleIdle 의 게이트
-	// (autoUpgrade / verifiedVersions / IdleCooldown)를 통째로 지나쳐 버린다 — 라이브에서
-	// autoUpgrade=false·화이트리스트 밖 버전인데도 install Job 이 생성됐다. 전이 결정은
-	// handleIdle 한 곳이 갖는다. 불일치 상황의 관측값 갱신은 아래 currentVersion 동기화가
-	// 이미 담당하므로 여기에 별도 분기를 두지 않는다 — 두면 매 reconcile 마다
-	// LastTransitionTime 이 갱신돼 IdleCooldown 이 영원히 차지 않는다(실측).
+	// 버전 불일치를 여기서 UpgradeRequired 로 전이시키지 않는다 — 그러면 handleIdle 의 게이트
+	// (autoUpgrade / verifiedVersions / IdleCooldown)를 통째로 지나친다. 전이 결정은 handleIdle
+	// 한 곳이 갖는다. 불일치 상황의 관측값 갱신은 아래 currentVersion 동기화가 이미 담당하므로
+	// 여기에 별도 분기를 두지 않는다 — 두면 매 reconcile 마다 LastTransitionTime 이 갱신돼
+	// IdleCooldown 이 영원히 차지 않는다.
 
 	// currentVersion 동기화: NDR 이 갱신되었지만 버전이 일치하는 경우
 	// (desiredVersion == device.DriverVersion 이나 existing.Status.CurrentVersion이 stale)
@@ -516,17 +509,12 @@ func (r *DriverUpgradeReconciler) ensureTrackOnlyState(ctx context.Context, node
 	return nil
 }
 
-// syncDUSModel 은 DriverUpgradeState.spec.model 을 NodeDeviceReport 가 보고한 장치 모델과
-// 맞춘다. spec.model 은 생성 시점 값이라 갱신되지 않아 이미 라이브에서 어긋나 있다
-// (DUS `generic` 대 장치 `a30`·`a2`).
-//
-// 왜 매칭 관대화(upgrade.DeviceModelMatches)만으로 부족한가 — 접두어·와일드카드 규칙은
-// 이름이 구체화되는 방향만 덮는다. `pcidb.go` 주석이 관리자에게 권하는 `update-pciids` 를
-// 돌리면 표기가 통째로 바뀔 수 있고(`a100-pcie-40gb` → `a100-sxm4-40gb`), 그때 두 값은
-// 서로 접두어도 아니고 어느 쪽도 "generic" 이 아니라 매칭이 끊긴다.
-//
-// spec 갱신은 CRD·webhook 제약이 없다(DriverUpgradeState 에 XValidation 0건, admission
-// webhook 미등록). 값이 같아지면 patch 가 안 나가므로 reconcile 마다 쓰기가 늘지 않는다.
+// syncDUSModel 은 DriverUpgradeState.spec.model 을 NodeDeviceReport 가 보고한 장치 모델과 맞춘다.
+// spec.model 은 생성 시점 값이라 갱신되지 않아 라이브에서 이미 어긋나 있을 수 있다. 접두어·와일드카드
+// 규칙(upgrade.DeviceModelMatches)은 이름이 구체화되는 방향만 덮는다 — `update-pciids` 를 돌리면
+// 표기가 통째로 바뀔 수 있고(`a100-pcie-40gb` → `a100-sxm4-40gb`), 그때 두 값은 서로 접두어도
+// 아니고 어느 쪽도 "generic" 이 아니라 매칭이 끊긴다. spec 갱신은 CRD·webhook 제약이 없고 값이
+// 같으면 patch 가 나가지 않아 reconcile 마다 쓰기가 늘지 않는다.
 func (r *DriverUpgradeReconciler) syncDUSModel(
 	ctx context.Context, existing *v1alpha1.DriverUpgradeState, deviceModel string) {
 	if deviceModel == "" || existing.Spec.Model == deviceModel {
@@ -661,20 +649,12 @@ const stuckLabelGracePeriod = 30 * time.Second
 // 차단 해제까지 시간이 줄어듦.
 const stuckBlockingLabelGracePeriod = 15 * time.Second
 
-// sweepStuckUpgradingLabels 는 모든 노드를 점검하여 사이클이 비정상 종료된 채
-// driver-upgrading 또는 driver-upgrading-blocking 라벨만 남아있는 경우 자동으로 제거한다.
-//
-// CRITICAL invariant — 정상 mid-cycle 라벨은 절대 건드리지 않는다:
-//  1. 노드의 라벨이 있어야 함
-//  2. 해당 노드+vendor 의 DUS state ∈ {Idle, "", Failed} (사이클 종료 상태)
-//  3. DUS LastTransitionTime 이 grace period 이상 경과 (transient 보호)
-//  4. 매칭 DUS 가 하나도 없으면 (vendor 미상) 라벨 보존 — 다른 컨트롤러 소유 가능성
-//
-// 위 4 조건을 모두 만족할 때만 cleanup 시도. mid-cycle (PreFlight ~ Uncordoning) 라벨은
-// 어떤 경우에도 제거하지 않는다.
-//
-// driver-upgrading-blocking 라벨은 좁은 lifecycle (Cordoning ~ Validating 진입) 이라
-// 더 짧은 grace (15s) 를 적용 — Validating 진입했는데도 라벨이 남아있으면 즉시 sweep.
+// sweepStuckUpgradingLabels 는 사이클이 비정상 종료된 채 driver-upgrading(-blocking) 라벨만
+// 남은 노드에서 그 라벨을 제거한다. 전부 만족할 때만 cleanup 한다: (1) 라벨이 있다 (2) 해당
+// 노드+vendor 의 DUS state 가 종료 상태(Idle·""·Failed) (3) LastTransitionTime 이 grace 이상
+// 경과(transient 보호) (4) 매칭 DUS 가 하나도 없으면 라벨을 보존한다(다른 컨트롤러 소유 가능성).
+// mid-cycle(PreFlight~Uncordoning) 라벨은 절대 건드리지 않는다. blocking 라벨은 lifecycle 이
+// 좁아(Cordoning~Validating 진입) grace 를 15s 로 더 짧게 둔다.
 func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context) error {
 	logger := logf.FromContext(ctx)
 
@@ -769,9 +749,9 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 
 // findPolicy는 vendor/model이 일치하는 정책을 찾습니다.
 //
-// 매칭 규칙은 upgrade.DeviceModelMatches 가 정본이다 — 규칙을 여기에 복제하면 한쪽만 고쳐진다
-// (실제로 그렇게 되어, detector 가 제품명을 구체화한 뒤 `spec.model: a100` 정책이 장치
-// `a100-pcie-40gb` 에 안 걸리고 nil 이 나갔다). 정확일치 우선은 유지한다 — 벤더에 정책이
+// 매칭 규칙은 upgrade.DeviceModelMatches 가 정본이다. 규칙을 여기에 복제하면 한쪽만 고쳐질
+// 수 있다 — detector 가 제품명을 구체화하면 `spec.model: a100` 정책이 장치
+// `a100-pcie-40gb` 에 안 걸려 nil 이 나갈 수 있다. 정확일치 우선은 유지한다 — 벤더에 정책이
 // 여럿이면 구체적인 것이 제품군 정책을 이겨야 한다.
 func findPolicy(policies []v1alpha1.DriverInstallPolicy, vendor, model string) *v1alpha1.DriverInstallPolicy {
 	var fallback *v1alpha1.DriverInstallPolicy
@@ -809,13 +789,11 @@ func OperationNameForDriver(state *v1alpha1.DriverUpgradeState) string {
 }
 
 // delegateDriverUpgrade 는 위임 모드에서 드라이버 상태머신을 직접 돌리는 대신 작업을 만든다.
-//
-// handled=true 면 호출자는 이 pass 를 여기서 끝낸다 — 상태머신을 부르지 않는다. 그래야 조정자와
+// handled=true 면 호출자는 상태머신을 부르지 않고 여기서 pass 를 끝낸다 — 그래야 조정자와
 // 컨트롤러가 같은 상태머신을 동시에 돌리지 않는다(분기가 아니라 호출자의 이동이다).
-//
-// 유휴 상태에서는 위임하지 않는다(handled=false). 그 시점에는 상태머신이 아직 아무것도 건드리지
-// 않았고 목표 버전조차 계산 전일 수 있다 — "업그레이드가 필요한가" 의 판정은 상태머신 몫이고
-// 여기서 다시 구현하지 않는다.
+// 유휴 상태에서는 위임하지 않는다(handled=false) — 그 시점엔 상태머신이 아직 아무것도
+// 건드리지 않았고 목표 버전도 계산 전일 수 있어, "업그레이드가 필요한가" 의 판정은
+// 상태머신 몫으로 남기고 여기서 다시 구현하지 않는다.
 func (r *DriverUpgradeReconciler) delegateDriverUpgrade(ctx context.Context, state *v1alpha1.DriverUpgradeState) (bool, ctrl.Result, error) {
 	if state.Status.State != v1alpha1.UpgradeStateRequired {
 		// 유휴·진행 중·터미널 — 진행 중이면 이미 만들어 둔 작업이 상태머신을 돌리고 있으므로

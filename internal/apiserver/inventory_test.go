@@ -1,11 +1,8 @@
 // ============================================================
 // inventory_test.go: 인벤토리 집약(BuildInventory) 단위 테스트
 // 상세: 정직성 불변식 세 개를 못박는다 — (1) time-slicing replica 는 행이 되지 않는다,
-//       (2) supported 주장만으로 Verified 가 켜지지 않는다, (3) stale/미수렴 데이터는 숨기지
-//       않는다(미수렴 ACPP 는 Stale=true 로 드러나고, 아직 장치를 보고하지 않은 관리 노드는
-//       미관리로 오분류되지 않는다). 더불어 ACPP 미관리 노드의 합성 ID·출처 표기, cordon 노드
-//       포함 여부, 멀티벤더 노드의 장치별 벤더 매칭을 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-11 (풀 이름이 노드명과 다른 드라이버 집계 시험 추가; 계획서 항목 토큰 제거; 다중 풀 합산 시험 추가; draSliceWithPool 장치 이름 중복 제거)
+//       (2) supported 주장만으로 Verified 가 켜지지 않는다, (3) stale/미수렴 데이터는 숨기지 않는다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -50,7 +47,7 @@ func ndr(nodeName string, entries ...v1alpha1.DeviceEntry) v1alpha1.NodeDeviceRe
 
 // acppReady 는 수렴 완료(observedGeneration==generation, phase=Ready)한 정책이다. 정책/노드
 // 이름은 이 테스트 파일에서 항상 "p"/"worker1" 하나뿐이라(unparam) 파라미터로 두지 않고 고정한다.
-// readySiblingPolicyName 은 D-4 재현 픽스처의 Ready 정책명이다(라이브 실측명, "a2" < "a30" 사전순).
+// readySiblingPolicyName 은 사전순으로 "a2" 뒤에 오는 이름("a30")을 써서 정렬 순서를 고정한다.
 const readySiblingPolicyName = "worker1-a30-4x1g"
 
 func acppReady(devices []v1alpha1.DeviceStatus, sharingMode string, replicas int32) v1alpha1.AcceleratorPartitionPolicy {
@@ -161,7 +158,7 @@ func TestBuildInventory_CordonedNodeStillListed(t *testing.T) {
 // TestBuildInventory_StaleACPPRowIsVisiblyStale: 정직성 계약 (3) 전반부 — 미수렴은 숨기지 않는다.
 // spec 이 바뀌어 generation 은 올랐지만(2) 컨트롤러가 아직 반영 못한(observedGeneration=1) 경우,
 // status.targets[].phase 에는 낡은 "Ready" 값이 그대로 남아 있다 — 이 낡은 phase/devices 를
-// 그대로 믿으면 안 된다는 리뷰 Critical #1 시나리오를 그대로 재현한다.
+// 그대로 믿으면 안 된다는 시나리오를 재현한다.
 func TestBuildInventory_StaleACPPRowIsVisiblyStale(t *testing.T) {
 	devs := []v1alpha1.DeviceStatus{{ID: "GPU-aaa", Model: "A30"}}
 	nodes := []corev1.Node{node("worker1", false, map[string]string{"nvidia.com/gpu": "1"})}
@@ -184,7 +181,7 @@ func TestBuildInventory_StaleACPPRowIsVisiblyStale(t *testing.T) {
 	}
 }
 
-// TestBuildInventory_PendingACPPNodeNotLabeledUnmanaged: 정직성 계약 (3) 후반부 — 리뷰 Critical #2.
+// TestBuildInventory_PendingACPPNodeNotLabeledUnmanaged: 정직성 계약 (3) 후반부.
 // ACPP 가 노드를 타깃하지만 아직 장치를 하나도 보고하지 않은(Phase=Applying) 상태다. 이걸 NDR
 // 미관리 경로로 떨어뜨리면 "관리 중" 과 "관리 안 함" 이 API 상 구분 불가능해진다.
 func TestBuildInventory_PendingACPPNodeNotLabeledUnmanaged(t *testing.T) {
@@ -216,9 +213,9 @@ func TestBuildInventory_PendingACPPNodeNotLabeledUnmanaged(t *testing.T) {
 	}
 }
 
-// TestBuildInventory_MultiVendorNodeDeviceVendorMatchesModel: 리뷰 Important #3 — worker1 재현.
-// NVIDIA A30/A2 + Furiosa 리소스가 같은 노드에 공존하면 리소스명 사전순(furiosa < nvidia)으로
-// nc.Vendor 가 "furiosa" 가 되므로, 장치별 벤더는 반드시 모델 매칭으로 되짚어야 한다.
+// TestBuildInventory_MultiVendorNodeDeviceVendorMatchesModel: NVIDIA A30/A2 + Furiosa 리소스가
+// 같은 노드에 공존하면 리소스명 사전순(furiosa < nvidia)으로 nc.Vendor 가 "furiosa" 가 되므로,
+// 장치별 벤더는 반드시 모델 매칭으로 되짚어야 한다.
 func TestBuildInventory_MultiVendorNodeDeviceVendorMatchesModel(t *testing.T) {
 	devs := []v1alpha1.DeviceStatus{
 		{ID: "GPU-a30", Model: "A30"},
@@ -349,9 +346,9 @@ func TestBuildInventory_PendingRowCarriesNoInstanceCounts(t *testing.T) {
 	}
 }
 
-// TestBuildInventory_FailedSiblingDoesNotHideReadyRows — 라이브 결함 D-4(§5.2):
-// devicesForNode 의 첫-매치 단락이 Failed 정책("worker1-a2-timeslice")을 골라 같은 노드의
-// Ready 정책(readySiblingPolicyName) 장치 행을 뭉개면 안 된다(/accelerators total 4→ 정상 복원).
+// TestBuildInventory_FailedSiblingDoesNotHideReadyRows: devicesForNode 의 첫-매치 단락이
+// Failed 정책("worker1-a2-timeslice")을 골라 같은 노드의 Ready 정책(readySiblingPolicyName)
+// 장치 행을 뭉개면 안 된다.
 func TestBuildInventory_FailedSiblingDoesNotHideReadyRows(t *testing.T) {
 	failed := v1alpha1.AcceleratorPartitionPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker1-a2-timeslice", Generation: 1},
@@ -383,7 +380,7 @@ func TestBuildInventory_FailedSiblingDoesNotHideReadyRows(t *testing.T) {
 
 // TestBuildInventory_SameModelEntriesGetDistinctIDs: 한 노드가 같은 벤더·모델 장치를 여러
 // 집계 행으로 보고하면(카드마다 PCI 주소가 달라 detector 가 행을 나눈다) 합성 ID 가 행마다
-// 0 부터 다시 매겨져 충돌한다. 실측 사례: A30 2장이 모두 "k8s-worker2/nvidia/generic#0".
+// 0 부터 다시 매겨져 충돌한다. 예: A30 2장이 모두 "k8s-worker2/nvidia/generic#0" 이 된다.
 // 충돌하면 UID 단건 조회가 영원히 첫 장치만 돌려주고 두 번째 장치는 조회할 길이 없다.
 func TestBuildInventory_SameModelEntriesGetDistinctIDs(t *testing.T) {
 	nodes := []corev1.Node{node("worker2", false, map[string]string{"nvidia.com/gpu": "2"})}
@@ -486,8 +483,8 @@ func TestAttachHealth_EmptyStateIsUnknownNotHealthy(t *testing.T) {
 // 가린다). 같은 PCI 라도 device.State 가 채워지면(Unhealthy) 그제서야 device 가 이긴다는
 // 대조를 같은 시험에서 함께 본다.
 func TestAttachHealth_DeviceRowWithEmptyStateFallsBackToNode(t *testing.T) {
-	// goconst: Scope 값 "node"/"device" 리터럴 비교가 이 패키지에서 이미 여러 곳에 있다
-	// (브리프가 지정한 기존 시험들) — 여기서는 상수로 참조해 리터럴 반복을 보태지 않는다.
+	// goconst: Scope 값 "node"/"device" 리터럴 비교가 이 패키지에 이미 여러 곳 있다 —
+	// 여기서는 상수로 참조해 리터럴 반복을 보태지 않는다.
 	const scopeNode, scopeDevice = "node", "device"
 	items := []AcceleratorView{{UID: "u1", NodeName: "n1", PCIAddress: "0000:18:00.0"}}
 	empty := v1alpha1.AcceleratorHealth{ObjectMeta: metav1.ObjectMeta{Name: "n1"},
@@ -555,7 +552,7 @@ func TestAttachAllocation_FinishedPodsAndOtherNodesDoNotCount(t *testing.T) {
 
 // TestAttachAllocation_RestartableInitContainerCountsPlainDoesNot: K8s 1.28+ 사이드카
 // 초기화 컨테이너(restartPolicy: Always)는 파드가 도는 동안 내내 가속기를 쥐므로 더해야
-// 하고, 재시작하지 않는 일반 초기화 컨테이너는 시작 단계에만 쥐므로 빼야 한다(review I-3).
+// 하고, 재시작하지 않는 일반 초기화 컨테이너는 시작 단계에만 쥐므로 빼야 한다.
 func TestAttachAllocation_RestartableInitContainerCountsPlainDoesNot(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	req := corev1.ResourceList{"furiosa.ai/rngd": resource.MustParse("1")}
@@ -623,8 +620,8 @@ func draSliceWithPool(node, driver, pool string, n int) resourcev1.ResourceSlice
 	}}
 }
 
-// 풀 이름이 노드명과 다른 드라이버도 할당이 집계된다 — 종전에는 res.Pool 을 노드명으로 찾아
-// 할당이 0 으로 떨어지고 free 가 광고 수와 같아졌다(여유 과대 보고).
+// 풀 이름이 노드명과 다른 드라이버도 할당이 집계되어야 한다 — res.Pool 을 노드명으로만 찾으면
+// 할당이 0 으로 떨어지고 free 가 광고 수와 같아져 여유를 과대 보고한다.
 func TestAttachDRAAllocation_PoolNameDiffersFromNode(t *testing.T) {
 	slices := []resourcev1.ResourceSlice{draSliceWithPool("k8s-worker1", "example.com/gpu", "pool-a", 4)}
 	claims := []resourcev1.ResourceClaim{allocatedClaimOn("pool-a", "example.com/gpu", "dev-0")}
@@ -640,8 +637,8 @@ func TestAttachDRAAllocation_PoolNameDiffersFromNode(t *testing.T) {
 	}
 }
 
-// 한 노드·드라이버가 풀 둘로 광고하면 두 풀의 할당을 합산한다 — 종전에는 마지막 풀만 조회해
-// 다른 풀의 할당을 놓치고 여유를 과대 보고했다.
+// 한 노드·드라이버가 풀 둘로 광고하면 두 풀의 할당을 합산해야 한다 — 마지막 풀만 조회하면
+// 다른 풀의 할당을 놓쳐 여유를 과대 보고한다.
 func TestAttachDRAAllocation_MultiplePoolsPerNodeDriver(t *testing.T) {
 	slices := []resourcev1.ResourceSlice{
 		draSliceWithPool("k8s-worker1", "example.com/gpu", "pool-a", 2),
@@ -666,7 +663,7 @@ func TestAttachDRAAllocation_MultiplePoolsPerNodeDriver(t *testing.T) {
 	}
 }
 
-// nodeWithAllocatable 은 status.allocatable 만 채운 노드다. attachVendorID(2회차 수정)가
+// nodeWithAllocatable 은 status.allocatable 만 채운 노드다. attachVendorID 가
 // NodeAdvertised 가 아니라 이 필드를 직접 읽으므로, 그 경로를 단위 시험에서 재현하는 전용
 // 픽스처로 쓴다. 노드 이름은 이 파일에서 항상 "n1" 하나뿐이라(unparam) 파라미터로 두지 않고
 // podWith·acppReady 와 같은 규율로 고정한다.

@@ -1,4 +1,4 @@
-<!-- README.md: AcceleratorHealth 건강 저하 관측 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 -->
+<!-- README.md: AcceleratorHealth 건강 저하 관측 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # 건강 저하 관측 데모 (health-degraded-observe)
 
 ## 왜
@@ -26,7 +26,7 @@ evidence 가 기록한 저하 전이와 대조한다.
 
 ## 과거 evidence 대조
 
-2026-08-04 라이브 실측 §5 가 기록한 저하 전이를 기준으로 삼는다.
+과거 라이브 evidence 가 기록한 저하 전이를 기준으로 삼는다.
 
 | 시점 | 관측 |
 |---|---|
@@ -89,7 +89,6 @@ DeviceDriver)는 실패 시 `internal/health/evaluate.go:81-150`·`device.go` �
 
 ## 이 데모가 증명하지 않는 것
 
-- 실제 장애 주입과 그에 따른 복구 작업 생성·격리 전이. 파괴적이라 범위 밖이다(원장에
-  `BLOCKED(scope: fault injection)` 로 남긴다). 그 경로의 라이브 판정은
-  2026-08-04 라이브 실측(§5·§8)과 envtest·장애 주입 하네스에 있다.
+- 실제 장애 주입과 그에 따른 복구 작업 생성·격리 전이. 파괴적이라 범위 밖이다(`BLOCKED
+  (scope: fault injection)` 로 남긴다). 그 경로의 라이브 판정은 envtest·장애 주입 하네스에 있다.
 - 복구 작업이 정확히 1건인지, 반복 실패 시 격리되는지 — 위 evidence 와 하네스가 고정한다.

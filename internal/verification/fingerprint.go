@@ -1,10 +1,8 @@
 // ============================================================
 // fingerprint.go: 환경 지문 계산 (R&D base v0.1 §8.6)
-// 상세: 검증 근거가 어느 환경에서 나왔는지를 노드(bootID·kernel)와 NodeDeviceReport(driver·
-//
-//	firmware), 그리고 요청 정책의 generation 으로 고정한다. 관측하지 못한 축은 비워 둔다.
-//
-// 생성일: 2026-07-31
+// 상세: 검증 근거가 어느 환경에서 나왔는지를 노드(bootID·kernel)와 NodeDeviceReport(driver·firmware),
+// 그리고 요청 정책의 generation 으로 고정한다. 관측하지 못한 축은 비워 둔다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -25,15 +23,11 @@ const (
 	FieldGeneration      = "Generation"
 )
 
-// Compute 는 노드 + NodeDeviceReport + 정책 generation 으로 지문을 만든다.
-//
-// vendor 가 비어 있지 않으면 그 벤더 장치만 본다 — 한 노드에 여러 벤더가 있을 때 무관한 벤더의
-// 드라이버 교체가 이 정책의 근거를 무효화하면 안 되기 때문이다. 같은 벤더 장치가 여럿이면 PCI
-// 주소가 가장 작은 장치를 쓴다(결정론적 선택 — 순서에 따라 지문이 흔들리면 아무것도 안 바뀐
-// 상태에서도 evidence 가 계속 만료된다).
-//
-// 관측하지 못한 축은 **비워 둔다**. 빈 값을 "같다" 로 취급할지는 무효화 규칙(freshness.go)이
-// 정하며, 여기서 그럴듯한 값을 채우지 않는다.
+// Compute 는 노드 + NodeDeviceReport + 정책 generation 으로 지문을 만든다. vendor 가 비어 있지 않으면
+// 그 벤더 장치만 본다 — 무관한 벤더의 드라이버 교체가 이 정책의 근거를 무효화하면 안 되기 때문이다.
+// 같은 벤더 장치가 여럿이면 PCI 주소가 가장 작은 장치를 쓴다(결정론적 선택 — 순서가 흔들리면
+// 아무것도 안 바뀐 상태에서도 evidence 가 계속 만료된다). 관측하지 못한 축은 비워 둔다 — 빈 값을
+// "같다" 로 취급할지는 무효화 규칙(freshness.go)이 정하며, 여기서 그럴듯한 값을 채우지 않는다.
 func Compute(node *corev1.Node, ndr *v1alpha1.NodeDeviceReport, vendor string, generation int64) v1alpha1.EnvironmentFingerprint {
 	fp := v1alpha1.EnvironmentFingerprint{Generation: generation}
 	if node != nil {

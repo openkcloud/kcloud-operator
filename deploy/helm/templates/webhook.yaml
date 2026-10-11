@@ -2,7 +2,7 @@
 # ============================================================
 # webhook.yaml: Admission webhook Service + cert Secret + Validating/Mutating 설정
 # 상세: cert 는 lookup 으로 최초 1회 발급·재사용(멱등), failurePolicy=Ignore, opt-in 라벨 mutating
-# 생성일: 2026-07-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-07-20 | 수정일: 2026-10-11
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $svcName := printf "%s-webhook" $fullname -}}

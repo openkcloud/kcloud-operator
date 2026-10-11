@@ -4,7 +4,7 @@
 //
 //	같은 원인이 이어지는 동안 중복 생성되지 않게 트랜잭션 ID 를 쿨다운 버킷으로 고정한다.
 //
-// 생성일: 2026-08-04 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -55,11 +55,11 @@ func operationForReason(reason string) (operation.Type, bool) {
 		return operation.DevicePluginRestart, true
 	case ReasonAdvertisementMismatch:
 		return operation.Revalidate, true
-	// 드라이버 미로드는 RecoverDevice 를 만든다 — 본체가 조정자에 등록된 **뒤부터**다.
-	// 본체가 없던 동안에는 이 줄이 없었다: 그때 작업을 만들면 "no participant registered" 로
-	// 즉시 종점이 되고, 그 종점이 실패로 세어져 세 번 만에 멀쩡한 노드가 격리됐다(H-1).
-	// 본체(recoverdevice_participant.go)가 하는 일은 "드라이버를 올리는 주체를 다시 띄운다" 하나이고,
-	// 커널 모듈 재적재나 재부팅은 하지 않는다 — 되돌릴 수 없는 행동은 health 의 몫이 아니다(계약 §9.6).
+	// 드라이버 미로드는 RecoverDevice 를 만든다 — 본체가 조정자에 등록된 뒤부터다. 본체가
+	// 없는 상태에서 작업을 만들면 "no participant registered" 로 즉시 종점이 되고, 그 종점이
+	// 실패로 세어져 세 번 만에 멀쩡한 노드가 격리된다. 본체(recoverdevice_participant.go)가
+	// 하는 일은 "드라이버를 올리는 주체를 다시 띄운다" 하나이고, 커널 모듈 재적재나 재부팅은
+	// 하지 않는다 — 되돌릴 수 없는 행동은 health 의 몫이 아니다(계약 §9.6).
 	case ReasonDriverNotLoaded:
 		return operation.RecoverDevice, true
 	default:

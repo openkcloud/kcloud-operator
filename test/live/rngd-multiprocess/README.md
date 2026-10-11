@@ -1,16 +1,16 @@
-<!-- README.md: RNGD 다중 프로세스 공유 가능성 실측 하네스 | 생성일: 2026-07-05 | 수정일: 2026-10-11 (출력 경로를 중립 자리표시자로 교체) -->
+<!-- README.md: RNGD 다중 프로세스 공유 가능성 실측 하네스 | 생성일: 2026-07-05 | 수정일: 2026-10-11 -->
 
 # RNGD 다중 프로세스 실측
 
 ## 왜
 RNGD 공유(time-slicing 유사 UX)의 가능 여부는 **런타임이 한 장치/파티션에 다중 프로세스 context 를
-허용하는가**로 나뉜다. furiosa device-plugin 에는 replica 옵션이 없으므로(2026-07-29 소스 확인:
-`reference/furiosa-device-plugin`, `reference/libfuriosa-kubernetes`), 공유를 제공하려면
+허용하는가**로 나뉜다. furiosa device-plugin 에는 replica 옵션이 없으므로(furiosa-device-plugin·
+libfuriosa-kubernetes 소스 확인), 공유를 제공하려면
 (a) 다중 프로세스가 되면 operator 가 replica 광고를 추가하거나, (b) 안 되면 Broker 가 필요하다.
 
-## 방법(2026-07-29, 호스트 레벨로 재작성)
-최초 설계는 컨테이너 이미지(`furiosa-smi`) 를 파드로 띄워 관찰하는 것이었으나, Harbor 에
-`furiosa-smi` 이미지가 없어(카탈로그 확인, air-gap 이라 대체 불가) 실행할 수 없었다.
+## 방법(호스트 레벨)
+컨테이너 이미지(`furiosa-smi`)로 파드에서 관찰하는 방법은 Harbor 에 그 이미지가 없어(카탈로그
+확인, air-gap 이라 대체 불가) 쓸 수 없다.
 대신 **컨테이너 없이 rngd-1 을 SSH 로 직접 접속**해, PE 캐릭터 디바이스(`/dev/rngd/npu0peN`,
 world-rw)를 두 프로세스가 동시에 `open()` 할 수 있는지로 판정한다(`probe.sh`):
 
@@ -26,8 +26,8 @@ world-rw)를 두 프로세스가 동시에 `open()` 할 수 있는지로 판정�
 
 ## 전제
 - 노드 `rngd-1`(<rngd-node>), SSH 접근(`NODE_HOST`, 기본 `<user>@<rngd-node>`)
-- PE 디바이스 노드가 world-rw 로 노출돼 있어야 함(2026-07-29 확인: 그러함, `crw-rw-rw-`)
-- 다른 테넌트가 해당 PE 를 쓰고 있지 않아야 함(2026-07-29 확인: `pe_occupancy` 전부 0, idle)
+- PE 디바이스 노드가 world-rw 로 노출돼 있어야 함(실제 권한 `crw-rw-rw-`)
+- 다른 테넌트가 해당 PE 를 쓰고 있지 않아야 함(`pe_occupancy` 전부 0, idle 이면 충족)
 
 ## 실행
 ```bash
@@ -48,9 +48,9 @@ NODE_HOST=<user>@<rngd-node> HOLD_SECONDS=20 bash test/live/rngd-multiprocess/pr
 3. 한 pod 강제 종료(`kubectl delete pod --grace-period=0`) 후 다른 pod 생존 여부 → fault isolation 등급 근거
 4. 결과를 기록하고, 이 결과가 있을 때만
    `SharingCapability.MultiProcess.Verification=verified` 로 승격한다.
-   (이 단계는 `furiosa-smi` 를 담은 이미지를 Harbor 에 올려야 실행 가능 — 2026-07-29 기준 없음.)
+   (이 단계는 `furiosa-smi` 를 담은 이미지를 Harbor 에 올려야 실행 가능 — 아직 없음.)
 
 ## 결과 기록 양식
 | 날짜 | 노드 | 방법 | B(동일 PE) | C(대조군) | 판정 |
 |---|---|---|---|---|---|
-| 2026-07-29 | rngd-1 | host-level open() (`probe.sh`, `HOLD_SECONDS=15`) | `OPEN_FAIL errno=2` | `OPEN_FAIL errno=2` | **계측기 무효** — A 자신의(동시성 없는 단독) open 도 `A_OPEN_FAIL errno=2` 로 실패. `dmesg -T`: 오픈 시각과 정확히 일치하는 `furiosa_rngd 0000:27:00.0: admin cmd failed. FW returns err(-2)` / `NPU0 (E) [_npu_init:122] PEn. npu init command failed: -2` (PE0~7 전부). root 로도 동일 실패(권한 문제 아님). 동시성과 무관한 드라이버/FW 레벨 admin-cmd 실패로 판단 — `MultiProcess` capability 는 `VerificationRequired` 로 유지, env 미설정. |
+| <날짜> | rngd-1 | host-level open() (`probe.sh`, `HOLD_SECONDS=15`) | `OPEN_FAIL errno=2` | `OPEN_FAIL errno=2` | **계측기 무효** — A 자신의(동시성 없는 단독) open 도 `A_OPEN_FAIL errno=2` 로 실패. `dmesg -T`: 오픈 시각과 정확히 일치하는 `furiosa_rngd 0000:27:00.0: admin cmd failed. FW returns err(-2)` / `NPU0 (E) [_npu_init:122] PEn. npu init command failed: -2` (PE0~7 전부). root 로도 동일 실패(권한 문제 아님). 동시성과 무관한 드라이버/FW 레벨 admin-cmd 실패로 판단 — `MultiProcess` capability 는 `VerificationRequired` 로 유지, env 미설정. |

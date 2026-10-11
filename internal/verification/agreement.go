@@ -1,10 +1,8 @@
 // ============================================================
 // agreement.go: spec·장치·NodeDeviceReport·광고·테스트 Pod 4자 일치 판정 (R&D base v0.1 §8.7)
-// 상세: 클러스터를 읽지 않는 순수 판정. 하나라도 어긋나면 등급을 주지 않는다 — "일부는 봤다" 를
-//
-//	성공으로 승격하는 순간 commit oracle 이 무의미해진다.
-//
-// 생성일: 2026-07-31
+// 상세: 클러스터를 읽지 않는 순수 판정. 하나라도 어긋나면 등급을 주지 않는다 — "일부는 봤다" 를 성공으로
+// 승격하는 순간 commit oracle 이 무의미해진다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -181,7 +179,7 @@ func evalNodeDeviceReport(in Inputs, record func(name, target string, passed boo
 	for _, pci := range sortedKeys(in.ReportGeometry) {
 		// 노드 에이전트가 그 장치를 못 봤으면 보고값은 "관측 결과" 가 아니라 공백이다. 그 공백을
 		// 기대값과 대조해 불일치로 부르면, 볼 수 없다는 사실이 하드웨어 불일치로 둔갑한다
-		// (라이브 실측 2026-08-04: 비특권 detector 는 MIG 를 관측할 수 없다).
+		// (예: 비특권 detector 는 MIG 를 관측할 수 없다).
 		if msg := in.ReportErrors[pci]; msg != "" {
 			record(name, pci, true, "node agent could not observe this device: "+msg)
 			compared = false

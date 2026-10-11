@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # comment-only-check.sh: BASE..HEAD 변경이 주석과 문서에만 머물렀는지 검사한다
-# 상세: Go 는 주석을 뗀 출력과 표식 주석 순서, 셸·Dockerfile·Makefile·Python 은 주석 줄을 뗀
+# 상세: Go 는 주석을 뗀 출력과 표식 주석 순서, 셸·Dockerfile·Makefile·Python·HTML 은 주석 줄을 뗀
 #       본문, YAML 은 적재한 데이터, 차트 템플릿은 {{/* */}} 와 # 전체 줄을 뗀 소스를 1차로
 #       보고 렌더 결과(인증서 필드 제외)를 보조로, CRD 는 description 을 뗀 데이터를 두
 #       판본에서 비교한다. 검사 대상은 현재 디렉터리의 git 루트다. --self-test 지원.
@@ -20,6 +20,9 @@ go_code()    { "$tmp/stripcomments" - < "$1"; }
 go_markers() { grep -E '^[[:space:]]*//[[:space:]]*(\+[A-Za-z]|go:|nolint)' "$1" || true; }
 # 주석 줄 전체와, 따옴표가 없는 꼬리 주석만 뗀다. 따옴표가 있으면 본문으로 보고 그대로 비교한다.
 strip_hash() { sed -E -e '1{/^#!/d}' -e '/^[[:space:]]*#/d' -e "s/[[:space:]]+#[^\"'\`]*\$//" "$1"; }
+# strip_html: HTML 의 전행 주석만 뗀다 — <script> 의 // 줄과 한 줄짜리 <!-- -->. `#` 은 CSS 셀렉터라
+# 주석으로 보지 않고, 꼬리 주석도 떼지 않는다(URL 의 // 와 구분할 수 없다).
+strip_html() { sed -E -e '/^[[:space:]]*\/\//d' -e '/^[[:space:]]*<!--.*-->[[:space:]]*$/d' "$1"; }
 yaml_data() {
   python3 - "$1" "$2" <<'PY'
 import sys, yaml
@@ -33,21 +36,26 @@ def scrub(o):
 print(repr([scrub(d) for d in yaml.safe_load_all(open(sys.argv[1]))]))
 PY
 }
-# tpl_code: {{/* … */}} 블록(공백 트림 표식 포함, 여러 줄 비탐욕)과 # 로 시작하는 전체 줄을
-# 뗀 템플릿 소스 — 템플릿 비교의 1차 판정(결정적, 토글과 무관하게 모든 템플릿을 본다). 주석
-# 제거 뒤 남는 빈 줄·공백만 있는 줄은 전부 버리고 남은 줄만 rstrip 해서 찍는다 — 주석
-# 블록의 줄 수 자체가 바뀌면(압축·확장) 그 자리에 남는 빈 줄 수도 달라지는데, 그 차이까지
-# "코드가 바뀜" 으로 보면 주석만 압축한 커밋도 걸린다.
+# tpl_code <파일> [notes]: {{/* … */}} 블록(공백 트림 표식 포함, 여러 줄 비탐욕)을 뗀
+# 템플릿 소스 — 템플릿 비교의 1차 판정(결정적, 토글과 무관하게 모든 템플릿을 본다). 두
+# 번째 인자가 notes 가 아니면 추가로 # 로 시작하는 전체 줄을 떼고, 남는 빈 줄·공백만
+# 있는 줄을 전부 버리고 남은 줄만 rstrip 해서 찍는다 — 주석 블록의 줄 수 자체가
+# 바뀌면(압축·확장) 그 자리에 남는 빈 줄 수도 달라지는데, 그 차이까지 "코드가 바뀜" 으로
+# 보면 주석만 압축한 커밋도 걸린다. notes(NOTES.txt)는 # 줄과 빈 줄이 사용자에게 그대로
+# 보이는 출력이라 그 둘은 안 건드리고 {{/* */}} 제거 결과를 그대로 찍는다.
 tpl_code() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${2:-}" <<'PY'
 import re, sys
 s = open(sys.argv[1], encoding='utf-8').read()
 s = re.sub(r'\{\{-?\s*/\*.*?\*/\s*-?\}\}', '', s, flags=re.S)
-s = re.sub(r'^\s*#.*$', '', s, flags=re.M)
-for line in s.split('\n'):
-    line = line.rstrip()
-    if line.strip():
-        print(line)
+if sys.argv[2] == 'notes':
+    print(s)
+else:
+    s = re.sub(r'^\s*#.*$', '', s, flags=re.M)
+    for line in s.split('\n'):
+        line = line.rstrip()
+        if line.strip():
+            print(line)
 PY
 }
 # render_scrub: 렌더 출력(여러 YAML 문서)을 적재해 인증서·CA 필드를 재귀로 지운 뒤 비교용으로 찍는다.
@@ -98,7 +106,7 @@ check() {
     case "$status" in
       A|D|R*|C*|T)
         case "$path" in
-          *.go|*.sh|*.yaml|*.yml|*.tpl|*.py|*.mk|*.json|*.toml|go.mod|go.sum|*/go.mod|*/go.sum|Makefile|*/Makefile|Dockerfile*|*/Dockerfile*)
+          *.go|*.sh|*.yaml|*.yml|*.tpl|*.py|*.mk|*.json|*.toml|*.html|go.mod|go.sum|*/go.mod|*/go.sum|Makefile|*/Makefile|Dockerfile*|*/Dockerfile*)
             bad "코드 파일 추가·삭제·이름 변경: $status $path" ;;
         esac
         continue ;;
@@ -115,7 +123,17 @@ check() {
           cmp -s "$tmp/gb.txt" "$tmp/gh.txt" || bad "Go 코드가 바뀜: $path"
         fi
         cmp -s <(go_markers "$tmp/base") <(go_markers "$tmp/head") || bad "Go 표식 주석이 바뀜: $path" ;;
-      deploy/helm/templates/*|*.tpl) templates=1 ;;
+      *.tpl)
+        # 위치와 무관하게 직접 비교(렌더 보조 비교는 deploy/helm 안에 있을 때만 같이 켠다).
+        rc_b=0; tpl_code "$tmp/base" > "$tmp/tb.txt" 2>/dev/null || rc_b=$?
+        rc_h=0; tpl_code "$tmp/head" > "$tmp/th.txt" 2>/dev/null || rc_h=$?
+        if [ "$rc_b" -ne 0 ] || [ "$rc_h" -ne 0 ]; then
+          bad "파싱 실패: $path"
+        else
+          cmp -s "$tmp/tb.txt" "$tmp/th.txt" || bad "템플릿 코드가 바뀜: $path"
+        fi
+        case "$path" in deploy/helm/templates/*) templates=1 ;; esac ;;
+      deploy/helm/templates/*) templates=1 ;;
       config/crd/bases/*.yaml|internal/crdapply/crd/*.yaml|deploy/helm/crds/*.yaml)
         rc_b=0; yaml_data "$tmp/base" nodesc > "$tmp/yb.txt" 2>/dev/null || rc_b=$?
         rc_h=0; yaml_data "$tmp/head" nodesc > "$tmp/yh.txt" 2>/dev/null || rc_h=$?
@@ -135,8 +153,17 @@ check() {
       *.sh|*.py|*.mk|Makefile|*/Makefile|Dockerfile*|*/Dockerfile*)
         cmp -s <(strip_hash "$tmp/base") <(strip_hash "$tmp/head") || bad "주석 밖 본문이 바뀜: $path"
         [ "$(head -n1 "$tmp/base")" = "$(head -n1 "$tmp/head")" ] || bad "첫 줄이 바뀜: $path" ;;
-      *.md|*.txt|LICENSE*|*/LICENSE*|OWNERS|PROJECT|.gitignore|.dockerignore|*/.gitignore|*/.dockerignore) ;;
-      *) bad "검사 규칙이 없는 파일 종류: $path" ;;
+      *.html)
+        cmp -s <(strip_html "$tmp/base") <(strip_html "$tmp/head") || bad "주석 밖 본문이 바뀜: $path" ;;
+      *.md|*.txt|LICENSE|LICENSE.*|*/LICENSE|*/LICENSE.*|OWNERS|PROJECT|.gitignore|.dockerignore|*/.gitignore|*/.dockerignore) ;;
+      *)
+        # 확장자로 못 가른 파일은 첫 줄 shebang 으로 셸·파이썬만 가른다(그 밖은 그대로 FAIL).
+        if [[ "$(head -n1 "$tmp/head" 2>/dev/null)" =~ ^#!.*((ba)?sh|python[0-9.]*)([[:space:]]|$) ]]; then
+          cmp -s <(strip_hash "$tmp/base") <(strip_hash "$tmp/head") || bad "주석 밖 본문이 바뀜: $path"
+          [ "$(head -n1 "$tmp/base")" = "$(head -n1 "$tmp/head")" ] || bad "첫 줄이 바뀜: $path"
+        else
+          bad "검사 규칙이 없는 파일 종류: $path"
+        fi ;;
     esac
   done <<< "$list"
   if [ "$templates" -eq 1 ]; then
@@ -147,8 +174,9 @@ check() {
       rel="${bf#"$tmp/b/"}"
       hf="$tmp/h/$rel"
       [ -f "$hf" ] || continue
-      cmp -s <(tpl_code "$bf") <(tpl_code "$hf") || bad "템플릿 코드가 바뀜: $rel"
-    done < <(find "$tmp/b/deploy/helm" \( -path '*/templates/*' -o -name '*.tpl' \) -type f -print0)
+      mode=""; [ "$(basename "$bf")" = "NOTES.txt" ] && mode="notes"
+      cmp -s <(tpl_code "$bf" "$mode") <(tpl_code "$hf" "$mode") || bad "템플릿 코드가 바뀜: $rel"
+    done < <(find "$tmp/b/deploy/helm" -path '*/templates/*' ! -name '*.tpl' -type f -print0)
     if command -v helm >/dev/null; then
       render_pass "기본값"
       [ -f "$tmp/b/deploy/helm/values-k8s1.34.yaml" ] && render_pass "values-k8s1.34.yaml" "values-k8s1.34.yaml"
@@ -161,7 +189,7 @@ check() {
 }
 
 # self_test: Go·YAML·셸 픽스처(통과 1·위반 4) 에 템플릿 통과·템플릿 위반·알 수 없는 리비전·
-# CRD(통과+위반) 를 더해 아홉 경우를 본다.
+# CRD(통과+위반)·확장자 없는 셸(통과+위반)·HTML(통과+위반) 을 더해 열한 경우를 본다.
 self_test() {
   local r rc out
   r="$(mktemp -d)"
@@ -196,27 +224,32 @@ self_test() {
   printf '#!/usr/bin/env bash\n# 새 머리말\necho bye # 새 꼬리\n' > "$r/s.sh"; commit c5
   rc=0; out="$(run_check)" || rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"주석 밖 본문이 바뀜"* ]] || { echo "self-test 5: 종료 $rc '$out'" >&2; return 1; }
-  # 6) 꺼진 템플릿의 {{/* */}} 문구만 바꿈(3줄→1줄로 압축, 줄 수 변화) → 통과
+  # 6) 꺼진 템플릿의 # 전체 줄 주석 3→1 압축(빈 줄 수 변화) + 항상 렌더되는 인증서
+  #    템플릿의 주석만 변경(스크럽 없으면 매번 다른 tls.crt 로 렌더가 갈린다) → 둘 다 통과
   mkdir -p "$r/deploy/helm/templates"
   printf 'apiVersion: v2\nname: x\nversion: 0.1.0\n' > "$r/deploy/helm/Chart.yaml"
   printf 'x: false\n' > "$r/deploy/helm/values.yaml"
-  printf '{{- if .Values.x }}\n{{/*\n설명 하나\n*/}}\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm\n{{- end }}\n' \
+  printf '{{- if .Values.x }}\n# 설명 하나\n# 설명 둘\n# 설명 셋\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm\n{{- end }}\n' \
     > "$r/deploy/helm/templates/off.yaml"
+  printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: x-cert\n# 인증서 하나\ndata:\n  tls.crt: {{ (genCA "x" 1).Cert | b64enc }}\n' \
+    > "$r/deploy/helm/templates/cert.yaml"
   commit c6base
-  printf '{{- if .Values.x }}\n{{/* 설명 둘 */}}\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm\n{{- end }}\n' \
+  printf '{{- if .Values.x }}\n# 설명 하나로 합침\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm\n{{- end }}\n' \
     > "$r/deploy/helm/templates/off.yaml"
+  printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: x-cert\n# 인증서 하나로 수정\ndata:\n  tls.crt: {{ (genCA "x" 1).Cert | b64enc }}\n' \
+    > "$r/deploy/helm/templates/cert.yaml"
   commit c6
   rc=0; out="$(run_check)" || rc=$?
   [ "$rc" -eq 0 ] || { echo "self-test 6: 종료 $rc '$out'" >&2; return 1; }
-  # 7) 꺼진 템플릿의 코드(ConfigMap 이름) 변경 → 실패(렌더 결과는 둘 다 빈 채로 같다)
-  printf '{{- if .Values.x }}\n{{/* 설명 둘 */}}\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm-renamed\n{{- end }}\n' \
+  # 7) 꺼진 템플릿의 코드(ConfigMap 이름) 변경 → 실패(인증서 템플릿은 안 건드림)
+  printf '{{- if .Values.x }}\n# 설명 하나로 합침\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: off-cm-renamed\n{{- end }}\n' \
     > "$r/deploy/helm/templates/off.yaml"
   commit c7
   rc=0; out="$(run_check)" || rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"템플릿 코드가 바뀜"* ]] || { echo "self-test 7: 종료 $rc '$out'" >&2; return 1; }
   # 8) 알 수 없는 리비전 → 종료 2
   rc=0; out="$( (cd "$r" && check deadbeef HEAD) 2>&1 )" || rc=$?
-  [ "$rc" -eq 2 ] && [[ "$out" == *"알 수 없는 리비전"* ]] || { echo "self-test 8: 종료 $rc '$out'" >&2; return 1; }
+  [ "$rc" -eq 2 ] && [[ "$out" == *"알 수 없는 리비전: deadbeef"* ]] || { echo "self-test 8: 종료 $rc '$out'" >&2; return 1; }
   # 9) CRD 꼴 YAML: description 만 바꾸면 통과, enum 값을 바꾸면 실패
   mkdir -p "$r/config/crd/bases"
   printf 'a:\n  description: 하나\n  enum: [c, d]\n' > "$r/config/crd/bases/x.yaml"
@@ -229,6 +262,28 @@ self_test() {
   commit c9fail
   rc=0; out="$(run_check)" || rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"CRD 가 description 밖에서 바뀜"* ]] || { echo "self-test 9b: 종료 $rc '$out'" >&2; return 1; }
+  # 10) 확장자 없는 셸(shebang 으로 판정): 꼬리 주석만 바꾸면 통과, 본문을 바꾸면 실패
+  printf '#!/bin/bash\n# 머리말\necho hi # 꼬리\n' > "$r/probe"
+  commit c10base
+  printf '#!/bin/bash\n# 새 머리말\necho hi # 새 꼬리\n' > "$r/probe"
+  commit c10pass
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 10a: 종료 $rc '$out'" >&2; return 1; }
+  printf '#!/bin/bash\n# 새 머리말\necho bye # 새 꼬리\n' > "$r/probe"
+  commit c10fail
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"주석 밖 본문이 바뀜"* ]] || { echo "self-test 10b: 종료 $rc '$out'" >&2; return 1; }
+  # 11) HTML: <script> 의 전행 // 주석만 바꾸면 통과, CSS 셀렉터(# 로 시작하는 줄)를 바꾸면 실패
+  printf '<html>\n<style>\n#a { color: red }\n</style>\n<script>\n// 설명 하나\nvar x = 1;\n</script>\n</html>\n' > "$r/u.html"
+  commit c11base
+  printf '<html>\n<style>\n#a { color: red }\n</style>\n<script>\n// 설명 둘\nvar x = 1;\n</script>\n</html>\n' > "$r/u.html"
+  commit c11pass
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 11a: 종료 $rc '$out'" >&2; return 1; }
+  printf '<html>\n<style>\n#b { color: red }\n</style>\n<script>\n// 설명 둘\nvar x = 1;\n</script>\n</html>\n' > "$r/u.html"
+  commit c11fail
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"주석 밖 본문이 바뀜"* ]] || { echo "self-test 11b: 종료 $rc '$out'" >&2; return 1; }
   echo "self-test ok"
 }
 

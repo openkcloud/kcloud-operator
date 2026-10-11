@@ -1,7 +1,7 @@
 // ============================================================
 // acpp_restore_mode_test.go: 삭제 시 MIG 모드 복원 envtest
 // 상세: 기본값에서는 아무것도 바뀌지 않고, 복원 정책에서만 모드 해제와 재부팅이 일어난다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-11 (작업공간 경로 인용 제거)
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -51,14 +51,12 @@ var _ = Describe("deletion restores MIG mode", func() {
 		seedDeletableRecord(acpp, node)
 
 		// 이미지를 실제로 설정한다 — 미설정이면 RequestReboot 이 "이미지 없음" 으로 먼저 실패해
-		// Job 이 안 생기고, 그러면 아래 rebootJobFor 부재 확인이 정책 분기 때문이 아니라 그
-		// 우연 때문에 통과해 버린다(실측 확인: 브리핑 원본은 이 설정이 없었고, steps 변수도
-		// 선언만 되고 검증되지 않았다 — 뮤테이션으로 실제 확인함).
+		// Job 이 안 생기고, 그러면 아래 rebootJobFor 부재 확인이 정책 분기가 아니라 그 우연
+		// 때문에 통과해 버린다(뮤테이션으로 확인: 이미지를 안 설정하면 이 확인이 늘 통과한다).
 		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
-		// 총 실행 step 수가 아니라 -mig 0 명령 수만 센다 — 기존 삭제 경로도 GI 회수용 명령을
-		// 같은 executor 로 실행하므로(hardwareChanged 분기의 b.Rollback), 총합으로 재면 그
-		// 정상적인 기존 명령까지 "복원 분기가 실행됐다" 로 오판한다(실측으로 확인함: 처음에
-		// countingExec 로 재고 steps==0 을 기대했더니 정상 코드에서도 실패했다).
+		// 총 실행 step 수가 아니라 -mig 0 명령 수만 센다 — 기존 삭제 경로도 GI 회수 명령을 같은
+		// executor 로 실행하므로(hardwareChanged 분기의 b.Rollback), 총합으로 재면 그 정상적인
+		// 기존 명령까지 "복원 분기가 실행됐다" 로 오판한다.
 		disables := 0
 		r := nvidiaReconciler()
 		r.NvidiaExecFactory = func(client.Client) nvidia.Executor { return migZeroCountingExec{n: &disables} }
@@ -77,10 +75,9 @@ var _ = Describe("deletion restores MIG mode", func() {
 	It("issues a mode disable and schedules a reboot under the restore policy", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
-		// 브리핑 원본은 이 이미지를 설정하지 않았다 — 그러면 RequestReboot 이 Job 생성 전에
-		// "이미지 미설정" 오류로 먼저 실패해, 이 스펙의 두 단언(err 있음 + disables>0)이 실제
-		// 재부팅 예약과 무관하게 통과해 버린다(실측 확인: rebootJobFor 가 항상 NotFound). 이미지를
-		// 설정해야 "재부팅이 실제로 예약됐다" 를 검증하는 스펙이 된다.
+		// 이미지를 설정해야 한다 — 미설정이면 RequestReboot 이 Job 생성 전에 "이미지 미설정"
+		// 오류로 먼저 실패해, 이 스펙의 두 단언(err 있음 + disables>0)이 실제 재부팅 예약과
+		// 무관하게 통과해 버린다. 이미지를 설정해야 "재부팅이 실제로 예약됐다" 를 검증하는 스펙이 된다.
 		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-on-node"
 		labels := map[string]string{"kcloud.ai/restore-on": "true"}
@@ -111,7 +108,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 		DeferCleanup(wipeACPPs)
 		// 이미지를 설정해야 한다 — 미설정이면 이미 Disabled 판정을 건너뛰는 뮤테이션이 들어와도
 		// RequestReboot 이 "이미지 없음" 으로 먼저 실패해 아래 rebootJobFor 부재 확인이 우연히
-		// 통과해 버린다(실측 확인).
+		// 통과해 버린다.
 		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		node := "restore-done-node"
 		labels := map[string]string{"kcloud.ai/restore-done": "true"}
@@ -134,15 +131,11 @@ var _ = Describe("deletion restores MIG mode", func() {
 		Expect(jerr).To(HaveOccurred(), "이미 해제된 모드인데 재부팅을 예약했다")
 	})
 
-	// 증명: 관측이 불확실하면(관측 오류) 모드를 건드리지 않는다.
-	//       상태를 모르는 채 재부팅을 예약하는 것이 이 경로에서 가장 위험한 행동이다.
-	// 깨는 뮤테이션: ModeObservable 게이트를 빼면 관측 실패에도 명령이 나가 실패한다.
-	//
-	// handleNvidiaDeletion 을 통째로 부르지 않고 restoreMigModeDisabled 를 직접 부른다 —
-	// assertMigEmptyAndBaseline 이 이미 자신의 기준(o.Err != "")으로 관측 오류를 먼저 거절해서,
-	// handleNvidiaDeletion 경유로는 이 함수의 ModeObservable 게이트에 절대 도달하지 못한다
-	// (실측 확인: 이 함수를 통째로 부르는 버전은 ModeObservable 을 통째로 지우는 뮤테이션에도
-	// 통과했다). 그래서 이 함수 자신의 fail-closed 규율을 직접 확인한다.
+	// 증명: 관측이 불확실하면(관측 오류) 모드를 건드리지 않는다 — 상태를 모르는 채 재부팅을
+	// 예약하는 것이 이 경로에서 가장 위험한 행동이다. handleNvidiaDeletion 경유로는
+	// assertMigEmptyAndBaseline 이 관측 오류를 먼저 거절해 이 함수의 ModeObservable 게이트에
+	// 도달하지 못하므로, restoreMigModeDisabled 를 직접 불러 이 함수 자신의 fail-closed 규율을
+	// 확인한다. 깨는 뮤테이션: ModeObservable 게이트를 빼면 관측 실패에도 명령이 나간다.
 	It("refuses to touch the mode when observation is unreliable", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -258,16 +251,12 @@ var _ = Describe("deletion restores MIG mode", func() {
 		// 관측할 수는 없지만, 그 상위 호출자가 err 하나만 보고 결정한다는 사실은 코드로 고정돼 있다.
 	})
 
-	// 증명(자기봉쇄 결함 고정): RestoreMode 로 모드 해제가 실제로 성공하고 재부팅이 끝나
-	// 재관측이 Disabled 를 보고하면, **바로 다음 reconcile pass** 에서 정리가 끝난다.
-	// assertMigEmptyAndBaseline 은 모든 pass 에서 무조건 먼저 불리므로, allowModeDisabled 가
-	// 실제로 효과가 없으면 이 두 번째 pass 가 "MIG not enabled after rollback (current=Disabled)"
-	// 로 다시 막힌다 — 복원이 성공한 바로 그 사실 때문에 정리가 영원히 안 끝나는 역설이다.
-	// 앞의 네 스펙은 전부 handleNvidiaDeletion 을 **한 번**만 불러 이 두 번째 pass 를 구성하지
-	// 않으므로 이 역설을 가둘 수 없었다(team-lead 실측 지적: allowModeDisabled = false 를
-	// 강제해도 전체 스위트가 green 이었다).
-	// 깨는 뮤테이션: assertMigEmptyAndBaseline 안에서 allowModeDisabled 를 무력화(강제 false)
-	// 하면 두 번째 pass 가 다시 오류를 낸다.
+	// 증명(자기봉쇄 결함 고정): RestoreMode 로 모드 해제가 성공하고 재부팅이 끝나 재관측이 Disabled
+	// 를 보고하면, 바로 다음 pass 에서 정리가 끝나야 한다. assertMigEmptyAndBaseline 은 매 pass 먼저
+	// 불리므로, allowModeDisabled 가 효과가 없으면 이 pass 도 "MIG not enabled after rollback" 으로
+	// 다시 막혀 복원 성공 자체가 정리를 영원히 못 끝내는 역설이 된다. 앞의 스펙들은
+	// handleNvidiaDeletion 을 한 번만 불러 이 두 번째 pass 를 만들지 않으므로 이 역설을 못 잡는다.
+	// 깨는 뮤테이션: allowModeDisabled 를 강제로 false 로 두면 두 번째 pass 가 다시 오류를 낸다.
 	It("completes cleanup on the pass after mode disable succeeds and reboot completes", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -366,8 +355,8 @@ var _ = Describe("deletion restores MIG mode before checking the advertisement b
 	// 증명: 조각이 회수됐지만 MIG mode 가 아직 켜져 있어 광고가 baseline 에 못 미치는 상태에서도
 	// 모드 해제 명령이 나간다. mixed 전략에서 mode 가 켜진 채 조각이 없는 GPU 는 아무것도 광고하지
 	// 않으므로 이 상태는 RestoreMode 삭제가 **반드시** 지나는 구간이다.
-	// 깨는 뮤테이션: baseline 확인을 모드 복원보다 앞에 두면(2026-08-05 이전 순서) baseline 미달로
-	// 먼저 반환해 해제 명령이 영영 안 나가고 finalizer 가 영구히 남는다.
+	// 깨는 뮤테이션: baseline 확인을 모드 복원보다 앞에 두면 baseline 미달로 먼저 반환해 해제
+	// 명령이 영영 안 나가고 finalizer 가 영구히 남는다.
 	It("issues the mode disable while the advertisement is still below baseline", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)

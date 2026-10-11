@@ -1,10 +1,8 @@
 // ============================================================
 // state_machine_test.go: UpgradeStateMachine 단위 테스트
-// 상세: PreviousImage broken tag sanitization 검증
-//       Rollback exhaustion → Failed 터미널 정지 검증
-//       소비된 rollback 요청 어노테이션 재소비 차단 검증
-//       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-28 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
+// 상세: PreviousImage broken tag 정리, Rollback 소진 시 Failed 터미널 정지, 소비된 rollback
+//       요청 어노테이션 재소비 차단을 fake client 로 검증한다.
+// 생성일: 2026-04-28 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -77,8 +75,8 @@ func makeIdleDIP(name, vendor, version string) *v1alpha1.DriverInstallPolicy {
 }
 
 // TestPreviousImage_BrokenTag_Cleared 는 reconcile 진입 시 plain tag (예: ":580.142") 가
-// PreviousImage 에 잔류하는 경우 자동 정리됨을 검증한다.
-// (architectural plan §3.4 defense-in-depth: broken tag rollback 회귀 차단)
+// PreviousImage 에 잔류하는 경우 자동 정리됨을 검증한다 — broken plain tag 가 rollback 시
+// 그대로 쓰이는 회귀를 막는다.
 func TestPreviousImage_BrokenTag_Cleared(t *testing.T) {
 	const (
 		nodeName    = "worker-sanitize-broken"
@@ -134,7 +132,7 @@ func TestPreviousImage_VerifiedTag_Kept(t *testing.T) {
 
 // TestHandleIdle_EmptyState_NormalizedToIdle 는 state="" 인 신규 DUS 가 현재버전==목표버전
 // 이어서 업그레이드 사이클을 거치지 않을 때, handleIdle 이 status.state 를 Idle 로 1회
-// 정규화함을 검증한다. (라이브 재배포 시 DUS state 가 빈 문자열로 남던 cosmetic nit 회귀 방지)
+// 정규화해 `kubectl get dus` STATE 가 빈 문자열로 남지 않게 하는지 검증한다.
 func TestHandleIdle_EmptyState_NormalizedToIdle(t *testing.T) {
 	const (
 		nodeName = "worker-empty-normalize"
@@ -369,8 +367,8 @@ func makeRollbackDUS(name, nodeName, vendor string, attempts int32) *v1alpha1.Dr
 }
 
 // TestRollbackExhaustion_TransitionsToFailed 는 RollbackAttempts 가 maxRollbackAttempts 에
-// 도달한 상태에서 단 1 회의 reconcile 호출만으로 Failed 터미널 상태로 전이됨을 검증한다.
-// (architectural plan §R1 — rollback infinite-loop 차단)
+// 도달한 상태에서 단 1 회의 reconcile 호출만으로 Failed 터미널 상태로 전이됨을 검증한다 —
+// 무한 롤백 루프를 막는 차단선이다.
 func TestRollbackExhaustion_TransitionsToFailed(t *testing.T) {
 	const (
 		nodeName = "k8s-worker1"
@@ -463,10 +461,9 @@ func podWithResource(resourceName string) *corev1.Pod {
 }
 
 // TestPodUsesDevice_RecognizesEveryVendorResource 는 podUsesDevice(hasDeviceWorkloads 와
-// evictDevicePods 가 함께 쓰는 판정)가 등록된 벤더 넷의 가속기 리소스를 모두 인식하는지
-// 본다. rebellions.ai/ATOM 은 한때 이 판정의 하드코딩 목록에서 빠져 있었다 — 드라이버
-// 업그레이드 drain 이 rebellions ATOM 파드를 장치 파드로 못 알아봐 PDB 를 존중하는
-// eviction 대상에서 제외할 위험이 있었다(2026-09-28).
+// evictDevicePods 가 함께 쓰는 판정)가 등록된 벤더 넷의 가속기 리소스를 모두 인식하는지 본다.
+// 하드코딩 목록에서 벤더 하나라도 빠지면, 그 벤더의 파드가 드라이버 업그레이드 drain 에서 장치
+// 파드로 인식되지 못해 PDB 를 존중하는 eviction 대상에서 빠진다.
 func TestPodUsesDevice_RecognizesEveryVendorResource(t *testing.T) {
 	cases := []struct {
 		name     string

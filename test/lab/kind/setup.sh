@@ -1,19 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # setup.sh: kind 실험 클러스터(kcloud-lab) 부트스트랩 — CRD 적용 + operator 클러스터 밖 구동
-# 상세: `.91` 운영 클러스터와 완전히 분리된 kind 클러스터를 만들고 operator CRD 를
-#       적용한 뒤, operator 를 `make run` 으로 클러스터 밖(호스트)에서 백그라운드
-#       구동한다. 이미지 로드나 웹훅 인증서 설정이 필요 없는 가장 가벼운 방법이다.
-#       이 호스트는 docker 를 sudo 로만 쓸 수 있어 kind 도 sudo 로 구동하고,
-#       kubeconfig 만 현재 사용자 소유로 바꿔 이후 kubectl/make 호출에 쓴다.
-#       CRD 는 `deploy/helm/crds/`(helm 차트가 배포하는 전체 13개 세트, config/crd/bases
-#       와 diff -r 로 내용이 같음을 확인함)를 kustomize 없이 차트가 배포하는 CRD
-#       디렉터리 그대로 kubectl apply 한다(kustomization 목록은 2026-09-21 에 13개로
-#       맞췄고 make crd-check 가 지킨다).
-#       재실행해도 안전(idempotent) — 클러스터가 이미 있으면 재사용하고, operator 가
-#       이미 떠 있으면 다시 띄우지 않는다. DRY_RUN=1 이면 실행할 명령만 출력하고
-#       아무것도 하지 않는다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-21 (CRD 적용 서술 정정)
+# 상세: `.91` 운영 클러스터와 분리된 kind 클러스터를 만들고 operator CRD 를 적용한 뒤,
+#       operator 를 `make run` 으로 호스트에서 백그라운드 구동한다(이미지 로드·웹훅
+#       인증서 설정 불필요). docker 가 sudo 전용인 호스트라 kind 도 sudo 로 구동하고
+#       kubeconfig 만 현재 사용자 소유로 바꾼다. 재실행 안전, DRY_RUN=1 지원.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -63,9 +55,9 @@ else
 fi
 
 # --- 2. CRD 적용 ------------------------------------------------------------
-# deploy/helm/crds/ 는 helm 차트가 실제로 배포하는 CRD 전체 세트(13개)다. kustomize
-# 없이 차트가 배포하는 CRD 디렉터리를 그대로 적용한다(kustomization 목록은
-# 2026-09-21 에 13개로 맞췄고 make crd-check 가 지킨다).
+# deploy/helm/crds/ 는 helm 차트가 실제로 배포하는 CRD 전체 세트(13개)이고, config/crd/bases/
+# 와 diff -r 기준으로 내용이 같다(make crd-check 가 이 일치를 지킨다). kustomize 없이 차트가
+# 배포하는 CRD 디렉터리를 그대로 적용한다.
 log "CRD 적용(kubectl apply -f deploy/helm/crds/)"
 env KUBECONFIG="$KUBECONFIG_PATH" kubectl apply -f "$CRD_DIR/"
 

@@ -1,26 +1,8 @@
 # ============================================================
 # workload.py: Rebellions ATOM 에서 컴파일한 행렬곱 모델을 반복 실행해 초당 처리량 측정
-# 상세: PHASE·DURATION·DEVICE_ID·MATMUL_DIM·START_AT env 를 읽어 torch Linear(K,K) 를
-#       rebel.compile_from_torch 로 컴파일(CPU 측)하고 create_runtime(device=DEVICE_ID) 으로
-#       장치를 연다. 워밍업 몇 회를 타이머 밖에서 돌린 뒤 DURATION 초 동안 runtime(x) 를 반복해
-#       초당 실행 횟수(iters_per_sec)를 낸다. 측정 후 "RESULT {json}" 한 줄(phase·iters·seconds·
-#       iters_per_sec·device_open_seconds·init_seconds·start·end·compile_seconds·compiled_from)과
-#       "metric=matmul_per_s value=<수>" 한 줄을 stdout 에 찍고 exit 0. 예외 시 error 를 담은
-#       RESULT json 을 찍고 exit 1.
-#       co-run 두 프로세스는 같은 DEVICE_ID(=0) 를 열어 같은 물리 장치를 공유한다 — 장치 두 장짜리
-#       노드에서 서로 다른 장치를 잡아 우연히 통과하는 것을 막으려 DEVICE_ID 로 고정한다.
-#       START_AT(epoch 초)이 있으면 워밍업 뒤 그 시각까지 대기했다 타이머를 시작해 co-run 두
-#       프로세스의 측정 창을 정렬한다(겹침 보장); 과거로 5초 넘게 지났으면 error 로 실패한다.
-#       초기화 시간을 따로 남긴다 — device_open_seconds(create_runtime 소요)와 init_seconds(프로세스
-#       시작→워밍업 종료). 동시 장치 open 이 직렬화되면 진 프로세스의 이 값이 늘어난다(Tenstorrent 선례).
-#
-#       RBLN_COMPILED_PATH 가 있으면 compile_from_torch 를 건너뛰고 그 경로의 파일을
-#       RBLNCompiledModel 로 적재한다(compile_seconds=0·compiled_from="file") — 파드 안
-#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
-#       컴파일은 호스트에서 PHASE=compile-only 로 한 번 하고 파드는 적재만
-#       한다(같은 모델 정의를 두 곳에 두지 않으려 같은 파일에 둔다). RBLN_NPU_NAME 은
-#       rebel.get_npu_name() 자동탐지가 실패할 때의 폴백이다.
-# 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 줄폭 재접음)
+# 상세: PHASE·DURATION·DEVICE_ID·MATMUL_DIM·START_AT·RBLN_COMPILED_PATH env 로 동작을 고르고
+#       RESULT/metric 줄을 stdout 에 낸다(필드·배리어·사전 컴파일 계약은 README 참고).
+# 생성일: 2026-09-25 | 수정일: 2026-10-11
 # ============================================================
 import os
 import sys

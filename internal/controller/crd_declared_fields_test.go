@@ -1,19 +1,10 @@
 // ============================================================
 // crd_declared_fields_test.go: 렌더된 CR 과 샘플이 CRD 에 선언된 필드만 쓰는지 고정한다
-// 상세: 게이트 전부가 초록인데 기본 설치가 API 서버에서 거절되는 구멍을 막는다. CRD 에서
-//
-//	필드를 지우고 values.schema.json 이나 샘플 동기화를 빠뜨리면, 렌더는 성공하고
-//	그 CR 이 미선언 필드를 싣는다. kubectl 1.25+ 의 strict 서버 측 필드 검증은 그
-//	매니페스트를 거절하므로 설치가 깨진다. 실측(2026-10-05): 그 상태에서
-//	chart-default-check·footprint-check·crd-check·manifest-check·conformance 가
-//	전부 rc=0 이었다 — 렌더된 CR 을 CRD 스키마와 대조하는 검사가 하나도 없었다.
-//
-// 주의: 이 시험은 os/exec 로 helm 을 부른다. Go 테스트 캐시는 그 의존을 보지 못하므로 손으로
-//
-//	돌릴 때는 `-count=1` 을 붙일 것(`make test` 는 -coverprofile 로 캐시를 끈다).
-//	helm 부재 판정은 helm_presence_test.go 의 helmBinary 하나다 — CI 면 하드 실패한다.
-//
-// 생성일: 2026-10-05
+// 상세: 게이트 전부가 초록이어도 기본 설치가 API 서버에서 거절되는 구멍을 막는다. CRD 에서
+// 필드를 지우고 values.schema.json 이나 샘플 동기화를 빠뜨리면 렌더는 성공하지만 그 CR 이
+// 미선언 필드를 싣고, kubectl 1.25+ 의 strict 서버 측 필드 검증이 그 매니페스트를 거절해
+// 설치가 깨진다. 다른 어떤 게이트도 렌더된 CR 을 CRD 스키마와 대조하지 않는다.
+// 생성일: 2026-10-05 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -78,7 +69,7 @@ func crdSchemas(t *testing.T) map[string]map[string]any {
 // undeclaredFields 는 obj 의 필드를 schema 와 대조해 선언되지 않은 필드 경로를 모은다.
 func undeclaredFields(path string, obj any, schema map[string]any, out *[]string) {
 	if schema == nil {
-		// 부모가 하위 스키마를 주지 않았다 — 그 자리는 부모 쪽에서 이미 보고됐다.
+		// 부모가 하위 스키마를 주지 않는 경우다 — 그 자리는 부모 쪽에서 이미 보고한다.
 		return
 	}
 	// CRD 가 임의 키를 허용한다고 스스로 선언한 자리는 대조하지 않는다. 지금 생성물에는
@@ -181,6 +172,9 @@ func chartPresets(t *testing.T) [][]string {
 // 차트가 렌더하는 CR 전부가 생성된 CRD 에 선언된 필드만 써야 한다. 하나라도 어긋나면
 // 그 설치는 kubectl 1.25+ 에서 거절된다 — 렌더가 성공했다는 사실이 설치 가능을 뜻하지
 // 않는다. values.schema.json 은 키를 받고 CRD 는 거절하는 어긋남이 바로 이 구멍이다.
+//
+// os/exec 로 helm 을 부르므로 Go 테스트 캐시가 그 의존을 못 본다 — 손으로 돌릴 때는
+// `-count=1` 을 붙일 것. helm 부재 판정은 helm_presence_test.go 의 helmBinary 하나다.
 func TestRenderedCustomResourcesUseOnlyDeclaredFields(t *testing.T) {
 	schemas := crdSchemas(t)
 	for _, args := range chartPresets(t) {
@@ -205,9 +199,8 @@ func TestRenderedCustomResourcesUseOnlyDeclaredFields(t *testing.T) {
 }
 
 // config/samples 의 CR 도 같은 대조를 받는다. 샘플은 사람이 그대로 적용하는 경로라
-// 거절되는 샘플은 차트 결함과 같은 값이다. 2026-10-05 에 CRD 필드를 지우면서 샘플 둘의
-// toolkit.method·toolkit.version 을 빠뜨린 적이 있다 — toolkit.version 은 살아 있는
-// driver.version 과 키 이름이 같아 grep 으로 구별되지 않고, 이 구조 대조만 잡는다.
+// 거절되는 샘플은 차트 결함과 같은 값이다. toolkit.version 은 살아 있는 driver.version 과
+// 키 이름이 같아 단순 grep 으로는 누락을 구별할 수 없다 — 이 구조 대조만 잡는다.
 func TestSampleCustomResourcesUseOnlyDeclaredFields(t *testing.T) {
 	schemas := crdSchemas(t)
 	files, err := filepath.Glob("../../config/samples/*.yaml")

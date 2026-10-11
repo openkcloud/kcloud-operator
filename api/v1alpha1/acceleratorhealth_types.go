@@ -1,9 +1,7 @@
 // ============================================================
 // acceleratorhealth_types.go: 노드별 health 상태 CR (R&D base v0.1 §9.5)
 // 상세: 이름은 노드 이름이다(노드당 하나). status 만 쓰이며 spec 은 관측 대상 식별만 담는다.
-//
-//	AcceleratorEvidence 가 "그때 정말 그랬는가" 라면 이것은 "지금도 그런가" 다.
-//
+// AcceleratorEvidence 가 "그때 정말 그랬는가" 라면 이것은 "지금도 그런가" 다.
 // 생성일: 2026-08-04
 // ============================================================
 package v1alpha1
@@ -58,8 +56,8 @@ type AcceleratorHealthStatus struct {
 	// RecoveryFailures 는 종점 실패로 끝난 복구 작업 수다(격리 임계의 입력).
 	// +optional
 	RecoveryFailures int32 `json:"recoveryFailures,omitempty"`
-	// SuspectedAt 은 광고 불일치를 처음 본 시각이다. 유예 계산이 이 값을 쓴다 —
-	// condition 의 전이 시각에 얹으면 재검증 pass 가 매번 지워 유예가 영영 안 찬다(Stage 1 D-7).
+	// SuspectedAt 은 광고 불일치를 처음 본 시각이다. 유예 계산이 이 값을 쓴다 — condition 의
+	// 전이 시각에 얹으면 재검증 pass 가 매번 지워 유예가 영영 안 찬다.
 	// +optional
 	SuspectedAt *metav1.Time `json:"suspectedAt,omitempty"`
 	// Devices 는 장치별 판정이다(장치 단위 신호가 없으면 비어 있다).

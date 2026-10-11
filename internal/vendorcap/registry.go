@@ -1,12 +1,9 @@
 // ============================================================
 // registry.go: 벤더×제품×능력 선언 레지스트리(명세서 층)
-// 상세: "벤더가 무엇을 할 수 있다고 우리가 선언했는가"만 담는다. 실측 결과(성적표 층)는
-//
-//	pkg/npuctl 이 evidence 를 조인해 따로 낸다. 새 CRD 없이 Go 리터럴 하나가 정본이고,
-//	호환성 매트릭스 문서는 여기서 생성된다. 정직성: Unsupported/Unknown 은 Reason 필수,
-//	Native/Software 는 Source 필수(registry_test 가 강제).
-//
-// 생성일: 2026-09-19 | 수정일: 2026-09-28
+// 상세: "벤더가 무엇을 할 수 있다고 선언했는가"만 담는다 — 실측(성적표 층)은 pkg/npuctl
+// 이 evidence 를 조인해 따로 낸다. 새 CRD 없이 이 Go 리터럴이 정본이고, 호환성 매트릭스
+// 문서는 여기서 생성된다. Reason/Source 필수 제약은 아래 생성자 주석 참고.
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 // ============================================================
 package vendorcap
 
@@ -51,14 +48,10 @@ const (
 type Key struct{ Vendor, Product string }
 
 // AssuranceLevel 은 그 능력을 어디까지 확인했는지를 나타낸다. State 와 나누는 이유는
-// "구현했다" 와 "확인했다" 가 다른 물음이기 때문이다. 코드가 있어도 확인하지 않았을 수
-// 있고, 확인했어도 단위 시험까지일 수 있다. "Verification"·"Evidence" 는 이 저장소에서
-// 이미 다른 뜻으로 쓰인다 — Support.Verification 필드(v1alpha1.VerificationRequired 등,
-// apiserver/inventory.go 의 toSharingModeView 를 거쳐 API 로 나가 이름을 바꿀 수 없다),
-// AcceleratorEvidence CRD 와 그 Status.Level 용 v1alpha1.EvidenceLevelObserved/
-// FunctionallyVerified/AllocationVerified, pkg/npuctl.EvidenceView·d.Evidence(표시용
-// 사본). 그래서 이 기준은 세 번째 이름 Assurance 를 쓴다 — 이 능력 칸의 주장을 얼마나
-// 확신할 수 있는지를 뜻하며, 값은 직접 읽지 말고 Support.Assurance() 로 얻는다.
+// "구현했다" 와 "확인했다" 가 다른 물음이기 때문이다 — 코드가 있어도 확인하지 않았거나
+// 단위 시험까지만 확인했을 수 있다. "Verification"·"Evidence" 는 API 로 나가는
+// Support.Verification 필드와 AcceleratorEvidence CRD 가 이미 써 이름을 바꿀 수 없어,
+// 세 번째 이름 Assurance 를 쓴다. 값은 직접 읽지 말고 Support.Assurance() 로 얻는다.
 type AssuranceLevel string
 
 const (
@@ -94,6 +87,8 @@ func (s Support) Assurance() AssuranceLevel {
 	return s.assurance
 }
 
+// Unsupported/Unknown 은 Reason 이, Native/Software 는 Source 가 있어야 한다 —
+// registry_test.go 가 강제한다(여기서는 검증하지 않는다).
 func native(src string, tests ...string) Support {
 	return Support{State: StateNative, Verification: v1alpha1.VerificationRequired, Source: src, TestRefs: tests}
 }

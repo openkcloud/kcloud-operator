@@ -1,17 +1,10 @@
 // ============================================================
 // devicereset_participant.go: DeviceReset 작업 본체 — descriptor 의 resetCommand 를 노드에서 실행
-// 상세: AcceleratorDescriptor.spec.cleanup.resetCommand 를 실행하는 유일한 경로다. 관리자가
+// 상세: AcceleratorDescriptor.spec.cleanup.resetCommand 를 노드에서 실행하는 유일한 경로다.
 //
-//	AcceleratorOperation(type=DeviceReset, nodeName, vendor)을 만들 때만 돈다 — health 는
-//	이 작업을 만들지 않는다(되돌릴 수 없는 행동은 사람이 시작한다). 세 게이트를 전부
-//	통과해야 실행한다: (1) 그 노드가 관측한 제품의 정합한(거절되지 않은) descriptor 가
-//	requiresDeviceReset 과 resetCommand 를 선언, (2) 그 벤더·제품의 능력 레지스트리
-//	CapReset 이 Native·Software(Unsupported 는
-//	거절 — tenstorrent 의 tt-smi -r 은 호스트를 멈춘다, 2026-09-28 실측), (3) 그 노드에서
-//	그 벤더 장치를 쓰는 파드 0. 실행은 kcloud-host-exec 이미지의 privileged hostPID Job
-//	(nsenter)으로 하고 Job 의 성공·실패가 곧 결과다. 되돌리기는 없다 — Compensated 로만 보고한다.
+//	관리자가 만든 AcceleratorOperation(DeviceReset)에서만 돌며, 되돌릴 수 없어 Compensated 로만 보고한다.
 //
-// 생성일: 2026-09-30 | 수정일: 2026-10-01
+// 생성일: 2026-09-30 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -136,8 +129,9 @@ func (p *deviceResetParticipant) Apply(ctx context.Context, op *npuv1alpha1.Acce
 // resetGradeRefusal 은 장치 리셋 능력 등급이 실행을 막을 때의 거절 사유다(허용하면 빈
 // 문자열). 게이트 1 이 확정한 제품까지 넘겨 Lookup 으로 조회한다 — LookupVendor 는 그
 // 벤더의 아무 제품 값이나 물려주므로, 한 벤더의 두 제품 등급이 갈리면 Unsupported 제품에도
-// 통과가 난다. 제품이 비면 거절한다: 어느 제품의 등급을 본 것인지 모르는 채로 되돌릴 수 없는
-// 명령을 실행할 수 없다.
+// 통과가 난다. 제품이 비면 거절한다: 어느 제품의 등급을 본 것인지 모르는 채로 되돌릴 수
+// 없는 명령을 실행할 수 없다. tenstorrent 의 tt-smi -r 처럼 Unsupported 명령은 호스트를
+// 멈출 수 있어, 등급 게이트가 그 실행을 막는다.
 func resetGradeRefusal(t resetTarget) string {
 	if strings.TrimSpace(t.capProduct) == "" {
 		return fmt.Sprintf("%s descriptor 가 제품을 비워 둬 장치 리셋 등급을 확정할 수 없다", t.capVendor)
@@ -169,9 +163,8 @@ func deviceResetAttemptsFrom(journal []npuv1alpha1.OperationJournalEntry) int {
 
 // resetTargetFor 는 그 노드가 관측한 제품에 맞는 리셋 명령을 찾는다. 없거나 모호하면 거절 사유를
 // 돌려준다(두 번째 반환값). 벤더만 보고 목록의 첫 일치를 쓰면 혼재 노드에서 그 노드에 없는
-// 제품의 명령이 나온다 — 명령에는 장치 인덱스가 들어가므로 다른 장치를 리셋하게 된다.
-//
-// 관측 출처는 NodeDeviceReport 다. detector 가 직접 쓰는 기록이고 노드 이름으로 바로 읽히며,
+// 제품의 명령이 나온다 — 명령에는 장치 인덱스가 들어가므로 다른 장치를 리셋하게 된다. 관측
+// 출처는 NodeDeviceReport 다 — detector 가 직접 쓰는 기록이고 노드 이름으로 바로 읽히며,
 // 드라이버 정책이 없는 벤더에도 존재한다(DriverUpgradeState.status.observedModels 는 이 값에서
 // 파생되고 드라이버 관리 대상 벤더에만 있다).
 func (p *deviceResetParticipant) resetTargetFor(ctx context.Context, node, vendor string) (resetTarget, string, error) {

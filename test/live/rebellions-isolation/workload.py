@@ -1,20 +1,8 @@
 # ============================================================
 # workload.py: Rebellions ATOM 네 축(연산·용량·대역폭·장애) 격리 실측용 워크로드
-# 상세: rebellions-timeslice/workload.py 를 확장했다. PHASE·DURATION·DEVICE_ID·OP·MATMUL_DIM·
-#       BW_DIM·CHAIN_K·START_AT·BAD_SHAPE env 를 읽어 rebel 런타임으로 장치를 열고 반복 실행해
-#       초당 처리량을 낸다. OP=matmul(기본, 연산·장애 축)은 torch Linear(K,K) 하나,
-#       OP=chain(용량 축)은 Linear+ReLU 를 CHAIN_K 번 이어 붙여 device 메모리 점유를 키운다
-#       (2026-09-25 K-chain 실측: K=32·dim=2048 이 3.73초에 컴파일돼 컴파일 소요가 작음을 이미
-#       확인한 패턴의 재사용 — K=128 이면 가중치만 2GiB), OP=scale 은 x*2.0 원소별 곱셈 하나만
-#       둬 계산을 무시할 만큼 가볍게 하고 처리시간을 호스트↔장치 전송이 지배하게 한다(대역폭 축).
-#       BAD_SHAPE=1 이면 워밍업 뒤 정상 반복 대신 형상이 다른 입력으로 한 번 호출해 실패를
-#       강제한다(장애 축의 "잘못된 입력" 단계). START_AT(epoch 초)이 있으면 co-run 프로세스들의
-#       측정 창을 정렬하는 배리어로 쓴다(rebellions-timeslice 와 같은 계약: 5초 넘게 지났으면
-#       error 로 실패). 타이머 루프에 들어가기 직전 "PHASE_READY" 한 줄을 찍어, 컴파일 소요가
-#       읽기 어려운 축(용량)에서 measure-node.sh 가 그 줄을 기다렸다가 rbln-smi 를 찍게 한다 —
-#       고정 sleep 오프셋 추정 대신 실제 준비 시점을 신호로 쓴다. device_open_seconds·
-#       init_seconds 를 남겨 동시 open 이 직렬화되는지도 드러낸다(Tenstorrent 선례).
-# 생성일: 2026-09-28
+# 상세: PHASE·DURATION·DEVICE_ID·OP·MATMUL_DIM·BW_DIM·CHAIN_K·START_AT·BAD_SHAPE env 로 축을
+#       고르고 rebel 런타임으로 장치를 열어 반복 실행, RESULT/INIT/PHASE_READY 줄로 알린다.
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 import os
 import sys

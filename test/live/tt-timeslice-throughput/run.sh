@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: Tenstorrent Blackhole SW 시분할 실 워크로드 처리량 라이브 하네스(k8s-worker3)
-# 상세: NPUClusterPolicy 의 tenstorrent 를 끄면 벤더 device-plugin(kcloud/kcloud-tt-device-plugin)이
-#       회수된다. descriptor(sharing timeSliced replicas 2, /dev/tenstorrent/0)를 적용하면 생성된
-#       device-plugin 이 tenstorrent/blackhole-p150 을 2개로 광고한다. workload.py(ConfigMap
-#       tt-ts-workload)를 마운트한 파드가 그 리소스를 요청해 ttnn matmul 처리량을 잰다. 순서는
-#       solo(단독) → co-run(파드 2, 같은 장치, 동시) → solo(교대, 드리프트 상쇄)다. 판정: co-run 각
-#       파드가 solo 평균의 0.35~0.65배, 두 합이 solo 평균의 1.1배 이하, 두 파드 모두 완주, 그리고
-#       start/end 타임스탬프로 겹침 입증. 끝에 파드·descriptor·ConfigMap 을 지우고 tenstorrent 를
-#       다시 켜 벤더 device-plugin·광고를 복원하고 NDR validation.passed 를 확인한다(실패·중단 시에도
-#       trap 으로 복원). 자체 descriptor·ConfigMap·파드·NPUClusterPolicy 의 tenstorrent.enabled
-#       필드만 변경한다. k8s-worker3 는 tenstorrent 워크로드가 없는 검증 노드다. DRY_RUN=1 이면
-#       명령만 출력. co-run 은 START_AT 배리어(BARRIER_SECONDS)로 두 파드의 측정 창을 정렬해
-#       겹침을 보장한다 — 배리어 없이는 초기화 시차로 두 파드가 순차 실행돼 겹침이 0 이 된다.
-# 생성일: 2026-09-22 | 수정일: 2026-09-23
+# 상세: NPUClusterPolicy 를 끄고 descriptor 적용→측정(solo→co-run→solo)→판정→정리 순서로
+#       돈다(판정 기준·배리어는 README 참고). 자체 descriptor·ConfigMap·파드·tenstorrent.enabled 만 변경한다.
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -408,7 +398,7 @@ try:
     min_dur = min((ea - sa).total_seconds(), (eb - sb).total_seconds())
 except Exception:
     overlap, min_dur = 0.0, 0.0
-# R-H13: co-run 은 두 타이머 창이 DURATION 의 80% 이상 겹쳐야 유효(배리어의 5초 유예는 workload 쪽).
+# co-run 은 두 타이머 창이 DURATION 의 80% 이상 겹쳐야 유효(배리어의 5초 유예는 workload 쪽).
 duration = float(os.environ.get("DURATION", "60"))
 overlap_ok = overlap >= 0.8 * duration and overlap > 0
 half_a = 0.35 <= ratio_a <= 0.65

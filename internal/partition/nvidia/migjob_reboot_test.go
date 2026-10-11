@@ -1,11 +1,8 @@
 // ============================================================
 // migjob_reboot_test.go: 재부팅에 치인 MIG Job 의 탐지·재생성·상한 테스트
-// 상세: 2026-08-05 라이브 결함 3 — mode 복원 재부팅이 GI rollback Job 을 Pending 에 가두고,
-//
-//	결정론적 이름 탓에 이후 모든 pass 가 같은 죽은 Job 을 10분씩 기다려 ACPP 삭제가 영구 차단됐다.
-//	여기서 고정하는 것은 세 가지다: 죽은 Job 을 알아본다 / 건강한 Job 은 건드리지 않는다 / 재생성에 상한이 있다.
-//
-// 생성일: 2026-08-06
+// 상세: mode 복원 재부팅이 GI rollback Job 을 Pending 에 가두면 결정론적 이름 탓에 모든 pass 가
+// 같은 죽은 Job 을 기다린다. 여기서 고정: 죽은 Job 식별 / 건강한 Job 유지 / 재생성 상한.
+// 생성일: 2026-08-06 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -54,7 +51,7 @@ func nodeWithBootID(id string) *corev1.Node {
 	}
 }
 
-// inFlightJob 은 라이브에서 실제로 남았던 Job 을 재현한다: 파드는 만들어졌지만 실행된 적이 없어
+// inFlightJob 은 실제 결함과 같은 Job 상태를 재현한다: 파드는 만들어졌지만 실행된 적이 없어
 // Succeeded 도 Failed 도 0 이고, Job 은 영원히 그 상태에 머문다.
 func inFlightJob(name, cmdHash, stampedBootID, restarts string) *batchv1.Job {
 	job := renderMigJob(name, cmdHash, rebootTestNode, rebootTestSteps(), "kcloud-host-exec:v0.1.0")
@@ -150,7 +147,7 @@ func TestRunLeavesHealthyInFlightJobAlone(t *testing.T) {
 func TestRunBoundsRebootRecreates(t *testing.T) {
 	steps := rebootTestSteps()
 	opID, cmdHash := OperationID("uid-1234", 1, rebootTestNode, "rollback", steps)
-	exhausted := inFlightJob(opID, cmdHash, bootBefore, "2") // 이미 상한만큼 다시 만들었다
+	exhausted := inFlightJob(opID, cmdHash, bootBefore, "2") // 재생성 횟수가 이미 상한에 도달한 상태
 
 	var creates, deletes int
 	c := fake.NewClientBuilder().WithScheme(rebootTestScheme(t)).
@@ -177,7 +174,7 @@ func TestRunBoundsRebootRecreates(t *testing.T) {
 }
 
 // TestWaitBailsWhenNodeRebootsMidWait 는 조기 탈출을 고정한다. 대기 도중 노드가 재부팅되면 남은
-// timeout(기본 10분)을 태울 이유가 없다 — 라이브에서 낭비된 것이 정확히 그 10분이다.
+// timeout(기본 10분)을 태울 이유가 없다.
 func TestWaitBailsWhenNodeRebootsMidWait(t *testing.T) {
 	steps := rebootTestSteps()
 	opID, cmdHash := OperationID("uid-1234", 1, rebootTestNode, "rollback", steps)

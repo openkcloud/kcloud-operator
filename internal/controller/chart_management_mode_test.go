@@ -1,13 +1,10 @@
 // ============================================================
 // chart_management_mode_test.go: managementMode 세 값(managed·delegated·external)의
 // 차트 렌더 결과를 고정한다.
-// 상세: clusterpolicy.yaml 의 enum 검사가 허용 목록을 managed·external 둘로 갖고 있으면
-//
-//	CRD 가 delegated 를 받아도 helm template 자체가 그 자리에서 실패한다.
-//	furiosa-exporter DaemonSet 은 차트가 직접 만드는 유일한 벤더 operand 라(나머지
-//	device-plugin 은 컨트롤러가 런타임에 만든다) managementMode 게이트가 여기 하나 더 있다.
-//
-// 생성일: 2026-09-28
+// 상세: 세 값 모두 템플릿의 enum 검사에서 거절되면 안 된다. furiosa-exporter DaemonSet 은
+// 차트가 직접 만드는 유일한 벤더 operand 라(나머지 device-plugin 은 컨트롤러가 런타임에
+// 만든다) managementMode 게이트가 여기 하나 더 있다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

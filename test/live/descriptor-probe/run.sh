@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: tenstorrent descriptor evidence allocation probe 라이브 점검(비파괴)
-# 상세: 이미 클러스터에 있는 tenstorrent AcceleratorDescriptor(장치가 k8s-worker3 로 resolve
-#       돼 있어야 한다) 에 대해, AllocationProbe 를 켠 AcceleratorVerificationPolicy 를 그
-#       노드에 적용한 뒤 descriptor 를 재조정시켜 AcceleratorDescriptorReconciler.Verify 호출 연결이
-#       실제로 probe Pod(tt-smi -s)를 띄우고 AcceleratorEvidence 의 AllocationProbe 체크를
-#       exit=0 으로 통과시키는지 확인한다. descriptor·소비자 파드는 만들지 않는다 — 이미 있는
-#       descriptor 를 그대로 쓰고, 이 스크립트가 건드리는 새 오브젝트는 AVP 하나뿐이다.
-#       끝나면 AVP 를 지우고 acpp.probeImages.tenstorrent 를 원값으로 되돌린다(trap 으로 항상
-#       실행). SCENARIO_MINUTES=4, SCENARIO_DESTRUCTIVE="no". DRY_RUN=1 이면 명령만 출력.
-# 생성일: 2026-09-20
+# 상세: 클러스터에 있는 tenstorrent AcceleratorDescriptor 에 AllocationProbe 를 켠
+#       AcceleratorVerificationPolicy(AVP)를 적용해 재조정시키고, probe Pod(tt-smi -s)가
+#       뜨고 AllocationProbe 검사가 exit=0 으로 통과하는지 본다. 새로 만드는 오브젝트는
+#       AVP 하나뿐이다(비파괴). DRY_RUN=1 이면 명령만 출력, 세부는 cleanup() 등 참고.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

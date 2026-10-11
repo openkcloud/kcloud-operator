@@ -1,11 +1,10 @@
+// ============================================================
 // apply_envtest_test.go: apply-crds 의 표식이 실 apiserver 왕복에서 살아남는지 확인.
-// 상세: fake client 는 server-side apply 를 지원하지 않아 표식의 수명을 볼 수 없다.
-//
-//	같은 field manager 의 SSA 는 이번 본문에 없는 필드를 지우므로, 릴리스 값이 빈
-//	바이너리가 적용하면 표식이 사라져 그 뒤의 대조가 꺼진다 — 그 경로를 envtest 로 본다.
-//	KUBEBUILDER_ASSETS 도 bin/k8s 도 없으면 건너뛴다(make test 는 전자를 채운다).
-//
-// 생성일: 2026-10-04
+// 상세: fake client 는 server-side apply 를 지원하지 않아 표식의 수명을 못 본다 — 같은
+// field manager 의 SSA 가 본문에 없는 필드를 지우는 경로라 envtest 가 필요하다. 각
+// 시나리오의 근거는 테스트 함수 주석 참고.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
+// ============================================================
 package crdapply
 
 import (

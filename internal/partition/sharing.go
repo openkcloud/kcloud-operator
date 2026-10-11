@@ -1,10 +1,8 @@
 // ============================================================
 // sharing.go: 벤더 중립 sharing 계약 (R&D v1.0 §14)
-// 상세: SharingBackend 는 옵셔널 인터페이스 — 미구현 backend 는 타입 assertion 실패로
-//
-//	ErrSharingUnsupported 를 정직 보고한다(Backend 인터페이스 자체는 건드리지 않는다).
-//
-// 생성일: 2026-07-29 | 수정일: 2026-07-31
+// 상세: SharingBackend 는 옵셔널 인터페이스다 — 미구현 backend 는 타입 assertion 실패로
+// ErrSharingUnsupported 를 정직 보고한다(Backend 인터페이스 자체는 그대로 둔다).
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package partition
 
@@ -40,7 +38,7 @@ type SharingBackend interface {
 	ApplySharing(t Target, l SharingLayout, base map[string]int32) (*SharingRollbackState, error)
 	// ApplySharingConfig 는 ApplySharing 의 config(ConfigMap) 단계만 수행한다 — device-plugin
 	// 배선은 하지 않는다. MPS 는 control daemon 이 이 config 를 마운트해 기동하므로, 호출자가
-	// daemon 을 띄우기 전에 config 만 먼저 놓을 수 있어야 한다(D-12).
+	// daemon 을 띄우기 전에 config 만 먼저 놓을 수 있어야 한다.
 	ApplySharingConfig(t Target, l SharingLayout, base map[string]int32) (*SharingRollbackState, error)
 	RollbackSharing(t Target, s SharingRollbackState) error
 	ExpectedSharedAllocatable(base map[string]int32, l SharingLayout) map[string]int32

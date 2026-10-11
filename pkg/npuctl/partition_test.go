@@ -1,11 +1,9 @@
 // partition_test.go: CollectPartitionStatus/CollectSharingStatus/ApplyPartition/
 // ApplySharing 단위 테스트(fake client, envtest 불필요)
-// 상세: 조회는 status.targets 로 이미 해석된 노드만 내는지, 적용은 4절 표(대상 없음·
-//
-//	값 같음·벤더 미지원·삭제 중)를 각각 거절/무변경 하는지, 있으면 patch 없으면
-//	생성하는지, layout·sharing 두 축이 서로를 건드리지 않는지를 검증한다.
-//
-// 생성일: 2026-09-28
+// 상세: 조회는 status.targets 로 이미 해석된 노드만 내는지, 적용은 대상 없음·값 같음·
+// 벤더 미지원·삭제 중 네 경우를 각각 거절/무변경 하는지, layout·sharing 두 축이
+// 서로를 건드리지 않는지를 검증한다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -370,10 +368,10 @@ func TestApplySharing_있으면패치_layout유지(t *testing.T) {
 }
 
 // TestApplySharing_삭제중이면거절 은 TestApplyPartition_삭제중이면거절 의 sharing 쪽
-// 짝이다 — 리뷰 지적: 이 검사가 resolvePartitionApply·resolveSharingApply 에 각자
-// 복제돼 있던 동안 sharing 쪽 시험이 없어, 그 복제 하나를 지워도 87개 시험이 전부
-// 통과했다. 지금은 두 함수가 공유하는 resolveNodeACPP 안에 검사가 하나뿐이라, 이
-// 시험이 partition·sharing 양쪽 경로를 다 지킨다.
+// 짝이다 — 이 검사가 resolvePartitionApply·resolveSharingApply 에 각자 복제돼 있으면
+// sharing 쪽 시험이 없는 한 그 복제 하나를 지워도 다른 시험들은 전부 통과해버린다.
+// 지금은 두 함수가 공유하는 resolveNodeACPP 안에 검사가 하나뿐이라, 이 시험이
+// partition·sharing 양쪽 경로를 다 지킨다.
 func TestApplySharing_삭제중이면거절(t *testing.T) {
 	now := metav1.Now()
 	deleting := &npuv1alpha1.AcceleratorPartitionPolicy{

@@ -1,7 +1,7 @@
 // ============================================================
 // mps_control_daemon_test.go: MPS control daemon operand 단위 테스트
 // 상세: mps 모드에서 daemon 이 뜨는지, 다른 모드에서 멱등 정리되는지 확인한다.
-// 생성일: 2026-07-30 | 수정일: 2026-07-31
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -42,7 +42,7 @@ func seedMpsDaemon(t *testing.T, ctx context.Context, r *AcceleratorPartitionPol
 }
 
 // mps 모드에서는 control daemon 이 반드시 떠야 한다 — DP 만으로는 MPS 가 동작하지 않는다.
-// 그리고 갓 만든 DS 는 "보장됐다" 가 아니다(review 최종 ③): pod 가 아직 스케줄조차 안 됐으므로
+// 그리고 갓 만든 DS 는 "보장됐다" 가 아니다: pod 가 아직 스케줄조차 안 됐으므로
 // 여기서 nil 을 반환하면 호출자가 곧바로 배선·검증으로 진행해 daemon 없는 mps 를 Ready 로 찍는다.
 func TestMpsControlDaemon_CreatedForMPSMode(t *testing.T) {
 	r := newMpsTestReconciler()
@@ -54,15 +54,15 @@ func TestMpsControlDaemon_CreatedForMPSMode(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: mpsControlDaemonDSName, Namespace: "kube-system"}, &ds); err != nil {
 		t.Fatalf("DS 가 없다: %v", err)
 	}
-	// review F4: daemon 이 client 프로세스를 보려면 PID 네임스페이스 공유가 필요하다(upstream 기본값
-	// 도 shareProcessNamespace) — hostIPC 는 다른 커널 기능이라 이 채널에 쓰이지 않는다.
+	// daemon 이 client 프로세스를 보려면 PID 네임스페이스 공유가 필요하다(upstream 기본값도
+	// shareProcessNamespace) — hostIPC 는 다른 커널 기능이라 이 채널에 쓰이지 않는다.
 	if ds.Spec.Template.Spec.ShareProcessNamespace == nil || !*ds.Spec.Template.Spec.ShareProcessNamespace {
 		t.Error("shareProcessNamespace 없이는 daemon 이 client 프로세스를 보지 못한다")
 	}
 	if !nvidiaPresentRequired(&ds) {
 		t.Errorf("nvidia 노드에만 떠야 한다: %+v", ds.Spec.Template.Spec.Affinity)
 	}
-	// re-review 블로커: daemon 바이너리는 ContainerRoot="/mps" 를 하드코딩한다(설정 불가,
+	// daemon 바이너리는 ContainerRoot="/mps" 를 하드코딩한다(설정 불가, upstream
 	// cmd/mps-control-daemon/mps/root.go:26) — 컨테이너 내부 마운트 경로가 반드시 "/mps" 여야
 	// 한다. 호스트 쪽 Path 는 계속 mpsPipeDir(DP 와 공유하는 경로)이어도 된다.
 	var mountPath string
@@ -101,12 +101,11 @@ func nodeSelectorTerms(ds *appsv1.DaemonSet) []corev1.NodeSelectorTerm {
 	return aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
 }
 
-// D-12: daemon 은 device-plugin 과 **같은** sharing ConfigMap 을 마운트하고 그것을 가리키는
+// daemon 은 device-plugin 과 **같은** sharing ConfigMap 을 마운트하고 그것을 가리키는
 // CONFIG_FILE 을 들어야 한다. 없으면 이미지 내장 기본값(sharing.timeSlicing{})으로 기동해
-// strategy=none 으로 판정하고 MPS 서버를 아예 띄우지 않는다(라이브 실측, v0.5.76).
-// upstream(daemonset-mps-control-daemon.yml)도 같은 CM 을 mps-control-daemon 에 마운트한다.
-// 마운트 대상은 항상 flat CM 이다 — mig-active 노드는 mpsBlockedByMigStrategy 가 MPS 자체를
-// 거절하므로 mixed CM 을 볼 일이 없다.
+// strategy=none 으로 판정하고 MPS 서버를 아예 띄우지 않는다. upstream(daemonset-mps-control-
+// daemon.yml)도 같은 CM 을 mps-control-daemon 에 마운트한다. 마운트 대상은 항상 flat CM 이다
+// — mig-active 노드는 mpsBlockedByMigStrategy 가 MPS 자체를 거절하므로 mixed CM 을 볼 일이 없다.
 func TestMpsControlDaemon_MountsFlatSharingConfig(t *testing.T) {
 	ds := renderMpsControlDaemonDS()
 
@@ -147,7 +146,7 @@ func TestMpsControlDaemon_MountsFlatSharingConfig(t *testing.T) {
 	}
 }
 
-// D-12: mig-active 노드에는 MPS 가 올 수 없다(mpsBlockedByMigStrategy 가 거절) — daemon 도 갈
+// mig-active 노드에는 MPS 가 올 수 없다(mpsBlockedByMigStrategy 가 거절) — daemon 도 갈
 // 이유가 없다. flat device-plugin DS(buildNvidiaDevicePluginDS)와 같은 DoesNotExist 규칙을 쓴다.
 // 그 노드로 스케줄되면 mount 할 flat CM 조차 그 노드의 정책과 무관하다.
 func TestMpsControlDaemon_SkipsMigActiveNodes(t *testing.T) {
@@ -163,7 +162,7 @@ func TestMpsControlDaemon_SkipsMigActiveNodes(t *testing.T) {
 		ds.Spec.Template.Spec.NodeSelector, ds.Spec.Template.Spec.Affinity)
 }
 
-// 라이브 결함: kcloud-nvidia-toolkit(toolkit_daemonset_controller.go)은 control-plane/master
+// kcloud-nvidia-toolkit(toolkit_daemonset_controller.go)은 control-plane/master
 // 노드를 제외하고 그 노드에는 containerd nvidia 런타임이 없다. daemon 은 RuntimeClassName: nvidia
 // 를 요구하므로 exclusion 없이 control-plane 노드(kcloud.ai/nvidia.present=true 라벨을 가진
 // k8s-master)로 스케줄되면 FailedCreatePodSandBox("no runtime for nvidia")로 영구 대기한다.
@@ -189,9 +188,9 @@ func TestMpsControlDaemon_SkipsControlPlaneNodes(t *testing.T) {
 		"영구 ContainerCreating 이 된다: affinity=%+v", ds.Spec.Template.Spec.Affinity)
 }
 
-// 라이브 결함의 본질은 비대칭이었다 — control daemon 은 호스트 MPS root 를 컨테이너 /mps 로
-// 보는데 device-plugin 은 /tmp/nvidia-mps 로 봐서, 둘이 같은 파이프 디렉터리를 못 봤다.
-// 두 렌더러가 서로 다른 패키지에 있으므로 여기서 실제 산출물을 맞대어 고정한다.
+// control daemon 과 device-plugin 이 호스트 MPS root 로 서로 다른 경로를 보면 같은 파이프
+// 디렉터리를 보지 못한다. 두 렌더러가 서로 다른 패키지에 있으므로 여기서 실제 산출물을
+// 맞대어 고정한다.
 func TestMpsRootWiringIsSymmetricBetweenDaemonAndDevicePlugin(t *testing.T) {
 	daemonHost, daemonCtr := mpsRootMountOf(renderMpsControlDaemonDS(), "mps-pipe")
 
@@ -213,10 +212,9 @@ func TestMpsRootWiringIsSymmetricBetweenDaemonAndDevicePlugin(t *testing.T) {
 	}
 }
 
-// upstream(daemonset-mps-control-daemon.yml)은 mps-control-daemon-ctr 앞에 mount-shm
-// init container 를 둔다 — /mps 에 sized tmpfs 를 미리 깔아 host 재부팅 후 남은 shm 이나 크기
-// 상한 없는 디렉터리를 그대로 쓰지 않게 한다. 이 구현은 그 단계를 포팅하지 않았었다(hostPath
-// 로 대체) — 이 테스트가 그 포팅을 고정한다.
+// upstream(daemonset-mps-control-daemon.yml)은 mps-control-daemon-ctr 앞에 mount-shm init
+// container 를 둔다 — /mps 에 sized tmpfs 를 미리 깔아 host 재부팅 후 남은 shm 이나 크기 상한
+// 없는 디렉터리를 그대로 쓰지 않게 한다. 이 테스트가 그 init container 를 고정한다.
 func TestMPSDaemonHasMountShmInitContainer(t *testing.T) {
 	ds := renderMpsControlDaemonDS()
 	if len(ds.Spec.Template.Spec.InitContainers) == 0 {
@@ -315,7 +313,7 @@ func TestMpsControlDaemon_DisabledNoopWhenAbsent(t *testing.T) {
 	}
 }
 
-// review 재검토(2차) 블로커: daemon 은 클러스터 전역 singleton 이라 참조 카운트가 없으면, mps 를
+// daemon 은 클러스터 전역 singleton 이라 참조 카운트가 없으면, mps 를
 // 전혀 모르는 다른 ACPP(B)의 평범한 reconcile 이나 삭제가 A 가 아직 쓰는 daemon 을 지운다.
 func TestMpsControlDaemon_SurvivesUnrelatedPolicyReconcileAndDeletion(t *testing.T) {
 	ctx := context.Background()
@@ -362,13 +360,12 @@ func TestMpsControlDaemon_SurvivesUnrelatedPolicyReconcileAndDeletion(t *testing
 	assertDaemonExists("B 삭제 이후")
 }
 
-// review 재검토 3차 Q1(Medium): DeletionTimestamp 있는 모든 정책을 넓게 제외하면, CleanupBlocked
-// 로 멈춘 정책(삭제는 시작됐지만 자기 mps 배선은 아직 롤백 못 함)까지 참조 카운트에서 영구히
-// 빠진다 — 무관한 정책의 평범한 reconcile 이 daemon 을 지워버린다. self(호출한 정책) 하나만
-// 제외해야 한다.
+// DeletionTimestamp 있는 모든 정책을 넓게 제외하면, CleanupBlocked 로 멈춘 정책(삭제는 시작됐지만
+// 자기 mps 배선은 아직 롤백 못 함)까지 참조 카운트에서 영구히 빠져 무관한 정책의 평범한
+// reconcile 이 daemon 을 지워버린다. self(호출한 정책) 하나만 제외해야 한다.
 // 차단 상태는 손으로 조립하지 않고 실제 삭제 경로(handleNvidiaDeletion 의 소유권 충돌 분기 →
-// setDeletionBlocked)로 만든다 — 이 finding 의 전제(차단된 정책은 DeletionTimestamp + finalizer 를
-// 유지한 채 mps 기록이 롤백되지 않고 남는다)까지 같이 고정된다.
+// setDeletionBlocked)로 만든다 — 차단된 정책은 DeletionTimestamp + finalizer 를 유지한 채 mps
+// 기록이 롤백되지 않고 남는다는 전제까지 같이 고정된다.
 func TestMpsControlDaemon_SurvivesCleanupBlockedSiblingsMPSRecord(t *testing.T) {
 	ctx := context.Background()
 	blocked := &npuv1alpha1.AcceleratorPartitionPolicy{

@@ -1,4 +1,4 @@
-<!-- README.md: kind 실험 클러스터(kcloud-lab) 부트스트랩 사용법 | 생성일: 2026-09-20 | 수정일: 2026-09-21 -->
+<!-- README.md: kind 실험 클러스터(kcloud-lab) 부트스트랩 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 
 # kind 실험 클러스터(kcloud-lab)
 
@@ -34,9 +34,8 @@ bash test/lab/kind/teardown.sh   # operator 프로세스 정리 + 클러스터 �
 
 `setup.sh` 는 `deploy/helm/crds/` 디렉터리를 통째로 `kubectl apply -f` 한다.
 이 디렉터리는 helm 차트가 실제로 배포하는 CRD 전체 세트(13개)이고, `config/crd/bases/`
-와 `diff -r` 로 내용이 같음을 확인했다. kustomize 없이 차트가 배포하는 CRD
-디렉터리를 그대로 적용한다(kustomization 목록은 2026-09-21 에 13개로 맞췄고
-`make crd-check` 가 지킨다).
+와 `diff -r` 기준으로 내용이 같다(`make crd-check` 가 이 일치를 지킨다). kustomize
+없이 차트가 배포하는 CRD 디렉터리를 그대로 적용한다.
 
 `DRY_RUN=1` 을 붙이면 실제로는 아무것도 하지 않고 실행될 명령만 출력한다.
 

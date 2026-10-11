@@ -3,17 +3,16 @@
 # api.yaml: 관리 REST API cert Secret + ClusterIP Service
 # 상세: operator pod 내 :9444 HTTPS listener 용 self-signed cert(lookup 멱등, upgrade 재수행에도 불변)
 #       + kcloud-operator-api Service. 기본 api.enabled=false(opt-in).
-# 생성일: 2026-07-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-07-20 | 수정일: 2026-10-11
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $svcName := printf "%s-api" $fullname -}}
 {{- $secretName := printf "%s-api-cert" $fullname -}}
 {{/*
-cert SAN: 서비스 DNS 두 개가 기본이다. NodePort 로 열어 노드 IP 로 접속하면 그 IP 가 SAN 에
-없어 브라우저가 이름 불일치 경고를 낸다 — api.service.extraAltNames 로 노드 IP/호스트명을
-더한다. **IP 로 접속할 것이면 extraAltIPs 를 써야 한다** — IP 를 DNS SAN 에 넣으면 브라우저가
-매칭하지 않는다. cert 는 아래 lookup 으로 최초 1회만 발급되므로, 이미 발급된 뒤 SAN 을
-늘리려면 기존 Secret 을 지우고 operator pod 를 재시작해야 한다.
+cert SAN: 서비스 DNS 두 개가 기본이다. NodePort 로 노드 IP 에 접속하면 그 IP 가 SAN 에 없어
+브라우저가 경고를 낸다 — extraAltNames 로 호스트명을, **IP 접속이면 extraAltIPs** 를 더한다
+(IP 를 DNS SAN 에 넣으면 매칭하지 않는다). cert 는 lookup 으로 최초 1회만 발급되므로, SAN 을
+늘리려면 기존 Secret 을 지우고 pod 를 재시작해야 한다.
 */}}
 {{- $altNames := concat (list (printf "%s.%s.svc" $svcName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $svcName .Release.Namespace)) (.Values.api.service.extraAltNames | default list) -}}
 {{/*

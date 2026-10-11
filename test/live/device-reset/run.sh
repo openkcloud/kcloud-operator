@@ -1,38 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: 벤더 장치 리셋 명령을 실제 노드에서 실행해 판정하는 하네스
-# 상세: 벤더가 장치 리셋 명령을 노출하는 두 벤더만 다룬다 — nvidia(k8s-worker1,
-#       nvidia-smi -r)·tenstorrent(k8s-worker3, tt-smi -r). furiosa·rebellions 는 공개
-#       인터페이스에 리셋 수단 자체가 없어 대상이 아니다. `internal/vendorcap` 레지스트리의
-#       CapReset 등급은 이 하네스 실측의 결과다 — nvidia 는 Native, tenstorrent 는
-#       Unsupported(2026-10-02 확정, 그 항목의 TestRef 가 이 파일이다). 안전
-#       게이트(그 노드에서 그 벤더 자원을 요구하는 파드 0개)를 모든 쓰기 앞에 두고, 리셋
-#       전/후 장치 목록·dmesg·NodeDeviceReport·AcceleratorHealth·DriverUpgradeState 를
-#       하나의 증거 파일(evidence.txt)에 순서대로 남긴다. DRY_RUN=1 이면 안전 게이트·상태
-#       조회 등
-#       읽기 전용 확인은 끝까지 돌고, 클러스터·노드를 바꾸는 명령(리셋·cordon·파드 삭제·
-#       재부팅·시험 워크로드 파드)은 출력만 한다.
-#       PHASE 로 단계를 하나씩 부를 수 있다. quiesce/unquiesce(cordon+device-plugin 파드
-#       삭제)와 reboot-recover 는 all 에 넣지 않는다 — 리셋이 막히거나 장치가 안 돌아올
-#       때만 판단해서 쓰는 조치이기 때문이다.
-#       bmc-sel(k8s-worker3 전용)은 ipmitool 로 BMC SEL 을 읽는다 —
-#       SEL_STAGE=before|after(기본 before)로 리셋 전/후 sel-<stage>.txt 를 남기고,
-#       after 는 before 와 diff 해 sel-delta.txt 를 만든다. do_reset()은 실제 리셋
-#       직전에 원격 dmesg -w -T·journalctl -kf 를 백그라운드로 열어 dmesg-live.log·
-#       journal-live.log 에 흘려 두고 리셋 종료(성공·SSH 유실 모두) 시 정리한다 — SSH 가
-#       끊기면 이 두 파일의 마지막 줄이 크래시 직전 커널 기록이다.
-#
-# 사용법:
-#   VENDOR=<nvidia|tenstorrent> [NODE=] [TARGET=] [DRY_RUN=1] [PHASE=] run.sh
-#   PHASE: verdict(RUN_DIR= 필요, 클러스터 미접속) | safety-gate | precheck | reset |
-#          wait-recover | postcheck | wait-advertise | workload-check | quiesce |
-#          unquiesce | reboot-recover | bmc-sel(SEL_STAGE=before|after) |
-#          all(기본, quiesce/reboot/bmc-sel 제외 순서대로 실행)
-#   FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap cleanup 의
-#   동작을 라이브 없이 확인할 수 있다. DRY_RUN=1 과 함께 쓴다.
-# 생성일: 2026-09-28 | 수정일: 2026-10-11 (bmc-sel 추가, do_reset 에 실시간 커널 로그
-#       캡처 연결, verdict 에 RESET_REPRO 줄 추가; 계획서 항목 토큰 제거; 세션 전용
-#       식별자 제거)
+# 상세: nvidia(k8s-worker1)·tenstorrent(k8s-worker3) 전용. 안전 게이트 뒤 리셋 전/후 상태를
+#       evidence.txt 에 남긴다. PHASE 목록은 아래 case 문, FORCE_FAIL_AT 은 force_fail_check()
+#       주석 참고.
+# 용법: VENDOR=<nvidia|tenstorrent> [NODE=] [TARGET=] [DRY_RUN=1] [PHASE=] run.sh
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -46,19 +19,12 @@ fi
 
 PHASE="${PHASE:-all}"
 
-# verdict <run-dir> — 그 실행 디렉터리에 남은 기계 파일만 읽어 판정 한 줄을 낸다.
-# 클러스터·노드에 접속하지 않는다 — VENDOR 조차 몰라도 된다. rc 는
-# reset-exit.txt(실제로 받은 종료 코드가 있을 때만) 또는
-# reset-ssh-lost.txt(SSH/채널이 끊겨 종료 코드를 못 받았을 때 do_reset 이 남긴다) —
-# 후자를 rc=1 로 지어내면 실제 exit=1 과 구분이 안 된다. devices 는 pre/post-devices.txt 비교, node 는
-# pre/post-boot-id.txt 비교(precheck·postcheck 가 남긴다, 이 라운드부터). 세 파일이
-# 없으면 각각 missing/missing/unknown 으로 낸다 — 지어내지 않는다.
-#
-# RESET_REPRO 줄은 위 rc·node 계산을 그대로
-# 재사용해 sel_new(sel-delta.txt 의 diff '>' 줄 수 — before/after 둘 다 있어야 생긴다,
-# 없으면 missing)·last_kernel_line(dmesg-live.log 의 mtime 이 reset-start-utc.txt 의
-# 리셋 시각 이후인지 — 파일이 없으면 missing, 있는데 그 전이면 no)을 더한다. 이 둘도
-# 파일이 없으면 지어내지 않고 missing 으로 낸다(같은 원칙).
+# verdict <run-dir> — 그 실행 디렉터리에 남은 기계 파일만 읽어 판정 한 줄을 낸다. 클러스터·
+# 노드에 접속하지 않는다 — VENDOR 조차 몰라도 된다. rc 는 reset-exit.txt(실제 종료 코드) 또는
+# reset-ssh-lost.txt(SSH 유실로 종료 코드를 못 받았을 때 do_reset 이 남긴다) — 후자를 rc=1 로
+# 지어내면 실제 exit=1 과 구분이 안 된다. devices 는 pre/post-devices.txt, node 는
+# pre/post-boot-id.txt 비교(precheck·postcheck 가 남긴다) — 파일이 없으면 지어내지 않고
+# missing/unknown 으로 낸다. RESET_REPRO 줄은 같은 계산에 sel_new·last_kernel_line 을 더한다.
 verdict() {
   local dir="$1" rc devices node verdict_str="FAIL"
   if [ -f "$dir/reset-exit.txt" ]; then
@@ -129,9 +95,9 @@ case "$VENDOR" in
     RESOURCE="${RESOURCE:-nvidia.com/gpu}"
     TARGET="${TARGET:-GPU-202cc280-df66-fed6-78b4-6782422adf5a}"  # A30, override로 A2 등 가능
     DP_NS="kube-system"
-    # /proc/*/fd 실측(2026-09-28, 최초 리셋 시도가 In use 로 막힌 뒤 조사)으로 확인:
-    # nvidia-device-plugin-flat·dcgm-exporter 둘 다 /dev/nvidia0 를 연 채로 들고 있다 —
-    # 이름이 "device-plugin"인 것만이 아니라 실제로 핸들을 쥔 것 둘 다 좁혀서 적는다.
+    # /proc/*/fd 로 확인: nvidia-device-plugin-flat·dcgm-exporter 둘 다 /dev/nvidia0 를 연
+    # 채로 들고 있다 — 이름이 "device-plugin"인 것만이 아니라 실제로 핸들을 쥔 것 둘 다
+    # 좁혀서 적는다.
     DP_LABELS=("app.kubernetes.io/name=nvidia-device-plugin-flat" "app.kubernetes.io/name=dcgm-exporter")
     ;;
   tenstorrent)
@@ -254,9 +220,9 @@ reset_cmd() {
     tenstorrent) echo "/home/kcloud/.local/bin/tt-smi -r ${TARGET}" ;;
   esac
 }
-# device_check_cmd — workload_check 시험 파드 안에서 실행할 명령. 브리프 Step 4 "시험
-# 워크로드로 쓸 수 있는지 확인"은 파드가 Running 되는 것만으로는 부족하다 — 로그에 장치
-# 파일 자체가 보여야 한다.
+# device_check_cmd — workload_check 시험 파드 안에서 실행할 명령. 파드가 Running 되는
+# 것만으로는 "장치를 시험 워크로드로 쓸 수 있다"가 성립하지 않는다 — 로그에 장치 파일
+# 자체가 보여야 한다.
 device_check_cmd() {
   case "$VENDOR" in
     nvidia) echo "ls -la /dev/nvidia* 2>&1" ;;
@@ -480,9 +446,9 @@ wait_advertise() {
 }
 
 # pick_test_image — 이 노드에 이미 떠 있는 kube-system 표준 파드 중 셸(sh)과 ls 가 둘 다
-# 있는 이미지를 exec 로 확인해 고른다 — 새 이미지를 pull 하지 않는다. 형제 하네스
-# test/live/dp-dra-residue/run.sh 의 같은 이름 함수를 그대로 옮겨 적었다(범위 밖 관찰 1,
-# 최종 리뷰 — busybox:1.36 고정 이미지가 레지스트리 pull 실패 시 재실행성을 해친다는 지적).
+# 있는 이미지를 exec 로 확인해 고른다 — 새 이미지를 pull 하지 않는다. busybox 같은 고정
+# 이미지를 쓰면 레지스트리 pull 실패 시 재실행성이 떨어지므로 피한다(test/live/dp-dra-residue/
+# run.sh 의 같은 이름 함수와 같은 방식).
 pick_test_image() {
   local name pod img
   for name in nginx-proxy calico-node kube-proxy nodelocaldns; do
@@ -601,12 +567,10 @@ bmc_sel() {
 
 # quiesce/unquiesce — 좁은 조치: cordon(신규 비-DaemonSet 스케줄 차단) +
 # 그 벤더 device-plugin DS 파드 삭제(장치를 다시 열기 전까지의 짧은 창을 만든다). reset 이
-# "장치 사용 중"으로 막힐 때만 판단해서 쓰는 조치라 all 에는 넣지 않는다. cordon 은
-# DaemonSet 파드의 기본 toleration(node.kubernetes.io/unschedulable) 때문에 그 자체로는
-# 재스케줄을 막지 못한다 — 실제 효과는 파드 삭제가 만드는 창뿐이다. 이 한계를 보고서에
-# 그대로 적는다. **허용 조치는 이 cordon + 해당 DS 파드 삭제뿐이다** — kill -9·커스텀
-# taint·operator 상태 라벨 재사용 등 이 함수 밖의 수동 조치는 컨트롤러 승인 없이 다시
-# 하지 않는다 — 실제로 세 차례 시도됐고 전부 되돌렸다.
+# "장치 사용 중"으로 막힐 때만 판단해서 쓰는 조치라 all 에는 넣지 않는다. cordon 은 DaemonSet
+# 기본 toleration(unschedulable) 때문에 재스케줄을 막지 못한다 — 실제 효과는 파드 삭제가
+# 만드는 창뿐이다. **허용 조치는 이 cordon + 해당 DS 파드 삭제뿐이다** — kill -9·커스텀
+# taint·라벨 재사용 등은 컨트롤러 승인 없이 하지 않는다(실제로 세 차례 시도돼 전부 되돌렸다).
 quiesce() {
   safety_gate
   force_fail_check quiesce

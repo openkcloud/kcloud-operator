@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # registry-head.sh: 레지스트리 매니페스트 HEAD 조회 공유 함수 (source 해서 쓴다)
-# 상세: refresh-image-digests.sh 와 image-tag-check.sh 가 같은 조회·판정 규칙을 쓰도록
-#       한 곳에 둔다. 토큰은 레지스트리가 돌려주는 WWW-Authenticate 챌린지의 realm 에서
-#       익명으로 받는다(GHCR 은 https://ghcr.io/token?scope=repository:<repo>:pull,
-#       nvcr.io 는 /proxy_auth 형태라 realm 을 읽어야 한다).
-#       상태 코드를 그대로 돌려주고 해석은 호출부에 맡긴다 — 404 는 그 태그가 없다는
-#       레지스트리의 확답이고, 401·403·빈 값은 조회를 못 한 것이라 "없음" 과 다르다.
-#       registry.k8s.io 는 지역 미러로 307 을 내므로 리다이렉트를 따라간다.
-#       ALLOWED_PRIVATE 도 여기 둔다 — 발행 접두 아래인데 의도적으로 비공개인 이미지
-#       목록을 image-tag-check.sh·refresh-image-digests.sh 둘이 같이 읽는다. 한쪽에만
-#       있으면 같은 이미지를 두 검사가 다르게 판정한다(하나는 결함, 하나는 허용).
-# 생성일: 2026-10-04 | 수정일: 2026-10-04 (ALLOWED_PRIVATE 를 여기로 이동, 공유)
+# 상세: refresh-image-digests.sh·image-tag-check.sh 가 같은 조회·판정 규칙(상태 코드를
+#       그대로 돌려주고 해석은 호출부가 함 — 404=확답, 401/403/빈값=조회 못 함)을 쓰도록
+#       한 곳에 둔다. ALLOWED_PRIVATE 도 같은 이유로 여기 둔다(한쪽에만 있으면 같은
+#       이미지를 두 검사가 다르게 판정한다).
+# 생성일: 2026-10-04 | 수정일: 2026-10-11
 # ============================================================
 
 # 발행 접두 아래지만 의도적으로 비공개인 이미지의 허용 목록. 항목마다 비공개인 이유를
@@ -40,6 +34,8 @@ head_manifest() {
   local host repo ref url chal realm svc scope tok=""
   host="$(registry_api_host "$1")"; repo="$2"; ref="$3"
   url="https://${host}/v2/${repo}/manifests/${ref}"
+  # 토큰은 WWW-Authenticate 챌린지의 realm 에서 받는다(GHCR 은 realm 에 scope 가 이미
+  # 있고, nvcr.io 는 /proxy_auth 형태라 realm 을 꼭 읽어야 한다).
   chal="$(curl -sSL -m 20 -I "$url" 2>/dev/null | tr -d '\r' | grep -i '^www-authenticate:' | tail -1 || true)"
   realm="$(sed -nE 's/.*realm="([^"]*)".*/\1/p' <<<"$chal")"
   if [ -n "$realm" ]; then
@@ -48,6 +44,7 @@ head_manifest() {
     tok="$(curl -sS -m 20 "${realm}?service=${svc}&scope=${scope:-repository:${repo}:pull}" 2>/dev/null |
       python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("token") or d.get("access_token") or "")' 2>/dev/null || true)"
   fi
+  # -L 로 리다이렉트를 따라간다 — registry.k8s.io 는 지역 미러로 307 을 낸다.
   curl -sSL -m 20 -o /dev/null -D - ${tok:+-H "Authorization: Bearer ${tok}"} -H "Accept: ${REGISTRY_HEAD_ACCEPT}" "$url" 2>/dev/null |
     tr -d '\r' |
     awk 'tolower($1) ~ /^http\//{c=$2} tolower($1)=="docker-content-digest:"{d=$2} END{print c, d}'

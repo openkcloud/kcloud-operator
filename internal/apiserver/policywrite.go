@@ -2,8 +2,7 @@
 // policywrite.go: 공유·분할 정책 생성·삭제 요청 처리(POST/DELETE /api/v1/policies)
 // 상세: 요청을 파싱해 npuctl 에 넘기고 결과를 응답으로 옮기기만 한다. 조립은
 //       pkg/npuctl/policy.go 가, 적용 가능 여부는 reconciler 가 맡는다 — 여기에 복제하지 않는다.
-//       dryRun 이 태우는 admission 은 CRD 스키마 검증뿐이다(§ handleCreatePolicy 주석).
-// 생성일: 2026-08-11 | 수정일: 2026-08-11
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -28,19 +27,12 @@ type CreatePolicyResponse struct {
 	Rejection *RejectionView `json:"rejection,omitempty"`
 }
 
-// handleCreatePolicy 는 정책을 만든다.
-//
-// dryRun=true 가 실제로 태우는 것: API 서버의 admission 이다.
-// AcceleratorPartitionPolicy 에는 validating webhook 이 등록돼 있다
-// (`internal/webhook/webhook.go` 의 ACPPValidator, `deploy/helm/templates/webhook.yaml`
-// 이 acceleratorpartitionpolicies 를 포함해 다섯을 건다). 따라서 dry-run 이 보는 것은
-// CRD OpenAPI 스키마와 CEL 규칙, 그리고 그 webhook 의 판정이다 —
-// vendor·sharing.mode enum, timeSlicing.replicas 2~16, layout 과 sharing 이 동시에 비지 않을 것.
-//
-// 보지 않는 것: 그 노드·장치가 요청한 방식을 실제로 할 수 있는가, profile 이 그 하드웨어에
-// 실재하는가, 같은 노드를 다른 정책이 이미 잡고 있는가. 그 판정은 reconciler 가 하며
-// 못 하는 조합은 ACPPPhaseUnsupported 로 떨어진다. 관문을 "적용 가능 여부 판정" 으로
-// 소개하면 통과가 성공을 뜻한다고 오인하게 된다.
+// handleCreatePolicy 는 정책을 만든다. dryRun=true 가 태우는 것은 API 서버의
+// admission(CRD 스키마·CEL 규칙과 AcceleratorPartitionPolicy 의 validating webhook)뿐이다 —
+// 노드·장치가 그 방식을 실제로 할 수 있는가, profile 이 하드웨어에 실재하는가, 다른 정책이
+// 이미 그 노드를 잡고 있는가는 보지 않는다. 그 판정은 reconciler 가 하며 못 하는 조합은
+// ACPPPhaseUnsupported 로 떨어진다. 관문을 "적용 가능 여부 판정" 으로 소개하면 통과가
+// 성공을 뜻한다고 오인하게 된다.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
 	if err != nil {

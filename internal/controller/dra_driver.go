@@ -1,12 +1,10 @@
 // ============================================================
 // dra_driver.go: 벤더 DRA 드라이버 배포·회수
-// 상세: 벤더 chart 를 그대로 설치하지 않고 우리 라벨·이미지·네임스페이스로 옮겨
-//       만든다. chart 의 affinity 가 NFD 와 벤더 탐지기 라벨 셋을 요구해 우리
-//       클러스터에서는 어느 노드에도 스케줄되지 않기 때문이다
-//       (chart 의 affinity 조건).
-//       사설 미러 경로는 여기서 조립하지 않는다 — 이 저장소는 레지스트리를 CR 이
-//       아니라 helm 에서 조립하고, 완성된 경로가 spec 으로 내려온다.
-// 생성일: 2026-08-07 | 수정일: 2026-09-28
+// 상세: 벤더 chart 를 그대로 설치하지 않고 우리 라벨·이미지·네임스페이스로 옮겨 만든다 —
+// chart 의 affinity 가 NFD 와 벤더 탐지기 라벨 셋을 요구해 우리 클러스터에서는 어느
+// 노드에도 스케줄되지 않기 때문이다. 사설 미러 경로는 여기서 조립하지 않는다 — 레지스트리는
+// helm 이 조립해 완성된 경로를 spec 으로 내려준다.
+// 생성일: 2026-08-07 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -44,7 +42,7 @@ const (
 	// 벤더 chart 2026.1.1 이 쓰는 것과 같다.
 	draDriverImageFuriosaDefault = "docker.io/furiosaai/furiosa-dra-driver:2026.1.1"
 	// draDriverCommandFuriosa 는 이미지의 CMD 다. 이 이미지에는 ENTRYPOINT 가 없어서
-	// args 만 주면 CMD 가 통째로 밀려 바이너리가 사라진다(실측: exec 실패).
+	// args 만 주면 CMD 가 통째로 밀려 바이너리가 사라져 exec 가 실패한다.
 	draDriverCommandFuriosa = "./dra-kubelet-plugin"
 	// draCDIRoot 는 드라이버가 CDI 스펙을 쓰는 경로다. init container 가 containerd 에
 	// 등록하는 경로와 같아야 한다.
@@ -58,10 +56,8 @@ const (
 	// draDriverNameRebellions 는 이 드라이버가 발행물에 쓰는 spec.driver 값이다.
 	// 벤더 chart 의 DeviceClass 이름과 같다(reference/rbln-k8s-dra-driver).
 	draDriverNameRebellions = "npu.rebellions.ai"
-	// draDriverImageRebellionsDefault 는 spec 미지정 시 기본 이미지다.
-	// docker.io/rebellions/k8s-dra-driver-npu 태그 목록 실측(2026-09-15):
-	// 0.2.0, latest, v0.1.0~v0.1.4, v0.2.0. 벤더 chart 기본값(appVersion v0.2.1)은
-	// 404 로 존재하지 않고, latest 는 재현 불가라 v0.2.0 을 쓴다.
+	// draDriverImageRebellionsDefault 는 spec 미지정 시 기본 이미지다. 벤더 chart 기본값
+	// (appVersion v0.2.1)은 레지스트리에 없고, latest 는 재현 불가라 v0.2.0 을 쓴다.
 	draDriverImageRebellionsDefault = "docker.io/rebellions/k8s-dra-driver-npu:v0.2.0"
 	// draHealthcheckPortRebellions 은 바이너리 헬스체크 포트다. 기본값 -1 은 꺼짐을
 	// 뜻한다. 벤더 chart 기본값 51515 를 그대로 쓴다(NVIDIA 렌더러의 51516 과 겹치지 않음).
@@ -85,7 +81,7 @@ func renderFuriosaDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Objec
 		ObjectMeta: metav1.ObjectMeta{Name: draDSNameFuriosa, Namespace: draNamespace, Labels: labels},
 	}
 
-	// 벤더 chart 실측 8줄을 그대로 옮긴다. resourceclaims/driver 의
+	// 벤더 chart 의 ClusterRole 규칙 8줄을 그대로 옮긴다. resourceclaims/driver 의
 	// associated-node:update 는 1.34 세대 권한이고, 빠지면 드라이버가 조용히 실패한다.
 	cr := &rbacv1.ClusterRole{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole"},
@@ -248,16 +244,12 @@ func mergeEnv(base, extra []corev1.EnvVar) []corev1.EnvVar {
 	return out
 }
 
-// renderCDIInitContainer 는 containerd 에 CDI 를 켜는 init container 다.
-// 이미 켜져 있으면 아무것도 하지 않는다 — 매번 재시작하면 노드가 흔들린다.
-//
-// 판정과 기록 위치가 둘 다 "유효 설정" 기준이다. 파일에 값이 있어도 같은 plugin
-// 테이블을 다시 선언하는 drop-in 이 있으면 그쪽이 이긴다. 그래서 base 가 conf.d 를
-// import 하면 거기에 쓰고, 마지막에 실제로 켜졌는지 다시 확인한 뒤 끝낸다.
-//
-// 이미지는 kcloud-host-exec 을 재사용한다(HOST_EXEC_IMAGE). 그 이미지에 python3 은
-// 없고 awk·grep·nsenter 는 있다(2026-08-07 실측). systemctl 도 이미지에는 없으나
-// nsenter 로 호스트 것을 부르므로 무관하다.
+// renderCDIInitContainer 는 containerd 에 CDI 를 켜는 init container 다. 이미 켜져 있으면
+// 아무것도 하지 않는다 — 매번 재시작하면 노드가 흔들린다. 판정과 기록 위치는 둘 다 "유효
+// 설정" 기준이다 — 같은 plugin 테이블을 다시 선언하는 drop-in 이 있으면 그쪽이 이기므로,
+// base 가 conf.d 를 import 하면 거기에 쓰고 마지막에 실제로 켜졌는지 다시 확인한다.
+// 이미지는 kcloud-host-exec(HOST_EXEC_IMAGE) 재사용이다 — python3 은 없고 awk·grep·nsenter
+// 는 있다. systemctl 도 없지만 nsenter 로 호스트 것을 부르므로 무관하다.
 func renderCDIInitContainer() corev1.Container {
 	const script = `set -eu
 DIR=/host/etc/containerd
@@ -336,18 +328,11 @@ echo "CDI enabled; containerd restarted"
 	}
 }
 
-// nvidiaDRABlockReason 은 NVIDIA DRA 드라이버를 배포하면 안 되는 사유다. 배포해도
-// 되면 빈 문자열이다.
-//
-// 이 벤더에만 게이트가 둘 붙는 이유는 우리 설계가 아니라 벤더 chart 구조다
-// (2026-08-07 실측, chart v0.5.0-dev):
-//
-//  1. gpus.enabled=false 로 깔면 DaemonSet 도 DeviceClass 도 나오지 않는다.
-//     RBAC 껍데기뿐이다. 즉 "깔되 광고는 device-plugin 이" 라는 상태가 없다.
-//     chart 자신도 device-plugin 과의 공존을 막는다.
-//  2. gpus.enabled 는 DaemonSet 하나에 하나라 노드 단위로 나눌 수 없다.
-//
-// 둘 다 조용히 반쪽 상태를 만드는 대신 거절로 드러낸다.
+// nvidiaDRABlockReason 은 NVIDIA DRA 드라이버를 배포하면 안 되는 사유다. 배포해도 되면
+// 빈 문자열이다. 게이트가 둘 붙는 이유는 벤더 chart 구조다: (1) gpus.enabled=false 로
+// 깔면 DaemonSet·DeviceClass 가 나오지 않고 RBAC 껍데기만 남는다 — chart 자신이
+// device-plugin 과의 공존을 막는다. (2) gpus.enabled 는 DaemonSet 하나에 하나라 노드
+// 단위로 나눌 수 없다. 둘 다 조용히 반쪽 상태를 만드는 대신 거절로 드러낸다.
 func nvidiaDRABlockReason(policy *npuv1alpha1.NPUClusterPolicy) string {
 	if !policy.Spec.Nvidia.DRA.IsEnabled() {
 		return ""
@@ -431,13 +416,11 @@ func (r *NPUClusterPolicyReconciler) ensureDRADriver(
 	return nil
 }
 
-// ignoredDRAConfigNote 는 이 벤더가 반영하지 않는 설정이 들어왔을 때 그 사실을
-// 문장으로 돌려준다. 반영하지 않을 것이 없으면 빈 문자열이다.
-//
-// Tenstorrent 만 Args·Env 를 반영하지 않는다 — 이 벤더는 장치 발견을 FM agent 에
-// 맡기는 구조라 --fabric-manager-agent-address·--device-profile 이 선택 인자가 아니고,
-// args 를 통째로 갈아끼우면 드라이버가 기동하지 못한다. 무시 자체는 맞지만 조용히
-// 무시하면 사용자는 자기 설정이 반영됐다고 믿는다.
+// ignoredDRAConfigNote 는 이 벤더가 반영하지 않는 설정이 들어왔을 때 그 사실을 문장으로
+// 돌려준다. 반영하지 않을 것이 없으면 빈 문자열이다. Tenstorrent 만 Args·Env 를 반영하지
+// 않는다 — 장치 발견을 FM agent 에 맡기는 구조라 --fabric-manager-agent-address·
+// --device-profile 이 선택 인자가 아니고, args 를 통째로 갈아끼우면 드라이버가 기동하지
+// 못한다. 무시 자체는 맞지만 조용히 무시하면 사용자는 설정이 반영됐다고 믿는다.
 func ignoredDRAConfigNote(vendor string, spec *npuv1alpha1.DRASpec) string {
 	if vendor != vendorTenstorrent || spec == nil {
 		return ""
@@ -478,14 +461,11 @@ type dualAdvertiseNode struct {
 	Slices      int32
 }
 
-// dualAdvertiseNodes 는 driverName 드라이버가 ResourceSlice 를 내는 노드 중, 같은
-// resourceName 을 device-plugin allocatable 로도 아직 내놓는 노드를 찾는다
-// (rebellionsDualAdvertiseNote 의 일반화 — 벤더마다 드라이버 이름·리소스명만 다르다).
-// 이중광고 노드가 없으면 빈 슬라이스.
-//
-// ponytail: 벤더마다 이 함수를 부르면 ResourceSliceList 를 벤더 수만큼 다시 List 한다.
-// reconcile 주기가 수십 초이고 슬라이스 수가 작아 지금은 문제 없다 — 늘어나면 호출부에서
-// intent.LoadDRACapability 한 번을 공유하도록 바꾼다.
+// dualAdvertiseNodes 는 driverName 드라이버가 ResourceSlice 를 내는 노드 중, 같은 resourceName
+// 을 device-plugin allocatable 로도 아직 내놓는 노드를 찾는다(rebellionsDualAdvertiseNote 의
+// 일반화 — 벤더마다 드라이버 이름·리소스명만 다르다). 이중광고 노드가 없으면 빈 슬라이스.
+// ponytail: 벤더마다 불러 ResourceSliceList 를 벤더 수만큼 다시 List 한다. 슬라이스 수가
+// 작아 지금은 문제 없다 — 늘어나면 호출부에서 intent.LoadDRACapability 공유로 바꾼다.
 func (r *NPUClusterPolicyReconciler) dualAdvertiseNodes(
 	ctx context.Context, vendor, driverName, resourceName string,
 ) ([]dualAdvertiseNode, error) {
@@ -591,13 +571,12 @@ func advertiseVendorDRADSName(vendor string) string {
 	return ""
 }
 
-// advertiseVendorResourceName 은 이 벤더가 device-plugin 으로 광고하는 전체 장치
-// 리소스명이다. tenstorrent·rebellions 는 spec 오버라이드를 실제 렌더러가 반영하므로
-// 그 필드를 그대로 읽는다. furiosa(warboy)·rngd 는 intent.WholeDeviceResource 의
-// 카탈로그 값을 쓴다 — nvidia 처럼 오버라이드 필드가 아예 없거나(furiosa), rngd 처럼
-// CRD 필드는 있어도 공식 이미지가 무시해 실제 광고명과 무관하기 때문이다
-// (ensureFuriosaRngdDevicePlugin 의 주석 참고). 모르는 벤더는 빈 문자열. ctx 는 카탈로그
-// 조회 실패를 다른 조회 실패처럼 로깅하는 데만 쓴다(review Minor — 이전에는 조용히 버렸다).
+// advertiseVendorResourceName 은 이 벤더가 device-plugin 으로 광고하는 전체 장치 리소스명이다.
+// tenstorrent·rebellions 는 spec 오버라이드를 실제 렌더러가 반영하므로 그 필드를 그대로
+// 읽는다. furiosa(warboy)·rngd 는 intent.WholeDeviceResource 카탈로그 값을 쓴다 — furiosa 는
+// 오버라이드 필드가 없고, rngd 는 CRD 필드가 있어도 공식 이미지가 무시해 실제 광고명과
+// 무관하기 때문이다(ensureFuriosaRngdDevicePlugin 참고). 모르는 벤더는 빈 문자열이며 ctx 는
+// 조회 실패 로깅에만 쓴다.
 func advertiseVendorResourceName(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, vendor string) string {
 	switch vendor {
 	case vendorNvidia:
@@ -634,13 +613,12 @@ func advertiseVendorResourceName(ctx context.Context, policy *npuv1alpha1.NPUClu
 	return ""
 }
 
-// detectDualAdvertisement 는 advertiseVendors() 다섯 벤더를 모두 훑어, device-plugin 과
-// DRA 가 같은 물리 장치를 동시에 광고하는 노드가 있는지를 top-level Condition
-// (ConditionDualAdvertisement)으로 남긴다. spec.<vendor>.advertiseBy·dra.enabled 값은
-// 보지 않는다 — 실측(allocatable·ResourceSlice)만 본다. advertiseBy 를 devicePlugin 으로
-// 되돌려도 DRA 발행이 아직 안 꺼진 창을 그대로 드러내야 하기 때문이다. 벤더별 Rebellions
-// 통지(rebellionsDualAdvertiseNote, DRADriverStatus.Message)는 그대로 둔다 — 이 Condition 은
-// 정책 전체 단위의 별도 표면이다.
+// detectDualAdvertisement 는 advertiseVendors() 다섯 벤더를 모두 훑어, device-plugin 과 DRA 가
+// 같은 물리 장치를 동시에 광고하는 노드가 있는지를 top-level Condition(ConditionDualAdvertisement)
+// 으로 남긴다. spec 의 advertiseBy·dra.enabled 가 아니라 실측(allocatable·ResourceSlice)만
+// 본다 — devicePlugin 으로 되돌려도 DRA 발행이 아직 안 꺼진 창을 그대로 드러내야 한다.
+// 벤더별 Rebellions 통지(rebellionsDualAdvertiseNote, DRADriverStatus.Message)는 별개다 —
+// 이 Condition 은 정책 전체 단위의 표면이다.
 func (r *NPUClusterPolicyReconciler) detectDualAdvertisement(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) {
 	logger := logf.FromContext(ctx)
 
@@ -752,9 +730,9 @@ func (r *NPUClusterPolicyReconciler) reconcileOneDRADriver(
 	for _, o := range objs {
 		if ds, ok := o.(*appsv1.DaemonSet); ok {
 			setOwnerAnnotation(&ds.ObjectMeta, policy)
-			// control-plane 노드에는 올리지 않는다. 그 노드에도 벤더 라벨이 붙어 있을 수
-			// 있고(2026-08-07 실측: k8s-master 에 nvidia.present), 장치가 없으니 벤더
-			// prestart 가 init 에서 멈춘 채 남는다. 다른 operand 와 같은 규약이다.
+			// control-plane 노드에는 올리지 않는다 — 그 노드에도 벤더 라벨이 붙어 있을 수
+			// 있고, 장치가 없으니 벤더 prestart 가 init 에서 멈춘 채 남는다. 다른 operand 와
+			// 같은 규약이다.
 			applyControlPlaneExclusion(&ds.Spec.Template.Spec)
 			applyImagePullSecrets(&ds.Spec.Template.Spec, policy.Spec.ImagePullSecrets)
 			if err := r.createOrUpdateDS(ctx, ds); err != nil {
@@ -935,7 +913,7 @@ func renderNvidiaDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object
 		ObjectMeta: metav1.ObjectMeta{Name: draDSNameNvidia, Namespace: draNamespace, Labels: labels},
 	}
 
-	// chart 실측 5줄에서 resource.nvidia.com(다중 노드 NVLink) 하나를 뺀 넷이다.
+	// chart 의 ClusterRole 5줄에서 resource.nvidia.com(다중 노드 NVLink) 하나를 뺀 넷이다.
 	cr := &rbacv1.ClusterRole{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole"},
 		ObjectMeta: metav1.ObjectMeta{Name: draDSNameNvidia, Labels: labels},
@@ -1169,18 +1147,12 @@ func renderRebellionsDRADaemonSet(spec *npuv1alpha1.DRASpec, labels map[string]s
 	if spec != nil {
 		env = mergeEnv(env, spec.Env)
 	}
-	// probe 포트는 병합이 끝난 env 를 되읽어 정한다. spec.Env 가 HEALTHCHECK_PORT 를
-	// 덮어썼는데 probe 는 상수 포트를 그대로 찌르면, 바이너리는 새 포트로 듣고
-	// kubelet 은 옛 포트를 찔러 정상 파드가 liveness 실패로 재시작 루프에 빠진다.
-	//
-	// 리터럴 값이 1~65535 범위일 때만 probe 를 붙인다(GRPCAction.Port 계약, K8s API
-	// "Number must be in the range 1 to 65535"). 이 범위를 벗어나면 API 서버가
-	// DaemonSet 자체를 거절해 probe 하나가 아니라 배포 전체가 실패한다. -1 은 벤더
-	// 관례상 헬스체크를 끈다는 뜻이라 이 값을 쓰는 사용자도 여기 걸려 probe 없이
-	// 렌더된다. ValueFrom(Secret·ConfigMap·fieldRef 참조)은 렌더 시점에 값을 알 수
-	// 없어 마찬가지로 probe 를 붙이지 않는다 — 상수로 폴백하면 바이너리는 참조가
-	// 풀린 값으로 듣고 kubelet 은 상수 포트를 찔러 같은 어긋남이 키 모양만 바꿔
-	// 재발한다. env 값 자체는 사용자 것이니 그대로 둔다.
+	// probe 포트는 병합이 끝난 env 를 되읽어 정한다. spec.Env 가 HEALTHCHECK_PORT 를 덮어썼는데
+	// probe 가 상수 포트를 찌르면 바이너리와 kubelet 이 다른 포트를 보고 liveness 가 재시작
+	// 루프에 빠진다. 리터럴 값이 1~65535 범위일 때만 붙인다 — 벗어나면 GRPCAction.Port 계약
+	// 위반으로 API 서버가 DaemonSet 전체를 거절한다. -1 은 벤더 관례상 헬스체크를 끈다는
+	// 뜻이고, ValueFrom(Secret·ConfigMap 등)은 렌더 시점에 값을 몰라 같은 이유로 probe 를
+	// 붙이지 않는다. env 값 자체는 사용자 것이니 그대로 둔다.
 	var healthPort int32
 	var attachProbe bool
 	for _, e := range env {
@@ -1217,11 +1189,10 @@ func renderRebellionsDRADaemonSet(spec *npuv1alpha1.DRASpec, labels map[string]s
 		},
 	}
 	if attachProbe {
-		// 벤더 chart 가 같은 포트에 gRPC 헬스체크를 건다. HEALTHCHECK_PORT 를
-		// 켜기만 하고 probe 를 안 걸면 쓰이지 않는 설정으로 남는다. 지연·주기·
-		// 실패 임계값은 벤더 chart 원본을 이 저장소에서 확인하지 못해 보수적으로
-		// 고른 기본값이다(확정 실측 아님). 이 드라이버는 라이브에서 CDI 단계를
-		// 넘긴 적이 없어 포트가 언제 열리는지 실측치가 없다.
+		// 벤더 chart 가 같은 포트에 gRPC 헬스체크를 건다. HEALTHCHECK_PORT 를 켜기만 하고
+		// probe 를 안 걸면 쓰이지 않는 설정으로 남는다. 지연·주기·실패 임계값은 벤더 chart
+		// 원본을 확인하지 못해 고른 보수적 기본값이다 — 이 드라이버가 CDI 단계를 넘겨 뜬
+		// 적이 없어 실측치가 없다.
 		plugin.LivenessProbe = &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				GRPC: &corev1.GRPCAction{Port: healthPort},
@@ -1274,19 +1245,14 @@ const (
 	// draDriverNameTenstorrent 는 이 드라이버가 발행물에 쓰는 spec.driver 값이다.
 	draDriverNameTenstorrent = "tenstorrent.com"
 	// draDriverImageTenstorrentDefault 는 spec 미지정 시 기본 이미지다.
-	// 벤더가 chart 를 주지 않아 태그를 우리가 고정한다(2026-08-05 라이브 확인 판).
+	// 벤더가 chart 를 주지 않아 태그를 우리가 고정한다.
 	draDriverImageTenstorrentDefault = "ghcr.io/tenstorrent/tt-dra-driver:0.0.48"
-	// draFMImageTenstorrentDefault 는 장치 발견을 맡는 보조 데몬이다. 드라이버가
-	// 이것에 gRPC 로 물어야 ASIC 을 찾는다 — 없으면 드라이버가 CrashLoop 에 빠진다
-	// (2026-08-05 라이브 실측).
-	//
-	// 태그를 고정하지 못했다. 이 파일은 위 draDriverImageRebellionsDefault 에서 latest 를
-	// 재현 불가라고 물리치는데 여기서는 쓴다 — ghcr.io/tenstorrent/tt-fabric-manager 가
-	// 공개하는 태그가 latest·main·sha 뿐이고 벤더가 버전 태그를 발행하지 않기 때문이다
-	// (같은 기록 §2 의 태그 실측). 실재를 확인하지 않은 태그를 적을 수는 없다.
-	// 배포자가 할 일 둘: 재현 가능한 배포가 필요하면 sha 태그나 digest 를 골라
-	// tenstorrent.dra.fabricManager.tag 로 덮고, air-gap 이면 드라이버 이미지와 함께
-	// 이것도 사설 미러에 올린 뒤 global.vendorRegistry 를 준다.
+	// draFMImageTenstorrentDefault 는 장치 발견을 맡는 보조 데몬이다. 드라이버가 이것에 gRPC 로
+	// 물어야 ASIC 을 찾는다 — 없으면 CrashLoop 에 빠진다. draDriverImageRebellionsDefault 와
+	// 달리 latest 를 쓴다 — ghcr.io/tenstorrent/tt-fabric-manager 가 공개하는 태그는
+	// latest·main·sha 뿐이라 버전 태그가 없다. 재현 가능한 배포가 필요하면 sha 태그나 digest 를
+	// tenstorrent.dra.fabricManager.tag 로 덮고, air-gap 이면 사설 미러에 올려
+	// global.vendorRegistry 를 준다.
 	draFMImageTenstorrentDefault = "ghcr.io/tenstorrent/tt-fabric-manager:latest"
 	// draFMPortTenstorrent 는 FM agent 가 듣는 포트다. 드라이버 기본값과 맞춘다.
 	draFMPortTenstorrent = 50053
@@ -1294,7 +1260,7 @@ const (
 
 // renderTenstorrentDRADriver 는 Tenstorrent DRA 드라이버 오브젝트 여섯을 만든다.
 // 다른 벤더와 달리 ConfigMap 이 하나 더 붙는다 — FM agent 가 설정 파일 없이
-// 기동을 거부하는데 그 파일이 이미지에 없다(2026-08-05 실측).
+// 기동을 거부하는데 그 파일이 이미지에 없다.
 func renderTenstorrentDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.Object {
 	spec := policy.Spec.Tenstorrent.DRA
 	labels := map[string]string{
@@ -1310,9 +1276,9 @@ func renderTenstorrentDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.O
 		TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole"},
 		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Labels: labels},
 		// 규칙 8종은 renderFuriosaDRADriver 의 ClusterRole 을 그대로 복제한 것이다.
-		// 손으로 좁혀 쓰지 않는다 — 그 집합이 1.34 에서 DRA 가 실제로 동작한 판이고,
-		// 라이브 기록이 요구한 resourceclaims/driver 의 associated-node 권한을 이미 담는다.
-		// 좁혀서 생기는 실패는 "claim 이 노드에 묶이지 않음" 이라 라이브에서야 드러난다.
+		// 손으로 좁혀 쓰지 않는다 — 이 집합은 1.34 에서 DRA 가 동작을 확인한 판이고
+		// resourceclaims/driver 의 associated-node 권한을 담는다. 좁히면 "claim 이 노드에
+		// 묶이지 않음" 실패가 운영에서야 드러난다.
 		Rules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch"}},
 			{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceclaims"},
@@ -1337,16 +1303,12 @@ func renderTenstorrentDRADriver(policy *npuv1alpha1.NPUClusterPolicy) []client.O
 		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: draDSNameTenstorrent},
 		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: draDSNameTenstorrent, Namespace: draNamespace}},
 	}
-	// 바이너리 문자열에서 뽑은 최소 설정이다. 벤더가 예제를 주지 않아 이 두 줄로
-	// 검증을 통과시켰다(2026-08-05). 벤더 판이 오르면 여기가 먼저 깨진다.
-	//
-	// 이 구성의 한계(2026-08-05 라이브 실측). listen_address 가
-	// 가리키는 FM controller 를 우리는 어디에도 배치하지 않는다. agent 는 등록에 실패하고
-	// 노드마다 초당 1회 장치 재발견을 재시도한다. DRA 경로 자체는 끝까지 성립하지만
-	// (GetTopology 는 등록 여부와 무관하게 응답한다) 그 기록 자신의 판정은 "단일 노드
-	// 시험에서는 무해했지만 운영에 올릴 구성은 아니다" 다. 여러 노드에 걸친 fabric
-	// 토폴로지도 controller 없이는 쓸 수 없다(미검증). controller 배치는 별개 과제이고,
-	// 같은 경고가 values.yaml 의 tenstorrent.dra 블록에도 있다.
+	// 바이너리 문자열에서 뽑은 최소 설정이다. 벤더가 예제를 주지 않아 이 두 줄로 검증을
+	// 통과시켰다 — 벤더 판이 오르면 여기가 먼저 깨진다. listen_address 가 가리키는 FM
+	// controller 는 어디에도 배치하지 않아 agent 가 등록에 실패하고 노드마다 초당 1회
+	// 재발견을 재시도한다. DRA 경로 자체는 끝까지 성립한다(GetTopology 는 등록 여부와
+	// 무관하게 응답한다). 여러 노드에 걸친 fabric 토폴로지는 controller 배치(별도 과제) 전까지
+	// 쓸 수 없다 — 같은 경고가 values.yaml 의 tenstorrent.dra 블록에도 있다.
 	cm := &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 		ObjectMeta: metav1.ObjectMeta{Name: draDSNameTenstorrent, Namespace: draNamespace, Labels: labels},
@@ -1384,9 +1346,9 @@ func renderTenstorrentDRADaemonSet(
 	// spec.Args·spec.Env 는 이 벤더에서만 반영하지 않는다. 다른 세 렌더러가 이 자리에서
 	// args 를 통째로 갈아끼우는데, 여기서 같은 일을 하면 --fabric-manager-agent-address 와
 	// --device-profile 이 사라져 드라이버가 기동하지 못한다 — 이 벤더는 장치 발견을 FM
-	// agent 에 맡기는 구조라 그 둘이 선택 인자가 아니다(라이브 기록 §2·§3.1).
-	// 덮어쓰기를 열려면 통째 교체가 아니라 병합 규칙을 먼저 정해야 하고, 컨테이너가 둘이라
-	// 어느 쪽에 적용할지도 함께 정해야 한다. 그때까지는 이미지 덮어쓰기만 연다.
+	// agent 에 맡기는 구조라 그 둘이 선택 인자가 아니다. 덮어쓰기를 열려면 통째 교체가
+	// 아니라 병합 규칙을 먼저 정해야 하고, 컨테이너가 둘이라 어느 쪽에 적용할지도 함께
+	// 정해야 한다. 그때까지는 이미지 덮어쓰기만 연다.
 	hostPathDir := func(p string) corev1.VolumeSource {
 		return corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: p}}
 	}
@@ -1412,8 +1374,7 @@ func renderTenstorrentDRADaemonSet(
 					InitContainers: []corev1.Container{renderCDIInitContainer()},
 					// 목록 순서는 기동 순서를 뜻하지 않는다 — Kubernetes 는 일반 컨테이너를
 					// 동시에 시작한다. FM 이 늦게 떠도 무해하다: 드라이버는 gRPC 등록 실패를
-					// 초당 1회 재시도하고, GetTopology 는 FM 준비 여부와 무관하게 응답한다
-					// (라이브 기록 §3.5).
+					// 초당 1회 재시도하고, GetTopology 는 FM 준비 여부와 무관하게 응답한다.
 					Containers: []corev1.Container{
 						{
 							Name:            "plugin",
@@ -1421,7 +1382,7 @@ func renderTenstorrentDRADaemonSet(
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							// 벤더 이미지는 ENTRYPOINT 가 없고 Cmd=[tt-dra-driver-kubeletplugin] 뿐이다.
 							// Args 를 주면 Cmd 가 통째로 덮이므로 Command 를 명시하지 않으면 kubelet 이
-							// 첫 인자(--device-profile)를 실행 파일로 exec 해 StartError 로 죽는다(라이브 확인).
+							// 첫 인자(--device-profile)를 실행 파일로 exec 해 StartError 로 죽는다.
 							Command: []string{"tt-dra-driver-kubeletplugin"},
 							// force-fallback-discovery 를 넣지 않는다. 이 메인보드는
 							// 벤더 화이트리스트에 없어 fallback 이 빈 ResourceSlice 를 낸다.
@@ -1433,7 +1394,7 @@ func renderTenstorrentDRADaemonSet(
 							},
 							// tt-dra-driver-kubeletplugin 은 --node-name(=$NODE_NAME)이 필수다.
 							// 다른 벤더 DRA 렌더처럼 downward API 로 노드명을 주입한다 — 없으면
-							// "Required flag node-name not set" 로 크래시한다(라이브 확인).
+							// "Required flag node-name not set" 로 크래시한다.
 							Env: []corev1.EnvVar{
 								{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -1441,10 +1402,10 @@ func renderTenstorrentDRADaemonSet(
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 							// plugins-registry 는 다른 세 벤더 모두가 마운트하는 kubelet 플러그인
-							// 등록 경로다(표준 DRA kubeletplugin 라이브러리가 요구). 라이브 기록은
-							// 마운트 구성을 Furiosa chart 에서 그대로 본떴다고 적었으므로 이 경로도
-							// 포함한다 — 빠지면 kubelet 이 플러그인을 찾지 못해 장치 주입이 조용히
-							// 실패한다(Rebellions 가 host-dev 볼륨 누락으로 겪은 것과 같은 종류).
+							// 등록 경로다(표준 DRA kubeletplugin 라이브러리가 요구). 마운트 구성은
+							// Furiosa chart 를 그대로 본떴으므로 이 경로도 포함한다 — 빠지면 kubelet
+							// 이 플러그인을 찾지 못해 장치 주입이 조용히 실패한다(Rebellions 가
+							// host-dev 볼륨 누락으로 겪은 것과 같은 종류).
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "plugins-registry", MountPath: "/var/lib/kubelet/plugins_registry"},
 								{Name: "plugins", MountPath: "/var/lib/kubelet/plugins"},
@@ -1459,7 +1420,7 @@ func renderTenstorrentDRADaemonSet(
 							// 이미지 Cmd 는 tt-fabric-manager-controller 지만 plugin 이 dial 하는 건
 							// localhost:50053 의 agent 다. 이미지에 tt-fabric-manager-agent 바이너리가
 							// 있으므로 그것을 Command 로 명시한다(없으면 Args 가 Cmd 를 덮어 --host-id 를
-							// exec 해 StartError — plugin 과 같은 원인, 라이브 확인).
+							// exec 해 StartError — plugin 과 같은 원인).
 							Command: []string{"tt-fabric-manager-agent"},
 							// 등호 표기는 Unknown argument 로 거부된다. 공백 분리만 받는다.
 							Args:            []string{"--host-id", "0"},

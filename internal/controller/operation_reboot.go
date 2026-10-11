@@ -1,11 +1,9 @@
 // ============================================================
 // operation_reboot.go: 노드 재부팅 작업 본체 (BootID 검증 + 시도 상한)
-// 상세: 드라이버 업그레이드 경로가 이미 쓰는 규율(캡처-후-Job, BootID 변화로 완료 판정)을 드라이버에
-//
-//	묶이지 않은 형태로 뽑았다. 재부팅은 되돌릴 수 없는 유일한 작업이라, 이 파일에서 가장 중요한
-//	코드는 실행이 아니라 상한이다.
-//
-// 생성일: 2026-08-01
+// 상세: 드라이버 업그레이드 경로가 이미 쓰는 규율(캡처-후-Job, BootID 변화로 완료 판정)을
+// 드라이버에 묶이지 않는 형태로 담는다. 재부팅은 되돌릴 수 없는 유일한 작업이라, 이 파일에서
+// 가장 중요한 코드는 실행이 아니라 상한이다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -123,15 +121,10 @@ func NewNodeRebootParticipant(c client.Client, image string) operation.Participa
 
 // Apply 는 재부팅을 요청하거나, 이미 요청했으면 완료를 판정한다.
 //
-// 캡처 BootID 는 스냅샷에서 읽는다(status.snapshot.bootID) — 조정자가 적용 이전에 이미 채워 둔
-// 값이고, 그 시점이 곧 "재부팅 직전" 이다. 새 필드를 만들 이유가 없다.
-//
-// StepRebootObserved 가 이미 저널에 있으면 더 확인할 것이 없다 — EventBootObserved 로 일단
-// 완료를 보고하면 조정자가 phase 를 Applying 으로 되돌리고(Next(WaitingForReboot,
-// EventBootObserved)), 다음 pass 에서 이 participant 를 다시 부른다. 그때도 attempts>0 이고
-// BootObserved 는 여전히 true 를 가리키므로, 이 가드가 없으면 EventBootObserved 를 또 내게 되고
-// Applying 에는 그 전이가 없어 "정의되지 않은 전이" 에러 루프가 된다 — NodeReboot 타입은 재부팅이
-// 곧 작업의 전부이므로 그 다음 pass 는 ApplyDone 으로 마감한다.
+// 캡처 BootID 는 스냅샷(조정자가 적용 전에 채운 status.snapshot.bootID)에서 읽는다 — 새 필드가
+// 필요 없다. StepRebootObserved 가 이미 저널에 있으면 더 확인하지 않는다 — 이 가드가 없으면
+// EventBootObserved 보고 후 되돌아온 다음 pass 에서도 BootObserved 가 여전히 true 라 같은
+// 사건을 또 내게 되고, Applying 에는 그 전이가 없어 에러 루프가 된다.
 func (p *nodeRebootParticipant) Apply(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) (operation.Outcome, error) {
 	if operation.HasStep(op.Status.Journal, operation.StepRebootObserved) {
 		return operation.Outcome{Event: operation.EventApplyDone, Message: "node reboot already observed"}, nil

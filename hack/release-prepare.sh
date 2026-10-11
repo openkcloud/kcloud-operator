@@ -1,40 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # release-prepare.sh: push 직전까지의 발행 준비를 한 번에 돌린다
-# 상세: 선행 조건과 정합 검사를 돌리고, 필요한 태그를 로컬에만 만들고, 사용자가 실행할
-#       push 명령을 순서대로 출력한다. 이 스크립트는 push 하지 않는다. 레지스트리를 읽는
-#       곳은 digest 검사와 image-tag-check 둘이고(둘 다 조회뿐, push 없음) git remote 는
-#       주소를 읽는 데만 쓴다.
-#       기본은 dry-run 이고 --apply 가 로컬 태그를 만든다. 선행 조건이 하나라도 걸리면
-#       --apply 는 태그를 만들지 않는다 — dry-run 은 그대로 끝까지 돌아 무엇이 왜 걸렸고
-#       무슨 태그·명령이 필요한지 보여준다. 이미 있는 태그는 가리키는 커밋만 대조하고
-#       옮기지 않는다.
-#       image-tag-check 는 기본은 꺼진 검사(CHECK_REGISTRY)지만 여기서는 건너뛰지 않고
-#       직접 돌린다 — 네트워크가 없으면 그 자체로 실패로 보고된다(note 로 눅이지 않는다).
-#       digest-check 의 어긋남 중 "합당한 미발행"(pend) 으로 눅이는 것은 pend 가 어긋남
-#       전체를 설명할 때만이다 — 합당한 미발행 하나(예: 다음 release 태그)가 있다고 그
-#       옆의 다른 어긋남(발행 접두 401 등)까지 덩달아 완화되지 않게 한다.
-#       형제 images 저장소 경로 규약은 test/airgap/manifest-coverage.sh 와 같다.
-#       공개 트리가 빼는 경로·변환하는 파일 목록은 hack/public-chain.sh 에서 읽는다 —
-#       그 파일 자체가 공개 트리에 없으므로, 없으면 그 검사만 건너뛴다(내부 전용 검사).
-#       1단계의 Go 시험 둘은 envtest 가 필요해 KUBEBUILDER_ASSETS 를 Makefile 의 test
-#       타깃과 같은 방법으로 직접 만들어 넘긴다 — 없이 부르면 패키지 TestMain 이 panic 해
-#       무엇을 검사했는지와 무관하게 늘 FAIL 하고, 그러면서 --apply 를 영구 차단한다.
-#       커널별 사전 컴파일 이미지의 발행 대상(operator)과 묶음(images) 대조도 2단계에
-#       직접 돌린다 — bundle-check 는 공개 ref 를 보고 그 ref 에 release-bundle.yaml 이
-#       없으면 묶음 검사를 건너뛰므로 그 대조도 함께 빠진다. 그 이미지의 미발행은 선행
-#       조건 실패로 세지 않는다 — 굽기 전에는 미발행이 정답인 구간이기 때문이다. 다만 그
-#       묶음 태그는 이 스크립트가 아예 만들지 않는다(3단계 want_bundle_tag): 발행 워크플로가
-#       묶음 항목별 build-arg 를 넘기지 못해 push 가 상태를 악화시킨다. 막는 사유와 가드를
-#       지워도 되는 조건은 그 함수 머리 주석에 있다.
+# 상세: 선행 조건과 정합 검사를 돌리고, 필요한 태그를 로컬에만 만들어 push 명령을
+#       출력한다(push 없음). 기본은 dry-run, --apply 가 태그를 만든다. 판정 근거는
+#       각 단계·함수의 본문 주석 참고(CHECK_REGISTRY·pend 완화·커널 묶음 태그 차단 등).
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-05 (커널 이미지 발행 대상·묶음 대조와 미발행 보고
-#         추가, 커널 이미지 묶음 태그 생성 차단, 조회 집계 세 수 읽기, 막을 묶음 이름을
-#         유도 스크립트의 --bundle-name 모드로 받기 — 소스를 긁으면 선언의 따옴표가 값에
-#         섞여 가드가 비켜난다) | 2026-10-04 (image-tag-check 를 2단계에 추가, digest-check
-#         의 미발행 완화 조건을 어긋남 전체 설명 여부로 강화, manifest-coverage 의 역방향을
-#         CHECK_REVERSE_COVERAGE=1 로 2단계에 추가, 1단계 Go 시험에 KUBEBUILDER_ASSETS
-#         명시 — 없이는 TestMain panic 으로 늘 FAIL)
+# 생성일: 2026-10-03 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,14 +14,12 @@ op="$PWD"
 img="$PWD/../images/kcloud-operator-images"
 pub=public/main
 chain=hack/public-chain.sh
-# 태그를 만들지 않는 묶음. 사유는 3단계 want_bundle_tag 머리 주석에 있다.
-# 이름을 여기 다시 적지 않고 유도 스크립트가 내주는 값으로 받는다 — 그 이름을 바꾸는 사람이
-# 이 가드를 함께 고치지 않아도 따라오게 한다.
-#
-# 소스를 긁지 않는 이유: 전에는 그 파일의 bundle_name 할당을 정규식으로 읽었는데, 선언이
-# bundle_name="kernel-images" 로 바뀌면 값에 따옴표가 섞여 들어왔다. 빈 값이 아니라서 아래
-# 빈 값 가드가 걸리지 않고 비교만 어긋나 가드가 조용히 사라졌다. 선언 형식은 또 바뀔 수 있으므로
-# 정규식을 정교하게 만드는 대신 셸이 값을 풀어 주는 모드로 받는다.
+# 태그를 만들지 않는 묶음. 사유는 3단계 want_bundle_tag 머리 주석에 있다. 이름을 여기
+# 다시 적지 않고 유도 스크립트가 내주는 값으로 받아, 이름을 바꾸는 사람이 이 가드를 함께
+# 고치지 않아도 따라오게 한다. 소스를 긁지 않는 이유: 그 파일의 bundle_name 할당을 정규식
+# 으로 읽으면, 선언이 bundle_name="kernel-images" 처럼 바뀔 때 값에 따옴표가 섞여 들어와
+# 빈 값 가드를 비켜가고 비교만 어긋나 가드가 조용히 사라진다. 선언 형식은 또 바뀔 수
+# 있으므로 정규식 대신 셸이 값을 풀어 주는 모드로 받는다.
 derive_sh=hack/kernel-image-targets.sh
 blocked_bundle="$(bash "$derive_sh" --bundle-name 2>/dev/null || true)"
 
@@ -97,19 +66,12 @@ else
   ok "차트 version ${ver} / appVersion ${app} — operator 발행 태그는 ${op_tag}"
 fi
 
-# 프리셋 image.tag 대조는 chart_version_sync_test.go 가 이미 한다. 같은 대조를 여기에
-# 다시 적으면 한쪽만 고쳐 또 어긋난다.
-#
-# 아래 두 Go 시험 모두 envtest(API 서버)가 필요하다 — internal/controller 패키지의 유일한
-# TestMain(acceleratordescriptor_apply_test.go) 이 -run 필터와 무관하게 항상 먼저 돈다.
-# KUBEBUILDER_ASSETS 없이 부르면 TestMain 이 패키지 전체를 panic 시켜 "무엇을 검사했는지와
-# 무관하게 늘 FAIL" 이 된다 — 릴리스 게이트 자신이 그 대조를 한 번도 안 돌리면서 --apply 를
-# 영구 차단하는 셀프 함정이다. Makefile 의 test 타깃과 같은 방법(ENVTEST use --bin-dir -p
-# path)으로 직접 만든다. --bin-dir 은 절대경로여야 한다 — go test 는 패키지 디렉터리를
-# CWD 로 바꿔 부르므로 상대경로를 주면 "그런 파일 없음" 으로 다시 panic 한다.
-# TestMain 자신도 변수가 비면 bin/k8s 를 훑어 대신 쓰지만, 그 디렉터리가 이미 있을 때만
-# 우연히 통과하는 상태라 여기서는 기대지 않고 매번 명시한다.
-# 자산을 못 구하면 건너뛰지 않고 아래 두 검사 각각을 그 사실로 FAIL 처리한다.
+# 프리셋 image.tag 대조는 chart_version_sync_test.go 가 이미 하므로 여기 다시 적지 않는다.
+# 아래 두 Go 시험은 envtest(API 서버)가 필요하고, internal/controller 의 유일한 TestMain
+# 이 -run 필터와 무관하게 항상 먼저 돈다. KUBEBUILDER_ASSETS 없이 부르면 TestMain 이
+# panic 해 늘 FAIL 하며 --apply 를 영구 차단하는 셀프 함정이 된다. Makefile 의 test
+# 타깃과 같은 방법으로 직접 만들어 넘긴다(--bin-dir 은 절대경로 필수, TestMain 자체
+# 폴백엔 기대지 않는다) — 자산을 못 구하면 건너뛰지 않고 FAIL 로 처리한다.
 k8s_ver="$(go list -m -f '{{.Version}}' k8s.io/api 2>/dev/null | awk -F'[v.]' '{printf "1.%d", $3}')"
 assets=""
 if [ -n "$k8s_ver" ] && [ -x "$op/bin/setup-envtest" ]; then
@@ -269,11 +231,10 @@ fi
 
 # 커널별 사전 컴파일 이미지는 위 rc 에 들어가지 않는다 — 아직 굽지 않은 것이 정답인 구간이
 # 있어 image-tag-check 가 결함으로 세지 않는다. 그 수를 여기서 읽어 눈에 띄게 둔다.
-# 미발행을 선행 조건 실패로 세지 않는 이유는 그것이 push 로 해소되는 사실이기 때문이다.
-# "발행 경로가 올바른 내용을 만들 수 없다" 는 다른 사실이고 3단계의 blocked_bundle 이 막는다.
-#
-# 세 수를 다 읽는다. 발행 수를 읽지 않으면 "없다고 확답받은 것이 없다"(kmiss==0)를 "다 있다" 로
-# 적는다 — 요율 제한으로 9건 중 8건이 401 이어도 초록이 된다.
+# 미발행을 선행 조건 실패로 세지 않는 이유는 push 로 해소되는 사실이기 때문이다 — "발행
+# 경로가 올바른 내용을 만들 수 없다" 는 다른 사실이고 3단계의 blocked_bundle 이 막는다.
+# 세 수를 다 읽는다 — 발행 수를 읽지 않으면 "없다고 확답받은 것이 없다"(kmiss==0)를 "다
+# 있다" 로 적어, 요율 제한으로 9건 중 8건이 401 이어도 초록이 된다.
 ktotal="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 \K[0-9]+' | head -1 || true)"
 kpub="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 [0-9]+건 중 발행 \K[0-9]+' | head -1 || true)"
 kmiss="$(printf '%s\n' "$out" | LC_ALL=C grep -oP '커널 이미지 — 대상 [0-9]+건 중 발행 [0-9]+건, 미발행 \K[0-9]+' | head -1 || true)"
@@ -343,21 +304,12 @@ want_tag() {
 
 want_tag "$op" "$op_tag" "$pub" "operator 이미지·차트 발행"
 
-# blocked_bundle 은 태그를 만들지 않는 묶음이다. publish-bundle.yml 이 build-arg 를
-# images.yaml 에서만 읽어 묶음 항목마다 다른 값을 넘기지 못하는데, 사전 컴파일에는 커널마다
-# 다른 PREBUILD_* 가 필요하다. 그래서 이 태그를 push 하면 사전 컴파일이 아닌 이미지가 커널
-# 이미지 태그를 달고 발행된다. 같은 태그 재발행이 거절되므로 그 빌드 개정은 영구히 못 쓰게 된다.
-#
-# "미발행이면 실패" 와 다른 사실이다 — 미발행은 push 가 해소하지만 이것은 push 가 악화시킨다.
-# 그래서 2단계의 미발행 집계는 note 로 두고 태그 생성만 여기서 막는다.
-#
-# 이 가드를 지워도 되는 조건 둘:
-#   - publish-bundle.yml 이 묶음 항목의 build-arg 를 images.yaml 값 위에 병합한다
-#   - 발행본의 사전 컴파일 라벨(org.kcloud.prebuild-kernel)을 읽어 태그의 -k<커널> 토막과
-#     대조하는 검사가 images 저장소에 있다(지금은 그 라벨을 붙이는 쪽도, 읽는 쪽도 없다)
-#
-# want_bundle_tag 는 묶음 태그 요청을 한 자리로 모은다. 두 호출부(이름 지정·묶음 하나)가
-# 각자 want_tag 를 부르면 한쪽에만 가드가 걸린다.
+# blocked_bundle 은 태그를 만들지 않는 묶음이다 — publish-bundle.yml 이 images.yaml 에서만
+# build-arg 를 읽어 커널마다 다른 PREBUILD_* 를 못 넘기므로, push 하면 사전 컴파일이 아닌
+# 이미지가 커널 태그를 달고 발행되고 재발행이 거절돼 그 빌드 개정은 못 쓰게 된다. "미발행
+# 이면 실패" 와 달리 push 가 악화시켜 2단계는 note 로 두고 태그 생성만 막는다. 지우는 조건:
+# publish-bundle.yml 이 build-arg 를 병합하거나 사전 컴파일 라벨 대조 검사가 생길 때.
+# want_bundle_tag 로 모아 둔다 — 두 호출부가 각자 부르면 한쪽에만 가드가 걸린다.
 want_bundle_tag() {
   local name="$1"
   # 막을 이름을 받지 못했으면 가드가 없는 것과 같다. 빈 문자열을 비교에 쓰면 어떤 묶음도

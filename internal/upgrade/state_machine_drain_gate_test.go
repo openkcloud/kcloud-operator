@@ -1,11 +1,8 @@
 // ============================================================
 // state_machine_drain_gate_test.go: drain 게이트의 장치 점유 판정 단위 테스트
-// 상세: 드라이버 교체 전 노드를 비우는 판정이 device-plugin 축(extended resource limits)과
-//   DRA 축(pod.spec.resourceClaims)을 모두 보는지, initContainers 와 Pending 단계를
-//   빠뜨리지 않는지, 그리고 hasDeviceWorkloads 와 evictDevicePods 가 같은 집합을 보는지 고정.
-//   다른 노드의 장치 Pod·Failed 단계·장치를 쓰지 않는 Pod 만 있는 음성 사례도 고정한다.
-//   fake client 기반 — envtest 불필요.
-// 생성일: 2026-10-04 | 수정일: 2026-10-04
+// 상세: device-plugin 축과 DRA 축을 모두 보고 initContainers·Pending 단계를 빠뜨리지 않는
+//       노드 비움 판정을 고정한다. fake client 기반 — envtest 불필요.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -172,7 +169,7 @@ func TestHandleDrainingSucceededDevicePodAllowsUpgrading(t *testing.T) {
 	}
 }
 
-// ── 시험 5: 확장 리소스 판정 범위가 좁아지지 않았다 ──────────────────
+// ── 시험 5: 확장 리소스 판정 범위가 좁지 않다 ─────────────────────────
 // 판정은 intent.AcceleratorResourceDomains 에 부분 일치를 걸어 벤더를 가리지 않는다.
 // 벤더별 정확 일치·접두 일치로 바꾸면 device-plugin 변형 이름(gpu.shared 등)과
 // 카탈로그 밖 제품명이 조용히 빠진다.
@@ -208,12 +205,10 @@ func TestPodUsesDeviceKeepsVendorAgnosticSubstringMatch(t *testing.T) {
 
 // ── 시험 4: resource.k8s.io 를 서빙하지 않는 클러스터 ────────────────
 // claim 축 조회가 "그 축이 없다" 로 돌아오면 넘긴다. 부재를 이유로 게이트를 막으면 DRA 가
-// 꺼진 클러스터에서 drain 이 영원히 끝나지 않는다.
-//
-// 그런 클러스터가 내는 실제 오류는 RESTMapper 의 NoKindMatchError 다. scheme 에서 타입만 빼면
-// fake client 는 "no kind is registered for the type" 라는 다른 오류를 내 넘기는 분기를 밟지
-// 못하므로(그것은 바이너리가 타입을 모르는 경우이고 운영에서는 일어나지 않는다),
-// interceptor 로 운영과 같은 오류를 돌려준다.
+// 꺼진 클러스터에서 drain 이 영원히 끝나지 않는다. 그런 클러스터가 내는 실제 오류는
+// RESTMapper 의 NoKindMatchError 다 — scheme 에서 타입만 빼면 fake client 는 다른 오류("no
+// kind is registered")를 내 넘기는 분기를 밟지 못하므로(바이너리가 타입을 모르는 경우라
+// 운영에서는 일어나지 않는다), interceptor 로 운영과 같은 오류를 돌려준다.
 func TestHandleDrainingSkipsClaimGateWhenDRANotServed(t *testing.T) {
 	dus, dip := makeDrainingDUS(), makeDrainEnabledDIP()
 	sm := &UpgradeStateMachine{

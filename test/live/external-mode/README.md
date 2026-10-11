@@ -1,4 +1,4 @@
-<!-- README.md: managementMode=external 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 -->
+<!-- README.md: managementMode=external 라이브 데모(run.sh) 실행법과 판정 기준 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # managementMode=external 라이브 데모
 
 ## 왜
@@ -25,8 +25,7 @@ device-plugin DaemonSet 이 없고, present 라벨이 유지되며, NPUClusterPo
 ## 전제
 
 - operator 빌드에 tenstorrent·rebellions 의 toggle-off(비활성화 시 소유 device-plugin 삭제) 경로가
-  있어야 한다. v0.7.44 에서는 이 경로가 없어 데모 1단계(`ds_deleted_on_disable`)가 실패했다(Ruling
-  R4-10 으로 컨트롤러에서 수정 중). 이 수정이 포함된 빌드(v0.7.45 이상)에서 실행한다. nvidia 는
+  있어야 한다. 이 경로가 없는 빌드에서는 데모 1단계(`ds_deleted_on_disable`)가 실패한다. nvidia 는
   기존부터 toggle-off 삭제 경로가 있다.
 - 대상 벤더 장치가 관측 노드에 실재하고, device-plugin 이 떠 있는 상태에서 시작한다.
 
@@ -95,13 +94,6 @@ VENDOR=nvidia bash test/live/external-mode/run.sh
 - 시작 조건이 안 맞으면 `verdict=BLOCKED`, 종료코드 1.
 - 요약은 `$OUT`(기본 `/tmp/external-mode-evidence/`)에도 남는다.
 
-## 실행 이력
-
-- tenstorrent 프로파일은 `run.sh` 로 실행해 7개 검사 전부 PASS 를 확인했다(원장 참조).
-- nvidia 프로파일은 `run.sh` 로는 아직 실행하지 않았다. nvidia external 은 별도 수동 절차로만
-  확인했다(external 전환 동안 기존 device-plugin DaemonSet 의 UID 가 바뀌지 않음 = kcloud 가
-  삭제·재생성하지 않음). nvidia 프로파일을 `run.sh` 로 돌리려면 위 표의 환경변수를 쓴다.
-
 ## 이 데모가 증명하지 않는 것
 
 이 데모는 kcloud 가 external 벤더의 배포물을 만들지 않고 관측·라벨만 유지하는지, descriptor 중재가
@@ -111,3 +103,5 @@ external 을 관리 중으로 보는지, 전환 뒤 복원이 되는지를 확�
 - external 벤더의 드라이버 버전 드리프트 관측과 그에 대한 조치.
 - DriverInstallPolicy 동작(nvidia-toolkit 배포 등). external 은 DriverInstallPolicy 에 영향을 주지
   않는다.
+- nvidia 프로파일은 `run.sh` 로 자동 확인하지 않는다 — external 전환 동안 기존 device-plugin
+  DaemonSet 의 UID 가 바뀌지 않는지(kcloud 가 삭제·재생성하지 않는다는 뜻)는 수동으로 확인한다.

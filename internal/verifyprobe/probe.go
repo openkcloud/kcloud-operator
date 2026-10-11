@@ -1,12 +1,9 @@
 // ============================================================
 // probe.go: 벤더별 기능 확인 probe 명령표
-// 상세: ACPP 검증기가 파티션·공유 적용 뒤 "장치가 실제로 보이는가" 를 컨테이너 안에서 묻는
-//
-//	한 줄 명령이다. 드라이버 어댑터(driveradapter)와 관심사가 달라(설치 생애주기 대 검증)
-//	별도 표로 둔다 — ADR-003 이 남긴 후속 후보의 두 번째 길. 이미지·호스트 바이너리 경로는
-//	배포 환경마다 달라 컨트롤러가 환경변수(ACPP_PROBE_IMAGE_<VENDOR>·ACPP_PROBE_HOSTBIN_<VENDOR>)로 채운다.
-//
-// 생성일: 2026-09-30
+// 상세: ACPP 검증기가 파티션·공유 적용 뒤 "장치가 실제로 보이는가" 를 컨테이너 안에서
+// 묻는 한 줄 명령이다. 드라이버 어댑터(driveradapter)와 관심사가 달라(설치 생애주기 대
+// 검증) 별도 표로 둔다(이미지·바이너리 경로 주입 방식은 registry 선언 주석 참고).
+// 생성일: 2026-09-30 | 수정일: 2026-10-11
 // ============================================================
 package verifyprobe
 
@@ -21,6 +18,8 @@ type Probe struct {
 }
 
 // registry 의 키는 vendorcap 벤더 어휘다. rngd 는 furiosa 의 product 라 furiosa 항목을 쓴다.
+// 이미지·호스트 바이너리 경로는 컨트롤러가 ACPP_PROBE_IMAGE_<VENDOR>·
+// ACPP_PROBE_HOSTBIN_<VENDOR> 환경변수로 채운다(배포 환경마다 다르다).
 var registry = map[string]Probe{
 	"nvidia":      {Command: "nvidia-smi", Args: []string{"-L"}},
 	"tenstorrent": {Command: "tt-smi", Args: []string{"-s"}},

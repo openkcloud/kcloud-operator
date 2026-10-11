@@ -1,12 +1,9 @@
 // ============================================================
 // nodedevicereport_notapplicable_test.go: ValidationStep.NotApplicable CRD 왕복 시험
 // 상세: detector 가 JSON 으로 쓰는 notApplicable 필드가 구조적 스키마에 없으면 API 서버가
-//
-//	조용히 잘라낸다(pruning). 타입에 필드가 있다는 것만으로는 라이브에서 살아남는지
-//	증명이 안 되므로, envtest(config/crd/bases 로 기동)에 실제로 쓰고 다시 읽어
-//	값이 유지되는지 본다.
-//
-// 생성일: 2026-08-12
+// 조용히 잘라낸다(pruning). 타입에 필드가 있다는 것만으로는 라이브에서 살아남는지 보장이
+// 안 되므로, envtest(config/crd/bases 로 기동)에 실제로 쓰고 다시 읽어 값이 유지되는지 본다.
+// 생성일: 2026-08-12 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

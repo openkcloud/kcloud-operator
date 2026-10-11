@@ -1,6 +1,6 @@
 // ============================================================
 // device_test.go: 장치 단위 판정 단위 시험
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -29,11 +29,9 @@ func TestEvaluateDevicesFlagsOnlyTheBadDevice(t *testing.T) {
 }
 
 // TestObservationFailureDoesNotChangeDeviceState 는 MIG 관측 실패가 장치 상태를 바꾸지 않는지
-// 본다 — "MIG 를 못 읽는다" 와 "GPU 를 못 쓴다" 는 다른 사실이다. 라이브 근거(2026-08-04):
-// master 의 GPU 는 GeForce GTX 970(Maxwell) 이라 MIG 자체를 지원하지 않고 드라이버/라이브러리
-// 버전 불일치로 nvidia-smi 가 rc=18(NVML 초기화 실패)로 죽는다 — 관측이 성공할 길이 없는데도
-// GPU 자체는 멀쩡하다. 예전엔 이 경우 장치가 영구히 Unknown 이 되어 배치에서 빠졌다
-// (TestEvaluateDevicesFailClosedOnUnobservable 이었던 시험).
+// 본다 — "MIG 를 못 읽는다" 와 "GPU 를 못 쓴다" 는 다른 사실이다. 예: master 의 GPU 는
+// GeForce GTX 970(Maxwell) 이라 MIG 자체를 지원하지 않고 드라이버/라이브러리 버전
+// 불일치로 nvidia-smi 가 rc=18(NVML 초기화 실패)로 죽지만 GPU 자체는 멀쩡하다.
 // 깨는 뮤테이션: MigObservationError 분기가 다시 State=Unknown 을 내면 실패한다.
 func TestObservationFailureDoesNotChangeDeviceState(t *testing.T) {
 	in := []DeviceInput{{PCI: "0000:18:00.0", DriverLoaded: true,

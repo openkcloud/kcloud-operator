@@ -1,7 +1,7 @@
 // ============================================================
 // participant_test.go: participant 레지스트리 테스트
 // 상세: 등록되지 않은 작업 종류가 조용히 통과하지 않는다는 것만 고정한다(계약 자체는 얇다).
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package operation
 
@@ -26,9 +26,7 @@ func (stubParticipant) VerifyRequest(context.Context, *v1alpha1.AcceleratorOpera
 }
 
 // 증명: 등록된 종류만 찾아진다. 미등록 종류를 실행하면 아무도 mutation 을 책임지지 않은 채
-//
-//	상태만 전진하므로, 레지스트리 조회 실패는 반드시 드러나야 한다.
-//
+// 상태만 전진하므로, 레지스트리 조회 실패는 반드시 드러나야 한다.
 // 깨는 뮤테이션: For 가 항상 (nil, true) 를 돌려주게 바꾸면 실패한다.
 func TestRegistryOnlyResolvesRegisteredTypes(t *testing.T) {
 	reg := Registry{PartitionReconfigure: stubParticipant{}}

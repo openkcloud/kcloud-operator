@@ -1,6 +1,6 @@
 // ============================================================
 // evaluate_test.go: 신호 판정·상태 분류·전이 규칙 시험
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -161,7 +161,7 @@ func TestUnknownCanGoAnywhere(t *testing.T) {
 // TestPartialDriverlessDoesNotCarryNodeScopedReason 는 장치 하나만 driverless 여도(건전한
 // 장치가 남아 있으면) 노드 원인이 DriverNotLoaded 로 올라가지 않는지 본다. 원인 그대로 올리면
 // 조치표(remediation.go)가 노드 범위 RecoverDevice 를 만들어, 혼재 노드에서 고장난 장치 하나가
-// 멀쩡한 다른 장치의 드라이버 pod 까지 쿨다운마다 재시작시킨다(2026-08-04 최종 리뷰 C2).
+// 멀쩡한 다른 장치의 드라이버 pod 까지 쿨다운마다 재시작시킨다.
 // 깨는 뮤테이션: Evaluate 의 부분 실패 원인 치환(state, reason, allow = StateDegraded, ...)을
 // 지우면 reason 이 DriverNotLoaded 로 남아 실패한다.
 func TestPartialDriverlessDoesNotCarryNodeScopedReason(t *testing.T) {
@@ -201,15 +201,11 @@ func TestFullDriverlessStillCarriesDriverNotLoaded(t *testing.T) {
 	}
 }
 
-// TestAllDevicesUnobservableIsUnknown 는 원래 "MIG 관측 전무 = 노드 Unknown/차단" 을 고정하는
-// 시험이었다. 그 판정 자체가 라이브에서 결함으로 드러나 여기서 반대를 고정한다 — 이름은 과거의
-// 판정을 가리키므로 바뀌었다(TestObservationFailureDoesNotBlockAllocation 이 실제 의도다).
-//
-// 라이브 근거(2026-08-04): master 의 GPU 는 GeForce GTX 970(Maxwell) 이라 MIG 자체를 지원하지
-// 않고, 드라이버/라이브러리 버전 불일치로 nvidia-smi 가 rc=18(NVML 초기화 실패)로 죽는다 —
-// 관측이 성공할 길이 없는데도 GPU 는 멀쩡하다. worker1 도 배포 직후 79초 동안 같은 이유로
-// 멀쩡한 GPU 2장이 배치에서 빠졌었다. "MIG 를 못 읽는다" 를 "GPU 를 못 쓴다" 의 대리로 쓴 것이
-// 잘못이었다 — 보고서 신선도는 이미 NDRFreshness 축이 따로, 정확하게 감시한다.
+// TestObservationFailureDoesNotBlockAllocation 는 모든 장치의 MIG 관측이 실패해도 노드를
+// Unknown/차단으로 보지 않는지 본다. 예: GeForce GTX 970(Maxwell)은 MIG 자체를 지원하지
+// 않아 nvidia-smi 가 rc=18(NVML 초기화 실패)로 죽지만 GPU 는 멀쩡하다 — "MIG 를 못
+// 읽는다" 를 "GPU 를 못 쓴다" 의 대리로 쓰면 틀린다. 보고서 신선도는 NDRFreshness 축이
+// 따로 정확하게 감시한다.
 // 깨는 뮤테이션: evaluateDevice 가 MigObservationError 로 다시 State=Unknown 을 내면 실패한다.
 func TestObservationFailureDoesNotBlockAllocation(t *testing.T) {
 	now := time.Now()
@@ -228,8 +224,8 @@ func TestObservationFailureDoesNotBlockAllocation(t *testing.T) {
 		t.Fatal("MIG 관측 실패만으로 신규 할당을 막았다")
 	}
 	// 노드가 Healthy 로 끝나도 장치 신호는 Result.Signals(status.signals) 에 실려야 한다 —
-	// 2026-08-04 라이브: 조기 반환 분기 안에서만 합쳤더니 Healthy 노드에서 관측 실패 신호가
-	// 통째로 사라졌다(status.devices 는 맞는데 "왜" 를 볼 수 없었다).
+	// 조기 반환 분기 안에서만 합치면 Healthy 노드에서 관측 실패 신호가 통째로 사라진다
+	// (status.devices 는 맞아도 "왜" 를 볼 수 없다).
 	found := false
 	for _, s := range res.Signals {
 		if s.Name == SignalDeviceObservation && !s.OK {

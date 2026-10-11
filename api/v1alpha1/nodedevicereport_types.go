@@ -43,7 +43,7 @@ type DeviceEntry struct {
 	DriverVersionDetail string `json:"driverVersionDetail,omitempty"` // 상세 버전 정보 (한 줄 요약)
 	NeedsReboot         bool   `json:"needsReboot,omitempty"`
 	// DriverBinding 은 해당 장치의 PCI 커널 드라이버 바인딩 상태입니다.
-	// "nvidia"=드라이버 바인딩, "vfio-pci"=passthrough 바인딩, "none"=미바인딩(free). (a) passthrough 감지용.
+	// "nvidia"=드라이버 바인딩, "vfio-pci"=passthrough 바인딩, "none"=미바인딩(free). passthrough 감지용.
 	DriverBinding string `json:"driverBinding,omitempty"`
 	// GFD 소스 필드 — node-agent 가 스캔 시 sysfs/PCI 에서 best-effort 추출합니다(미가용 시 공란).
 	MemoryMiB         int64  `json:"memoryMiB,omitempty"`         // 디바이스 메모리(MiB)
@@ -59,12 +59,11 @@ type DeviceEntry struct {
 	MigObservationError string `json:"migObservationError,omitempty"`
 	FirmwareVersion     string `json:"firmwareVersion,omitempty"` // 가용 시 펌웨어/BIOS 버전
 	// MigLgipOutput 은 `nvidia-smi mig -lgip` 원문입니다(ACPP §4.2 MIG profile discovery 소스).
-	// node-manager(detector) 가 채웁니다(Task 11b). NVIDIA 이외 벤더는 공란.
+	// node-manager(detector) 가 채웁니다. NVIDIA 이외 벤더는 공란.
 	MigLgipOutput string `json:"migLgipOutput,omitempty"`
 	// DriverVersionOnDisk 는 설치된(디스크) 드라이버 버전 = 재부팅 후 로드될 버전입니다.
-	// 로드된 버전(DriverVersion, /proc)과 다르면 대역외 드리프트입니다(2026-09-17 사고 형태).
-	// detector 가 nvidia dpkg 에서 채웁니다. 이 필드가 CRD 스키마에 있어야 apiserver 가
-	// detector 방출을 pruning 하지 않습니다.
+	// 로드된 버전(DriverVersion, /proc)과 다르면 대역외 드리프트입니다. detector 가 nvidia
+	// dpkg 에서 채우며, CRD 스키마에 있어야 apiserver 가 detector 방출을 pruning 하지 않습니다.
 	DriverVersionOnDisk string `json:"driverVersionOnDisk,omitempty"`
 }
 
@@ -79,7 +78,7 @@ type NodeDeviceReportStatus struct {
 	Devices    []DeviceEntry `json:"devices,omitempty"`
 	Conditions []Condition   `json:"conditions,omitempty"`
 	// PassthroughReserved 는 노드에 GPU 가 존재하며 전량 vfio-pci(passthrough)에 바인딩된 경우 true 입니다.
-	// (a) 관리자가 passthrough 예약 노드를 식별하고 드라이버 설치 보류 판단을 보조합니다.
+	// 관리자가 passthrough 예약 노드를 식별하고 드라이버 설치 보류 판단을 보조합니다.
 	PassthroughReserved bool `json:"passthroughReserved,omitempty"`
 	// Validation 은 node-agent 가 상시/정기 실행하는 벤더별 검증 결과입니다.
 	Validation *ValidationStatus `json:"validation,omitempty"`
@@ -129,10 +128,9 @@ type ValidationStep struct {
 	Name string `json:"name"`
 	// Passed 는 해당 step 통과 여부입니다.
 	Passed bool `json:"passed"`
-	// NotApplicable 은 Passed 와 별개 축입니다 — 통과도 실패도 아닌 "해당없음" 상태를
-	// 표시합니다(예: control-plane 배제 노드의 devicePlugin/sampleWorkload). 이 이름·json
-	// 태그는 detector(node-device-detector/types.go 의 ValidationStep)와 정확히 같아야
-	// 합니다 — 다르면 구조적 스키마가 detector 가 쓰는 값을 조용히 잘라냅니다.
+	// NotApplicable 은 Passed 와 별개 축입니다 — 통과도 실패도 아닌 "해당없음" 상태를 표시합니다
+	// (예: control-plane 배제 노드). 이 이름·json 태그는 detector(node-device-detector/types.go 의
+	// ValidationStep)와 정확히 같아야 합니다 — 다르면 구조적 스키마가 그 값을 조용히 잘라냅니다.
 	NotApplicable bool `json:"notApplicable,omitempty"`
 	// Message 는 실패/보조 사유입니다(운영자 디버깅).
 	Message string `json:"message,omitempty"`

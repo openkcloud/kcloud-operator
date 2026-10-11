@@ -1,12 +1,9 @@
 // ============================================================
 // adapter.go: 드라이버 생애주기에서 벤더마다 다른 판단을 모으는 어댑터
 // 상세: 컨트롤러가 벤더 이름으로 분기하지 않고 (vendor, product) 로 어댑터를 조회해 묻는다.
-//
-//	레지스트리는 vendorcap 이 아는 조합마다 한 항목을 갖는다(adapter_test 가 강제).
-//	이 태스크는 자리만 만들고 판단을 옮기지 않는다 — 각 메서드는 지금 컨트롤러가
-//	내는 것과 같은 값을 돌려준다.
-//
-// 생성일: 2026-09-28
+// 레지스트리는 vendorcap 이 아는 조합마다 한 항목을 갖는다(adapter_test 가 강제). 지금은
+// 자리만 만들고 판단을 옮기지 않아, 각 메서드는 컨트롤러가 내는 것과 같은 값을 돌려준다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 // ============================================================
 package driveradapter
 
@@ -47,26 +44,21 @@ type Key = vendorcap.Key
 // DriverAdapter 는 드라이버 생애주기에서 벤더마다 다른 판단을 모은다. 컨트롤러는 벤더
 // 이름으로 분기하지 않고 이 인터페이스로 묻는다. 값으로 답할 수 없는 물음은 벤더의 현재
 // 기본 동작(빈 값·no-op)을 그대로 돌려준다 — 그것은 구현 누락이 아니라 정상 상태다.
-//
-// 메서드는 착수 시 internal/controller 의 실제 벤더 분기를 읽어 정했다. 초안의 일곱 중
-// AdvertisedResource(internal/intent 의 productResource 가 이미 담당)·InstallMode
-// (spec.driver.mode 필드)·NeedsRebootAfterInstall(NodeDeviceReport.needsReboot 필드)·
-// DriverLoadedFrom(NodeDeviceReport.driverLoaded 를 벤더 무관으로 읽음)·ExporterRequired
-// (spec.nvidia.dcgmExporter 필드)는 컨트롤러의 벤더 분기가 아니어서 뺐다.
+// AdvertisedResource·InstallMode·NeedsRebootAfterInstall·DriverLoadedFrom·ExporterRequired 는
+// 컨트롤러의 벤더 분기가 아니라(각각 internal/intent.productResource·spec.driver.mode·
+// NodeDeviceReport 필드·spec.nvidia.dcgmExporter 가 담당) 이 인터페이스에 없다.
 type DriverAdapter interface {
 	// Key 는 이 어댑터가 담당하는 (vendor, product) 다.
 	Key() Key
 
 	// PresentNodeSelector 는 이 벤더 장치가 있는 노드를 고르는 셀렉터다(node-manager 가
 	// 부여하는 자립 라벨, NFD 비의존). 셀렉터가 없는 벤더는 nil 을 돌려준다.
-	// (구 internal/controller/driver_daemonset_controller.go 의 vendorNodeSelector,
-	// 74f18e8 에서 제거)
+	// (구 internal/controller/driver_daemonset_controller.go 의 vendorNodeSelector 에서 이동)
 	PresentNodeSelector() map[string]string
 
 	// RmmodCommand 는 설치 DaemonSet 이 구 커널 모듈을 내릴 때 쓰는 셸 명령이다. 내릴
 	// 모듈이 없는 벤더(호스트 관리·설치 추적만)는 no-op("true")을 돌려준다.
-	// (구 internal/controller/driver_daemonset_controller.go 의 vendorRmmodCommand,
-	// 74f18e8 에서 제거)
+	// (구 internal/controller/driver_daemonset_controller.go 의 vendorRmmodCommand 에서 이동)
 	RmmodCommand() string
 
 	// ToolkitRequired 는 container-toolkit(containerd 런타임 등록) 조정이 필요한지다.
@@ -76,8 +68,7 @@ type DriverAdapter interface {
 
 	// AptAuthRequired 는 설치 DaemonSet 이 사설 APT repo 인증 secret 을 마운트해야 하는지다.
 	// 현재 Furiosa Warboy 만 참이다.
-	// (구 internal/controller/driver_daemonset_controller.go 의 furiosaAptAuthRequired,
-	// 74f18e8 에서 제거)
+	// (구 internal/controller/driver_daemonset_controller.go 의 furiosaAptAuthRequired 에서 이동)
 	AptAuthRequired() bool
 
 	// RuntimeClass 는 이 벤더 장치를 쓰는 파드에 박을 runtimeClassName 이다. 필요 없는

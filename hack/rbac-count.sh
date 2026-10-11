@@ -5,8 +5,7 @@
 #       모아 distinct 개수를 센다(`*` verb 는 리소스당 한 쌍으로 계산, 확장하지 않음). 이 값은
 #       특권 사용량 실측의 rbac_verb_pairs/role_verb_pairs 와
 #       같은 정의다. 기본은 표(PAIRS KIND NAME), --json 은 "kind/name"→수 객체를 출력한다.
-# 용법: hack/rbac-count.sh [--json]
-# 생성일: 2026-09-22
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

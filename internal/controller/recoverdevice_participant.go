@@ -1,11 +1,9 @@
 // ============================================================
 // recoverdevice_participant.go: RecoverDevice 작업 본체 (R&D base v0.1 §9.7)
-// 상세: 드라이버가 안 올라온 노드에서 **드라이버를 올리는 주체**(설치 Job pod / 드라이버 DS pod)를
-//
-//	지워 다시 뜨게 한다. 커널 모듈을 직접 건드리지도, 노드를 재부팅하지도 않는다 — 그 둘은
-//	되돌릴 수 없고, health 는 되돌릴 수 없는 행동을 스스로 하지 않는다(계약 §9.6).
-//
-// 생성일: 2026-08-04 | 수정일: 2026-10-09
+// 상세: 드라이버가 안 올라온 노드에서 **드라이버를 올리는 주체**(설치 Job pod / 드라이버 DS
+// pod)를 지워 다시 뜨게 한다. 커널 모듈을 직접 건드리지도, 노드를 재부팅하지도 않는다 — 그
+// 둘은 되돌릴 수 없고, health 는 되돌릴 수 없는 행동을 스스로 하지 않는다(계약 §9.6).
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -36,12 +34,10 @@ const driverVendorLabel = "npu.ai/vendor"
 
 // recoverDeviceParticipant 는 장치 복구 작업의 본체다.
 //
-// **무엇이 복구인가**: 이 단계의 답은 "드라이버를 올리는 주체를 다시 띄운다" 하나다. 라이브에서
-// driverLoaded=false 가 되는 흔한 원인은 그 주체(설치 Job·DS pod)가 죽어 있는 것이고, 그것은
-// 다시 띄우면 낫는다. 커널 모듈 재적재(rmmod/modprobe)와 재부팅은 **하지 않는다**: 전자는 장치를
-// 쓰는 프로세스가 있으면 실패하거나 커널을 불안정하게 만들고, 후자는 되돌릴 수 없다. 둘 다
-// 필요한 상황이라면 그것은 자동 복구가 아니라 사람이 결정할 일이고, 세 번 실패하면 격리가
-// 그렇게 만든다.
+// **무엇이 복구인가**: 이 단계의 답은 "드라이버를 올리는 주체를 다시 띄운다" 하나다. 운영에서
+// driverLoaded=false 의 흔한 원인은 그 주체(설치 Job·DS pod)가 죽어 있는 것이고, 다시 띄우면
+// 낫는다. 커널 모듈 재적재(rmmod/modprobe)와 재부팅은 **하지 않는다** — 전자는 프로세스 점유 시
+// 실패하거나 커널을 불안정하게 만들고, 후자는 되돌릴 수 없어 둘 다 사람이 결정할 일이다.
 type recoverDeviceParticipant struct {
 	r *AcceleratorPartitionPolicyReconciler
 }
@@ -62,7 +58,7 @@ func (p *recoverDeviceParticipant) Apply(ctx context.Context,
 	// 드라이버 업그레이드 사이클 안이면 아무것도 지우지 않는다. 그 구간의 driverLoaded=false 는
 	// 고장이 아니라 설치가 스스로 구 모듈을 내린 예정된 상태다. 여기서 설치 주체를 지우면 노드의
 	// apt 가 DKMS 빌드 도중 죽어 패키지가 half-configured 로 남고, 버전 보고가 막혀 검증이 영원히
-	// 실패하는 자기강화 루프가 된다(2026-08-10 라이브).
+	// 실패하는 자기강화 루프가 된다.
 	//
 	// 실패가 아니라 완료로 보고한다 — ApplyFailed 는 세 번 쌓이면 멀쩡한 노드를 격리로 보낸다.
 	if p.upgradingDriver(ctx, op.Spec.NodeName) {
@@ -158,7 +154,7 @@ func (p *recoverDeviceParticipant) Rollback(context.Context,
 //
 // health 가 만든 작업은 소유 정책이 없어 검증이 구조적으로 통과할 수 없다 — 여기서 따로 판단하면
 // 그 사실을 잊은 채 "정직하게" 검증을 요구하게 되고, 그러면 이 작업은 항상 RolledBack 으로 끝나
-// 멀쩡한 노드가 세 번 만에 격리된다(HL-3·HL-5, 2026-08-04 라이브에서 두 번 재현됐다).
+// 멀쩡한 노드가 세 번 만에 격리된다.
 func (p *recoverDeviceParticipant) VerifyRequest(ctx context.Context,
 	op *npuv1alpha1.AcceleratorOperation) (verification.Request, bool, error) {
 	return p.r.verifyRequestFor(ctx, op)

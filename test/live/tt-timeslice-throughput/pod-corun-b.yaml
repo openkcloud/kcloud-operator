@@ -1,10 +1,8 @@
 # ============================================================
 # pod-corun-b.yaml: co-run 처리량 측정 파드 B — 같은 장치를 corun-a 와 동시에 공유
-# 상세: descriptor 가 광고한 tenstorrent/blackhole-p150 1개와 hugepages-1Gi 1개를 요청해
-#       k8s-worker3 의 /dev/tenstorrent/0 을 주입받고, ConfigMap(tt-ts-workload)로 마운트된
-#       /work/workload.py 를 PHASE=corun-b 로 실행한다. 벤더 리소스(tenstorrent.com/blackhole)가
-#       아니라 descriptor 공유 리소스를 요청해 시분할 경로를 탄다. restartPolicy Never, root 실행.
-# 생성일: 2026-09-22
+# 상세: descriptor 공유 리소스(tenstorrent/blackhole-p150, 벤더 리소스 아님)를 요청해 시분할
+#       경로를 타고, ConfigMap(tt-ts-workload)의 workload.py 를 PHASE=corun-b 로 실행한다.
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: v1
 kind: Pod

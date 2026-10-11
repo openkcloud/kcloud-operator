@@ -1,7 +1,7 @@
 // ============================================================
 // acpp_rollback_visibility_test.go: 파티션 되돌리기 실패의 상태 노출 envtest
 // 상세: 되돌리기가 실패하면 그 사실이 phase 와 조건에 남아야 조정자가 수동 복구 종점을 열 수 있다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -55,17 +55,11 @@ func (e rollbackOnlyFailingExec) Run(_ context.Context, opID, _, _ string, steps
 }
 
 var _ = Describe("partition rollback visibility", func() {
-	// 증명: 적용 자체가 실패해 되돌리기에 들어갔는데 되돌리기까지 실패하면, 그 사실이 phase 와
-	//       조건에 남는다. 이 노출이 없으면 조정자가 보상 실패를 영영 못 보고 수동 복구 종점이
-	//       열리지 않는다.
-	//
-	// 이 스펙은 "검증 실패로 되돌리기에 들어간" 경로가 아니다 — BuildApplySteps 자체가 사전정리용
-	// -dci/-dgi(Optional) 를 포함하므로(geometry.go), 인자만 보는 rollbackFailingExec 는 검증
-	// 이전에 적용 자체를 실패시킨다(실측: opID 에 "-apply-" 가 박혀 있음을 확인함). 그래서
-	// r.Verifier = failVerifier{} 는 이 스펙에서 도달하지 않는 설정이다 — 적용 실패 경로(524줄)
-	// 를 태우는 스펙으로 고쳐 부른다. 검증 실패 경로(552줄)는 아래 별도 스펙이 다룬다.
-	// 깨는 뮤테이션: `_ = backend.Rollback(...)` 로 되돌리면(오류를 다시 버리면) phase 가
-	//                RollingBack 에 머물러 실패한다.
+	// 증명: 적용 자체가 실패해 되돌리기에 들어갔는데 되돌리기까지 실패하면, phase·조건에 그 사실이
+	// 남아야 조정자가 보상 실패를 보고 수동 복구 종점을 연다. rollbackFailingExec 는 BuildApplySteps
+	// 의 사전정리 단계(-dci/-dgi)에서 걸려 검증 전에 적용 자체를 실패시킨다(opID 에 "-apply-" 가
+	// 박힘으로 확인) — 그래서 r.Verifier 설정은 이 스펙에서 도달하지 않는다. 깨는 뮤테이션: Rollback
+	// 오류를 버리면(`_ = backend.Rollback(...)`) phase 가 RollingBack 에 머문다.
 	It("surfaces a failed rollback after an apply failure in the phase and condition", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -125,18 +119,12 @@ var _ = Describe("partition rollback visibility", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	})
 
-	// 증명: 검증 실패로 되돌리기에 들어갔는데(적용 자체는 성공) 되돌리기까지 실패하면, 그 사실이
-	// phase 와 조건에 남고 **여러 pass 를 거쳐도 유지된다** — 위 두 스펙이 각각 "적용 실패+되돌리기
-	// 실패" 와 "검증 실패+되돌리기 성공" 을 덮으므로, 남는 조합("검증 실패+되돌리기 실패", 552줄)은
-	// 이 스펙이 채운다. 이 조합이 바로 되돌리기 표면화가 존재하는 이유인 주 시나리오다.
-	//
-	// 관측 seam(a30Device 의 geometry)이 목표와 일치해야 한다 — 되돌리기가 실패하면 GI 가 그대로
-	// 남으므로 실제 관측도 계속 목표와 같은 geometry 를 본다. 빈 문자열을 쓰면 diff.Changed 가
-	// 항상 참이 되어 routeNvidiaNoDiff 의 no-diff 갈래를 아예 안 타므로, 되돌리기 실패 신호가
-	// 두 번째 pass 부터 ExistingMigConfiguration 으로 덮이는 결함을 가린다(실측함).
-	// 깨는 뮤테이션: 552줄의 `_ = backend.Rollback(...)` 로 되돌리면 phase 가 RollingBack 에
-	//                머물러 실패한다. routeNvidiaNoDiff 의 MigPhaseRolledBack 갈래를 지우면 두
-	//                번째 pass 부터 phase 가 Failed(ExistingMigConfiguration)로 덮여 실패한다.
+	// 증명: 검증 실패로 되돌리기에 들어갔는데(적용은 성공) 되돌리기까지 실패하면, 그 사실이 phase·
+	// 조건에 남고 여러 pass 를 거쳐도 유지된다 — 위 두 스펙이 덮지 않는 "검증 실패+되돌리기 실패"
+	// 조합이다. 되돌리기가 실패하면 GI 가 남으므로 관측 fixture 도 목표 geometry 와 같아야 한다 —
+	// 비워두면 diff.Changed 가 항상 참이 되어 no-diff 갈래를 안 타, 신호가 두 번째 pass 부터
+	// ExistingMigConfiguration 으로 덮이는 결함을 가린다. 깨는 뮤테이션: Rollback 오류를 버리거나
+	// MigPhaseRolledBack 갈래를 지우면 phase 가 각각 RollingBack·Failed 로 덮인다.
 	It("keeps surfacing a failed rollback after a verify failure across multiple passes", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)
@@ -187,20 +175,12 @@ var _ = Describe("partition rollback visibility", func() {
 		Expect(cond.Message).NotTo(BeEmpty())
 	})
 
-	// 증명: 크래시 복구 경로(resumeNvidiaRecovery, 869줄 부근)도 같은 방식으로 되돌리기 실패를
-	// 노출하고, **여러 pass 를 거쳐도** 그 신호가 남는다. 이 함수는 rb 가 없어(하드웨어 mutation 은
-	// 이미 끝났다고 간주) 위 두 경로와 시그니처가 다르므로 별도로 확인해야 한다. "이미 이 ACPP 가
-	// 소유하고 geometry 도 일치하는데 Verifying 단계에서 크래시했다" 는 저널을 심어
-	// owned && isApplyInFlightPhase 진입 조건을 만든다(managed no-diff 픽스처와
-	// 같은 패턴) — 관측 seam(a30Device 의 geometry)이 되돌리기 실패 후에도 GI 가 그대로 남은
-	// 프로덕션 상태를 그대로 반영한다(빈 문자열이면 diff.Changed 가 항상 참이 되어 이 결함을
-	// 가린다 — 실측함).
-	//
-	// 첫 pass 이후, MigPhase 가 RolledBack 으로 바뀌어 isApplyInFlightPhase 를 벗어난다.
-	// routeNvidiaNoDiff 가 그 상태를 handled=true 로 가로채면(ExistingMigConfiguration) 표면화한
-	// 신호가 사라진다 — 그 가로채기를 막는 것이 이번 수정이다.
-	// 깨는 뮤테이션: routeNvidiaNoDiff 의 MigPhaseRolledBack 갈래를 지우면 두 번째 pass 부터
-	//                phase 가 Failed(ExistingMigConfiguration)로 덮여 실패한다.
+	// 증명: 크래시 복구 경로(resumeNvidiaRecovery)도 같은 방식으로 되돌리기 실패를 노출하고 여러
+	// pass 를 거쳐도 신호가 남는다 — rb 가 없어 시그니처가 다른 별도 경로다. "이미 소유하고 geometry
+	// 도 일치하는데 Verifying 단계에서 크래시했다" 는 저널로 owned && isApplyInFlightPhase 진입
+	// 조건을 만들고, geometry fixture 는 되돌리기 실패 후 GI 가 남은 프로덕션 상태를 반영한다(비우면
+	// diff.Changed 가 항상 참이 되어 결함을 가린다). 첫 pass 뒤 MigPhase 가 RolledBack 으로 바뀌어
+	// isApplyInFlightPhase 를 벗어나므로, routeNvidiaNoDiff 가 그 상태를 가로채지 않아야 신호가 산다.
 	It("keeps surfacing a failed crash-recovery rollback across multiple passes", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)

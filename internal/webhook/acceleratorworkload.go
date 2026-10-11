@@ -1,9 +1,8 @@
 // ============================================================
 // acceleratorworkload.go: AcceleratorWorkload validating webhook (추상 → 벤더 리소스 변환 검증)
-// 상세: kubectl apply 에 즉시 거절 사유를 돌려주기 위한 경로다. 판정 자체는 컨트롤러와
-// 동일한 intent.Translate 를 쓴다 — 이 webhook 은 failurePolicy=Ignore 라 최종 권위가
-// 아니며, 권위 판정은 컨트롤러가 status 로 남긴다.
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: kubectl apply 에 즉시 거절 사유를 돌려주기 위한 경로다. 판정 자체는 컨트롤러와 동일한
+// intent.Translate 를 쓴다 — failurePolicy=Ignore 라 최종 권위가 아니며, 권위 판정은 컨트롤러가 status 로 남긴다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 
 package webhook

@@ -4,7 +4,7 @@
 //
 //	되돌릴 수 없는 행동 이전에 저널을 반드시 영속한다 — 그 순서가 크래시 복구의 유일한 근거다.
 //
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -39,16 +39,15 @@ const (
 	maxApplyDuration = 20 * time.Minute
 	// maxVerifyGrace 는 검증기가 "아직 등급을 못 준다" 를 계속 말해도 되는 최대 시간이다.
 	// 관측은 적용 직후 곧바로 갱신되지 않는다 — node-agent 는 30초 주기로 보고하고, device-plugin
-	// 은 재광고까지 더 걸린다. 그 지연을 곧바로 불일치로 읽으면 **성공한 변경을 되돌린다**. 되돌리기
-	// 자체가 재부팅을 낀 파괴적 절차라 기다리는 비용보다 훨씬 비싸다. Stage 5 F08(광고 지연)이 바로
-	// 이 갈래를 관측했다 — 기대는 "Verifying 유지" 였는데 코드는 즉시 RolledBack 이었다.
-	// health 쪽 광고 유예(기본 30초)보다 넉넉히 잡되, 적용 상한(20분)보다는 훨씬 짧게 둔다.
+	// 은 재광고까지 더 걸린다. 그 지연을 곧바로 불일치로 읽으면 **성공한 변경을 되돌린다** — 되돌리기
+	// 자체가 재부팅을 낀 파괴적 절차라 기다리는 비용보다 훨씬 비싸다. health 쪽 광고 유예(기본
+	// 30초)보다 넉넉히 잡되, 적용 상한(20분)보다는 훨씬 짧게 둔다.
 	maxVerifyGrace = 3 * time.Minute
-	// maxObserveFailures 는 복구 판정용 관측이 연속 실패해도 되는 횟수다. 넘으면 수동 복구로 보낸다 —
-	// 관측 없이 rollback 을 실행하는 것이 이 계통에서 가장 위험한 행동이다. 이 태스크는 상수만
-	// 정의한다 — 소비하는 크래시 복구 판정(ObserveFailures 필드를 실제로 세고 비교하는 로직)은
-	// 아직 없다(다음 태스크 몫). CRD 계약(AcceleratorOperationStatus.ObserveFailures)과 이름을
-	// 맞춰 두는 것이 이 상수의 유일한 역할이다.
+	// maxObserveFailures 는 복구 판정용 관측이 연속 실패해도 되는 횟수다. 넘으면 수동 복구로
+	// 보낸다 — 관측 없이 rollback 을 실행하는 것이 이 계통에서 가장 위험한 행동이다. 상수만
+	// 정의돼 있고, ObserveFailures 필드를 실제로 세고 비교하는 크래시 복구 판정 로직은 아직
+	// 없다. CRD 계약(AcceleratorOperationStatus.ObserveFailures)과 이름을 맞춰 두는 것이 이
+	// 상수의 유일한 역할이다.
 	//nolint:unused // 다음 태스크(크래시 복구 판정)의 소비자를 기다리는 상수 — 위 설명 참조.
 	maxObserveFailures = 5
 	// opRequeue 는 진행 중 operation 재확인 간격이다.
@@ -91,7 +90,7 @@ func (r *AcceleratorOperationReconciler) Reconcile(ctx context.Context, req ctrl
 		op.Status.Phase = npuv1alpha1.OpPhasePending
 	}
 	if operation.IsTerminal(op.Status.Phase) {
-		// 종점에서는 아무것도 하지 않는다. Lease 는 종점 진입 시 이미 놓았다.
+		// 종점에서는 아무것도 하지 않는다. Lease 는 종점 진입 시 이미 놓은 상태다.
 		return ctrl.Result{}, nil
 	}
 
@@ -178,7 +177,7 @@ func (r *AcceleratorOperationReconciler) stepAdmit(ctx context.Context, op *npuv
 			continue
 		}
 		if o.Status.Phase == "" || o.Status.Phase == npuv1alpha1.OpPhasePending {
-			continue // 아직 아무 자원도 안 잡았다.
+			continue // 아직 자원 청구가 없다.
 		}
 		active = append(active, operation.ClaimOf(o))
 	}
@@ -282,17 +281,12 @@ func (r *AcceleratorOperationReconciler) stepApply(ctx context.Context, op *npuv
 			return next, ctrl.Result{}, nil
 		}
 		if out.Event == operation.EventRebootRequired {
-			// 아직 재부팅 대기 중이다 — 전이 없이 같은 자리에서 다시 확인한다. 전이표에 자기
-			// 전이(RebootRequired → WaitingForReboot)를 추가하는 대신 여기서 처리하는 이유:
-			// Reconcile 은 "전이가 있었다" 를 곧 "즉시 재큐잉해도 되는 진짜 진행" 으로 보고
-			// ctrl.Result{Requeue:true} 로 나가버린다(op.Status.Phase 를 next 로 덮어쓴 뒤).
-			// 자기 전이는 매 pass 문자 그대로 "전이가 있었다" 이므로 10초 주기 대신 매 순간
-			// 재확인하는 busy-loop 이 된다 — 노드가 돌아올 때까지 이 pass 가 API 서버를 계속
-			// 두드린다. 전이 없음(next="")으로 두면 기존 in-progress 분기와 같은 절제된
-			// requeue 를 그대로 쓴다.
-			//
-			// 재부팅이 영원히 끝나지 않는 노드도 종점에 도달해야 한다. 사건이 있다는 이유로
-			// 아래 상한 검사(Event=="" 일 때만 도는)를 비켜 가면 이 대기만 무한이 된다.
+			// 아직 재부팅 대기 중이다 — 전이 없이 같은 자리에서 다시 확인한다. 전이표에 자기 전이를
+			// 추가하는 대신 여기서 처리하는 이유: Reconcile 은 전이가 있으면 곧바로 재큐잉으로
+			// 나가버리는데, 자기 전이는 매 pass 마다 "전이가 있다" 이므로 10초 주기 대신 노드가
+			// 돌아올 때까지 API 서버를 계속 두드리는 busy-loop 이 된다. 전이 없음(next="")으로 두면
+			// 기존 in-progress 분기와 같은 절제된 requeue 를 쓴다. 상한 검사(Event=="" 일 때만
+			// 도는 아래 분기)도 재부팅이 영원히 끝나지 않는 노드가 종점에 도달하도록 비켜 가지 않는다.
 			if started := applyStartedAt(op.Status.Journal); started != nil && r.now().Sub(started.Time) >= maxApplyDuration {
 				op.Status.Message = fmt.Sprintf("node did not come back within %s: %s", maxApplyDuration, out.Message)
 				return npuv1alpha1.OpPhaseManualRecoveryRequired, ctrl.Result{}, nil
@@ -438,15 +432,12 @@ func (r *AcceleratorOperationReconciler) stepVerify(ctx context.Context, op *npu
 	return npuv1alpha1.OpPhaseSucceeded, ctrl.Result{}, nil
 }
 
-// stepRollback 은 보상을 시도하고 횟수를 제한한다.
-//
-// 참여자가 명확한 성공(EventCompensated)·실패(EventCompensationFailed) 어느 쪽도 보고하지
-// 못하는 경로가 실제로 있다 — NVIDIA MIG apply/verify 실패 rollback 은 runNvidiaTarget 이
-// backend.Rollback 오류를 삼키고(acceleratorpartitionpolicy_controller.go 의 `_ =
-// backend.Rollback(...)` 세 곳) ACPPCondRolledBack condition 을 남기지 않으므로,
-// acppParticipant.Rollback 은 그때 Event 없는 Outcome(진행 중 취급)만 돌려준다. 그 결함을
-// 고치는 것은 이 태스크의 범위 밖이다 — 대신 RollbackAttempts 상한을 참여자의 신호와
-// 완전히 무관하게 세어, 참여자가 영원히 "진행 중"만 말해도 이 카운터가 종점을 강제한다.
+// stepRollback 은 보상을 시도하고 횟수를 제한한다. 참여자가 명확한 성공(EventCompensated)·
+// 실패(EventCompensationFailed) 어느 쪽도 보고하지 못하는 경로가 실제로 있다 — NVIDIA MIG
+// rollback 은 runNvidiaTarget 이 backend.Rollback 오류를 삼키고 ACPPCondRolledBack condition
+// 을 안 남기면 acppParticipant.Rollback 이 Event 없는 Outcome(진행 중 취급)만 돌려준다. 그
+// 경로를 고치지 않고, RollbackAttempts 상한을 참여자 신호와 무관하게 세어 영원히 "진행 중"만
+// 말해도 이 카운터가 종점을 강제하게 한다.
 func (r *AcceleratorOperationReconciler) stepRollback(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) (string, ctrl.Result, error) {
 	p, ok := r.Participants.For(operation.Type(op.Spec.Type))
 	if !ok {
@@ -479,13 +470,11 @@ func (r *AcceleratorOperationReconciler) journal(op *npuv1alpha1.AcceleratorOper
 		metav1.NewTime(r.now()), detail)
 }
 
-// writeStatus 는 펜싱을 통과한 경우에만 status 를 쓴다. 서버의 세대가 우리가 이 pass 를 시작할
-// 때 들고 있던 세대보다 앞서 있으면, 다른 프로세스가 이미 잠금을 새로 잡고 진행했다는 뜻이므로
-// 우리(낡은) 결과를 버린다.
-//
-// 비교가 "정확히 같음" 이 아니라 방향 있는 비교(>)인 이유: 이 pass 가 stepAcquire 에서 **방금**
-// 세대를 올렸지만 아직 한 번도 쓰지 않은 정상 케이스에서는 서버가 이전 세대를 들고 있다.
-// 여기서 물어야 할 질문은 "우리가 계산하는 동안 남이 앞서 갔는가" 다.
+// writeStatus 는 펜싱을 통과한 경우에만 status 를 쓴다. 서버의 세대가 이 pass 시작 시점의
+// 세대보다 앞서 있으면 다른 프로세스가 이미 잠금을 새로 잡고 진행한 것이므로 우리(낡은)
+// 결과를 버린다. 비교가 "정확히 같음" 이 아니라 방향 있는 비교(>)인 이유: stepAcquire 에서
+// 방금 세대를 올렸지만 아직 한 번도 쓰지 않은 정상 케이스에서는 서버가 이전 세대를 들고
+// 있다 — 물어야 할 질문은 "계산하는 동안 남이 앞서 갔는가" 다.
 func (r *AcceleratorOperationReconciler) writeStatus(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) error {
 	var fresh npuv1alpha1.AcceleratorOperation
 	if err := r.Get(ctx, client.ObjectKey{Name: op.Name}, &fresh); err != nil {

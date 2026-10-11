@@ -1,11 +1,8 @@
 // ============================================================
 // acceleratorclass.go: AcceleratorClass validating webhook
-// 상세: CRD structural schema 가 enum·MinItems 를 이미 강제하므로 여기서는 스키마가 못 잡는
-// 것만 본다 — 같은 벤더 중복(선택이 비결정적이 된다), nativeProfile 형식(그 문자열이
-// nvidia.com/mig-<profile> 리소스명에 그대로 들어간다), 그리고 product 모호(furiosa 처럼
-// 벤더 하나에 제품이 둘이면 product 없이는 리소스명을 못 정한다 — Translate 가 나중에
-// 워크로드 쪽에서 거절하는 것보다 클래스 admission 에서 바로 막는 편이 사유를 명확히 한다).
-// 생성일: 2026-07-30 | 수정일: 2026-07-30
+// 상세: CRD structural schema 가 enum·MinItems 를 강제하므로 여기서는 스키마가 못 잡는 것만 본다 —
+// 벤더 중복(선택 비결정), nativeProfile 형식(리소스명에 들어간다), product 모호(furiosa 등, 리소스명이 안 갈린다).
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package webhook

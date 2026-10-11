@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # docs-path-check.sh: 형제 docs 저장소 경로가 코드에 들어오는 것을 막는다
-# 상세: docs 저장소는 remote 가 없어 이 저장소를 받은 사람이 docs/... 경로에 도달할 수
-#       없다. 웹훅 거절 메시지처럼 사용자에게 가는 문자열에 그런 경로가 실리면 받는
-#       사람은 열 수 없는 파일을 안내받는다. 근거는 저장소 안 경로(test/live/, *_test.go)
-#       로 적는다. 예외는 아래 ALLOW 에 이유와 함께 적는다. --self-test 는 임시 저장소에서
-#       상대경로(../docs/)·URL 비매치·같은 줄 URL+위반·위반 0건 통과·git 저장소 아님을
-#       자가 검증한다.
-# 생성일: 2026-09-30 | 수정일: 2026-10-11 (상대경로 ../docs/ 를 잡도록 정규식 확장, 자가시험 추가; URL과 위반이 같은 줄에 있으면 위반이 묻히던 빈틈 수정;
-# URL 지우기 재판정 단계 제거(쉼표·괄호로 붙은 위반 누락 수정), 자가시험 2건 추가; 지워진 단계를 전제하던 주석 정정, 이진 파일 매치 방지용 -I 추가)
+# 상세: docs 저장소는 remote 가 없어 이 저장소만 받은 사람은 docs/... 경로에 도달할 수
+#       없다. 판정 근거·예외 목록·경계 사례는 ALLOW·scan()·self_test() 의 본문 주석 참고.
+# 생성일: 2026-09-30 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -16,8 +11,7 @@ set -euo pipefail
 #   test/fault/suite_test.go   — 판정표 출력 대상. 디렉터리가 없으면 건너뛰도록 가드돼 있다.
 #   cmd/kubectl-npu/main_test.go — 열 정렬 시험의 가짜 값.
 #   Makefile                   — capmatrix 가 문서 저장소로 매트릭스를 생성하는 대상 경로.
-#   internal/apiserver/routes_doc_test.go — 라우트 수를 문서와 대조하는 로컬 전용 검사.
-#                                문서 저장소가 없으면 건너뛰도록 가드돼 있다.
+#   internal/apiserver/routes_doc_test.go — 라우트 수 대조(로컬 전용), 문서 저장소 없으면 건너뛴다.
 #   hack/docs-path-check.sh    — 자가시험 픽스처 문자열. 검사 대상이 아니라 시험 입력이다.
 ALLOW='^(test/fault/suite_test\.go|cmd/kubectl-npu/main_test\.go|Makefile|internal/apiserver/routes_doc_test\.go|hack/docs-path-check\.sh)$'
 
@@ -36,8 +30,8 @@ scan() (
 
   # 추적 파일만 본다. runs/ 아래는 실행이 그 시점에 낸 전사라 사후에 고치지 않는다.
   # URL 안의 경로는 정규식이 이미 거부한다 — `scheme://host/dir/x.md` 의 `dir` 앞 글자가 `/`
-  # 라 선두 문자 클래스에 걸린다. 종전에는 그 위에 "URL 을 지운 사본으로 재판정" 단계를 뒀는데,
-  # 그 치환이 다음 공백까지 먹어 URL 과 쉼표·괄호로 붙은 실제 위반까지 지웠다(자가시험 4·5).
+  # 라 선두 문자 클래스에 걸린다. 별도로 "URL 을 지운 사본으로 재판정"하는 단계는 두지 않는다 —
+  # 그런 치환은 다음 공백까지 먹어 URL 과 쉼표·괄호로 붙은 실제 위반까지 지운다(자가시험 4·5 참고).
   hits=$(git ls-files \
     | grep -vE '/runs/' \
     | grep -vE "$ALLOW" \

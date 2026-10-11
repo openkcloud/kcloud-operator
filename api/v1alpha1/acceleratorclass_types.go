@@ -1,9 +1,8 @@
 // ============================================================
 // acceleratorclass_types.go: AcceleratorClass CRD 타입 (추상 사용자 API)
-// 상세: R&D v1.0 §10.5. 사용자가 장치를 모르고 쓰는 등급 선언 — 요구사항(격리/메모리)과
-// 벤더별 native profile 매핑만 담는다. 컨트롤러도 status 도 없다(순수 선언, 매칭 결과는
-// AcceleratorWorkload.status 에 나온다).
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 상세: R&D v1.0 §10.5. 사용자가 장치를 모르고 쓰는 등급 선언 — 요구사항(격리/메모리)과 벤더별
+// native profile 매핑만 담는다. 컨트롤러·status 없음(매칭 결과는 AcceleratorWorkload.status).
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 
@@ -31,10 +30,9 @@ type AcceleratorRequirements struct {
 type AcceleratorMapping struct {
 	// +kubebuilder:validation:Enum=nvidia;furiosa;rebellions;tenstorrent
 	Vendor string `json:"vendor"`
-	// Product 는 사람이 읽는 제품 표기(A30, rngd 등)다. 벤더 아래 제품이 하나뿐이면
-	// (nvidia/rebellions/tenstorrent) 매칭에 쓰지 않으니 생략해도 된다. 벤더 아래 제품이
-	// 둘 이상이면(furiosa: rngd/warboy) 리소스명을 이것으로 가르므로 필수다 — 비어 있으면
-	// AcceleratorClass admission webhook 이 거절한다.
+	// Product 는 사람이 읽는 제품 표기(A30, rngd 등)다. 벤더 아래 제품이 하나뿐이면 생략 가능하고,
+	// 둘 이상이면(furiosa: rngd/warboy) 리소스명을 이것으로 가르므로 필수다 — 비우면 webhook 이
+	// 거절한다.
 	// +optional
 	Product string `json:"product,omitempty"`
 	// NativeProfile 은 partitioned 계열 모드에서 요구하는 벤더 공식 profile

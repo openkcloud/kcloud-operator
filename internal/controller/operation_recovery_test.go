@@ -1,7 +1,7 @@
 // ============================================================
 // operation_recovery_test.go: 적용 실패 후 복구 판정 배선 envtest
 // 상세: 실패 보고가 곧바로 보상으로 가지 않고, 관측 결과에 따라 갈리는지 본다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -69,8 +69,7 @@ func (verifyPendingParticipant) Rollback(context.Context,
 }
 
 // NodeName 을 반드시 채운다 — 비우면 검증기가 노드를 못 읽어 **오류**로 끝나고, 그러면 이
-// 스펙이 유예가 아니라 오류 재큐잉 때문에 Verifying 에 머물러 통과해 버린다(처음 이렇게 썼다가
-// 유예를 지워도 통과하는 무의미한 시험이 됐다).
+// 스펙이 유예가 아니라 오류 재큐잉 때문에 Verifying 에 머물러 통과해 버린다.
 func (verifyPendingParticipant) VerifyRequest(_ context.Context,
 	op *npuv1alpha1.AcceleratorOperation) (verification.Request, bool, error) {
 	return verification.Request{
@@ -83,9 +82,8 @@ func (verifyPendingParticipant) VerifyRequest(_ context.Context,
 var _ = Describe("operation verification grace", func() {
 	// 증명: 근거가 아직 안 모였다는 이유로 성공한 변경을 되돌리지 않는다. 유예를 넘겨야 되돌린다.
 	//
-	// Stage 5 F08(광고 지연)이 이 갈래를 관측했다 — 기대는 "Verifying 유지" 였는데 코드는 곧바로
-	// RolledBack 이었다. 관측 갱신은 node-agent 주기(30초) + 재광고만큼 늦으므로, 그 지연을
-	// 불일치로 읽으면 재부팅을 낀 되돌리기가 헛돌게 된다.
+	// 관측 갱신은 node-agent 주기(30초)와 재광고만큼 늦을 수 있다 — 그 지연을 불일치로 읽으면
+	// 재부팅을 낀 되돌리기가 헛돌게 된다.
 	//
 	// 깨는 뮤테이션: stepVerify 의 유예 분기를 지우면 첫 검증에서 RolledBack 이 되어 실패한다.
 	It("waits for the evidence instead of rolling back a good change", func() {
@@ -120,7 +118,6 @@ var _ = Describe("operation recovery after a reported apply failure", func() {
 	}
 
 	// 증명: 장치가 이미 목표라면 실패 보고에도 불구하고 검증으로 넘어가 성공한다.
-	//       (마스터의 "재시작 시 관측으로 commit" 이 이 갈래다.)
 	// 깨는 뮤테이션: decideAfterApplyFailure 를 곧바로 RollingBack 으로 바꾸면 실패한다.
 	It("commits when the device already matches the target", func() {
 		geom := nvidia.GeometrySummary("1g.6gb", 4)

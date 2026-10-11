@@ -1,10 +1,8 @@
 // ============================================================
 // drift_test.go: 광고 붕괴 감지 판정 테스트
 // 상세: 오탐 방향(정상 롤아웃·재부팅 대기·적용 중)을 먼저 고정하고, 그 다음 진짜 붕괴가
-//
-//	유예 시간 뒤에 확정되는지를 본다.
-//
-// 생성일: 2026-07-31
+// 유예 시간 뒤에 확정되는지를 본다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -47,7 +45,7 @@ func TestSurplusAdvertisementIsNotDrift(t *testing.T) {
 }
 
 func TestRolloutSuppressesDrift(t *testing.T) {
-	// 이 테스트가 이 태스크의 핵심이다 — 정상 DaemonSet 롤아웃 중 광고 공백은 장애가 아니다.
+	// 이 검사가 핵심이다 — 정상 DaemonSet 롤아웃 중 광고 공백은 장애가 아니다.
 	now := time.Now()
 	in := collapsedInput(now)
 	in.RolloutInProgress = true
@@ -158,7 +156,7 @@ func TestZeroGraceStillRequiresASecondObservation(t *testing.T) {
 
 // TestConfirmedDriftStaysConfirmed 는 확정 판정이 다음 pass 에서 의심으로 되돌아가지 않는지
 // 고정한다. 되돌아가면 확정 상태에는 의심 시작 시각이 없어 유예가 매번 처음부터 재어지고,
-// 정책이 Ready 와 Degraded 사이를 초 단위로 진동한다(2026-08-04 라이브 실측).
+// 정책이 Ready 와 Degraded 사이를 초 단위로 진동한다.
 func TestConfirmedDriftStaysConfirmed(t *testing.T) {
 	now := metav1.Now()
 	in := DriftInput{

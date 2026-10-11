@@ -4,7 +4,7 @@
 //
 //	managed 벤더별 조건·경고 전이 검증(nvidia 는 envtest 로도 재확인)
 //
-// 생성일: 2026-09-20 | 수정일: 2026-09-20
+// 생성일: 2026-09-20 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -440,15 +440,11 @@ func TestDetectVendorOperatorRecheckPreventsFlapping(t *testing.T) {
 }
 
 // TestDetectVendorOperatorPresence 는 세 값 감지 계약을 고정한다. delegated 배포 모드가 이
-// 값 하나로 갈리므로 Absent 와 Unknown 을 반드시 구분해야 한다:
-//   - Unknown: 감지 시그니처가 없어 판정 불가. Absent 로 두면 "없음 확정"으로 읽혀 delegated
-//     선언을 잘못 거절하고, 호출부가 매번 오경고한다.
-//   - Absent: 시그니처가 있고 CRD 미서빙을 확인. delegated 인데 이 값이면 경고 대상.
-//   - Present: 시그니처 CRD 가 서빙됨.
-//
-// furiosa 만 시그니처가 없다(vendoroperator_detect.go 상단 주석). rebellions·tenstorrent 는
-// 2026-09-20 에 시그니처가 추가돼 이제 Absent/Present 로 판정된다 — 셋을 묶어 Unknown 이라 본
-// 계획 초안은 그 추가 전 상태였다.
+// 값 하나로 갈리므로 Absent 와 Unknown 을 반드시 구분해야 한다: Unknown 은 감지 시그니처가
+// 없어 판정 불가(Absent 로 두면 "없음 확정"으로 읽혀 delegated 선언을 잘못 거절하고 호출부가
+// 매번 오경고한다), Absent 는 시그니처가 있고 CRD 미서빙을 확인(delegated 면 경고 대상),
+// Present 는 시그니처 CRD 가 서빙됨이다. furiosa 만 시그니처가 없다(vendoroperator_detect.go
+// 상단 주석) — rebellions·tenstorrent 는 시그니처가 있어 Absent/Present 로 판정된다.
 func TestDetectVendorOperatorPresence(t *testing.T) {
 	ctx := context.Background()
 

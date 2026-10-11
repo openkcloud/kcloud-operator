@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: Rebellions ATOM 격리 네 항목(연산·용량·대역폭·장애) 라이브 실측 하네스(node5)
-# 상세: rebellions-timeslice(같은 장치의 시분할 실측)와 달리, 서로 다른 두 물리 장치
-#       (device 0=0000:c3:00.0, device 1=0000:c4:00.0)에 각각 한 프로세스를 두고 "장치 1 의
-#       부하가 장치 0 으로 새는가"를 잰다. preflight(노드 Ready·NDR 장치 2개·안전 게이트: 이
-#       노드에서 rebellions/atom 을 요구하는 파드 없음·디스크 여유) → measure(node5 에 scp 로
-#       워크로드를 올리고 measure-node.sh 를 ssh 로 실행, 네 항목 solo/co-run 을 순서대로 돌림) →
-#       verdict(항목별 RESULT json 을 읽어 기계 줄 "ISOLATION: compute=<ratio> capacity=<same|
-#       shrinks> bandwidth=<ratio> fault=<contained|leaks>" 산출) → cleanup(서비스 복원 이중
-#       확인). PHASE=verdict RUN_DIR=<dir> 로 부르면 라이브 접근 없이 RUN_DIR 에 이미 있는 항목별
-#       json 만 읽어 그 한 줄만 찍고 끝낸다(test/collect/evidence.sh 의 --command 용).
-#       node5 의 atomplus-vllm.service 와 자신이 띄운 프로세스만 건드린다. DRY_RUN=1 이면
-#       명령만 출력.
-# 생성일: 2026-09-28
+# 상세: preflight→measure(ssh 로 measure-node.sh 실행)→verdict→cleanup 순서로 돈다. PHASE=verdict
+#       RUN_DIR=<dir> 로 부르면 라이브 접근 없이 저장된 json 만 읽어 ISOLATION 줄만 낸다.
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

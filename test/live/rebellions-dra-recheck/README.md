@@ -1,4 +1,4 @@
-<!-- README.md: Rebellions DRA 벤더 CDI 수정 재확인 스크립트 사용법과 최근 확인 결과 | 생성일: 2026-09-20 -->
+<!-- README.md: Rebellions DRA 벤더 CDI 수정 재확인 스크립트 사용법과 최근 확인 결과 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # Rebellions DRA — 벤더 CDI 수정 재확인
 
 ## 왜
@@ -78,12 +78,12 @@ OUT=/path/to/dir test/live/rebellions-dra-recheck/run.sh
 **네트워크 실패/rate limit(verdict=BLOCKED, reason=network)** — GitHub API 접근 실패 시.
 재확인 자체가 안 된 것이므로 다시 실행한다.
 
-## 최근 확인 결과 (2026-09-20)
+## 최근 확인 결과
 
 ```json
 {"test":"rebellions-dra-recheck","repo":"rbln-sw/rbln-k8s-dra-driver","struct":"rblnRuntimeSpec","latestTag":"v0.2.0","publishedAt":"2026-09-12T00:15:55Z","checkedAt":"2026-09-20T08:49:31Z","fieldsFound":"Kind,Devices","fixed":false,"defaultBranch":"main","mainState":"not_fixed","phase":"cleanup","reason":"not_reflected","verdict":"BLOCKED","dryRun":false}
 ```
 
-`v0.2.0`(2026-09-12 공개)과 `main`(HEAD `e08884c`, 2026-09-11) 모두 `rblnRuntimeSpec` 에
-`Kind`, `Devices` 필드만 있고 `ContainerEdits` 가 없다 — 두 곳 다 미반영. 확인 시각
-2026-09-20. 판정: **BLOCKED(external)**.
+`v0.2.0`(최신 릴리스)과 `main`(HEAD `e08884c`) 모두 `rblnRuntimeSpec` 에
+`Kind`, `Devices` 필드만 있고 `ContainerEdits` 가 없다 — 두 곳 다 미반영. 판정:
+**BLOCKED(external)**.

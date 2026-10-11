@@ -1,13 +1,10 @@
 // ============================================================
 // acceleratorhealth_vendor_registration_test.go: 벤더 등록 지점 둘의 적합성 시험
-// 상세: isAcceleratorNode·acceleratorOperationVendors 는 벤더 목록을 손으로 옮겨 적은
+// 상세: isAcceleratorNode·acceleratorOperationVendors 는 벤더 목록을 손으로 옮겨 적은 자료라
 //
-//	자료라 새 벤더나 벤더 목록 변경이 조용히 어긋날 수 있다. 이 시험은
-//	test/conformance 의 적합성 시험과 같은 목적(벤더 등록 지점 완전성)을 갖지만,
-//	두 대상이 이 패키지의 비공개 식별자라 test/conformance 가 아니라 이 패키지
-//	안에 둔다 — 오직 시험을 위해 새 export 를 만드는 것보다 적다.
+//	어긋날 수 있다. 두 대상이 비공개 식별자라 test/conformance 대신 이 패키지 안에 둔다.
 //
-// 생성일: 2026-09-28
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -21,14 +18,12 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// vendorPresentLabels 는 계약 8 이 보는 벤더별 present 라벨이다 — 기대값은
-// isAcceleratorNode 의 파생 로직이 아니라 detector 자신(node-device-detector/label.go
-// computeLabels·vendorKey)이 실제로 쓰는 값에서 직접 가져온다. nvidia·rebellions·
-// tenstorrent 는 vendorPresentLabel(vendor) 하나씩이다. furiosa 는 셋이다 —
-// vendorPresentLabel(vendorFuriosa)(Warboy 를 포함한 기본 키), vendorPresentLabel
-// (vendorRngd)(RNGD 만 detector 가 별도 키 "rngd" 를 쓴다), furiosaFamilyNodeLabel
-// (PCI 0x1ed2 공유 공통 라벨). "kcloud.ai/warboy.present" 는 detector 어디에서도
-// 쓰지 않으므로 여기 없다 — 2026-09-28 판에서는 이 틀린 라벨이 들어 있었다.
+// vendorPresentLabels 는 계약 8 이 보는 벤더별 present 라벨이다 — 기대값은 isAcceleratorNode
+// 의 파생 로직이 아니라 detector 자신(node-device-detector/label.go computeLabels·vendorKey)
+// 이 실제로 쓰는 값에서 직접 가져온다. nvidia·rebellions·tenstorrent 는
+// vendorPresentLabel(vendor) 하나씩이고, furiosa 는 셋이다 — vendorPresentLabel(vendorFuriosa)
+// (Warboy 포함 기본 키), vendorPresentLabel(vendorRngd)(RNGD 전용 키 "rngd"),
+// furiosaFamilyNodeLabel(PCI 0x1ed2 공유 공통 라벨). "kcloud.ai/warboy.present" 는 틀린 값이라 여기 없다.
 var vendorPresentLabels = map[string][]string{
 	vendorNvidia:      {vendorPresentLabel(vendorNvidia)},
 	vendorFuriosa:     {vendorPresentLabel(vendorFuriosa), vendorPresentLabel(vendorRngd), furiosaFamilyNodeLabel},
@@ -37,18 +32,11 @@ var vendorPresentLabels = map[string][]string{
 }
 
 // TestIsAcceleratorNodeRecognizesEveryVendorPresentLabel 는 계약 8번이다: 등록된 모든
-// 벤더의 present 라벨을 가진 노드에 대해 isAcceleratorNode 가 참인지 본다. 이 게이트가
-// 벤더 하나를 놓치면 AcceleratorHealth Reconcile 이 그 벤더 노드를 에러·이벤트·로그
-// 없이 무시한다. vendorPresentLabels 에 없는 벤더가 생기면(다섯째 벤더 추가 등) 그
-// 사실 자체를 실패로 낸다 — 표를 갱신하지 않고 넘어갈 수 없게 한다.
-//
-// 이 시험의 노드 fixture 는 벤더별 present 라벨 하나만 갖고 kcloud.ai/gpu.present 는
-// 갖지 않는다 — 실제 node-device-detector 의 computeLabels 는 장치가 하나라도 있으면
-// gpu.present 를 항상 함께 쓰므로 프로덕션은 이 조합을 만들지 않는다. 그래서 이 시험은
-// "라이브 감시가 빠져 있었다"를 증명하지 않는다 — isAcceleratorNode 가 부르는
-// acceleratorPresentLabels() 의 파생 결과가 등록된 벤더를 빠짐없이 담는지만 지킨다.
-// gpu.present 를 쓰는 노드는 rebellions 케이스를 더한 수정 전에도 이미 감시
-// 대상이었다(2026-09-28) — furiosa 라벨 오류 수정은 그 다음 라운드다.
+// 벤더의 present 라벨을 가진 노드에 isAcceleratorNode 가 참인지 본다. 벤더 하나를 놓치면
+// AcceleratorHealth Reconcile 이 그 벤더 노드를 에러·이벤트·로그 없이 무시한다.
+// vendorPresentLabels 에 없는 벤더가 생기면 표를 갱신하지 않고는 넘어갈 수 없게 실패로
+// 낸다. 노드 fixture 는 벤더별 라벨 하나만 갖고, detector 가 항상 함께 쓰는
+// kcloud.ai/gpu.present 는 갖지 않는다 — 등록된 벤더가 빠짐없이 담기는지만 지킨다.
 func TestIsAcceleratorNodeRecognizesEveryVendorPresentLabel(t *testing.T) {
 	for _, vendor := range []string{vendorNvidia, vendorFuriosa, vendorRebellions, vendorTenstorrent} {
 		labels, ok := vendorPresentLabels[vendor]

@@ -17,7 +17,7 @@ func eq(a, b []string) bool {
 	return true
 }
 
-// 모델 B(§17.1): preflight current==Enabled(사전조건), -mig 전환 없음, GI 생성.
+// 모델 B: preflight current==Enabled(사전조건), -mig 전환 없음, GI 생성.
 func TestBuildApplySteps_PreEnabledNoModeSwitch(t *testing.T) {
 	steps := BuildApplySteps([]GeometrySpec{{GPUSelector: "00000000:18:00.0", ProfileName: "1g.6gb", Count: 4}})
 	var preEnabledOK, cgiOK, sawMigSwitch bool
@@ -62,7 +62,7 @@ func TestBuildDisableSteps_KeepsModeEnabled(t *testing.T) {
 	last := steps[len(steps)-1]
 	// 되돌리기가 mode 를 끄지는 않지만, RestoreMode 삭제 경로는 mode 를 먼저 끄고 이 시퀀스를
 	// 부른다 — 그때 Disabled 를 실패로 보면 이미 복원된 노드에서 job 이 실패해 finalizer 가
-	// 영원히 남는다(2026-08-04 라이브).
+	// 영원히 남는다.
 	if !eq(last.ExpectOneOf, []string{"Enabled", "Disabled"}) {
 		t.Fatalf("disable 마지막 step 은 mode 판독 확인이어야(Enabled/Disabled 허용): %+v", last)
 	}

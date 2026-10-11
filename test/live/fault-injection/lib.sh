@@ -1,15 +1,9 @@
 # shellcheck shell=bash
 # ============================================================
 # lib.sh: fault-injection 3개 시나리오(01/02/03)가 공유하는 저수준 헬퍼
-# 상세: test_conventions.md §3 은 신규 run.sh 를 "카테고리 CLI 진입이나 lib/*.sh 공용 소스는
-#       쓰지 않고 스크립트 하나로 완결" 하도록 규정하지만, 이 세 스크립트는 한 태스크가 만드는
-#       형제 시나리오이고 그 중 02 는 test/live/tt-upgrade-transition/run.sh(같은 저장소의
-#       기존 작업)이 이미 검증한 기법(가짜 DriverInstallPolicy/NodeDeviceReport/
-#       DriverUpgradeState, stub install Job)을 그대로 재사용한다. 그 저수준 배관(kubectl
-#       DRY_RUN 래퍼, 폴링, 검사 집계)을 세 스크립트가 각자 베껴 쓰면 세 벌의 사본이 생기므로,
-#       이 파일 하나로 좁힌다(의도적 예외). 이 파일은 실행 진입점이 아니라 source 전용이며
-#       그 자체로는 아무 부작용도 없다 — 각 run.sh 가 자신의 시나리오 로직에서 이 함수들을 부른다.
-# 생성일: 2026-09-20
+# 상세: kubectl DRY_RUN 래퍼·폴링·검사 집계를 한 곳에 모은다 — source 전용이며 그 자체로는
+#       부작용이 없다. 각 run.sh 가 자신의 시나리오 로직에서 이 함수들을 부른다.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 
 utc_now() { date -u +%FT%TZ; }
@@ -96,13 +90,11 @@ preflight_kind_node() {
 }
 
 # summary_json TESTNAME [EXTRA_FIELDS_JSON] — 공통 JSON 요약 한 줄을 stdout 에 찍고, PASS·DRY
-# 면 0, FAIL·BLOCKED 면 1 을 반환한다(return, exit 아님). 판정을 전역 변수에 남기지 않는
-# 이유: 호출부가 `summary_json ... | tee -a file` 처럼 파이프 뒤에서 쓰는데(§3 관례가 JSON
-# 요약을 stdout 에도 내라고 요구), 파이프 왼쪽은 서브셸에서 돈다 — 그 서브셸 안에서 세운 전역
-# 변수는 파이프가 끝나면 사라진다(1차 라이브 실행에서 실제로 이 버그로 PASS 인데 exit 1 이
-# 났다). `set -o pipefail` 이 있으면 이 반환값이 파이프 전체의 종료코드가 되므로, 호출부는
-# `summary_json ... | tee -a "$OUT/..."; exit $?` 로 받으면 된다.
-# EXTRA_FIELDS_JSON 은 콤마로 시작하지 않는 `"key":"value"` 나열(선택, 시나리오별 부가 필드).
+# 면 0, FAIL·BLOCKED 면 1 을 반환한다(return, exit 아님). 판정을 전역 변수에 남기지 않는 이유:
+# 호출부가 `summary_json ... | tee -a file` 처럼 파이프 뒤에서 쓰는데, 파이프 왼쪽은 서브셸에서
+# 돈다 — 그 서브셸의 전역 변수는 파이프가 끝나면 사라져 PASS 인데도 exit 1 이 나는 버그가
+# 생긴다. `set -o pipefail` 이 있으면 이 반환값이 파이프 전체의 종료코드가 된다(호출부는
+# `summary_json ... | tee -a "$OUT/..."; exit $?`). EXTRA_FIELDS_JSON 은 `"key":"value"` 나열(선택).
 summary_json() {
   local test_name="$1" extra="${2:-}"
   local verdict="FAIL"

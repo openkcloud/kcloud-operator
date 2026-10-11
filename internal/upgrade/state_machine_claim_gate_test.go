@@ -1,13 +1,8 @@
 // ============================================================
 // state_machine_claim_gate_test.go: drain 게이트 claim 축의 제어 흐름 계약 고정 시험
-// 상세: claim 축은 "아직 할당돼 있다" 와 "읽지 못했다" 를 가른다. 전자는 Pod 축과 같은 정상
-//   재조정이고(DRA 는 kubelet NodeUnprepare → reservedFor 비움 → deallocate 순서라 Pod 이
-//   사라진 뒤 claim 이 남는 구간을 정상 drain 이 반드시 지난다 — 그 구간을 오류로 올리면 DRA
-//   노드의 정상 drain 마다 오류 로그와 reconcile 오류 지표가 오른다), 후자는 여전히 오류다.
-//   그 둘을 각각 고정하고, 막은 주체가 Event 로 밖에 보이는지도 함께 본다 — Status.Message 는
-//   transitionTo 만 쓰므로 Event 가 없으면 kubectl get dus 에 "노드 cordon 완료" 가 남는다.
-//   fake client 기반 — envtest 불필요.
-// 생성일: 2026-10-04
+// 상세: claim 축에서 "아직 할당돼 있다"(정상 재조정)와 "읽지 못했다"(오류)를 가르고, 막은
+//       주체가 Event 로 보이는지 고정한다. fake client 기반 — envtest 불필요.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade

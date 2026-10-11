@@ -1,7 +1,7 @@
 // ============================================================
 // quiesce_test.go: quiesce 오케스트레이션 테스트
 // 상세: cordon → 장치 점유 pod 삭제 → 잔여 0 검증 → uncordon. DaemonSet pod 은 삭제하지 않는다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package partition
 
@@ -84,7 +84,7 @@ func TestAssertQuiescedFailsWhenNotCordoned(t *testing.T) {
 }
 
 // TestAssertQuiescedFailsOnNonExemptPod 는 노드가 cordon 됐어도 장치를 점유한 일반(비면제) pod 이
-// 남아 있으면 실패해야 함을 검증한다(I-3: 이 조건을 제거해도 그린으로 남던 회귀 케이스).
+// 남아 있으면 실패해야 함을 검증한다 — 이 조건을 빼면 통과해 버리는 회귀를 막는다.
 func TestAssertQuiescedFailsOnNonExemptPod(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker2"}, Spec: corev1.NodeSpec{Unschedulable: true}}
 	c := fake.NewClientBuilder().
@@ -98,7 +98,7 @@ func TestAssertQuiescedFailsOnNonExemptPod(t *testing.T) {
 }
 
 // TestAssertQuiescedPassesWhenOnlyExemptPodsHoldDevice 는 cordon 된 노드에 DaemonSet 소유 pod 과
-// static/mirror pod 만 장치를 점유하고 있으면 quiesced 로 간주해야 함을 검증한다(I-1).
+// static/mirror pod 만 장치를 점유하고 있으면 quiesced 로 간주해야 함을 검증한다.
 func TestAssertQuiescedPassesWhenOnlyExemptPodsHoldDevice(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker3"}, Spec: corev1.NodeSpec{Unschedulable: true}}
 	dsOwner := &metav1.OwnerReference{Kind: "DaemonSet", Name: "nvidia-device-plugin"}

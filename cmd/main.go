@@ -119,7 +119,7 @@ func main() {
 		}
 		return
 	}
-	// === 기존 manager 로직 (변경 없음) ===
+	// === 이하 기본 manager 로직 ===
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -232,10 +232,8 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	// If the certificate is not specified, controller-runtime will automatically
-	// generate self-signed certificates for the metrics server. While convenient for development and testing,
-	// this setup is not recommended for production.
-	//
+	// If the certificate is not specified, controller-runtime will automatically generate
+	// self-signed certificates for the metrics server (not recommended for production).
 	// TODO(user): If you enable certManager, uncomment the following lines:
 	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
 	// managed by cert-manager for the metrics server.
@@ -269,15 +267,9 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "35b22ec5.ai",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
+		// when the Manager ends, speeding up leader transitions — but requires the binary to
+		// end immediately when the Manager stops; if any cleanup runs after that, enabling
+		// this is unsafe.
 		// LeaderElectionReleaseOnCancel: true,
 		Cache: cache.Options{SyncPeriod: &syncPeriod},
 	})
@@ -430,15 +422,11 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Admission webhooks(DIP/NCP validating + Pod mutating).
-	//
-	// webhook-cert-path 가 비면 등록 자체를 건너뛴다. 이전 주석은 "WebhookConfiguration 이
-	// 없으면 무해하게 미사용으로 남는다" 고 적었으나 **틀렸다** — 핸들러를 등록하는 순간
-	// controller-runtime 이 웹훅 서버를 띄우고, 인증서 경로가 비면 기본 경로
-	// (/tmp/k8s-webhook-server/serving-certs)에서 찾다가 매니저가 통째로 죽는다.
-	// helm 차트는 webhook.enabled=false 면 --webhook-cert-path 를 주지 않으므로
-	// **차트 기본값 그대로 설치하면 operator 가 뜨지 못했다**(kind 1.28 실측 2026-08-06).
-	// 라이브는 줄곧 webhook 을 켜서 운영해 와 드러나지 않았다.
+	// Admission webhooks(DIP/NCP validating + Pod mutating). webhook-cert-path 가 비면 등록
+	// 자체를 건너뛴다 — 핸들러를 등록하는 순간 controller-runtime 이 웹훅 서버를 띄우고,
+	// 인증서 경로가 비면 기본 경로(/tmp/k8s-webhook-server/serving-certs)에서 찾다가 매니저가
+	// 통째로 죽는다. helm 차트는 webhook.enabled=false 면 --webhook-cert-path 를 주지 않으므로
+	// 이 가드가 없으면 차트 기본값 그대로는 operator 가 뜨지 않는다.
 	if webhookCertPath != "" {
 		if err := npuwebhook.Setup(mgr); err != nil {
 			setupLog.Error(err, "unable to set up admission webhooks")

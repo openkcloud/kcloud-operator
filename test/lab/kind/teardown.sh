@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # teardown.sh: kind 실험 클러스터(kcloud-lab) 정리 — operator 프로세스 + 클러스터 삭제
-# 상세: setup.sh 가 만든 kind 클러스터와 백그라운드 operator(make run) 프로세스를
-#       지운다. operator 는 setsid 로 새 세션을 열어 띄웠으므로 PID 가 곧 PGID 이고,
-#       그 프로세스 그룹 전체(make → go run → 컴파일된 바이너리)에 신호를 보내면
-#       한 번에 정리된다. PID 파일이 없을 때만 pgrep -f 로 이 LAB_DIR 의 프로세스만
-#       찾아 보조 정리한다(호스트의 다른 LAB_DIR·개발자의 make run 은 건드리지 않음).
-#       클러스터가 이미 없거나 operator 가 이미 죽어 있어도 그대로 성공(exit 0)한다.
-#       operator 로그(operator.log)는 사후 확인용으로 지우지 않는다. DRY_RUN=1 이면
-#       실행할 명령만 출력하고 아무것도 하지 않는다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-21
+# 상세: setup.sh 가 만든 kind 클러스터와 백그라운드 operator(make run) 프로세스를 지운다.
+#       operator 는 setsid 로 띄워 PID==PGID 라 프로세스 그룹째 신호를 보내 한 번에
+#       정리된다. 클러스터·operator 가 이미 없어도 성공(exit 0)하고, operator.log 는
+#       사후 확인용으로 지우지 않는다. DRY_RUN=1 지원.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

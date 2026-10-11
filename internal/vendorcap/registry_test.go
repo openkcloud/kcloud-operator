@@ -4,7 +4,7 @@
 //
 //	지키고, 알려진 근거 항목이 기대 상태를 갖는지 본다.
 //
-// 생성일: 2026-09-19 | 수정일: 2026-09-28
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 // ============================================================
 package vendorcap
 
@@ -51,11 +51,11 @@ func TestGroundedEntries(t *testing.T) {
 		{"furiosa", "rngd", CapPartition, StateNative},        // PE-fusion
 		{"furiosa", "rngd", CapTimeSlicing, StateUnsupported}, // EBUSY 배타 open
 		{"furiosa", "warboy", CapPartition, StateUnsupported}, // 단일 코어
-		{"rebellions", "", CapPartition, StateUnsupported},    // 공개 소스 조사 2026-09-15
-		{"rebellions", "", CapTimeSlicing, StateSoftware},     // 실 워크로드 동시 실행 실측(2026-09-25)
-		{"tenstorrent", "", CapPartition, StateUnsupported},   // 공개 소스 조사 2026-09-22
+		{"rebellions", "", CapPartition, StateUnsupported},    // 공개 소스 조사
+		{"rebellions", "", CapTimeSlicing, StateSoftware},     // 실 워크로드 동시 실행 실측
+		{"tenstorrent", "", CapPartition, StateUnsupported},   // 공개 소스 조사
 		{"tenstorrent", "", CapDevicePlugin, StateSoftware},   // kcloud 자체 device-plugin
-		{"tenstorrent", "", CapTimeSlicing, StateUnsupported}, // co-run 직렬화 실측(2026-09-23) — tt-metal UMD KMD 락
+		{"tenstorrent", "", CapTimeSlicing, StateUnsupported}, // co-run 직렬화 실측 — tt-metal UMD KMD 락
 	}
 	for _, c := range cases {
 		got, ok := Lookup(c.vendor, c.product, c.cap)
@@ -76,8 +76,8 @@ func TestLookupVendorPrefersSupported(t *testing.T) {
 }
 
 func TestRebellionsPartitionReasonCitesSourceReview(t *testing.T) {
-	// rblnlib-go v0.3.0 소스 검토(2026-09-20) 이후 Reason 이 검토 근거를 인용해야 한다 —
-	// "내부 미검토" 문구로 되돌아가는 회귀를 막는다.
+	// Reason 은 rblnlib-go v0.3.0 소스 검토 근거를 인용해야 한다 — "내부 미검토" 문구로
+	// 되돌아가는 회귀를 막는다.
 	s, ok := Lookup("rebellions", "", CapPartition)
 	if !ok {
 		t.Fatalf("rebellions/partition 항목 누락")
@@ -91,8 +91,8 @@ func TestRebellionsPartitionReasonCitesSourceReview(t *testing.T) {
 }
 
 func TestTenstorrentTimeSlicingDowngradedToUnsupported(t *testing.T) {
-	// tt-metal UMD 가 /dev/tenstorrent/0 에 KMD 락을 잡아 실제 워크로드 두 개가 직렬화된다는
-	// 2026-09-23 co-run 실측 이후 timeSlicing 은 Unsupported 다. Software 로 되돌아가거나 근거가
+	// tt-metal UMD 가 /dev/tenstorrent/0 에 KMD 락을 잡아 실제 워크로드 두 개가 직렬화되므로
+	// co-run 실측 이후 timeSlicing 은 Unsupported 다. Software 로 되돌아가거나 근거가
 	// 직렬화 사실·evidence 출처를 지우면 이 시험이 실패한다(bare os.open 동시 성공만으로 다시
 	// 지원으로 읽히는 회귀를 막는다).
 	s, ok := Lookup("tenstorrent", "", CapTimeSlicing)
@@ -111,11 +111,11 @@ func TestTenstorrentTimeSlicingDowngradedToUnsupported(t *testing.T) {
 }
 
 func TestRebellionsTimeSlicingGroundedInRealWorkload(t *testing.T) {
-	// rebellions ATOM 은 두 실 워크로드가 같은 장치(device 0)에서 동시 진행함을 2026-09-25 실측으로
-	// 확인했다. 주근거는 device_open 이 배리어에 비례해 안 늘어 배타 락이 없다는 점과 rbln-smi 가
-	// NPU 0 에 두 컨텍스트를 본 점이고, 처리량(합 약 1.83×solo)은 보조다. timeSlicing 은 Software 로
-	// 유지하되 근거가 이 실측이어야 한다 — 유휴 os.open 데모로 되돌아가거나 근거 없이 Unsupported 로
-	// 내려가면 이 시험이 실패한다(약한 근거로의 회귀·무근거 하향 차단).
+	// rebellions ATOM 은 두 실 워크로드가 같은 장치(device 0)에서 동시 진행함을 실측으로 보인다.
+	// 주근거는 device_open 이 배리어에 비례해 안 늘어 배타 락이 없다는 점과 rbln-smi 가 NPU 0 에
+	// 두 컨텍스트를 본 점이고, 처리량(합 약 1.83×solo)은 보조다. timeSlicing 은 이 실측을 근거로
+	// Software 를 유지한다 — 유휴 os.open 데모로 되돌아가거나 근거 없이 Unsupported 로 내려가면
+	// 이 시험이 실패한다(약한 근거로의 회귀·무근거 하향 차단).
 	s, ok := Lookup("rebellions", "", CapTimeSlicing)
 	if !ok {
 		t.Fatalf("rebellions/timeSlicing 항목 누락")
@@ -156,7 +156,7 @@ func TestAssuranceDefaultsToNone(t *testing.T) {
 
 // hwEvidenceRe 는 Source 프로세 안에서 재현 경로 토큰만 뽑는다. test/live/ 를 포함하면서
 // 경로 문자(영숫자·_·.·/·-)로만 이뤄진 덩어리를 잡으므로 괄호·세미콜론·한글·공백에서
-// 끊긴다 — "…(co-run 실측 2026-09-23); 재현은 test/live/x/run.sh" 같은 프로세도 경로만
+// 끊긴다 — "…(co-run 실측); 재현은 test/live/x/run.sh" 같은 프로세도 경로만
 // 정확히 잘라낸다.
 var hwEvidenceRe = regexp.MustCompile(`[\w./-]*test/live/[\w./-]*`)
 
@@ -190,18 +190,12 @@ func TestHardwareVerifiedRequiresEvidencePath(t *testing.T) {
 }
 
 func TestAssuranceAboveNoneNamesAReference(t *testing.T) {
-	// 확인 수준을 None 위로 올렸다면 무엇으로 확인했는지가 참조로 남아야 한다.
-	// 옛 검사는 TestRefs 나 Source 가 비지 않기만 하면 통과였는데, native()·software()
-	// 가 Source 를 필수로 받으므로 그 항목은 전부 자동 통과 — 검사가 사실상 무력했다.
-	// 이미지 이름이나 helm 경로만 든 Source 도 통과해 버렸다.
-	//
-	// 그래서 "비지 않음" 이 아니라 "검증을 가리키는 종류의 참조" 를 요구한다:
-	//   - Go 시험 파일(_test.go)
-	//   - 라이브 하네스(test/live/)
-	// 둘 다 이 저장소 안이라 받는 사람이 열어 볼 수 있다. 형제 docs 저장소는 remote 가 없어
-	// 근거로 쓰지 않는다.
-	// AssuranceHardware 는 이보다 엄한 TestHardwareVerifiedRequiresEvidencePath 가 경로
-	// 존재까지 따로 잡는다 — 이 검사는 모든 등급에 걸리는 최소 기준이다.
+	// 확인 수준을 None 위로 올렸다면 무엇으로 확인했는지가 참조로 남아야 한다. "비지 않음"
+	// 만으로는 부족하다 — native()·software() 가 Source 를 필수로 받아 그 검사는 모든 항목을
+	// 자동 통과시켜 버린다. 그래서 "검증을 가리키는 종류의 참조"(Go 시험 파일 _test.go,
+	// 라이브 하네스 test/live/)를 요구한다 — 둘 다 이 저장소 안이라 열어 볼 수 있다(형제
+	// docs 저장소는 remote 가 없어 근거로 못 쓴다). AssuranceHardware 는 더 엄한
+	// TestHardwareVerifiedRequiresEvidencePath 가 경로 존재까지 따로 확인한다.
 	indicatesVerification := func(ref string) bool {
 		return strings.Contains(ref, "_test.go") || strings.Contains(ref, "test/live/")
 	}
@@ -209,8 +203,8 @@ func TestAssuranceAboveNoneNamesAReference(t *testing.T) {
 	// 이 저장소 밖에만 있어 독자가 도달할 수 없다는 뜻이며, 하네스가 생기면 지운다. 표시를
 	// 쓴 항목은 아래에서 따로 세어 수가 늘면 실패시킨다 — 예외가 조용히 번지지 않게 한다.
 	const noHarness = "재현 하네스 미작성"
-	// wantNoHarness 는 2026-09-30 기준 하네스가 없는 항목 수다. nvidia/isolation 과
-	// furiosa rngd/isolation 둘이며, 측정은 형제 저장소 tester/ 에서 했다.
+	// wantNoHarness 는 하네스가 없는 항목 수(nvidia/isolation, furiosa rngd/isolation)다 —
+	// 근거는 형제 저장소 tester/ 에 있다.
 	const wantNoHarness = 2
 	gotNoHarness := 0
 	for k, caps := range registry {

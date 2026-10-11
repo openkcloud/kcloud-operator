@@ -1,12 +1,8 @@
 // main.go: kubectl-npu plugin — NPU Operator CLI
-// 상세: kubectl npu status[--json]/driver-version/upgrade/toggle/describe 명령을 제공.
-//
-//	조회·제어 로직은 pkg/npuctl(kcloud-operator 모듈, replace로 로컬 참조)에 위임하고,
-//	이 파일은 CLI 파싱 + 사람용/JSON 출력 포맷팅만 담당한다.
-//
-// 생성일: 2026-03-25 | 수정일: 2026-10-10 (NPUClusterPolicy 절에 벤더 operator 조건 줄 추가,
-//
-//	벤더 줄 열 폭을 고정값 대신 데이터에서 측정하도록 수정; 계획서 항목 토큰 제거)
+// 상세: kubectl npu status[--json]/driver-version/upgrade/toggle/describe 등을 제공한다.
+// 조회·제어는 pkg/npuctl(kcloud-operator 모듈, replace 로 로컬 참조)에 위임하고, 이
+// 파일은 CLI 인자 파싱과 사람용/JSON 출력 서식만 맡는다.
+// 생성일: 2026-03-25 | 수정일: 2026-10-11
 package main
 
 import (
@@ -25,17 +21,12 @@ import (
 	"kcloud-operator/pkg/npuctl"
 )
 
-// printTable은 열 폭을 데이터에서 재어 표를 낸다.
-//
-// 고정폭 서식(%-15s)은 값 하나만 넘쳐도 그 행부터 열이 밀려 표를 눈으로 훑을 수 없다.
-// 실측만 봐도 노드 rngd-1.cluster.local(20자)과 장치 tenstorrent/blackhole-p150(26자)이
-// 하드코딩한 폭을 넘겼다. 클러스터마다 이름 길이가 다르므로 폭은 잴 수밖에 없다.
-//
-// 폭은 rune 개수로 잰다 — 아래 %-*s 의 폭 단위가 byte 가 아니라 rune 이라, len()(byte 길이)
-// 로 재면 한글처럼 rune 당 3byte 인 문자열에서 필요한 것보다 훨씬 크게 재져 그 열 뒤 열이
-// 행마다 다르게 밀린다(REASON 이 마지막 열일 때는 안 밀려 드러나지 않다가 SOURCE 가
-// 뒤에 붙으며 드러남). 한글은 터미널에서 실제로 2칸을 차지하므로 rune 단위로도 완전한
-// 정렬은 아니다 — 동아시아 폭 문자 정렬은 별도 과제로 남긴다.
+// printTable은 열 폭을 데이터에서 재어 표를 낸다. 고정폭 서식(%-15s)은 값 하나만
+// 넘쳐도 그 행부터 열이 밀려 표를 훑을 수 없다 — 노드 rngd-1.cluster.local(20자)
+// 처럼 클러스터마다 이름 길이가 다르므로 폭은 잴 수밖에 없다. 폭은 byte 가 아니라
+// rune 개수로 잰다 — len()(byte 길이)로 재면 한글처럼 rune 당 3byte 인 문자열에서
+// 필요한 것보다 크게 재져 열이 행마다 다르게 밀린다. 한글은 터미널에서 실제로 2칸을
+// 차지하므로 rune 단위로도 완전한 정렬은 아니다 — 동아시아 폭 문자는 별도 과제다.
 func printTable(header []string, rows [][]string) {
 	width := make([]int, len(header))
 	for i, h := range header {
@@ -721,11 +712,11 @@ func renderNodeDetail(d *npuctl.NodeDetail) string {
 		noIdentifier := false
 		for i, ev := range d.Evidence {
 			vendor, level := ev.Vendor, ev.Level
-			// Vendor·Level 이 둘 다 빈 조각(라이브에서 실재)을 표 칸에 그대로 두면
-			// 만료일만 남는다. "식별자 없음" 문자열은 바이트 수(16)가 화면 폭(11)보다
-			// 커서 renderTable 이 표 폭을 재는 len() 과 어긋나 LEVEL/EXPIRES 열이
-			// 밀린다(k8s-master·k8s-worker3 실측) — 표 칸에는 다른 빈 값과 같은
-			// "—" 를 쓰고, 식별자가 없다는 사실은 라벨 줄에 적는다.
+			// Vendor·Level 이 둘 다 빈 조각을 표 칸에 그대로 두면 만료일만 남아 무엇에
+			// 대한 만료인지 알 수 없다. "식별자 없음" 문자열을 VENDOR 칸에 직접 넣으면
+			// 그 길이(16바이트)가 renderTable 이 표 폭을 재는 len() 과 어긋나 LEVEL·
+			// EXPIRES 열이 밀린다 — 다른 빈 값과 같은 "—" 를 쓰고, 식별자가 없다는
+			// 사실은 라벨 줄에 따로 적는다.
 			if vendor == "" && level == "" {
 				noIdentifier = true
 				vendor, level = "—", "—"
@@ -1351,17 +1342,11 @@ type partitionApplyArgs struct {
 }
 
 // scanFlags 는 partition apply·sharing apply·allocation switch·driver rollback 인자
-// 파서가 공유하는 최소 스캐너다(dupl 이 지적한 여러 벌의 거의 같은 순차 파싱 루프를
-// 하나로 묶는다) — "--flag 값" 문자열 플래그(strs), "--flag N" 정수 플래그(ints),
-// "--force" 스위치 하나를 받는다.
-//
-// 값이 필요한 플래그의 다음 토큰이 "--" 로 시작하면(즉 값이 아니라 다른 플래그 이름처럼
-// 보이면) 그 토큰을 값으로 삼키지 않고 즉시 에러를 낸다. 예전에는 그 토큰을 그대로
-// 삼켰다 — "--profile --count-per-device 2 --force" 처럼 값 하나를 빠뜨린 사용자가
-// 습관적으로 마지막에 --force 를 붙이면, "--profile"이 "--count-per-device"를 값으로
-// 삼키고 뒤로 밀린 "--force"가 정상 플래그 자리에서 인식돼 확인 없이 통과했다(리뷰가
-// 네 명령 모두에서 재현). 지금은 그 자리에서 바로 실패하므로 뒤로 밀린 --force 가 살아
-// 남을 수 없다.
+// 파서가 공유하는 최소 스캐너다 — "--flag 값" 문자열 플래그(strs), "--flag N" 정수
+// 플래그(ints), "--force" 스위치 하나를 받는다. 값이 필요한 플래그의 다음 토큰이 "--"
+// 로 시작하면 그 토큰을 값으로 삼키지 않고 즉시 에러를 낸다 — 그러지 않으면 "--profile
+// --count-per-device 2 --force" 처럼 값 하나를 빠뜨린 사용자의 뒤로 밀린 "--force"가
+// 정상 플래그 자리에서 인식돼 확인 없이 통과해버린다(네 명령 모두에서 재현 가능).
 func scanFlags(args []string, strs map[string]*string, ints map[string]*int32) (force bool, err error) {
 	requireValue := func(i int) (string, error) {
 		if i+1 >= len(args) {
@@ -1439,8 +1424,7 @@ func describeSharing(mode string, replicas int32) string {
 }
 
 // cmdPartitionApply 는 node+vendor 의 파티션 레이아웃을 profile/count-per-device 로 맞춘다.
-//
-// dupl 이 번갈아 지목한다.
+// dupl 린터가 cmdSharingApply 와 구조가 같다고 번갈아 지목한다 — 이유는 아래 nolint 지시문 참고.
 //
 //nolint:dupl // cmdSharingApply 의 nolint 주석 참고 — 짝을 이루는 두 함수 중 이쪽도
 func cmdPartitionApply(args []string) {
@@ -1510,13 +1494,12 @@ func runApplyCommand(force bool, prompt func() (string, error), apply func() (ap
 	printApplyResult(outcome.policy, outcome.node, outcome.vendor, outcome.created, outcome.noChange)
 }
 
-// printApplyResult 는 partition apply·sharing apply 가 공유하는 결과 출력이다.
-// printApplyResult 는 CR 을 썼다는 사실만 알린다 — "정상 적용됐다"고 말하지 않는다.
-// 이 정책은 그 뒤 컨트롤러의 Discover→Validate→Diff→Apply→Verify 단계를 거치고
-// Failed·RollingBack 등으로 끝날 수 있으며(admission webhook 은 이 CRD 에서
-// failurePolicy=Ignore 라 항상 먼저 막아 주지 않는다), 그 판정은 이 명령이 돌려주지
-// 않는다 — allocation switch 의 기존 고지("선언만 — 노드별 실제 전환은 …")와 같은
-// 이유로 created/patch 를 완료로 오인하지 않도록 확인 명령을 함께 낸다.
+// printApplyResult 는 partition apply·sharing apply 가 공유하는 결과 출력이다. CR 을
+// 썼다는 사실만 알린다 — "정상 적용됐다"고 말하지 않는다. 이 정책은 그 뒤 컨트롤러의
+// Discover→Validate→Diff→Apply→Verify 단계를 거치고 Failed·RollingBack 등으로 끝날 수
+// 있으며(admission webhook 은 이 CRD 에서 failurePolicy=Ignore 라 항상 먼저 막아 주지
+// 않는다), 그 판정은 이 명령이 돌려주지 않는다 — created/patch 를 완료로 오인하지
+// 않도록 확인 명령을 함께 낸다(allocation switch 의 "선언만" 고지와 같은 이유).
 func printApplyResult(policy, node, vendor string, created, noChange bool) {
 	fmt.Printf("Policy: %s\n", policy)
 	fmt.Printf("Node:   %s\n", node)
@@ -1601,13 +1584,11 @@ func parseSharingApplyArgs(args []string) (sharingApplyArgs, error) {
 	return a, nil
 }
 
-// cmdSharingApply 는 node+vendor 의 공유 방식을 mode/replicas 로 맞춘다.
-//
-// 것은 명령마다 다른 메서드 호출(PreviewSharingApply·ApplySharing)과 서식(describeSharing)
-// 뿐인데 인자 개수가 cmdPartitionApply 와 같아 dupl 이 구조만 보고 겹친다고 본다. 레이아웃과
-// 공유는 서로 다른 필드를 가진 별개 도메인이라, 이 이상 합치려면 제네릭 서술자로 둘을
-// 인위적으로 묶어야 해서 오히려 각 명령의 흐름을 한눈에 못 읽게 된다(root .golangci.yml 이
-// internal/* 에 이미 쓰는 것과 같은 판단 — 반복되는 얇은 배선은 억지로 합치지 않는다).
+// cmdSharingApply 는 node+vendor 의 공유 방식을 mode/replicas 로 맞춘다. 두 함수가 다른
+// 것은 메서드 호출(PreviewSharingApply·ApplySharing)과 서식(describeSharing)뿐이라 인자
+// 개수가 cmdPartitionApply 와 같아 dupl 이 구조만 보고 겹친다고 본다. 레이아웃과 공유는
+// 서로 다른 필드를 가진 별개 도메인이라, 이 이상 합치면 제네릭 서술자로 둘을 억지로
+// 묶어야 해서 각 명령의 흐름을 한눈에 못 읽게 된다 — 반복되는 얇은 배선은 합치지 않는다.
 //
 //nolint:dupl // runApplyCommand 가 실제 공유 로직(확인→적용→출력)을 이미 뽑아냈다 — 남는
 func cmdSharingApply(args []string) {
@@ -1643,12 +1624,10 @@ func cmdSharingApply(args []string) {
 
 // diagnoseRow 는 diagnose 표의 한 행이다 — 이미 다른 명령이 읽는 값 중 정상이 아닌
 // 것만 모은다. 새 판정 기준을 두지 않는다: health 는 npuctl.HealthStateHealthy 가
-// 아닌 값(internal/health.StateHealthy 를 pkg/npuctl 이 중개한 것 — internal/ 은 별도
-// 모듈인 cmd/kubectl-npu 가 직접 import 할 수 없지만, internal/ 이 아닌 api/v1alpha1 은
-// 이 파일이 이미 직접 import 한다), upgrade 는 npuv1alpha1.UpgradeStateFailed(driver
-// status 명령 문서가 이미 나열하는 어휘), allocation 은 이미 있는
-// AmbiguousProductNodes, capability 는 이미 있는 npuctl.VerificationDegraded 상수를
-// 그대로 쓴다.
+// 아닌 값(internal/health.StateHealthy 를 pkg/npuctl 이 중개한 것 — cmd/kubectl-npu 는
+// 별도 모듈이라 internal/ 을 직접 import 할 수 없다), upgrade 는
+// npuv1alpha1.UpgradeStateFailed, allocation 은 AmbiguousProductNodes, capability 는
+// npuctl.VerificationDegraded 상수를 그대로 쓴다.
 type diagnoseRow struct {
 	category string
 	node     string

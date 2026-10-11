@@ -2,8 +2,7 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20 | 수정일: 2026-10-11 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정; 라우트별 SAR 개수 고정 표 추가, TokenReview 시험의 SAR 단언 제거;
-// 세션 전용 식별자 제거)
+// 생성일: 2026-07-20 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -199,10 +198,9 @@ func TestToggle_MissingEnabled400(t *testing.T) {
 	}
 }
 
-// 최종 리뷰 Important #4 로 추가한 core-group nodes 게이트를 고정한다. 게이트가 있는데
-// 아무 테스트도 잠그지 않으면 다음 리팩터가 조용히 지워도 초록으로 남는다 — 이 트랙이
-// 반복해서 값을 치른 형태다(I-6 의 동어반복 테스트와 같은 부류, 인가 쪽 버전).
-// 응답이 노드 파생 값을 싣는 6개 라우트 전부가 대상이다.
+// core-group nodes 게이트를 고정한다. 게이트가 있는데 아무 테스트도 잠그지 않으면 다음
+// 리팩터가 조용히 지워도 초록으로 남는다. 응답이 노드 파생 값을 싣는 6개 라우트 전부가
+// 대상이다.
 func TestNodeAuthzGateOnNodeDerivedRoutes(t *testing.T) {
 	cases := []struct{ name, method, path, body string }{
 		{"accelerators", "GET", "/api/v1/accelerators", ""},
@@ -299,7 +297,7 @@ func TestCapabilityRoutesRequireDRAReadAuthz(t *testing.T) {
 }
 
 // 중첩 게이트가 계층마다 TokenReview 를 반복하면 요청당 왕복이 게이트 수만큼 늘어난다.
-// 토큰이 하나면 TokenReview 도 한 번이어야 한다(최종 리뷰 후속 4번).
+// 토큰이 하나면 TokenReview 도 한 번이어야 한다.
 func TestAuthzAllDoesOneTokenReview(t *testing.T) {
 	s, _ := newServer(t, okAuth(), previewObjects()...)
 	fake := s.Authn.(*k8sfake.Clientset)
@@ -318,14 +316,12 @@ func TestAuthzAllDoesOneTokenReview(t *testing.T) {
 	}
 }
 
-// 라우트별 인가 호출(SAR) 수를 고정한다 — 게이트를 늘리면 이 숫자가 늘고, 늘어난 사실이
-// 리뷰에 보여야 한다. 캐시는 넣지 않는다(인가 판정을 묵히면 권한 회수 직후의 요청이 통과하는
-// 창이 생긴다). SAR 수를 고정하는 자리는 이 표 하나로 모은다 — preview 의 수는 과거
-// TestAuthzAllDoesOneTokenReview 에도 있었으나 그 시험은 이제 TokenReview 수만 본다.
-// 기대값 출처(server.go): capabilities 는 capGates(nodes·acpp·ndr·resourceslices·deviceclasses
-// 5개), accelerators 는 invGates(capGates + acceleratorhealths·pods·resourceclaims = 8개),
-// preview 는 POST 핸들러 등록부의 인라인 게이트 목록(nodeGate·acppGate·ndrGate·classGate +
-// resourceslices·deviceclasses = 6개).
+// 라우트별 인가 호출(SAR) 수를 고정한다 — 게이트를 늘리면 이 숫자가 늘어 diff 에 드러난다.
+// 캐시는 넣지 않는다(인가 판정을 묵히면 권한 회수 직후의 요청이 통과하는 창이 생긴다).
+// 기대값 출처(server.go): capabilities 는 capGates(nodes·acpp·ndr·resourceslices·
+// deviceclasses 5개), accelerators 는 invGates(capGates + acceleratorhealths·pods·
+// resourceclaims = 8개), preview 는 nodeGate·acppGate·ndrGate·classGate+resourceslices·
+// deviceclasses = 6개.
 func TestRouteAuthzCallCounts(t *testing.T) {
 	cases := []struct {
 		path, method, body string
@@ -360,7 +356,7 @@ func TestRouteAuthzCallCounts(t *testing.T) {
 
 // 기존 read 라우트 2개는 npuctl.CollectStatus 를 통해 corev1.NodeList 를 읽고
 // node.status.allocatable 전량을 응답에 싣는다(pkg/npuctl/types.go:68-71). npu.ai 권한만으로
-// 그게 나가면 안 된다 — core group nodes list 인가를 함께 요구한다(최종 리뷰 후속 1번).
+// 그게 나가면 안 된다 — core group nodes list 인가를 함께 요구한다.
 func TestStatusRoutesRequireNodeAuthz(t *testing.T) {
 	cases := []struct{ name, path string }{
 		{"status", "/api/v1/status"},
@@ -381,9 +377,9 @@ func TestStatusRoutesRequireNodeAuthz(t *testing.T) {
 }
 
 // 두 게이트가 동시에 막혀 있을 때 403 이 이름을 남기는 리소스는 authzAll 의 pairs 순서로
-// 결정된다. 순서를 고정하는 테스트가 없으면 pairs 를 뒤집어도 스위트가 green 이라(소비자 귀속
-// 리뷰가 실험으로 확인) 사용자가 받는 사유가 조용히 바뀐다. nodes 가 첫 게이트임을 고정한다.
-// 거부를 하나만 걸면 순서와 무관하게 그 하나가 이름에 나오므로 반드시 둘을 막아야 한다.
+// 결정된다. 순서를 고정하는 테스트가 없으면 pairs 를 뒤집어도 스위트가 green 이라 사용자가
+// 받는 사유가 조용히 바뀐다. nodes 가 첫 게이트임을 고정한다. 거부를 하나만 걸면 순서와
+// 무관하게 그 하나가 이름에 나오므로 반드시 둘을 막아야 한다.
 func TestAuthzAllReportsFirstGateInOrder(t *testing.T) {
 	opts := authnOpts{
 		authenticated: true, username: "sa:no-nodes-no-acpp", allowed: true,
@@ -426,8 +422,8 @@ func lastSAR(t *testing.T, fake *k8sfake.Clientset, resource string) *authzv1.Su
 	return nil
 }
 
-// I-2: AcceleratorWorkload 는 namespaced 라 쓰기 인가의 SubjectAccessReview 에도 네임스페이스를
-// 실어야 한다 — 비우면 쿠버네티스가 "모든 네임스페이스" 로 읽는다(최종 리뷰 Important #2).
+// AcceleratorWorkload 는 namespaced 라 쓰기 인가의 SubjectAccessReview 에도 네임스페이스를
+// 실어야 한다 — 비우면 쿠버네티스가 "모든 네임스페이스" 로 읽는다.
 func TestWorkloadWriteAuthzNamespace(t *testing.T) {
 	t.Run("create 는 본문 네임스페이스를 SAR 에 싣는다", func(t *testing.T) {
 		s, _ := newServer(t, okAuth())

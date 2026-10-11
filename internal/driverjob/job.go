@@ -1,12 +1,9 @@
 // ============================================================
 // job.go: driver install Job 빌더 (DriverSpec.Mode=job)
-// 상세: 상시 privileged driver DaemonSet 대신 "순간 install Job" 을 렌더한다.
-//       DS pod spec(privileged/hostPID/host mounts/env)을 재사용하되,
-//       Job 전용으로 (1) restartPolicy=OnFailure (2) PreStop rmmod/probe 제거
-//       (완료 시 방금 설치한 모듈 언로드 참사 방지) (3) RUN_MODE=job env 주입
-//       (entrypoint 가 설치 후 exit 0) 로 변형한다. node-agent 가 그대로
-//       흡수할 수 있도록 controller 에 의존하지 않는 독립 패키지로 둔다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: 상시 privileged driver DaemonSet 대신 "순간 install Job" 을 렌더한다. DS pod spec 을
+// 재사용하되 Job 전용으로 변형한다(세부는 renderJob 주석). node-agent 가 그대로 흡수할 수
+// 있도록 controller 에 의존하지 않는 독립 패키지로 둔다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 // Package driverjob renders the one-shot driver install Job used by
@@ -29,7 +26,7 @@ import (
 
 // Namespace 는 install Job 이 생성되는 네임스페이스다. driver DaemonSet 과 동일하게
 // operator 관리 네임스페이스(OPERATOR_NAMESPACE, 기본 kube-system)에 둔다.
-// process 시작 시 1회 평가(operator pod 의 Downward API env). #16 네임스페이스 재편.
+// process 시작 시 1회 평가(operator pod 의 Downward API env).
 var Namespace = naming.OperatorNamespace()
 
 // 기본값 — JobOverrides 로 override 가능.
@@ -39,34 +36,28 @@ const (
 	defaultActiveDeadlineSeconds   int64 = 1800 // 무한 hang 방지(DKMS 빌드 여유 30m)
 )
 
-// RenderInstallJob 은 DriverInstallPolicy 로부터 대상 노드용 install Job 을 빌드한다.
-//
-//   - pol      : 벤더/모델/시크릿/JobOverrides 등 정책 소스.
-//   - nodeName : 설치 대상 노드(스케줄러 우회, spec.nodeName 고정).
-//   - image    : 설치에 사용할 드라이버 이미지(desired 또는 rollback 대상).
-//   - version  : DRIVER_VERSION env 로 전달할 목표 버전.
-//
-// 이름은 naming.InstallJobName 으로 결정론적으로 계산되어 동일 (vendor,model,node) 에
-// 대해 중복 생성이 불가능하다(de-facto lease). owner 는 DIP(cluster-scoped)로 설정해
-// DIP 삭제 시 K8s GC 가 Job 을 cascade 정리한다(TTL GC 와 함께 orphan 방지).
+// RenderInstallJob 은 DriverInstallPolicy(벤더/모델/시크릿/JobOverrides 등 정책 소스) 로부터
+// nodeName(설치 대상, spec.nodeName 고정) 에 image(desired 또는 rollback 대상)·
+// version(DRIVER_VERSION env 목표값) 으로 install Job 을 빌드한다. 이름은
+// naming.InstallJobName 으로 결정론적으로 계산되어 동일 (vendor,model,node) 에 대해 중복
+// 생성이 불가능하다(de-facto lease). owner 는 DIP(cluster-scoped)로 설정해 DIP 삭제 시
+// K8s GC 가 Job 을 cascade 정리한다(TTL GC 와 함께 orphan 방지).
 func RenderInstallJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string) *batchv1.Job {
 	return renderJob(pol, nodeName, image, version, false)
 }
 
 // RenderRollbackJob 은 실패한 업그레이드를 되돌리는 Job 을 빌드한다. RenderInstallJob 과 같되
-// **다운그레이드를 허용한다.**
-//
-// 정책의 `driver.allowDowngrade` 는 *정책 변경으로 버전을 낮추는 것*을 막는 장치다. 롤백은
-// 그것과 다른 일이다 — 방금 실패한 업그레이드를 원래 자리로 되돌리는 것이고, 정의상 내려간다.
-// 둘을 한 값으로 묶으면 installer 자신의 다운그레이드 가드가 롤백을 거부해 되돌릴 수 없는
-// 업그레이드가 만들어지고, 노드는 실패한 버전에 갇힌다(2026-08-10 라이브).
-//
-// VERSION_SOURCE 도 Policy 로 고정한다. Host 로 두면 installer 가 호스트에 남은 *실패한* 버전을
-// desired 로 채택해 롤백이 그대로 무동작이 된다.
+// 다운그레이드를 허용한다. 정책의 `driver.allowDowngrade` 는 정책 변경으로 버전을 낮추는 것을
+// 막는 장치이고, 롤백(정의상 내려간다)과는 다른 일이다 — 둘을 한 값으로 묶으면 installer 의
+// 다운그레이드 가드가 롤백을 거부해 노드가 실패한 버전에 갇힌다. VERSION_SOURCE 도 Policy 로
+// 고정한다 — Host 로 두면 호스트에 남은 실패한 버전을 desired 로 채택해 롤백이 무동작이 된다.
 func RenderRollbackJob(pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string) *batchv1.Job {
 	return renderJob(pol, nodeName, image, version, true)
 }
 
+// renderJob 은 RenderInstallJob·RenderRollbackJob 의 공통 구현이다. DS pod spec 을 재사용하되
+// Job 전용으로 변형한다: (1) restartPolicy=OnFailure (2) PreStop rmmod/probe 제거(완료 시
+// 방금 설치한 모듈 언로드 참사 방지) (3) RUN_MODE=job env 주입(entrypoint 가 설치 후 exit 0).
 func renderJob(
 	pol *npuv1alpha1.DriverInstallPolicy, nodeName, image, version string, rollback bool,
 ) *batchv1.Job {
@@ -221,7 +212,7 @@ func renderJob(
 // versionSourcePolicy 는 정책이 선언한 버전을 그대로 쓰라는 값이다(entrypoint 의 VERSION_SOURCE).
 const versionSourcePolicy = "Policy"
 
-// versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작 "Policy" 를 반환한다.
+// versionSourceOrDefault 는 VersionSource 가 빈 값이면 기존 동작 "Policy" 를 반환한다.
 func versionSourceOrDefault(vs string) string {
 	if vs == "" {
 		return versionSourcePolicy

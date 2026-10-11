@@ -1,15 +1,8 @@
 // ============================================================
-// chart_values_schema_test.go: values.schema.json 이 모르는 키를 막는지 고정한다
-// 상세: helm 은 스키마가 없으면 오타 키를 오류 없이 받고 조용히 버린다. 그래서 설치자는
-//
-//	자기가 준 값이 먹힌 줄 안다. 닫은 블록은 거절하고, 사이트마다 키가 달라
-//	열어 둔 블록은 통과해야 한다 — 둘을 같이 고정해야 엄격함이 의도대로 걸렸음이 남는다.
-//
-// 주의: 이 시험은 os/exec 로 helm 을 부른다. Go 테스트 캐시는 그 의존을 보지 못하므로 손으로
-//
-//	돌릴 때는 `-count=1` 을 붙일 것(`make test` 는 -coverprofile 로 캐시를 끈다).
-//
-// 생성일: 2026-10-04
+// chart_values_schema_test.go: values.schema.json 이 모르는 키를 막는지 고정한다.
+// 상세: helm 은 스키마가 없으면 오타 키를 받고 조용히 버린다. 닫은 블록은 거절하고, 사이트마다
+// 키가 달라 열어 둔 블록은 통과해야 한다 — 둘을 같이 고정해야 엄격함이 의도대로 걸렸음이 남는다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -23,6 +16,7 @@ import (
 
 // helmRenderWithSet 은 --set 한 쌍으로 차트 렌더를 시도하고 성공 여부와 출력을 돌려준다.
 // helmTemplate 과 달리 실패를 t.Fatalf 로 끝내지 않는다 — 거절 자체가 기대값인 시험이 있다.
+// os/exec 로 helm 을 부르므로 손으로 돌릴 때는 -count=1 을 붙일 것(make test 는 -coverprofile 로 캐시를 끈다).
 func helmRenderWithSet(t *testing.T, set string) (bool, string) {
 	t.Helper()
 	bin := helmBinary(t)
@@ -87,8 +81,7 @@ func TestChartValuesSchemaKeepsSiteKeyedBlocksOpen(t *testing.T) {
 }
 
 // 벤더 항목은 그 벤더 템플릿이 읽는 키만 받아야 한다. 공유 정의 한 벌을 네 벤더가 쓰므로
-// 합집합으로 두면 읽히지 않는 키가 통과하고 렌더에서 조용히 사라진다 — 바로 이 차트가
-// detector.image 로 겪은 결함이다. 거절과 통과를 쌍으로 고정한다.
+// 합집합으로 두면 읽히지 않는 키가 통과하고 렌더에서 조용히 사라진다. 거절과 통과를 쌍으로 고정한다.
 func TestChartValuesSchemaScopesVendorOnlyKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -156,8 +149,7 @@ func TestChartValuesSchemaRejectsScalarForStructuredBlocks(t *testing.T) {
 
 // TestChartRendersKernelImageAssemblyKeys 는 네 벤더 템플릿이 조립 값을 실제로 CR 에 싣는지 본다.
 // 스키마가 키를 받는 것만으로는 부족하다 — 템플릿 블록이 한 벤더에서 빠지면 값이 조용히 버려지고
-// 그 벤더는 조립 경로를 켤 수 없다(이 차트가 detector.image 로 겪은 결함과 같은 모양).
-// 벤더마다 다른 값을 줘서 어느 블록이 빠졌는지 출력으로 드러나게 한다.
+// 그 벤더는 조립 경로를 켤 수 없다. 벤더마다 다른 값을 줘서 어느 블록이 빠졌는지 출력으로 드러나게 한다.
 func TestChartRendersKernelImageAssemblyKeys(t *testing.T) {
 	bin := helmBinary(t)
 	revisions := map[string]string{

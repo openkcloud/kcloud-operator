@@ -1,33 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: 실패 업그레이드 + 롤백 kind 재현 — 롤백 이미지 재구성·RollbackAttempts 상한
-# 상세: test/fault/sequence_test.go 의 Sequence B(:69, full→MIG→upgrade→rollback→full)가
-#       envtest 로 증명한 롤백 경로를, 실제 apiserver 위에서 job 모드 install Job 으로 다시
-#       탄다. 이 저장소의 기존 작업(test/live/tt-upgrade-transition/run.sh)이 이미 검증한
-#       레시피를 그대로 쓴다 — 가짜 DriverInstallPolicy(mode=job)·NodeDeviceReport
-#       (driverLoaded=false 고정)·DriverUpgradeState(kind 노드가
-#       node-role.kubernetes.io/control-plane 라벨을 갖고 있어 ensureUpgradeStates 가
-#       skip 하므로 직접 생성, driver_upgrade_controller.go:180-183) 로 검증 실패→Rollback→
-#       (rollback Job 도 실패)→RollbackAttempts 소진→Failed 경로를 만든다. 가짜
-#       device-plugin 은 두지 않는다 — defaultValidators(state_machine.go:551)는
-#       DriverModuleValidator 를 DevicePluginValidator 보다 먼저 fail-fast 로 돌리므로
-#       (handleValidatingJob, state_machine_job.go:212-229), NDR.driverLoaded=false 가
-#       유지되는 한 DevicePlugin 체크에는 도달하지 않는다 — tt-upgrade-transition 의 성공
-#       시나리오와 달리 이 스크립트는 성공 시나리오를 만들지 않으므로 그 체크가 필요 없다.
-#       tt-upgrade-transition 재현 기록과 달리 이 스크립트가 직접 검증하는 것 둘: ① 롤백 install Job 의 실제
-#       컨테이너 이미지가 reconstructPrevImage(state_machine_job.go:423-447)의 계산값과
-#       같은지(핸들러는 :291- 의 handleRollbackJob) ② status.rollbackAttempts 가
-#       maxRollbackAttempts(1)를 넘는 순간 더는 늘지 않고 Failed 로 멈추는지(:355-364 의
-#       RollbackExhausted 상한).
-#       설치 Job 은 HostPID/HostNetwork/Privileged 로 실제 컨테이너를 실행하므로, 실제
-#       장치·드라이버는 전혀 건드리지 않는 stub 이미지(stub/Dockerfile, busybox 기반,
-#       DRIVER_VERSION 과 무관하게 baked exit code 로 즉시 종료)를 kind load 해 쓴다.
-#       installer=ngc 를 택해 reconstructPrevImage 의 태그-스왑 경로를 태운다(apt/script
-#       는 롤백도 같은 이미지를 재사용해 성공/실패를 이미지로 분리할 수 없다).
-#       실제 장치·드라이버는 건드리지 않는다. `.91` 은 이 스크립트 어디서도 참조하지 않는다.
-# 생성일: 2026-09-20
+# 상세: test/fault/sequence_test.go 의 Sequence B(envtest 증명)를 실제 apiserver 위 job 모드
+#       install Job 으로 재현한다(tt-upgrade-transition/run.sh 와 같은 레시피). 가짜
+#       DIP·NDR·DUS 로 검증 실패→Rollback→소진→Failed 경로를 만들고, 롤백 이미지·시도 상한을
+#       직접 대조한다(근거는 각 함수 주석 참고). 실제 장치·드라이버는 건드리지 않는다.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
+# `.91` 은 이 스크립트 어디서도 참조하지 않는다 — kind 클러스터 전용 재현이다.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
@@ -101,6 +82,9 @@ preflight() {
 # ndr_apply — driverLoaded=false 로 고정한다(설치가 실제로는 아무것도 못 올린 상태를 흉내).
 # 이 값을 절대 true 로 바꾸지 않는 것이 이 시나리오의 전부다 — DriverModuleValidator 가
 # 영원히 미통과해야 검증 타임아웃→Rollback 경로를 탄다.
+# defaultValidators(state_machine.go:551)는 DriverModuleValidator 를 DevicePluginValidator
+# 보다 먼저 fail-fast 로 돌리므로, 가짜 device-plugin 은 두지 않는다 — driverLoaded=false 가
+# 유지되는 한 그 체크에 도달하지 않는다.
 ndr_apply() {
   cat <<EOF | kcapply >&2
 apiVersion: npu.ai/v1alpha1
@@ -119,6 +103,8 @@ EOF
 # handleIdle 의 job-모드 self-heal 분기를 먼저 발동시켜 PreviousVersion 을 비운다 — 그러면
 # 첫 rollback 진입에서 곧장 "이전 버전 없음"으로 Failed 에 떨어져 RollbackAttempts 소진 자체를
 # 볼 수 없다. PreviousVersion 을 직접 채운 UpgradeRequired 에서 시작해 이 문제를 피한다).
+# kind 노드는 node-role.kubernetes.io/control-plane 라벨이 있어 ensureUpgradeStates 가
+# 자동 생성을 skip 한다(driver_upgrade_controller.go:180-183) — 그래서 DUS 를 직접 만든다.
 dus_apply() {
   cat <<EOF | kcapply >&2
 apiVersion: npu.ai/v1alpha1

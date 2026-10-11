@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # version-check.sh: 문서의 "현재 릴리스 세트" 표기가 Chart.yaml 과 일치하는지 확인
-# 상세: deploy/helm/Chart.yaml 의 appVersion·npu.ai/paired-release 주석을
-#       ../docs/README.md·../docs/status.md 의 "현재 (릴리스) 세트는 vX.Y.Z" 문장과
-#       대조한다. Chart↔values 정합은 chart_version_sync_test.go, 태그↔appVersion
-#       정합은 release.yml 이 이미 고정하므로 여기서는 문서↔Chart 만 본다.
-#       docs 저장소가 없으면(CI) 건너뛴다 — capmatrix-check 와 같은 로컬 전용 검사.
-# 생성일: 2026-09-21
+# 상세: deploy/helm/Chart.yaml 의 appVersion·npu.ai/paired-release 주석을 docs 저장소의
+#       "현재 (릴리스) 세트는 vX.Y.Z" 문장과 대조한다. Chart↔values 정합·태그↔appVersion
+#       정합은 각각 chart_version_sync_test.go·release.yml 이 보므로 여기서는 문서만 본다.
+#       docs 저장소가 없으면(CI) 건너뛴다.
+# 생성일: 2026-09-21 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

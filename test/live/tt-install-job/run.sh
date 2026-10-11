@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh: Tenstorrent install-Job 멱등 경로 라이브 실행(Round3 Task3)
-# 상세: render/main.go 로 뽑은 install Job YAML 을 상태기계 없이 그대로 적용한다.
-#       DIP 버전(2.8.0)과 노드의 현재 DKMS 버전(2.8.0)이 같으므로 entrypoint.sh 는
-#       설치를 건너뛰는 분기만 탄다(images/kcloud-operator-images/
-#       driver-installer/tenstorrent/entrypoint.sh:164-192) — 비파괴.
-#       ssh probe.sh 와 같은 원칙: 무슨 일이 있어도(적용 실패·타임아웃·설치 시도 감지)
-#       스크립트가 죽지 않고 JSON 요약 한 줄을 반드시 낸다. 로그가 스킵이 아니라 실제
-#       설치/rmmod 시도를 보이면 대기를 끊고 즉시 Job 을 지운 뒤 FAIL 로 기록한다(재시도 없음).
-# 생성일: 2026-09-20
+# run.sh: Tenstorrent install-Job 멱등 경로 라이브 실행
+# 상세: render/main.go 로 뽑은 install Job YAML 을 상태기계 없이 그대로 적용한다. 실제 설치/
+#       rmmod 시도를 감지하면 대기를 끊고 Job 을 지운 뒤 FAIL 로 기록한다(재시도 없음).
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -68,8 +63,8 @@ if [ "$dus_state" != "Idle" ] || [ "$dus_cur" != "$dus_des" ] || [ -z "$dus_cur"
 fi
 
 echo "=== rendering Job ==="
-# render 는 set -e 아래라 실패하면 스크립트가 JSON 요약 없이 죽는다 — 헤더의 "무슨 일이 있어도
-# JSON 한 줄" 계약을 지키려 명시적으로 가드한다.
+# render 는 set -e 아래라 실패하면 스크립트가 JSON 요약 없이 죽는다 — 호출자가 실패를 인지하도록
+# 여기서 명시적으로 가드해 JSON 요약을 반드시 낸다.
 if ! job_yaml=$(go run ./test/live/tt-install-job/render -dip "$DIP" -node "$NODE" -namespace "$NAMESPACE"); then
   echo "render 실패 — install Job 을 못 뽑음, 적용하지 않음" >&2
   printf '{"job":"","namespace":"%s","node":"%s","phase":"RenderFailed","skipBranch":"n/a","verdict":"BLOCKED","stateUnchanged":false,"date":"%s"}\n' \

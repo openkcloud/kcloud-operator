@@ -3,7 +3,7 @@
 // 상세: privileged/hostPID/OnFailure/ttl/backoff/RUN_MODE env/nodeName 고정,
 //       PreStop·probe 제거(완료 시 rmmod 참사 방지), Furiosa secret,
 //       imagePullSecrets, JobOverrides override, ownerReference(DIP) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 package driverjob
@@ -175,8 +175,8 @@ func TestRenderInstallJob_NoFuriosaSecretForNvidia(t *testing.T) {
 	}
 }
 
-// RNGD 는 공개 repo 라 furiosa-apt-auth secret 마운트가 없어야 한다(#14 — secret 부재
-// 클러스터에서 install Job 파드가 스케줄 실패하는 버그를 Job 경로에 복제하지 않음).
+// RNGD 는 공개 repo 라 furiosa-apt-auth secret 마운트가 없어야 한다 — secret 부재 클러스터에서
+// install Job 파드가 스케줄 실패하는 버그를 Job 경로에 복제하지 않는다.
 func TestRenderInstallJob_NoFuriosaSecretForRNGD(t *testing.T) {
 	pol := basePolicy()
 	pol.Spec.Vendor = tFuriosa

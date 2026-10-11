@@ -1,7 +1,7 @@
 // ============================================================
 // snapshot_test.go: capability 스냅샷 테스트
 // 상세: 가속기 없는 노드 제외, ACPP 저널 반영, stale(fail closed) 판정, fake client Load.
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package intent
 
@@ -91,7 +91,7 @@ func TestBuildSnapshotSkipsCordonedNodes(t *testing.T) {
 }
 
 // 저널이 exclusive 라고 해도 광고 수가 물리 장치 수보다 많으면 광고가 초과 상태다. 원인(복제냐
-// 하드웨어 서브유닛이냐)은 이 관측만으로 알 수 없으므로 timeSliced 로 단정하지 않는다(D-1).
+// 하드웨어 서브유닛이냐)은 이 관측만으로 알 수 없으므로 timeSliced 로 단정하지 않는다.
 // 손으로 고친 sharing ConfigMap 등 ACPP 밖에서 켜진 초과 광고를 여기서 잡는다.
 func TestBuildSnapshotDetectsOutOfBandSharing(t *testing.T) {
 	acpp := readyACPP("worker1", 1, []v1alpha1.DeviceStatus{{ID: "gpu0"}}, nil, v1alpha1.SharingModeExclusive, 0)
@@ -132,10 +132,9 @@ func TestDegradedTargetMarksNodeStale(t *testing.T) {
 	}
 }
 
-// RNGD 라이브 재현(D-1): 물리 RNGD 1대(NDR count=1)가 하드웨어 PE 4개를 furiosa.ai/rngd=4 로
-// 광고한다. 복제가 아니라 하드웨어 서브유닛이므로 timeSliced 로 단정하면 안 되고, 원인 미확정
-// 상태(oversubscribed)로만 표시해야 한다. BuildSnapshot 이 실제로 만드는 입력 모양 그대로 짠다
-// (필드를 손으로 꽂지 않는다).
+// RNGD 재현: 물리 RNGD 1대(NDR count=1)가 하드웨어 PE 4개를 furiosa.ai/rngd=4 로 광고한다. 복제가
+// 아니라 하드웨어 서브유닛이므로 timeSliced 로 단정하면 안 되고, 원인 미확정 상태(oversubscribed)로만
+// 표시해야 한다. BuildSnapshot 이 실제로 만드는 입력 모양 그대로 짠다(필드를 손으로 꽂지 않는다).
 func TestBuildSnapshotRNGDPEsAreOversubscribedNotTimeSliced(t *testing.T) {
 	n := node("rngd-1", map[string]string{"furiosa.ai/rngd": "4"})
 	snap := BuildSnapshot([]corev1.Node{n}, nil, []v1alpha1.NodeDeviceReport{ndr("rngd-1", "furiosa", 1)}, DRACapability{})
@@ -247,9 +246,9 @@ func TestBuildSnapshotTakesSmallestDeviceMemory(t *testing.T) {
 	}
 }
 
-// TestBuildSnapshotVendorIsDeterministicOnMultiVendorNode 는 I-1 회귀 방지용이다: 한 노드가
-// NVIDIA 와 Furiosa 리소스를 동시에 광고하면(이 클러스터의 실제 worker1 처럼), 반복 실행해도
-// 항상 같은 Vendor(리소스명 사전순으로 가장 앞선 쪽)가 나와야 한다.
+// TestBuildSnapshotVendorIsDeterministicOnMultiVendorNode 는 회귀 방지용이다: 한 노드가 NVIDIA 와
+// Furiosa 리소스를 동시에 광고하면(이 클러스터의 실제 worker1 처럼), 반복 실행해도 항상 같은
+// Vendor(리소스명 사전순으로 가장 앞선 쪽)가 나와야 한다.
 func TestBuildSnapshotVendorIsDeterministicOnMultiVendorNode(t *testing.T) {
 	n := node("worker1", map[string]string{"nvidia.com/gpu": "2", "furiosa.ai/rngd": "1"})
 	var want string
@@ -270,9 +269,8 @@ func TestBuildSnapshotVendorIsDeterministicOnMultiVendorNode(t *testing.T) {
 	}
 }
 
-// TestBuildSnapshotACPPSelectionIsDeterministic 는 I-2 회귀 방지용이다: 같은 노드를 타깃하는
-// ACPP 가 둘 있으면(전제 위반이지만 방어적으로), 입력 순서와 무관하게 항상 이름 사전순으로
-// 앞선 쪽("acpp-a")이 이겨야 한다.
+// TestBuildSnapshotACPPSelectionIsDeterministic 는 회귀 방지용이다: 같은 노드를 타깃하는 ACPP 가
+// 둘 있으면(전제 위반이지만 방어적으로), 입력 순서와 무관하게 항상 이름 사전순으로 앞선 쪽("acpp-a")이 이겨야 한다.
 func TestBuildSnapshotACPPSelectionIsDeterministic(t *testing.T) {
 	acppA := readyACPP("worker1", 1, nil, nil, v1alpha1.SharingModeTimeSliced, 2)
 	acppA.Name = "acpp-a"
@@ -290,10 +288,10 @@ func TestBuildSnapshotACPPSelectionIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy 는 라이브 결함 D-4 재현이다(§5.2):
-// 같은 노드를 타깃하는 ACPP 둘 중 이름 사전순 앞("worker1-a2-timeslice", "a2" < "a30")이 Failed 여도
-// 뒤의 Ready 정책("worker1-a30-4x1g")의 관측이 채택되고 노드는 stale 이 아니어야 한다.
-// 첫-매치 단락은 Failed 정책만 보고 즉시 반환해 Ready 정책의 장치·프로파일을 통째로 가렸다.
+// TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy 는 회귀 방지용이다: 같은 노드를 타깃하는 ACPP
+// 둘 중 이름 사전순 앞("worker1-a2-timeslice", "a2" < "a30")이 Failed 여도 뒤의 Ready 정책
+// ("worker1-a30-4x1g")의 관측이 채택되고 노드는 stale 이 아니어야 한다 — 첫 매치만 보고 즉시
+// 반환하면 Ready 정책의 장치·프로파일이 가려진다.
 func TestBuildSnapshotFailedSiblingDoesNotHideReadyPolicy(t *testing.T) {
 	failed := readyACPP("worker1", 1, nil, nil, "", 0)
 	failed.Name = "worker1-a2-timeslice"
@@ -368,7 +366,7 @@ func TestLoadReadsClusterObjects(t *testing.T) {
 }
 
 // TestApplyHealthDropsBlockedNode 는 할당이 막힌 노드가 배치 후보에서 빠지는지 본다.
-// 이 축이 없으면 health 는 상태만 예쁘게 적고 워크로드는 그대로 그 노드로 간다(F-18).
+// 이 축이 없으면 health 는 상태만 예쁘게 적고 워크로드는 그대로 그 노드로 간다.
 func TestApplyHealthDropsBlockedNode(t *testing.T) {
 	snap := BuildSnapshot([]corev1.Node{node("worker1", map[string]string{"nvidia.com/gpu": "2"})}, nil, nil, DRACapability{})
 	if len(snap) != 1 || snap[0].Stale {
@@ -463,10 +461,10 @@ func TestApplyHealthKeepsUnknownDevices(t *testing.T) {
 	}
 }
 
-// TestApplyHealthAcceptsRealEvaluateOutput 는 internal/health 와 internal/intent 를 실제로
-// 이어 본다 — 단위 시험은 각자 통과해도 조합에서 어긋날 수 있다(fold 가 노드를 통째로 막으면
-// 이 아래 장치 필터는 존재해도 절대 실행되지 않는다, 2026-08-04 재현). health.Evaluate() 가
-// 낸 진짜 Result 를 그대로 옮겨 ApplyHealth 에 먹인다.
+// TestApplyHealthAcceptsRealEvaluateOutput 는 internal/health 와 internal/intent 를 실제로 이어
+// 본다 — 단위 시험은 각자 통과해도 조합에서 어긋날 수 있다(fold 가 노드를 통째로 막으면 이 아래
+// 장치 필터는 존재해도 절대 실행되지 않는다). health.Evaluate() 가 낸 진짜 Result 를 그대로 옮겨
+// ApplyHealth 에 먹인다.
 // 깨는 뮤테이션: evaluate.go 의 fold 를 "장치 하나만 고장나도 allow=false" 로 되돌리면
 // 노드가 Stale 로 막혀 장치 필터에 닿지도 못하고 실패한다.
 func TestApplyHealthAcceptsRealEvaluateOutput(t *testing.T) {

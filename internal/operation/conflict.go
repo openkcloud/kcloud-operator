@@ -1,10 +1,8 @@
 // ============================================================
 // conflict.go: 활성 operation 대비 admission 판정 (R&D base v0.1 §7.7)
 // 상세: 두 작업 사이의 판정(Conflicts) 위에 "지금 들여보내도 되는가" 를 얹는다. 종속 판정의
-//
-//	범위 한정(conflict-matrix.md §3.2 의 미결 항목)도 여기서 처리한다.
-//
-// 생성일: 2026-08-01
+// 범위 한정(conflict-matrix.md §3.2 의 미결 항목)도 여기서 처리한다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package operation
 
@@ -42,13 +40,11 @@ func ClaimOf(op *v1alpha1.AcceleratorOperation) Claim {
 	return Claim{Name: op.Name, Type: Type(op.Spec.Type), Keys: keys}
 }
 
-// Admit 은 활성 작업 전체에 대해 후보를 판정한다.
-//
-// 충돌이 우선이다 — 하나라도 막고 있으면 종속 관계보다 그쪽이 이긴다. 막는 것이 여럿이면 이름
-// 사전순 첫 번째를 돌려준다(결정론: 판정이 흔들리면 status 가 매 reconcile 마다 바뀐다).
-//
-// 종속(AdmitAfter)은 **자원이 실제로 겹칠 때만** 성립한다. Conflicts 는 타입 쌍만 보고 종속을
-// 판정하므로 무관한 노드의 두 작업까지 순서화해 버린다 — 그 범위 한정이 여기다.
+// Admit 은 활성 작업 전체에 대해 후보를 판정한다. 충돌이 우선이다 — 하나라도 막고 있으면 종속
+// 관계보다 그쪽이 이긴다. 막는 것이 여럿이면 이름 사전순 첫 번째를 돌려준다(결정론: 판정이 흔들리면
+// status 가 매 reconcile 마다 바뀐다). 종속(AdmitAfter)은 자원이 실제로 겹칠 때만 성립한다 —
+// Conflicts 는 타입 쌍만 보고 종속을 판정하므로 무관한 노드의 두 작업까지 순서화해 버린다. 그
+// 범위 한정이 여기다.
 func Admit(candidate Claim, active []Claim) (Admission, string) {
 	sorted := make([]Claim, len(active))
 	copy(sorted, active)

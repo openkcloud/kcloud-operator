@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # snapshot.sh: 노드 하나의 device-plugin/DRA 관련 자원을 파일로 남기는 읽기 전용 도구
-# 상세: kubectl get·ssh cat/ls 외의 명령을 쓰지 않는다 — 클러스터에 아무것도 만들거나
-#       바꾸지 않는다. 벤더가 device-plugin과 DRA allocation API 사이를 전환할 때 남을 수
-#       있는 흔적(0으로 남은 등록, 여전히 0이 아닌 옛 광고, 고아 ResourceSlice/CDI 파일)을
-#       비교가 알아볼 수 있도록, 관련 자원 전부를 노드별 파일 12개로 남긴다.
-#       ResourceSlice/ResourceClaim/ResourceClaimTemplate/DeviceClass 네 종류는 "이 클러스터에
-#       그 종류 자체가 없음"(kubectl이 kind를 못 찾음)과 "종류는 있으나 0개"를 구분해
-#       {"collected":false,...} / {"collected":true,"items":[...]}로 남긴다 — 앞의 것을
-#       오류로 죽이면 이 도구가 지금 상태에서 한 번도 돌지 않는다. 벤더(세 번째 인자)는
-#       manifest 기록용일 뿐 조회를 좁히는 데 쓰지 않는다 — 벤더로 필터링하면 그 벤더가
-#       아닌 도메인에 남은 잔재(예: rngd/rngd, tenstorrent/blackhole-p150 같은 옛 이름)를
-#       놓친다. allocatable/capacity/labels도 같은 이유로 필터 없이 전부 남긴다.
-# 생성일: 2026-09-28 | 수정일: 2026-09-28 (ssh_capture: 원격 명령 rc 분리, permission denied 를 partial 로 구분)
+# 상세: kubectl get·ssh cat/ls 외의 명령을 쓰지 않는 읽기 전용 도구다. device-plugin↔DRA
+#       전환 흔적(0 등록 잔재·옛 광고·고아 ResourceSlice/CDI)을 노드별 파일 12개로 남긴다.
+#       "종류 자체가 없음"과 "있으나 0개"를 collected:false/true 로 구분한다(앞을 오류로
+#       죽이면 지금 상태로 못 돈다). 벤더는 기록용일 뿐 조회를 좁히지 않는다(옛 이름 잔재 보존).
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 # 이 프로세스의 LC_ALL/LANG 을 SSH 가 원격으로 전달(SendEnv)하면서 원격 sshd 가 그 로케일을
@@ -79,7 +72,7 @@ manifest_status() {
 # 계속한다(exit 하지 않는다). 원격 명령 뒤에 종료 코드 마커(echo)를 붙여 SSH 접속 자체의
 # 성공 여부와 원격 명령 자체의 성공 여부를 분리해서 받는다 — 접속은 됐지만 원격 명령이
 # "Permission denied" 등으로 실패하면 그 결과는 관측 불가(partial)이지 "관측 성공"(ok)이
-# 아니다(R-O7). 마커 줄은 파일에 남기기 전에 지운다.
+# 아니다. 마커 줄은 파일에 남기기 전에 지운다.
 SSH_STATUS=""
 ssh_capture() {
   local outfile="$1" remote_cmd="$2"

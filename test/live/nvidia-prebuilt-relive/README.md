@@ -1,18 +1,15 @@
 <!-- README.md: k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 하네스 사용법 | 생성일: 2026-09-28 |
-     수정일: 2026-10-11 (계획서 항목 토큰 제거; 끊긴 조사 복구; 세션 전용 식별자 제거) -->
+     수정일: 2026-10-11 -->
 # k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인
 
 ## 왜
 
-ADR-002 드라이버 버전 출처 단일화의 "해소된 결합"
-절은 images 저장소 커밋 `aa7a13b`/`a40b94e`가 사전 컴파일 정합성 가드에서
-`apt-cache madison` 아카이브 조회를 제거했다고 기록하면서도, 그 제거를 담은 이미지로
-빈 노드 전이를 다시 돌린 라이브 확인은 하지 않았다고 스스로 적어 뒀다. k8s-worker1 에
-떠 있던 `-v2` 이미지는 그 제거보다 먼저 빌드된 것이라(`followup-research.md` §B.2),
-지금 라이브에 있는 것은 제거 이전 버전이다. 이 하네스가 그 재확인을 한다 — 제거를
-담은 새 이미지(`-v3`, 이 하네스 밖에서 `make build-precompiled`로 미리 빌드·push)를
-DIP 에 등록하고, 2026-09-26 실측 레코드가 실행한 것과 같은 9개 패키지 제거+재부팅으로
-노드를 빈 상태로 만든 뒤, operator 자기복구 설치 Job 을 관찰한다.
+images 저장소의 사전 컴파일 정합성 가드는 더 이상 `apt-cache madison` 아카이브 조회를 쓰지
+않는다 — 그 조회를 제거한 뒤 다시 빌드한 이미지로 빈 노드 전이를 돌려 확인해야 한다.
+k8s-worker1 에 떠 있던 `-v2` 이미지는 그 제거보다 먼저 빌드돼, 지금 라이브에 있는 것은
+제거 이전 버전이다. 이 하네스는 제거를 담은 새 이미지(`-v3`, 이 하네스 밖에서
+`make build-precompiled`로 미리 빌드·push)를 DIP 에 등록하고, 9개 패키지 제거+재부팅으로
+노드를 빈 상태로 만든 뒤 operator 자기복구 설치 Job 을 관찰해 그 재확인을 한다.
 
 ## 허용 조치(닫힌 목록) — 이 밖은 컨트롤러 승인 없이 하지 않는다
 
@@ -23,9 +20,8 @@ DIP 에 등록하고, 2026-09-26 실측 레코드가 실행한 것과 같은 9�
    패키지**(`PACKAGES` 배열, 순서·이름 고정), `sudo reboot`(`.91` 관리 노드 무승인).
    `autoremove`·`purge`·다른 패키지 제거·수동 dpkg/apt 재설치는 하지 않는다.
 3. 복구 수단(실패했을 때만): `PHASE=rollback-dip` 으로 DIP 를 이전 값(`-v2`)으로 되돌리고
-   operator 자기복구가 다시 돌 때까지 기다린다(30분). 그래도 안 되면 수동 정리
-   절차(2026-09-25 실측)를 컨트롤러
-   승인 하에 각 명령 전 보고하며 따른다 — 이 하네스가 스스로 하지 않는다.
+   operator 자기복구가 다시 돌 때까지 기다린다(30분). 그래도 안 되면 수동 정리 절차를
+   컨트롤러 승인 하에 각 명령 전 보고하며 따른다 — 이 하네스가 스스로 하지 않는다.
 4. 노드 대상은 `kubectl get node k8s-worker1 -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}'`
    로만 구한다. 시범서비스 배포 노드는 접촉 경로 자체가 없다.
    k8s-worker1 밖의 어떤 노드에도 접촉하지 않는다.
@@ -40,9 +36,9 @@ DIP 에 등록하고, 2026-09-26 실측 레코드가 실행한 것과 같은 9�
   기록만으로 재부팅 뒤 실제로 그 커널로 뜬다는 보장은 없다 — `wait-empty`/`observe`
   단계가 실제 모듈·Job 관찰로 확인한다.
 - **재부팅 완성 판정**: SSH 로 잰 `uptime<600` 초(=새 boot)와 `kubectl` 이 보는
-  node Ready=True 가 **같은 폴링 순간**에 동시에 성립해야 통과다. 2026-09-26
-  실행에서 재부팅 전 오래 떠 있던 stale Ready(uptime 87897초)를 새 Ready 로 착각할
-  뻔한 함정이 실제로 있었다 — 이 동시 조건이 그 함정을 구조적으로 막는다.
+  node Ready=True 가 **같은 폴링 순간**에 동시에 성립해야 통과다. 재부팅 전 오래 떠 있던
+  stale Ready(uptime 87897초)를 새 Ready 로 착각할 뻔한 함정이 있다 — 이 동시 조건이
+  그 함정을 구조적으로 막는다.
 - **관찰 종료 조건**(`observe`): 설치 Job 파드가 `Succeeded`이고 DUS 가 `Idle`로
   돌아온 뒤, 모듈 버전==정책 버전·allocatable==2·health==Healthy 세 조건이 모두
   맞아야 통과다.
@@ -79,8 +75,8 @@ RUN_DIR=test/live/nvidia-prebuilt-relive/runs/<RUN_ID>-nvidia PHASE=verdict bash
 `v3`)·`REGISTRY_REPO`(기본 `<레지스트리>:5100/kcloud/nvidia-driver-ds`)·
 `IMAGE_TAG`(위 셋으로 계산한 값을 통째로 덮고 싶을 때)·`REBOOT_TIMEOUT`(기본
 540초)·`OBSERVE_TIMEOUT`(기본 540초). **제거 대상 9개 패키지 이름·순서
-(`PACKAGES` 배열)는 환경변수로 덮지 않는다** — ADR-002 실행 기록과 정확히
-같아야 한다는 것이 이 절차의 근거다.
+(`PACKAGES` 배열)는 환경변수로 덮지 않는다** — images 저장소 설치기의 정리 명령과
+정확히 같아야 한다는 것이 이 절차의 근거다.
 
 **`PHASE=quiesce` 를 단독으로 돌렸으면 반드시 `PHASE=unquiesce` 로 되돌린다.** 정상
 종료(rc 0)에서는 `cleanup` 이 uncordon 하지 않는다. `dip-patch` 로 바꾼 DIP 값은
@@ -126,7 +122,7 @@ RUN_DIR=test/live/nvidia-prebuilt-relive/runs/<RUN_ID>-nvidia PHASE=verdict bash
    가 0 — 이 이미지의 `entrypoint.sh` 에는 그 조회를 부르는 코드 자체가 없다는
    뜻이라, 실행 여부와 무관하게 성립하는 강한 증거다.
 2. **`dpkg_i`(=`install-job.log` 의 `Preparing to unpack .../<pkg>_<ver>_<arch>.deb`
-   줄 수, 컨트롤러 확인 2026-09-28) ≥ 1**: 이것은 dpkg 자신이 각 `.deb` 파일을 처리할
+   줄 수) ≥ 1**: 이것은 dpkg 자신이 각 `.deb` 파일을 처리할
    때 찍는 출력이라 echo 유무와 무관하게 실제로 그 파일이 언패킹됐다는 적극 증거다.
    `Unpacking <패키지명> (<버전>) ...` 줄도 같은 개수를 내지만 패키지명만 찍혀 `.deb`
    파일 자체를 가리키지 않는다 — `dpkg_i` 는 전자를 센다.

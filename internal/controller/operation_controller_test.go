@@ -1,7 +1,7 @@
 // ============================================================
 // operation_controller_test.go: Operation 컨트롤러 envtest
 // 상세: 상태머신 구동·선행 기록·충돌 직렬화·보상 상한·펜싱을 본다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -194,7 +194,7 @@ var _ = Describe("operation controller", func() {
 		Expect(got.Status.Epoch).To(BeNumerically(">=", 1))
 	})
 
-	// 증명: 같은 자원을 다투는 두 operation 이 동시에 적용되지 않는다. 이 단계의 완료 기준 그 자체다.
+	// 증명: 같은 자원을 다투는 두 operation 이 동시에 적용되지 않는다.
 	// 깨는 뮤테이션: Admit 호출을 빼면 두 번째도 Applying 으로 올라가 실패한다.
 	It("serializes two operations that claim the same device", func() {
 		node := seedOpNode("aop-conflict-node")
@@ -229,12 +229,10 @@ var _ = Describe("operation controller", func() {
 	})
 
 	// 증명: 보상이 계속 실패해도 무한 재시도하지 않고 수동 복구 종점에 도달한다. 참여자가 끝까지
-	// Event 없이(진행 중이라고만) 응답하는 이 픽스처는 실제 NVIDIA MIG 경로의 관측 가능한 결함과
-	// 같은 모양이다 — runNvidiaTarget 이 backend.Rollback 오류를 삼키고 ACPPCondRolledBack 을
-	// 남기지 않는 case 에서, acppParticipant.Rollback 은 Event 없는 Outcome 만 돌려준다
-	// (operation_participants.go:228 "rollback in progress" 낙폭). 여기서 확인하는 것은 그 결함을
-	// 고치는 것이 아니라(범위 밖), Coordinator 가 참여자의 신호와 무관하게 자체 상한으로 종점에
-	// 반드시 도달한다는 것이다.
+	// Event 없이(진행 중이라고만) 응답하는 이 픽스처는 실제 결함과 같은 모양이다 — runNvidiaTarget
+	// 이 backend.Rollback 오류를 삼키고 ACPPCondRolledBack 을 안 남기면 acppParticipant.Rollback
+	// 도 Event 없는 Outcome 만 돌려준다. 여기서 확인하는 것은 그 결함을 고치는 것이 아니라,
+	// Coordinator 가 참여자 신호와 무관하게 자체 상한으로 종점에 반드시 도달한다는 것이다.
 	// 깨는 뮤테이션: RollbackAttempts 증가나 상한 비교를 빼면 영원히 RollingBack 이라 실패한다.
 	It("stops compensating after the attempt limit and lands in ManualRecoveryRequired", func() {
 		node := seedOpNode("aop-manual-node")
@@ -277,14 +275,10 @@ var _ = Describe("operation controller", func() {
 	})
 
 	// 증명: 종점 operation 은 더 이상 participant 를 부르지 않고, status 도 다시 쓰지 않는다.
-	//
-	// 브리핑 원안의 "깨는 뮤테이션: IsTerminal 조기 반환을 빼면 호출 수가 계속 늘어 실패한다" 는
-	// 실제로는 성립하지 않는다(뮤테이션으로 확인함) — step() 의 switch 에 애초에 종점 phase 의
-	// case 가 없어 participant 호출은 조기 반환 없이도 막힌다. writeStatus 의 최종 write 도
-	// apiserver 의 객체-동일성 no-op 최적화 때문에 resourceVersion 을 안 바꾼다(ACPP
-	// writeTargetStatus 의 같은 원리). 그래서 이 조기 반환의 실제 역할은 매 reconcile 마다
-	// 불필요한 Get+Update 왕복을 막는 것이다 — 정확성이 아니라 효율성 문제이고, 종점에서
-	// 5번 더 돌아도 resourceVersion 이 그대로임을 확인해 "다시 쓰지 않는다" 를 직접 고정한다.
+	// step() 의 switch 에는 애초에 종점 phase 의 case 가 없어 participant 호출은 조기 반환 없이도
+	// 막힌다. writeStatus 의 최종 write 도 apiserver 의 객체-동일성 no-op 최적화로 resourceVersion
+	// 을 안 바꾼다. 이 조기 반환의 실제 역할은 매 reconcile 마다 불필요한 Get+Update 왕복을 막는
+	// 것이다(정확성이 아니라 효율성) — 5번 더 돌아도 resourceVersion 이 그대로임을 확인해 고정한다.
 	It("does nothing once terminal", func() {
 		node := seedOpNode("aop-terminal-node")
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
@@ -314,10 +308,10 @@ var _ = Describe("operation controller", func() {
 			"종점에서 5번을 더 돌았는데 resourceVersion 이 바뀌었다 — 불필요한 write 가 일어났다")
 	})
 
-	// 증명: 낡은 epoch 을 기준으로 계산된 결과는 status 에 반영되지 않는다 — 이전에는 seam 없이
-	// 이연한 "펜싱이 참여자 호출을 감싸는가" 를 여기서 처음 검증 가능하게 한다. participant 호출이
-	// 진행되는 동안(Job 생성·대기처럼 실제로 시간이 걸리는 동안) 다른 프로세스가 Lease 를 다시
-	// 잡아 epoch 을 이미 올렸다면, 이 pass 가 그 위에 자신의(낡은) 계산 결과를 얹으면 안 된다.
+	// 증명: 낡은 epoch 을 기준으로 계산된 결과는 status 에 반영되지 않는다 — 펜싱이 participant
+	// 호출 전체를 감싸는지를 여기서 검증한다. participant 호출이 진행되는 동안(Job 생성·대기처럼
+	// 실제로 시간이 걸리는 동안) 다른 프로세스가 Lease 를 다시 잡아 epoch 을 이미 올렸다면, 이
+	// pass 가 그 위에 자신의(낡은) 계산 결과를 얹으면 안 된다.
 	// 깨는 뮤테이션: writeStatus 의 epoch 비교를 빼면 낡은 결과가 새 epoch 위에 그대로 올라간다.
 	It("discards a stale-epoch result when a newer epoch has already been recorded", func() {
 		node := seedOpNode("aop-stale-epoch-node")

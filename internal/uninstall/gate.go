@@ -1,12 +1,9 @@
 // ============================================================
 // gate.go: helm uninstall 의 pre-delete 게이트 — 사용 중이면 보류, 아니면 전량 삭제
-// 상세: 가속기를 요청한 Pod 가 하나라도 있으면 아무것도 지우지 않고 exit 1 로 끝난다.
-//
-//	없으면 npu.ai 그룹 CR 을 의존 순서대로 지우고(finalizer 처리 대기),
-//	operator 가 동적으로 만든 DaemonSet 을 정리한다. 호스트의 드라이버 패키지와
-//	커널 모듈은 건드리지 않는다 — 이 게이트는 Kubernetes 오브젝트만 다룬다.
-//
-// 생성일: 2026-09-10 | 수정일: 2026-09-10
+// 상세: 가속기를 쓰는 Pod 가 하나라도 있으면 아무것도 지우지 않고 보류한다(Execute 참고).
+// 없으면 npu.ai CR·DaemonSet·Job 등을 정리한다. 호스트 드라이버 패키지·커널 모듈은
+// 건드리지 않는다 — 이 게이트는 Kubernetes 오브젝트만 다룬다.
+// 생성일: 2026-09-10 | 수정일: 2026-10-11
 // ============================================================
 package uninstall
 
@@ -39,11 +36,10 @@ import (
 
 // acceleratorDomains 는 가속기 extended resource 의 도메인 접두다. 정확한 제품명
 // 목록(intent.VendorForResource)이 아니라 도메인으로 보는 이유는 게이트의 판정이
-// fail-closed 여야 하기 때문이다. 카탈로그에 아직 없는 제품명이나 device-plugin 이
-// 붙이는 변형 이름(nvidia.com/mig-1g.5gb, nvidia.com/gpu.shared)도 사용으로 센다.
+// fail-closed 여야 하기 때문이다 — 카탈로그에 없는 제품명이나 device-plugin 의 변형
+// 이름(nvidia.com/mig-1g.5gb, nvidia.com/gpu.shared)도 사용으로 센다.
 // intent.AcceleratorResourceDomains 가 정본이다 — 드라이버 업그레이드 drain
-// (internal/upgrade/state_machine.go)도 같은 집합을 쓴다. 예전엔 이 목록을 여기 손으로도
-// 따로 적어 뒀는데, drain 쪽 목록은 rebellions.ai/ 를 빠뜨린 채 갈라져 있었다.
+// (internal/upgrade/state_machine.go)도 같은 집합을 써야 두 목록이 갈리지 않는다.
 var acceleratorDomains = intent.AcceleratorResourceDomains()
 
 // waitKinds 는 삭제 후 실제로 사라질 때까지 기다리는 종류다. operator 가 finalizer 로
@@ -420,10 +416,9 @@ func managedDaemonSets() []client.ObjectKey {
 const componentLabel = "app.kubernetes.io/component"
 
 // ownerAnnotation 은 operator 가 자기가 만든 오브젝트에 남기는 표시다(내용은 정책 CR 의
-// namespace/name). 이 표시를 다는 오브젝트에는 ownerReference 가 없어서 CR 을 지워도
-// GC 가 걷지 않는다 — 라이브 kind 확인에서 rbln-device-plugin 의 ClusterRole·
-// ClusterRoleBinding·ServiceAccount 와 ConfigMap 둘, kcloud-node-manager 의
-// ServiceAccount 가 릴리스 삭제 뒤에도 남았다.
+// namespace/name). ownerReference 가 없어서 CR 을 지워도 GC 가 걷지 않는 오브젝트에
+// 쓴다 — 예: rbln-device-plugin 의 ClusterRole·ClusterRoleBinding·ServiceAccount 와
+// ConfigMap 둘, kcloud-node-manager 의 ServiceAccount.
 const ownerAnnotation = "npu.ai/owner"
 
 // cleanupNamespaces 는 라벨로 훑을 네임스페이스다. 두 값이 같으면 한 번만 훑는다.

@@ -1,11 +1,8 @@
 // ============================================================
 // rollbackjob_test.go: 롤백 Job 이 다운그레이드를 허용받는지 고정
-// 상세: 2026-08-10 라이브에서 롤백 Job 이 정책의 allowDowngrade=false 를 그대로 물려받아
-//
-//	installer 자신의 다운그레이드 가드에 막혔다. 이전 버전을 설치하라고 시켜 놓고
-//	내려가지 말라고 한 셈이라 롤백이 구조적으로 무동작이었다.
-//
-// 생성일: 2026-08-10
+// 상세: 롤백 Job 은 정책의 allowDowngrade 값을 그대로 물려받지 않는다 — 물려받으면 installer
+// 자신의 다운그레이드 가드가 롤백을 거부해 구조적으로 무동작이 된다.
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package driverjob
 
@@ -58,13 +55,10 @@ func noDowngradePolicy() *npuv1alpha1.DriverInstallPolicy {
 }
 
 // TestRollbackJobIsAllowedToDowngrade 는 롤백 Job 이 ALLOW_DOWNGRADE=true 로 렌더링되는지 본다.
-//
-// 롤백은 정의상 내려가는 일이다. 정책의 allowDowngrade 는 **정책 변경으로 버전을 낮추는 것**을
-// 막는 장치이지, 실패한 업그레이드를 되돌리는 것을 막는 장치가 아니다. 둘을 같은 값으로 묶으면
-// 되돌릴 수 없는 업그레이드가 만들어진다 — 노드는 실패한 버전에 갇힌다.
-//
-// 깨는 뮤테이션: RenderRollbackJob 이 RenderInstallJob 을 그대로 부르게 하면(=정책 값 사용)
-// ALLOW_DOWNGRADE 가 false 로 나와 실패한다.
+// 롤백은 정의상 내려가는 일이다. 정책의 allowDowngrade 는 정책 변경으로 버전을 낮추는 것만
+// 막는 장치이지 롤백까지 막는 장치가 아니다 — 같은 값으로 묶으면 되돌릴 수 없는 업그레이드가
+// 되어 노드가 실패한 버전에 갇힌다. 깨는 뮤테이션: RenderRollbackJob 이 RenderInstallJob 을
+// 그대로 부르면(정책 값 사용) ALLOW_DOWNGRADE 가 false 로 나와 실패한다.
 func TestRollbackJobIsAllowedToDowngrade(t *testing.T) {
 	pol := noDowngradePolicy()
 

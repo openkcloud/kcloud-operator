@@ -1,8 +1,8 @@
 // ============================================================
 // driver_daemonset_controller_test.go: renderDriverDaemonSet 단위 테스트
-// 상세: Phase C/D — operator pod anti-affinity, PreStop timeout 30s,
-//        TerminationGracePeriodSeconds=60s 가 DS spec 에 박혀 있는지 검증
-// 생성일: 2026-04-27 | 수정일: 2026-09-09
+// 상세: operator pod anti-affinity, PreStop timeout 30s,
+// TerminationGracePeriodSeconds=60s 가 DS spec 에 박혀 있는지 검증
+// 생성일: 2026-04-27 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -43,8 +43,8 @@ func hasFuriosaAuthMount(ds *appsv1.DaemonSet) bool {
 
 // TestRenderDriverDaemonSet_FuriosaAuthWarboyOnly 는 furiosa-apt-auth secret 마운트가
 // Warboy(사설 repo 인증 필수)에만 부착되고 RNGD(공개 repo)에는 부착되지 않음을 검증한다.
-// 회귀 시나리오: RNGD 가 warboy 전제를 상속받아 secret 부재 클러스터에서 파드 스케줄 실패
-// (service 클러스터 실측 버그). Warboy 는 하위호환으로 마운트 유지.
+// 회귀 시나리오: RNGD 가 warboy 전제를 상속받으면 secret 부재 클러스터에서 파드 스케줄이
+// 실패한다. Warboy 는 하위호환으로 마운트 유지.
 func TestRenderDriverDaemonSet_FuriosaAuthWarboyOnly(t *testing.T) {
 	cases := []struct {
 		name      string

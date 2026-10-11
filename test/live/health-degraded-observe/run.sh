@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: AcceleratorHealth 건강 저하를 관측 경로로 보여주는 라이브 스크립트(주입 없음)
-# 상세: 노드별 AcceleratorHealth 의 현재 state/allocationAllowed/reason/signals/devices 를 읽어
-#       표로 내고, 2026-08-04 라이브 실측이 기록한
-#       Healthy→Recovering(할당 차단)→Healthy 전이와 대조한다. 클러스터에 장애를 주입하지
-#       않는다 — 실제 장애 주입은 파괴적이라 범위 밖이다. 검사는 관측 표면이 읽히는지와,
-#       과거 evidence 가 세운 불변식(Healthy 노드는 할당 허용·신호 정상, 고장 노드는 할당 차단)이
-#       현재도 성립하는지만 본다.
-#       SCENARIO_DESTRUCTIVE="no" — 읽기 전용. DRY_RUN=1 이면 실행할 명령만 출력한다.
-# 생성일: 2026-09-20
+# 상세: 노드별 AcceleratorHealth 의 state/allocationAllowed/reason/signals/devices 를 표로 내고,
+#       과거 evidence 가 세운 불변식(Healthy=할당 허용, 고장=할당 차단)이 성립하는지 본다(읽기 전용, 장애 미주입).
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -124,7 +119,7 @@ PYEOF
 )
 
 # 과거 evidence 가 기록한 저하 전이 — 관측 표면(이 스크립트가 읽는 필드)이 저하 때 어떻게
-# 움직이는지의 기준이다. 2026-08-04 라이브 실측 §5 에서 인용.
+# 움직이는지의 기준이다.
 print_past_reference() {
   log ""
   log "과거 라이브 evidence 가 기록한 저하 전이 (인용: $EVIDENCE_CITE §5)"
@@ -156,8 +151,8 @@ preflight() {
 }
 
 # ── demo: 현재 관측 + 과거 대조 (읽기 전용 — 상태 변경 없음) ───────────────
-# 세 함수 계약(preflight·demo·cleanup)에 맞춰 이름은 demo 지만 하는 일은 관측뿐이다
-# (시험 관례 §3). PHASE 는 관측 단계임을 그대로 남긴다.
+# 세 함수 계약(preflight·demo·cleanup)에 맞춰 이름은 demo 지만 하는 일은 관측뿐이다.
+# PHASE 는 관측 단계임을 그대로 남긴다.
 demo() {
   PHASE="observe"
   print_past_reference

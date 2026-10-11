@@ -1,6 +1,6 @@
 // ============================================================
 // acpp_verifier_test.go: allocatableMet 순수 함수 + 벤더 probe 파드 + allocationProber 어댑터 unit 테스트
-// 생성일: 2026-07-23 | 수정일: 2026-09-20
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -22,7 +22,7 @@ import (
 )
 
 // TestNewLiveVerifier_ProbeImage 는 ACPP_PROBE_IMAGE 미설정 시 fallback(registry.k8s.io/pause:3.9),
-// 설정 시 override 값을 사용함을 검증한다(finding #3 — air-gap 미러 이미지 지정 seam, pure/no envtest).
+// 설정 시 override 값을 사용함을 검증한다(air-gap 미러 이미지 지정 seam).
 func TestNewLiveVerifier_ProbeImage(t *testing.T) {
 	t.Run("falls back when unset", func(t *testing.T) {
 		v := NewLiveVerifier(nil, nil).(*liveVerifier)

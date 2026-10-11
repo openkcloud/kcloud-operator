@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh: "새 벤더 = device-plugin 코드 0줄" 라이브 데모 — descriptor 하나로 Tenstorrent 를 광고·소비·복원
-# 상세: NPUClusterPolicy 의 tenstorrent 를 끄면 소유 device-plugin(kcloud-tt-device-plugin)이
-#       회수된다. 그 뒤 AcceleratorDescriptor 하나(descriptor.yaml)를 적용하면 벤더별 코드 없이
-#       생성된 device-plugin DaemonSet(kcloud-generated-<desc>-dp)이 뜨고 tenstorrent/blackhole-p150
-#       을 광고한다. 소비자 파드가 /dev/tenstorrent 주입을 확인한다. 끝에 descriptor·파드를 지우고
-#       tenstorrent 를 다시 켜 원래 벤더 device-plugin 과 광고를 복원한다(실패 시에도 trap 으로 복원).
-#       자체 descriptor·소비자 파드·NPUClusterPolicy 의 tenstorrent 필드만 건드린다 — 다른
-#       워크로드에는 손대지 않는다. 전환 동안 tenstorrent device-plugin 이 잠시 내려갔다 복원되므로
-#       tenstorrent 장치를 쓰는 워크로드가 없는 데모/실험 클러스터(k8s-worker3)에서 실행한다.
-#       SCENARIO_MINUTES=6, SCENARIO_DESTRUCTIVE="no"(파괴적 주입 없음). DRY_RUN=1 이면 명령만 출력.
-# 생성일: 2026-09-20
+# run.sh: "새 벤더 = device-plugin 코드 0줄" 라이브 데모 — descriptor 로 Tenstorrent 광고·소비·복원
+# 상세: tenstorrent 를 끄면 소유 device-plugin 이 회수되고, descriptor 하나를 적용하면 벤더
+#       코드 없이 생성된 device-plugin 이 떠 장치를 광고한다. 소비자 파드로 주입을 확인한 뒤
+#       복원한다(cleanup() 참고). 자체 descriptor·파드·NCP.tenstorrent 필드만 건드리며, 전환
+#       중 그 벤더 device-plugin 이 잠시 내려가므로 데모/실험 클러스터(k8s-worker3)에서 실행.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

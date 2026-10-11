@@ -1,11 +1,8 @@
 // ============================================================
 // validator.go: 드라이버 업그레이드 검증 단계 (Validator) 인터페이스 + 구현
-// 상세: architectural plan §4.4.3 — 단일 단계 handleValidating 을
-//       단계별 책임으로 분리한다 (DriverModule / DevicePlugin / Workload).
-//       각 Validator 는 controller-runtime client 와 기본 식별자만 받아
-//       단일 검증 시도(Run)를 수행한다. caller 는 timeout 내에서 재시도하고
-//       Event/Metric 을 발행한다.
-// 생성일: 2026-04-27 | 수정일: 2026-10-09 (빈 image 비통과 사유, stale 정리 오류 표기 통일)
+// 상세: 드라이버 업그레이드 검증을 단계별 책임(DriverModule/DevicePlugin/Workload)으로 나눈
+// 인터페이스다. Validator 는 검증 1회 시도(Run)만 하고, 재시도·Event/Metric 발행은 caller 몫이다.
+// 생성일: 2026-04-27 | 수정일: 2026-10-11
 // ============================================================
 
 package validator
@@ -38,14 +35,11 @@ type Result struct {
 	Message string
 }
 
-// Validator 는 단일 검증 단계 인터페이스.
-//
-// 의미:
-//   - Name 은 metric/event label 로 사용된다 (예: "DriverModule", "DevicePlugin").
-//   - Timeout 은 controller wall-clock 예산 — caller 는 LastTransitionTime 부터
-//     이 값을 초과하면 Failed/Rollback 으로 전이한다.
-//   - Run 은 검증 1회 시도 — 통과/미통과/오류 셋 중 하나를 반환한다.
-//     ctx cancel 시 즉시 반환해야 한다 (호출자가 reconcile timeout 으로 차단).
+// Validator 는 단일 검증 단계 인터페이스다. Name 은 metric/event label(예:
+// "DriverModule", "DevicePlugin"), Timeout 은 controller wall-clock 예산(caller 는
+// LastTransitionTime 부터 이 값을 초과하면 Failed/Rollback 으로 전이), Run 은 검증
+// 1회 시도로 통과/미통과/오류 중 하나를 반환하며 ctx cancel 시 즉시 반환해야 한다
+// (호출자가 reconcile timeout 으로 차단).
 type Validator interface {
 	Name() string
 	Timeout() time.Duration
@@ -57,12 +51,9 @@ type Validator interface {
 // ─────────────────────────────────────────────
 
 // DriverModuleValidator 는 노드의 드라이버 커널 모듈이 desiredVersion 으로 로드되었는지
-// NodeDeviceReport (NDR) 를 통해 검증한다.
-//
-// 통과 조건: NDR.status.devices[].driverVersion == desiredVersion (vendor 일치)
-//   - DriverLoaded=true 도 함께 요구.
-//
-// timeout 30s — NDR collector 가 보통 수 초 내 갱신.
+// NodeDeviceReport(NDR)로 검증한다. 통과 조건: NDR.status.devices[].driverVersion ==
+// desiredVersion(vendor 일치) 이고 DriverLoaded=true. timeout 30s — NDR collector 가
+// 보통 수 초 내 갱신.
 type DriverModuleValidator struct{}
 
 // Name 은 metric/event label.
@@ -130,7 +121,7 @@ func (v *DriverModuleValidator) Run(
 		)
 		// needsReboot 이면 위 안내는 틀렸다. 목표 버전 모듈은 이미 디스크에 준비돼 있고 구 모듈이
 		// 사용 중이라 삽입만 못 한 상태(cross-major)라서 rmmod 로는 풀리지 않는다 — 그 지시를
-		// 따르는 사람은 시간만 버린다(2026-08-07 라이브). 교체 주체는 노드 재부팅뿐이고,
+		// 따르는 사람은 시간만 버린다. 교체 주체는 노드 재부팅뿐이고,
 		// 그 재부팅은 상태기계가 RebootRequired 로 진행한다.
 		if hostNeedsReboot {
 			msg = fmt.Sprintf(
@@ -156,11 +147,8 @@ func (v *DriverModuleValidator) Run(
 // ─────────────────────────────────────────────
 
 // DevicePluginValidator 는 device-plugin Pod 가 노드에서 ContainersReady 인지 검증한다.
-//
-// 통과 조건: kube-system namespace 에서 vendor 라벨/이름 매칭되는 Pod 중
-//
-//	노드에 스케줄된 인스턴스가 ContainersReady=True 면 PASS.
-//
+// 통과 조건: 네임스페이스 전체에서 vendor 라벨/이름이 매칭되고 그 노드에 스케줄된
+// 인스턴스가 ContainersReady=True 면 PASS(네임스페이스 하드코딩 금지 — Run 참고).
 // timeout 60s — Pod 재시작/시작 시간 고려.
 type DevicePluginValidator struct{}
 
@@ -183,7 +171,7 @@ func (v *DevicePluginValidator) Run(
 		return Result{}, err
 	}
 	// device-plugin 은 벤더별로 다른 네임스페이스에 상주한다(3rd-party=kube-system,
-	// TT=kcloud=OperatorNamespace, #21). 네임스페이스를 하드코딩하지 않고 전 네임스페이스를
+	// TT=kcloud=OperatorNamespace). 네임스페이스를 하드코딩하지 않고 전 네임스페이스를
 	// 조회하되 아래 nodeName + isDevicePluginPod 필터로 정확히 스코프한다(ClusterRole pods list).
 	var pods corev1.PodList
 	if err := c.List(ctx, &pods); err != nil {
@@ -218,14 +206,12 @@ func (v *DevicePluginValidator) Run(
 // WorkloadValidator
 // ─────────────────────────────────────────────
 
-// WorkloadValidator 는 장치 1개를 요청하는 probe 파드를 띄워 벤더 명령의 종료 코드로 "진짜 쓸 수 있는가" 를
-// 본다. Run 은 한 번 호출이 한 번 관찰이다 — 파드가 없으면 만들고 대기(Passed=false), Succeeded 면 지우고
-// 통과, Failed 면 지우고 실패, Pending 이 TimeoutSeconds 를 넘기면 지우고 실패. 체인이 10초마다 다시 부른다.
-// 정책 opt-in(DriverInstallPolicySpec.WorkloadProbe) — validatorsFor(internal/upgrade)가 켜졌을 때만 체인에 넣는다.
-//
-// 파드 이름은 (노드, desiredVersion) 에 고정된다 — 같은 버전으로 재검증하는 동안은 이름이
-// 재사용되므로, Succeeded 를 보고도 삭제(cleanup)에 실패하면 그 파드가 다음 Run 에서 다시
-// 읽혀 통과를 막는다(의도적 — 지워지지 않는 파드를 판정으로 쓰지 않기 위해).
+// WorkloadValidator 는 장치 1개를 요청하는 probe 파드를 띄워 벤더 명령의 종료 코드로
+// "진짜 쓸 수 있는가" 를 본다. 한 번 호출이 한 번 관찰이다 — 파드가 없으면 만들고 대기,
+// Succeeded/Failed 면 지우고 그 결과를, Pending 타임아웃이면 지우고 실패를 반환하며
+// 체인이 10초마다 다시 부른다. 정책 opt-in(WorkloadProbe)일 때만 체인에 들어간다.
+// 파드 이름은 (노드, desiredVersion)에 고정된다 — Succeeded 뒤 삭제가 실패하면 다음
+// Run 도 같은 파드를 다시 보므로, 지워지지 않은 파드를 통과로 보고하지 않는다(의도적).
 type WorkloadValidator struct {
 	Probe     v1alpha1.WorkloadProbeSpec
 	Namespace string
@@ -335,17 +321,12 @@ func (v *WorkloadValidator) Run(ctx context.Context, c client.Client, nodeName, 
 	return Result{Passed: false, Message: "workload probe 실행 중"}, nil
 }
 
-// probePod 은 노드에 고정(NodeName)된, 장치 1개를 요청하는 1회성 파드다. driver-upgrading 라벨의
-// cordon 상태에서도 뜰 수 있게 모든 taint 를 허용한다(cordon=NoSchedule 은 scheduler 가 아니라
-// unschedulable 플래그라 toleration 과 무관하지만, 벤더 노드에 흔한 수동 taint 대비 방어적으로 둔다).
-//
-// ActiveDeadlineSeconds 를 Timeout() 초로 거는 이유: Run 안의 삭제 경로(Succeeded·Failed·제한시간)는
-// Run 이 다시 불려야 돈다. 검증 체인은 첫 미통과에서 끊기므로 Workload 앞 단계가 실패로 돌아서면
-// 그 pass 에서 Run 이 호출되지 않고, 그 사이 상위 제한시간(upgradePolicy.validationTimeout)이 지나
-// Rollback·Failed 로 전이하면 Run 은 다시 불리지 않는다. 그렇게 남은 Pending 파드를
-// internal/partition/quiesce.go 의 holdsDevice 가 장치 점유자로 계속 세어 그 노드의 ACPP apply 와
-// CapReset quiesce 가 사람이 파드를 지울 때까지 막힌다. kubelet 이 스스로 Failed(터미널)로 끝내면
-// 그 영향이 사라진다 — 터미널 파드는 holdsDevice 와 인벤토리 합산에서 모두 빠진다.
+// probePod 은 노드에 고정(NodeName)된 1회성 파드다. 모든 taint 를 허용해 cordon 에서도
+// 뜬다(벤더 노드의 수동 taint 방어). ActiveDeadlineSeconds 를 Timeout() 초로 거는 이유:
+// 검증 체인이 Workload 앞에서 끊기거나 상위 제한시간이 지나 Rollback·Failed 로 전이하면
+// Run 이 다시 불리지 않아 Pending 파드가 남아 holdsDevice 가 점유자로 계속 세고 ACPP
+// apply·CapReset quiesce 를 막는다. kubelet 이 스스로 Failed 로 끝내면 영향이 없다 —
+// quiesce.go 호출부와 inventory.go 의 집계가 각각 독립적으로 터미널 파드를 빼므로, 한쪽만 고치면 어긋난다.
 func (v *WorkloadValidator) probePod(key client.ObjectKey, nodeName, vendor, desiredVersion string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name,
@@ -370,13 +351,10 @@ func (v *WorkloadValidator) probePod(key client.ObjectKey, nodeName, vendor, des
 // 헬퍼
 // ─────────────────────────────────────────────
 
-// isDevicePluginPod 은 Pod 가 device-plugin 인지 (옵션) 특정 vendor 인지 판단한다.
-//
-// 매칭 규칙 (state_machine.go deleteDevicePluginPods 와 동일):
-//   - app.kubernetes.io/name 라벨에 "device-plugin" 부분 포함, 또는
-//   - Pod 이름에 "device-plugin" 포함.
-//
-// vendor 가 비어있지 않다면 라벨/이름에 vendor 토큰이 포함되어야 한다.
+// isDevicePluginPod 은 Pod 가 device-plugin 인지, (옵션) 특정 vendor 인지 판단한다. 매칭
+// 규칙(state_machine.go deleteDevicePluginPods 와 동일): app.kubernetes.io/name 라벨 또는
+// Pod 이름에 "device-plugin" 포함. vendor 가 비어있지 않으면 라벨/이름에 vendor 토큰도
+// 포함되어야 한다.
 func isDevicePluginPod(pod *corev1.Pod, vendor string) bool {
 	matchedDevicePlugin := false
 	for key, val := range pod.Labels {
@@ -395,7 +373,7 @@ func isDevicePluginPod(pod *corev1.Pod, vendor string) bool {
 		return true
 	}
 	// vendor 토큰 별칭: TT device-plugin 은 "kcloud-tt-device-plugin" 로 명명되어
-	// "tenstorrent" 문자열을 포함하지 않는다(#21). "tt" 를 별칭으로 허용한다.
+	// "tenstorrent" 문자열을 포함하지 않는다. "tt" 를 별칭으로 허용한다.
 	// ponytail: 단일 별칭. 벤더가 늘면 map 으로 승격.
 	tokens := []string{strings.ToLower(vendor)}
 	if strings.EqualFold(vendor, "tenstorrent") {

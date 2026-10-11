@@ -1,11 +1,8 @@
 // ============================================================
 // acpp_migmode.go: MIG mode enable 오케스트레이션 (quiesce → enable → reboot → 재관측)
-// 상세: parity 격차 ②의 "장치 모드 전환" 축. Ampere pending MIG 는 재부팅으로만 확정되므로
-//
-//	기존 reboot Job 렌더러를 ACPP 소유로 재사용한다. 각 단계는 ApplyRecord.migPhase 로 영속되고
-//	(persist-before-mutate), 실패 시 정책이 잠근 노드만 다시 schedulable 로 되돌린다.
-//
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: parity 격차 ②("장치 모드 전환" 축)로, Ampere pending MIG 는 재부팅으로만 확정되므로
+// reboot Job 렌더러를 ACPP 소유로 재사용하고 각 단계를 ApplyRecord.MigPhase 로 영속한다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -111,9 +108,9 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureMigModeEnabled(
 				acpp.Generation)
 			return false, ts, nil // terminal — err 로 재시도 폭주시키지 않는다.
 		}
-		// review-i1 M-1/M-3: 재부팅 전에도 소유권을 저널하고 노드를 cordon 한다 — 이전에는 이
-		// 갈래가 cordon 없이 재부팅 Job 을 예약해 (a) 새 워크로드가 곧 재부팅될 노드로 계속
-		// 들어오고 (b) OwnerUID/GPUPCIs 가 비어 있어 D-5 급 오판 재발 창이 생겼다.
+		// 재부팅 전에도 소유권을 저널하고 노드를 cordon 한다 — cordon 없이 재부팅 Job 만 예약하면
+		// 새 워크로드가 곧 재부팅될 노드로 계속 들어오고, OwnerUID/GPUPCIs 가 비어 있으면 장치 단위
+		// 소유 판정이 오판할 창이 생긴다.
 		if err := r.cordonForApply(t.Ctx, acpp, t.NodeName, devs); err != nil {
 			return false, ts, err
 		}
@@ -143,7 +140,7 @@ func (r *AcceleratorPartitionPolicyReconciler) ensureMigModeEnabled(
 		return false, ts, err // 영속 실패 시 cordon 하지 않는다(우리가 잠갔다는 사실이 durable 해야 복원 가능).
 	}
 	q := partition.NvidiaQuiescer(r.Client)
-	// remaining 은 정보성이다 — 완료 판정은 오직 AssertQuiesced 로 한다(I-2).
+	// remaining 은 정보성이다 — 완료 판정은 오직 AssertQuiesced 로 한다.
 	if _, err := q.EvictDeviceWorkloads(t.Ctx, t.NodeName); err != nil {
 		return false, ts, err
 	}
@@ -191,17 +188,11 @@ func (r *AcceleratorPartitionPolicyReconciler) cordonForApply(ctx context.Contex
 }
 
 // cordonForRollback 은 삭제 경로(handleNvidiaDeletion)의 rollback 전제인 cordon 을 정책 스스로
-// 취득한다. 성공한 apply 는 종점에서 노드를 되돌려 놓으므로(restoreSchedulable), 삭제 시점의 노드는
-// 거의 항상 schedulable 이다 — cordon 주체가 없으면 assertNodeQuiesced 가 영구히 막고 finalizer 가
-// 빠지지 않는다(D-10). 호출 지점은 owner-lock 이 이 정책 소유임을 확인한 뒤이므로 주장이 정당하다.
-//
-// 이미 cordon 된 노드는 건드리지 않는다 — 우리 재진입이면 소유 저널(CordonedByPolicy=true)을 뒤집어
-// 복원 주체를 잃고, 운영자가 잠근 노드면 정비 중인 노드를 정책이 되살리게 된다.
-//
-// apply 경로의 journalQuiescing 을 재사용하지 않는 이유: 그 함수는 MigPhase 를 Quiescing 으로
-// 덮는데, Quiescing 은 mode 전환 구간(isMigModeEnablePhase)이라 다음 pass 의 hardwareChanged 판정이
-// false 로 뒤집힌다 — rollback 을 건너뛴 채 GI 를 남기고 finalizer 가 빠진다. 삭제 경로의 저널은
-// "무엇을 되돌려야 하는가" 의 유일한 근거(snapshot)이므로 phase·GPUPCIs 는 불변으로 둔다.
+// 취득한다 — 성공한 apply 는 종점에서 노드를 되돌려 놓아 삭제 시점엔 보통 cordon 주체가 없으므로,
+// 없으면 assertNodeQuiesced 가 영구히 막혀 finalizer 가 안 빠진다. 이미 cordon 된 노드는 건드리지
+// 않는다(재진입이면 소유 저널을 뒤집고, 운영자가 잠근 노드면 정비 중인 노드를 되살린다). apply 의
+// journalQuiescing 을 재사용하면 MigPhase 를 Quiescing(전환 구간)으로 덮어 hardwareChanged 판정이
+// 뒤집혀 rollback 을 건너뛰고 GI 를 남긴 채 finalizer 가 빠진다 — 그래서 phase·GPUPCIs 는 불변으로 둔다.
 func (r *AcceleratorPartitionPolicyReconciler) cordonForRollback(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy, rec npuv1alpha1.ApplyRecord) error {
 	var n corev1.Node
 	if err := r.Get(ctx, types.NamespacedName{Name: rec.NodeName}, &n); err != nil {
@@ -218,9 +209,9 @@ func (r *AcceleratorPartitionPolicyReconciler) cordonForRollback(ctx context.Con
 }
 
 // syncMigActiveLabel 은 노드의 nvidia.MigActiveNodeLabel 을 실제 GI 존재 여부와 맞춘다.
-// device-plugin 이 이 라벨로 mixed/flat DaemonSet 중 어느 쪽이 그 노드를 맡을지 가르므로(MPS
-// 근본해결), 라벨이 실제와 어긋나면 D-5/D-8 류 오판이 재발한다. 현재 값과 같으면 patch 하지
-// 않는다(불필요한 write·watch 트리거 방지 — U-1 이 남긴 교훈과 같은 원칙).
+// device-plugin 이 이 라벨로 mixed/flat DaemonSet 중 어느 쪽이 그 노드를 맡을지 가르므로, 라벨이
+// 실제와 어긋나면 device-plugin 오판이 재발한다. 현재 값과 같으면 patch 하지 않는다(불필요한
+// write·watch 트리거 방지).
 func (r *AcceleratorPartitionPolicyReconciler) syncMigActiveLabel(ctx context.Context, node string, active bool) error {
 	var n corev1.Node
 	if err := r.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
@@ -231,14 +222,11 @@ func (r *AcceleratorPartitionPolicyReconciler) syncMigActiveLabel(ctx context.Co
 		return nil
 	}
 	if !active && !r.migModeFullyRestored(ctx, node) {
-		// 조각을 지웠다고 라벨을 떼면 안 되는 경우가 있다: MIG 모드가 켜진 채 조각이 0개인 GPU 다.
-		// 그 GPU 는 `nvidia-smi -L` 에는 보이지만 **CUDA 가 장치로 세지 않는다**. 라벨을 떼면
-		// flat device-plugin(`--mig-strategy` 없음 = none)이 담당하게 되고, none 전략은 MIG 상태를
-		// 보지 않으므로 그 GPU 를 통짜로 광고한다 — 스케줄러가 배정한 파드는 CUDA 초기화에서
-		// 죽는다(D-11, 2026-07-31 라이브에서 유령 GPU 1개가 실제로 광고됐다).
-		//
-		// 모르면 떼지 않는다. 라벨이 남아 생기는 손해는 "이 노드에서 공유 모드를 잠시 못 쓴다"
-		// 이고, 떼서 생기는 손해는 "쓸 수 없는 GPU 를 광고해 파드가 죽는다" 다. 후자가 훨씬 나쁘다.
+		// 조각을 지웠다고 라벨을 떼면 안 되는 경우가 있다: MIG 모드가 켜진 채 조각이 0개인 GPU 는
+		// `nvidia-smi -L` 에는 보이지만 CUDA 가 장치로 세지 않는다. 라벨을 떼면 flat
+		// device-plugin(mig-strategy=none)이 그 GPU 를 통짜로 광고해, 배정된 파드가 CUDA 초기화에서
+		// 죽는다. 모르면 떼지 않는다 — 라벨을 남기는 손해("이 노드에서 공유 모드를 잠시 못 쓴다")
+		// 보다 떼는 손해("쓸 수 없는 GPU 를 광고해 파드가 죽는다")가 훨씬 크다.
 		if r.Recorder != nil {
 			r.Recorder.Eventf(&n, corev1.EventTypeWarning, "MigModeStillEnabled",
 				"keeping %s on node %s: a GPU still has MIG mode enabled (advertising it as a whole GPU would fail CUDA init)",
@@ -312,15 +300,12 @@ func (r *AcceleratorPartitionPolicyReconciler) cordonNode(ctx context.Context, a
 	return nil
 }
 
-// journalQuiescing 은 cordon 이전에 Quiescing 저널을 영속한다. 최초 진입에서만 "이 cordon 이
-// 정책 소유인지"(CordonedByPolicy)를 기록한다 — 재진입이 우리 cordon 을 외부 cordon 으로 오인해
-// 복원 책임을 잃으면, 실패 후 노드가 영영 unschedulable 로 남는다.
-//
-// 소유 주장(OwnerUID)과 그 대상 장치(GPUPCIs)를 같은 write 로 영속한다. 장치 목록을 뒤(computeBaseline)로
-// 미루면, 그 사이에 멈춘 정책(예: MIG mode 이미 Enabled + GPU 점유 pod → WaitingForDrain, 상한 없음)의
-// 저널이 "내 것" 이라고만 하고 어느 장치인지는 말하지 않는다 — 장치 단위 소유 판정
-// (devicesOwnedByOtherPolicies)이 그 창에서 눈이 멀어 형제 정책이 남의 장치를 자기 판정 대상으로
-// 삼는다(I-1). targets 는 computeBaseline 이 쓰는 것과 같은 집합이므로 이후 덮어써도 값이 같다.
+// journalQuiescing 은 cordon 이전에 Quiescing 저널을 영속한다. 최초 진입에서만 CordonedByPolicy 를
+// 기록한다 — 재진입이 우리 cordon 을 외부 cordon 으로 오인해 복원 책임을 잃으면 실패 후 노드가
+// 영영 unschedulable 로 남는다. 소유 주장(OwnerUID)과 대상 장치(GPUPCIs)는 같은 write 로 영속한다 —
+// 장치 목록을 computeBaseline 으로 미루면 그 사이 멈춘 정책의 저널이 "내 것" 이라고만 하고 어느
+// 장치인지 말하지 않아, 장치 단위 소유 판정이 그 창에서 눈이 멀어 형제 정책이 남의 장치를 가져간다.
+// targets 는 computeBaseline 이 쓰는 것과 같은 집합이라 이후 덮어써도 값은 같다.
 func (r *AcceleratorPartitionPolicyReconciler) journalQuiescing(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy, node string, targets []nvidia.MigDevice) error {
 	rec := getApplyRecord(acpp, node)
 	if !isMigModeEnablePhase(rec.MigPhase) {
@@ -361,13 +346,11 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreSchedulable(ctx context.Co
 	return r.patchApplyRecord(ctx, acpp, rec)
 }
 
-// ensureAcppRebootJob 은 ACPP 소유 재부팅 Job 을 만든다(이미 있으면 no-op — 재부팅을 두 번 쏘지 않는다).
-// 이름은 드라이버 업그레이드 경로와 반드시 달라야 한다(naming.AcppRebootJobName) — 같으면 남의 Job 을
-// 자기 것으로 오인해 재부팅을 쏜 적 없이 대기 상태를 영속한다.
-//
-// 시도 횟수는 Job 생성 **직전에** 증가·영속한다(persist-before-mutate): 재부팅으로 프로세스가 죽어도
-// 카운터가 남아야 상한이 의미를 갖는다. 이미 있는 Job 을 재조우할 때는 증가시키지 않는다 —
-// 노드가 실제로 내려가기 전 30s requeue 가 몇 번 돌기 때문에 그 경로에서 세면 상한이 즉시 소진된다.
+// ensureAcppRebootJob 은 ACPP 소유 재부팅 Job 을 만든다(이미 있으면 no-op). 이름은 드라이버
+// 업그레이드 경로와 반드시 달라야 한다(naming.AcppRebootJobName) — 같으면 남의 Job 을 자기 것으로
+// 오인해 재부팅을 쏜 적 없이 대기 상태를 영속한다. 시도 횟수는 Job 생성 직전에 증가·영속한다 —
+// 재부팅으로 프로세스가 죽어도 카운터가 남아야 상한이 의미를 갖는다. 이미 있는 Job 을 재조우할 때는
+// 증가시키지 않는다 — 노드가 내려가기 전 30s requeue 가 여러 번 돌면 상한이 즉시 소진되기 때문이다.
 func (r *AcceleratorPartitionPolicyReconciler) ensureAcppRebootJob(t partition.Target, acpp *npuv1alpha1.AcceleratorPartitionPolicy) error {
 	name := naming.AcppRebootJobName(t.NodeName)
 	var existing batchv1.Job

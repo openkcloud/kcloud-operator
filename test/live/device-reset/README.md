@@ -1,18 +1,15 @@
-<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거; CapReset 서술 시점 명시) -->
+<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 -->
 # 벤더 장치 리셋 실측
 
 ## 왜
 
-`internal/vendorcap/registry.go` 의 `CapReset` 은 2026-09-26 리셋 수단 조사 시점에는
-nvidia·tenstorrent 를 둘 다 `Native`(벤더가 리셋 명령을 문서화)로 선언했고 확인 수준은
-`none` 이었다(문서만 읽었고 어느 노드에서도 실행하지 않았다는 조사). 이 하네스는 실제
-노드에서 리셋 명령을 실행해 그 확인 수준을 `hardware` 로 올릴 근거(또는 올리지 못하는
-이유)를 남긴다.
+`internal/vendorcap/registry.go` 의 `CapReset` 등급은 이 하네스 실측의 결과다 — nvidia 는
+`Native`(확인 수준 `hardware`), tenstorrent 는 `Unsupported`다(리셋 명령 실행이 노드 급정지를
+유발해 `investigate-pcie.sh` 로 원인을 좁혔다). 이 하네스는 실제 노드에서 벤더 리셋 명령을
+실행해 그 확인 수준의 근거를 남긴다.
 
 대상은 벤더가 장치 리셋 명령을 노출하는 두 벤더뿐이다 — nvidia(`nvidia-smi -r`)·tenstorrent(`tt-smi -r`).
 furiosa(warboy·rngd)·rebellions 는 공개 인터페이스에 리셋 수단 자체가 없어 다루지 않는다.
-`internal/vendorcap` 레지스트리의 `CapReset` 등급은 이 하네스 실측의 결과다 — tenstorrent 는
-2026-10-02 에 Unsupported 로 확정됐고 그 항목의 근거가 이 하네스다.
 
 | 벤더 | 노드 | 대상 장치 | 리셋 명령 |
 |---|---|---|---|
@@ -131,7 +128,7 @@ DRY_RUN=1 FORCE_FAIL_AT=quiesce VENDOR=nvidia PHASE=quiesce bash test/live/devic
 | `sel-delta.txt` | `SEL_STAGE=after` 실행 시 `sel-before.txt`가 있으면 만드는 `diff`(신규 SEL 항목은 `>` 로 시작하는 줄) |
 
 `post-devices.txt`·`post-boot-id.txt` 는 `postcheck` 가 남긴다 — `do_reset` 이 실패하면
-`main` 이 그 자리에서 멈추므로(브리프 Step 4 전체가 뒤로 못 간다) 이 두 파일이 아예
+`main` 이 그 자리에서 멈추므로(이후 단계가 전부 실행되지 않는다) 이 두 파일이 아예
 없을 수 있다. `PHASE=verdict` 는 이 경우를 `devices=missing`·`node=unknown` 으로,
 지어내지 않고 그대로 낸다.
 
@@ -143,11 +140,11 @@ DRY_RUN=1 FORCE_FAIL_AT=quiesce VENDOR=nvidia PHASE=quiesce bash test/live/devic
 - 반복 측정. 한 벤더당 한 번의 리셋만 실행한다(측정이 한 번이라는 것 자체가 한계다).
 - 대상 노드 외의 노드에 대한 어떤 조치. `quiesce`/`reboot-recover` 는 `VENDOR` 로 정해진
   그 노드에만 적용된다.
-- `remote()` 는 ServerAlive 로 원격 호스트 급정지 뒤 약 6초 안에 ssh-lost 를 판정한다(이전 약 5분).
+- `remote()` 는 ServerAlive 로 원격 호스트 급정지 뒤 약 6초 안에 ssh-lost 를 판정한다.
 
 ## 급정지 원인 조사 (investigate-pcie.sh)
 
-`tt-smi -r 0` 실행 직후 k8s-worker3 이 급정지·자동 재부팅한 사건(2026-09-28 두 재현)의
+`tt-smi -r 0` 실행 직후 k8s-worker3 이 급정지·자동 재부팅한 사건(두 차례 재현됨)의
 근본 원인을 읽기 전용으로 좁히는 수집기다. `run.sh` 와 별개이고 리셋을 실행하지
 않는다 — SEL 상세·PCI 설정·`_OSC` 로그·이전 부팅 커널 로그·tt 버전을 읽기 명령으로만
 모아 `runs/<UTC>-investigate/` 에 남기고 `ROOTCAUSE:` 판정 줄을 찍는다. 원격 sudo 는
@@ -171,13 +168,8 @@ ROOTCAUSE: sel_target=<rootport|device|unknown> aer_owner=<os|firmware|unknown> 
 ```
 
 - `sel_target` 은 BMC SEL `Critical Interrupt` 레코드의 Event Data(RAW) 바이트 2 를 PCI
-  버스 번호로 보고 tenstorrent 장치 버스·루트 포트 버스와 대조한 결과다(BMC 벤더 의존
-  해석 — 2026-09-29 원인 조사 §2.1).
+  버스 번호로 보고 tenstorrent 장치 버스·루트 포트 버스와 대조한 결과다(BMC 벤더 의존 해석이다).
 - `aer_owner` 는 `_OSC` 협상에서 AER 를 OS 가 넘겨받았는지, 또는 APEI firmware first
   모드인지로 정한다.
 - 수집은 멱등이라 여러 번 실행해도 안전하고, 판정 자동 분류가 원문과 어긋나면 스크립트의
   분류 로직을 고쳐 `PHASE=verdict` 로 다시 확인한다.
-
-조사 결과와 세 후보의 순위·다음 선택지는 2026-09-29 원인 조사 문서와
-그 증거 레코드
-에 있다.

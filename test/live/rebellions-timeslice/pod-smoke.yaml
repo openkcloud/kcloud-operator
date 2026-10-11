@@ -1,12 +1,8 @@
 # ============================================================
 # pod-smoke.yaml: rbln-workload 이미지가 호스트 SDK 로 장치를 열 수 있는지 1회 확인
-# 상세: node5 `/etc/cdi/rbln.yaml`(벤더 CDI 스펙)이 정의한 컨테이너 요건 — 장치 노드(device-plugin
-#       이 광고한 rebellions.ai/ATOM 요청으로 주입) 외에 호스트 라이브러리(librbln-thunk.so 등)와
-#       도구(rbln-stat·rbln-smi)를 hostPath 로 재현한다. rbln-stat 결과를 찍고, get_npu_name()
-#       자동탐지를 먼저 시도한 뒤 실패하면 env RBLN_NPU_NAME 폴백을 쓴다. import rebel →
-#       compile_from_torch → create_runtime 까지 간다(호출 형태는 workload.py 와 동일하게
-#       tensor_type="np" 포함). 정상이면 SMOKE_OK 한 줄. CR 은 바꾸지 않는다(벤더 광고 자원 그대로).
-# 생성일: 2026-09-29
+# 상세: node5 의 벤더 CDI 요건(장치 노드 + 라이브러리·도구)을 hostPath 로 재현해 host SDK 로
+#       compile_from_torch→create_runtime 까지 확인한다. CR 은 바꾸지 않는다(벤더 광고 자원 그대로).
+# 생성일: 2026-09-29 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: v1
 kind: Pod

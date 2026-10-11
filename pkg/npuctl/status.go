@@ -1,10 +1,8 @@
 // status.go: pkg/npuctl 상태 집약(aggregation) 로직
 // 상세: NPUClusterPolicy/DriverInstallPolicy/NodeDeviceReport/DriverUpgradeState(CR)와
-//
-//	core/v1 Node(allocatable)를 한 번에 조회해 ClusterStatus로 합친다.
-//	kubectl-npu status --json 및 사람용 텍스트 출력이 공통으로 사용하는 단일 진입점.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (벤더 operator 조건 집계 추가)
+// core/v1 Node(allocatable)를 한 번에 조회해 ClusterStatus로 합친다. kubectl-npu
+// status --json 및 사람용 텍스트 출력이 공통으로 사용하는 단일 진입점이다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 package npuctl
 
 import (

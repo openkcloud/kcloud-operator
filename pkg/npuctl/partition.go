@@ -1,13 +1,8 @@
 // partition.go: pkg/npuctl 파티션(layout)·공유(sharing) 조회 + 적용
-// 상세: AcceleratorPartitionPolicy 하나가 파티션·공유 두 축을 함께 담는다(policy.go
-//
-//	BuildPartitionPolicy 참고). 조회는 status.targets 로 이미 노드가 해석된 것만
-//	낸다(NodeSelector 를 여기서 다시 풀지 않는다 — describe.go CollectNodeDetail 의
-//	policy 절과 같은 원칙). 적용(apply)은 node+vendor 로 기존 정책을 찾아(있으면
-//	그 축만 patch, 없으면 새로 생성) BuildPartitionPolicy 의 번역 규칙을 그대로
-//	재사용한다 — layout·sharing 번역 규칙을 여기서 다시 만들지 않는다.
-//
-// 생성일: 2026-09-28
+// 상세: AcceleratorPartitionPolicy 하나가 파티션·공유 두 축을 함께 담는다. 조회는
+// status.targets 로 이미 노드가 해석된 것만 낸다. 적용(apply)은 node+vendor 로 기존
+// 정책을 찾아(있으면 그 축만 patch, 없으면 생성) policy.go 의 번역 규칙을 재사용한다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -120,13 +115,11 @@ func sharingModeReplicas(s *npuv1alpha1.SharingSpec) (mode string, replicas int3
 }
 
 // resolveNodeACPP 는 node·vendor 를 겨냥한 단일 AcceleratorPartitionPolicy 를 찾는다
-// (status.targets 로 이미 해석된 것만 — resolveDUS 와 같은 원칙). 0개면 아직 없다는
-// 뜻으로 (nil,nil) — apply 가 새로 만들 신호다. 2개 이상이면 webhook 의 target-conflict
-// 방지가 정상 동작하면 생기지 않아야 하지만, 방어적으로 모호 에러를 낸다(resolveDUS·
-// resolveDIP 와 같은 fail-closed 관례). 찾은 정책이 삭제 처리 중(DeletionTimestamp)이면
-// 여기서 바로 거절한다 — partition apply·sharing apply 양쪽이 각자 따로 검사하던 것을
-// 호출 지점 하나로 모았다(리뷰 지적: sharing 쪽 검사를 지워도 87개 시험이 전부 통과했다
-// — 검사가 두 곳에 복제돼 있으면 한쪽이 비어도 아무도 모른다).
+// (status.targets 로 이미 해석된 것만 — resolveDUS 와 같은 원칙). 0개면 (nil,nil) —
+// apply 가 새로 만들 신호다. 2개 이상이면 webhook 의 target-conflict 방지가 정상
+// 동작하면 생기지 않지만 방어적으로 모호 에러를 낸다(resolveDUS·resolveDIP 와 같은
+// fail-closed 관례). 삭제 처리 중인 정책은 거절한다 — partition·sharing apply 가 검사를
+// 각자 복제해 두면 한쪽이 비어도 드러나지 않으므로, 검사를 이 한 곳에 모은다.
 func (c *Client) resolveNodeACPP(ctx context.Context, node, vendor string) (
 	*npuv1alpha1.AcceleratorPartitionPolicy, error,
 ) {

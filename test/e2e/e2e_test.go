@@ -260,12 +260,8 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
 		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		// the reconciliation by using the metrics, e.g. assert that
+		// controller_runtime_reconcile_total{controller="<Kind>",result="success"} increments.
 	})
 })
 

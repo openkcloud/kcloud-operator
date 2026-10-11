@@ -1,6 +1,6 @@
 // ============================================================
 // deviceplugin_participant_test.go: 재시작 작업 본체 envtest
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -71,9 +71,8 @@ var _ = Describe("DevicePluginRestart participant", func() {
 		Expect(out.Event).To(Equal(operation.EventCompensated))
 	})
 
-	// 증명: health 가 만든 재시작은 검증을 요구하지 않는다.
-	// 라이브(2026-08-04 HL-5): 요구하면 정책 기대값이 없어 검증이 구조적으로 실패하고, 작업이
-	// 항상 RolledBack 으로 끝나 세 번이면 멀쩡한 노드가 격리된다.
+	// 증명: health 가 만든 재시작은 검증을 요구하지 않는다. 요구하면 정책 기대값이 없어 검증이
+	// 구조적으로 실패하고, 작업이 항상 RolledBack 으로 끝나 세 번이면 멀쩡한 노드가 격리된다.
 	It("skips verification for a health-owned restart", func() {
 		p := NewDevicePluginParticipant(nvidiaReconciler())
 		_, want, err := p.VerifyRequest(ctx, dpRestartOp("dp-restart-op-4", "dp-empty-node"))
@@ -83,11 +82,9 @@ var _ = Describe("DevicePluginRestart participant", func() {
 })
 
 var _ = Describe("Revalidate participant with a non-policy owner", func() {
-	// 증명: health 가 만든 재검증은 검증 대상이 아니다.
-	//
-	// 한 번은 반대로 고쳤다가 라이브에서 되돌렸다(2026-08-04): 정책이 없으면 장치 관측을 띄우는
-	// 주체도 없어 검증이 언제나 "관측 전무" 로 실패하고, 그래서 health 재검증이 **항상**
-	// RolledBack 으로 끝나 세 번이면 멀쩡한 노드가 격리된다.
+	// 증명: health 가 만든 재검증은 검증 대상이 아니다. 정책이 없으면 장치 관측을 띄우는 주체도
+	// 없어 검증이 언제나 "관측 전무" 로 실패하고, health 재검증이 **항상** RolledBack 으로 끝나
+	// 세 번이면 멀쩡한 노드가 격리된다.
 	It("skips verification when the owner is not an ACPP", func() {
 		p := NewRevalidateParticipant(nvidiaReconciler())
 		op := &npuv1alpha1.AcceleratorOperation{

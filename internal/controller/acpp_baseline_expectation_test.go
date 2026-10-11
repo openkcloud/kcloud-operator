@@ -1,7 +1,7 @@
 // ============================================================
 // acpp_baseline_expectation_test.go: apply 후 기대 allocatable 산출 회귀 시험
-// 상세: 조각낸 GPU 는 온전한 GPU 로 광고되지 않는다는 사실을 고정한다(2026-08-04 라이브 결함).
-// 생성일: 2026-08-04
+// 상세: 조각낸 GPU 는 온전한 GPU 로 광고되지 않는다는 사실을 고정한다.
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -36,7 +36,7 @@ func TestNvidiaPhysicalGPUsCountsInventoryNotAdvertisement(t *testing.T) {
 
 // TestComputeBaselineExcludesPartitionedGPUFromExpectation 는 조각낼 GPU 가 기대 온전-GPU 수에서
 // 빠지는지 고정한다. 빠지지 않으면 A30 1장을 조각낸 뒤에도 nvidia.com/gpu 2 를 기다리게 되고,
-// mixed device-plugin 은 1 만 광고하므로 verify 가 180초를 채우고 rollback 한다(라이브 실측).
+// mixed device-plugin 은 1 만 광고하므로 verify 가 180초를 채우고 rollback 한다.
 // 픽스처의 allocatable 2 는 "mode 는 Enabled 인데 GI 가 없어 flat 이 아직 온전한 GPU 로 광고하는"
 // 실제 상태다 — 이 상태가 조각내기 직전의 정상 입력이다.
 func TestComputeBaselineExcludesPartitionedGPUFromExpectation(t *testing.T) {
@@ -79,7 +79,7 @@ func TestComputeBaselineExcludesPartitionedGPUFromExpectation(t *testing.T) {
 
 // TestMigGeometryEmptyAcceptsDisabledSentinel 은 "조각 없음" 의 두 표기를 모두 받는지 고정한다.
 // mode 가 꺼진 GPU 는 geometry 를 "disabled" 로 보고하므로, 빈 문자열만 받으면 복원이 끝난
-// 노드가 "아직 조각이 남았다" 로 읽혀 정리가 영구히 막힌다(2026-08-04 라이브).
+// 노드가 "아직 조각이 남았다" 로 읽혀 정리가 영구히 막힌다.
 func TestMigGeometryEmptyAcceptsDisabledSentinel(t *testing.T) {
 	for _, g := range []string{"", "disabled", "Disabled"} {
 		if !migGeometryEmpty(g) {

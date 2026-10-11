@@ -1,7 +1,7 @@
 // ============================================================
 // generated_backend_emit_test.go: 배포물 발행 facade 시험
 // 상세: 라이브 재현에 쓰는 경로다. 손으로 쓴 YAML 을 쓰지 않으려면 발행이 코드여야 한다.
-// 생성일: 2026-08-10 | 수정일: 2026-09-20
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -132,9 +132,9 @@ func sharingDescriptor(vendor, product string) *npuv1alpha1.AcceleratorDescripto
 	}
 }
 
-// 발행 facade 도 sharing 게이트를 지난다(final review F5). 컨트롤러는 Render 에 오기 전에
-// 구조화된 refusal 로 막지만 cmd/backendtool 은 이 함수가 유일한 관문이라, 게이트가 여기
-// 없으면 timeSlicing 이 Unsupported 인 벤더의 replicas YAML 이 도구로는 뽑혔다.
+// 발행 facade 도 sharing 게이트를 지난다. 컨트롤러는 Render 에 오기 전에 구조화된 refusal 로
+// 막지만 cmd/backendtool 은 이 함수가 유일한 관문이라, 게이트가 여기 없으면 timeSlicing 이
+// Unsupported 인 벤더의 replicas YAML 도 도구로 뽑힐 수 있다.
 func TestRenderGeneratedBackendsRefusesSharingForUnsupportedVendor(t *testing.T) {
 	_, err := RenderGeneratedBackends(sharingDescriptor("rngd", "rngd"), "dp:v3", "", "kcloud")
 	if err == nil {

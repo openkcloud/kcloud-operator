@@ -1,12 +1,10 @@
 // ============================================================
 // draclaim.go: DRA ResourceClaim 의 노드 할당 판정 (leaf 패키지)
-// 상세: 장치를 쥔 claim 이 특정 노드에 남아 있는지 보는 안전 게이트. partition 의 quiesce 경로와
-//
-//	upgrade 의 drain 경로가 같은 판정을 써야 하지만 두 패키지는 서로를 import 하고 있어
-//	(internal/partition/profiles.go → internal/upgrade) 한쪽에 둘 수 없다. 그래서 우리 패키지를
-//	하나도 import 하지 않는 leaf 로 분리했다 — 복사본을 두면 게이트가 없는 쪽으로 흐른다.
-//
-// 생성일: 2026-10-04
+// 상세: 장치를 쥔 claim 이 특정 노드에 남아 있는지 보는 안전 게이트다. partition 의 quiesce
+// 경로와 upgrade 의 drain 경로가 같은 판정을 쓴다. partition 이 upgrade 를 단방향으로
+// import 하므로, 판정을 partition 에 두면 upgrade 가 쓸 수 없어 우리 패키지를 하나도
+// import 하지 않는 leaf 로 분리했다 — 복사본을 두면 게이트가 없는 쪽으로 흐른다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package draclaim
 
@@ -33,15 +31,11 @@ import (
 var ErrClaimStillAllocated = errors.New("resourceclaim still allocated on node")
 
 // AssertNoneAllocatedOnNode 는 nodeName 노드에 할당된(status.allocation 이 그 노드를 가리키는)
-// ResourceClaim 이 없는지 검증한다. List 실패는 "없음" 이 아니라 "모른다" 다 — 이 함수는 안전
-// 게이트이므로 읽지 못했으면 오류로 올린다. 유일한 예외는 클러스터가 resource.k8s.io 자체를
-// 서빙하지 않는 경우다(그 축이 아예 없으므로 부재를 이유로 게이트를 막을 수 없다).
-//
-// 할당이 남은 경우만 ErrClaimStillAllocated 를 감싸 돌려준다 — 호출자는 errors.Is 로 그 둘을
-// 가른다. claim 이름은 메시지에 남겨 막은 주체를 밖에서 특정할 수 있게 한다.
-//
-// Node 는 라벨 매칭이 필요해질 때만 조회한다 — 노드에 박힌 claim 이 하나도 없으면 노드 라벨을
-// 볼 일이 없다. 조회 실패는 역시 오류로 올린다(모르는 상태로 게이트를 열지 않는다).
+// ResourceClaim 이 없는지 검증한다. List 실패는 "없음" 이 아니라 "모른다" 다 — 안전 게이트이므로
+// 읽지 못했으면 오류로 올린다(유일한 예외는 클러스터가 resource.k8s.io 를 서빙하지 않는 경우).
+// 할당이 남은 경우만 ErrClaimStillAllocated 로 감싸 돌려줘 호출자가 errors.Is 로 가른다 — claim
+// 이름은 메시지에 남겨 막은 주체를 특정한다. Node 는 라벨 매칭이 필요해질 때만 조회한다(실패해도
+// 오류로 올린다 — 모르는 상태로 게이트를 열지 않는다).
 func AssertNoneAllocatedOnNode(ctx context.Context, c client.Client, nodeName string) error {
 	var claims resourcev1.ResourceClaimList
 	if err := c.List(ctx, &claims); err != nil {

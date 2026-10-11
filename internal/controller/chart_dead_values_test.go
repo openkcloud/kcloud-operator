@@ -1,16 +1,9 @@
 // ============================================================
 // chart_dead_values_test.go: 선언돼 있으나 템플릿이 읽지 않던 값 셋이 렌더에
 // 반영되는지 고정한다.
-// 상세: rollingUpdate.maxUnavailable·serviceAccount.create·rbac.create 는
-//
-//	chart_detector_image_test.go 가 고정한 detector.image 와 같은 결함(선언은
-//	있는데 소비하는 템플릿이 없어 --set 이 조용히 버려짐)이었다. 기본값 렌더는
-//	이 수정 전후로 바뀌지 않고 --set 을 줬을 때만 바뀌어야 한다.
-//
-// 생성일: 2026-10-04 | 수정일: 2026-10-04 (serviceAccount.create=false 이고
-//
-//	name 도 비웠을 때 "default" SA 로 떨어지는 경우 추가)
-//
+// 상세: rollingUpdate.maxUnavailable·serviceAccount.create·rbac.create 는 detector.image 와
+// 같은 종류(선언은 있는데 템플릿이 읽지 않아 --set 이 조용히 버려짐)가 될 수 있는 값이다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

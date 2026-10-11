@@ -123,8 +123,8 @@ spec:
                 type: string
               suspectedAt:
                 description: |-
-                  SuspectedAt 은 광고 불일치를 처음 본 시각이다. 유예 계산이 이 값을 쓴다 —
-                  condition 의 전이 시각에 얹으면 재검증 pass 가 매번 지워 유예가 영영 안 찬다(Stage 1 D-7).
+                  SuspectedAt 은 광고 불일치를 처음 본 시각이다. 유예 계산이 이 값을 쓴다 — condition 의
+                  전이 시각에 얹으면 재검증 pass 가 매번 지워 유예가 영영 안 찬다.
                 format: date-time
                 type: string
             type: object

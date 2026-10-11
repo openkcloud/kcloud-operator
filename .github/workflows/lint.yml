@@ -1,15 +1,6 @@
-# lint.yml: push·PR 시 golangci-lint 와 footprint 회귀 게이트를 돈다.
+# lint.yml: push·PR 시 golangci-lint 와 주석·문서·설정 검증 게이트들을 돈다.
 # 상세: CRD embed 번들을 먼저 만들어야 golangci-lint 타입체크가 fresh clone 에서도 통과한다.
-#       footprint-check 는 kcloud 차트 정적 렌더 결과를 test/footprint/baseline.json 과
-#       대조한다. 클러스터가 없어 static 모드만 돈다.
-#       image-tag-check 는 release 태그(v*) push 에만 돈다 — 차트는 발행 전에 다음
-#       태그를 먼저 적으므로 평시엔 "아직 미발행" 이 정답이라 매 push·PR 마다 돌리면
-#       상시 빨강(신호 없음)이 된다. release.yml 도 같은 push 로 도므로(그 파일 머리말
-#       참고) v* 태그 push 순간엔 실제로 돈다. CHECK_REGISTRY=1 로 직접 켠다 —
-#       helm·PyYAML 이 footprint-check 단계에서 이미 설치돼 추가 설치가 없다. test.yml 은
-#       make test 만 돌려 이 검사를 포함하지 않는다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-11 (docs 경로 인용 실재 게이트 추가; docs-path-check·private-ip-check·lint-config·kubectl-npu 린트 추가;
-# 작업공간 인용 거부 게이트 추가)
+# 생성일: 2025-07-04 | 수정일: 2026-10-11
 name: Lint
 
 on:
@@ -52,7 +43,7 @@ jobs:
       - name: Private address gate
         run: make private-ip-check
 
-      # .superpowers 작업공간은 .gitignore 로 막혀 커밋되지 않는다 — 추적 파일이 그
+      # 계획 디렉터리는 .gitignore 로 막혀 커밋되지 않는다 — 추적 파일이 그
       # 경로나 task-N 보고서 파일명을 인용하면 받는 사람은 열 수 없는 경로를 안내받는다.
       - name: Workspace citation gate
         run: make workspace-cite-check
@@ -68,8 +59,8 @@ jobs:
         with:
           version: v2.1.0
 
-      # cmd/kubectl-npu 는 별도 go.mod 라 위 단계가 내려가지 않는다 — make lint 가 로컬에서
-      # 도는 두 모듈 중 하나가 CI 린트를 전혀 받지 않고 있었다. version 은 위 단계와 같게.
+      # cmd/kubectl-npu 는 별도 go.mod 라 위 단계가 내려가지 않는다 — 이 단계가 없으면
+      # make lint 가 로컬에서 도는 두 모듈 중 하나가 CI 린트를 받지 않는다. version 은 위 단계와 같게.
       - name: Run linter (kubectl-npu plugin module)
         uses: golangci/golangci-lint-action@v8
         with:

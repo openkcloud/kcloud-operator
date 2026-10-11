@@ -1,7 +1,7 @@
 // ============================================================
 // backend.go: RNGD 파티션 backend — DS env(RNGD_PARTITION_POLICY) 기반 apply (spec §2.3, §4.1)
 // 상세: discover/validate/diff/apply/rollback/verify. 적용 범위 = DaemonSet 전역(DaemonSetGlobal).
-// 생성일: 2026-07-23 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package rngd
 
@@ -135,8 +135,8 @@ func (b *Backend) Discover(t partition.Target) (*partition.DiscoverResult, error
 	if err := b.c.Get(t.Ctx, types.NamespacedName{Name: t.NodeName}, &ndr); err == nil {
 		for _, d := range ndr.Status.Devices {
 			// 모델 표기는 detector 판에 따라 대소문자가 갈린다(라이브 0.6.4 는 "rngd"). 정확
-			// 일치로 거르면 장치가 하나도 안 잡혀 status.devices 가 비고, 그 위에 얹힌 검증
-			// (장치 관측 근거)이 "관측 전무" 로 영구 실패한다 — 라이브 실측, 2026-08-04.
+			// 일치로 거르면 장치가 하나도 안 잡혀 status.devices 가 비고, 그 위에 얹힌 검증이
+			// "관측 전무" 로 영구 실패한다.
 			if !strings.EqualFold(d.Vendor, "furiosa") || !strings.EqualFold(d.Model, "rngd") {
 				continue
 			}
@@ -173,26 +173,12 @@ func capabilityProfiles() []v1alpha1.ProfileSupport {
 	return out
 }
 
-// deviceStatusFor 는 RNGD 장치 status 를 만들며 capability 3축을 채운다.
-// TimeSlicing/Brokered 는 미구현이라 전부 Supported=false + Verification=required 다.
-// MultiProcess 는 라이브 실측 결과(MultiProcessEnv)를 반영 — 미실측이면 마찬가지로 required.
-// vendor 는 실측 근거가 없어 시그니처만 유지한다(호출부 대칭, 향후 벤더별 분기 대비).
-//
-// IsolationCapability 는 세 축 전부 빈 문자열, 즉 미실측이다. compute 축은 한때
-// subdevice 로 단정했으나 근거가 없었고, 벤더 코드가 오히려 그 단정을 반증한다
-// (reference/libfuriosa-kubernetes 코드 검토, 2026-08-05):
-//   - pkg/cdi_spec/partitioned_device_renderer.go:57-94 filterPartitionedDeviceNodes 는
-//     PE 노드만 코어 범위로 거르고, PE 정규식에 안 걸리는 노드는 else 로 떨어져 무조건
-//     통과시킨다. 그래서 모든 파티션이 카드의 npu{N}mgmt·bar0/2/4·dmar·ch* 를 함께 받는다 —
-//     코어는 갈려도 관리 인터페이스와 DMA 채널은 공유다.
-//   - pkg/furiosa_device/partitioned_device.go:98-109 IsHealthy 는 카드 전체 Liveness 를
-//     그대로 돌려준다. 파티션 단위 상태 API(CoreStatus)는 호출조차 하지 않는다.
-//
-// 그렇다고 none 으로 낮춰 적지도 않는다 — none 은 rank 0 인 "주장" 이라
-// minimumIsolation=none 요구를 통과시킨다. 공유 인터페이스의 존재는 subdevice 라는 주장을
-// 무너뜨릴 뿐, 실제 등급을 잰 것이 아니다. 실측 전까지는 어느 등급도 적지 않는 것이
-// 이 프로젝트의 규율이다(정직성 §19.3, AcceleratorClass.MinimumIsolation 주석).
-// 격상은 PE 간 간섭 실측(테넌트 A 의 mgmt/DMA 접근이 테넌트 B 에 닿는지)이 선행 조건이다.
+// deviceStatusFor 는 RNGD 장치 status 를 만들며 capability 3축을 채운다. TimeSlicing/Brokered 는
+// 미구현(required), MultiProcess 는 실측 결과(MultiProcessEnv)를 반영한다. vendor 매개변수는
+// 실측 근거가 없어 시그니처만 유지한다(호출부 대칭, 향후 벤더별 분기 대비).
+// Isolation 세 축은 미실측(빈 문자열)이다 — FuriosaAI 의 libfuriosa-kubernetes 코드가 PE
+// 필터링에서도 관리 인터페이스·DMA·health 를 카드 단위로 공유해 subdevice 주장을 반증하고,
+// none 도 minimumIsolation=none 요구를 잘못 통과시켜 쓸 수 없다. 격상은 PE 간 간섭 실측이 선행 조건이다.
 func deviceStatusFor(_, model string) v1alpha1.DeviceStatus {
 	return v1alpha1.DeviceStatus{
 		Model:          model,

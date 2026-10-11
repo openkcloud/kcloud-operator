@@ -1,10 +1,8 @@
 // ============================================================
-// server.go: 관리 REST API 서버 (관리 API 2단계)
-// 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read(GET /status,
-//       /nodes/{node})/control(POST /vendors/{vendor}/upgrade|rollback|toggle)을 노출.
-//       control 은 전부 CR patch 로 귀결(1단계 계약 유지). 인증=TokenReview, 인가=SubjectAccessReview.
-// 생성일: 2026-07-20 | 수정일: 2026-10-10 (capabilities·accelerators·preview 에 DRA 읽기
-//         (resourceslices·deviceclasses) 인가 게이트 추가; 계획서 항목 토큰 제거)
+// server.go: 관리 REST API 서버
+// 상세: operator pod 내 별도 HTTPS listener(:9444). pkg/npuctl 를 감싸 read·control 을 낸다 —
+//       control 은 CR patch 로 귀결한다(1단계 계약 유지). 인증=TokenReview, 인가=SAR.
+// 생성일: 2026-07-20 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -133,17 +131,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/upgrade", s.authz("patch", "driverinstallpolicies", s.handleUpgrade))
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/rollback", s.authz("patch", "driverinstallpolicies", s.handleUpgrade))
 	mux.HandleFunc("POST /api/v1/vendors/{vendor}/toggle", s.authz("patch", "npuclusterpolicies", s.handleToggle))
-	// track ③ 인벤토리 조회: 미관리 노드는 NodeDeviceReport 만으로 채워지므로(review I-1)
-	// acceleratorpartitionpolicies 인가만으론 부족하다 — nodedevicereports 인가도 함께 요구한다
-	// (기존 authz 를 중첩 호출해 둘 다 통과해야 next 가 실행되게 한다). 응답은 node 이름·cordon
-	// 상태·advertised 수량도 함께 낸다(loadInventory/handleNodeAccelerators 가 corev1.Node 를
-	// 직접 읽는다) — core 그룹 nodes list 인가도 함께 요구한다(리뷰 Important #4, 5라우트 전부).
-	// loadInventory 가 attachDRAAllocation 용 ResourceClaim 도 읽으므로
-	// resourceclaims 인가도 invGates 에 포함한다 — consumers 라우트와 같은 요구.
+	// 인벤토리 조회: 미관리 노드는 NodeDeviceReport 만으로 채워지므로 acceleratorpartitionpolicies
+	// 인가만으론 부족하다 — nodedevicereports 인가도 함께 요구한다. 응답은 node 이름·cordon
+	// 상태·advertised 수량도 함께 내므로(corev1.Node 직접 읽음) core 그룹 nodes list 인가도
+	// 요구한다 — capGates 를 공유하는 accelerators 3개·capabilities 까지 4라우트의 공통 요구다
+	// (vendors/capabilities·preview 는 별도 게이트로 같은 인가를 요구한다). loadInventory 가
+	// attachDRAAllocation 용 ResourceClaim 도 읽으므로 resourceclaims 인가도 invGates 에 포함한다.
 	mux.HandleFunc("GET /api/v1/accelerators", s.authzAll(invGates, s.handleAccelerators))
 	mux.HandleFunc("GET /api/v1/accelerators/{uid...}", s.authzAll(invGates, s.handleAcceleratorByUID))
 	mux.HandleFunc("GET /api/v1/nodes/{node}/accelerators", s.authzAll(invGates, s.handleNodeAccelerators))
-	// track ③ capability 조회: memoryMiB/sharingReplicas 는 NDR 로 되짚은 값이라(§ intent.applyObservedSharing)
+	// capability 조회: memoryMiB/sharingReplicas 는 NDR 로 되짚은 값이라(§ intent.applyObservedSharing)
 	// accelerators 와 같은 이유로 nodedevicereports 인가도, node 파생 필드(schedulable/advertised) 때문에
 	// nodes 인가도 함께 요구한다.
 	mux.HandleFunc("GET /api/v1/capabilities", s.authzAll(capGates, s.handleCapabilities))
@@ -156,7 +153,7 @@ func (s *Server) Handler() http.Handler {
 		npuPair("list", "acceleratorverificationpolicies"),
 		nodeGate,
 	}, s.handleVendorCapabilities))
-	// track ③ CR 투영: 각 라우트는 자기 응답이 실제로 읽는 CR 종류의 list 권한만 요구한다
+	// CR 투영: 각 라우트는 자기 응답이 실제로 읽는 CR 종류의 list 권한만 요구한다
 	// (조인이 없으므로 accelerators/capabilities 처럼 이중 게이트가 필요 없다).
 	mux.HandleFunc("GET /api/v1/classes", s.authz("list", "acceleratorclasses", s.handleClasses))
 	mux.HandleFunc("GET /api/v1/policies", s.authz("list", "acceleratorpartitionpolicies", s.handlePolicies))

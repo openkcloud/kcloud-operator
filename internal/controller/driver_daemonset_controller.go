@@ -1,7 +1,7 @@
 // driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
 // 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
 //       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-09-09
+// 생성일: 2026-04-13 | 수정일: 2026-10-11
 
 package controller
 
@@ -170,8 +170,8 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 									PodAffinityTerm: corev1.PodAffinityTerm{
 										LabelSelector: &metav1.LabelSelector{
 											MatchLabels: map[string]string{
-												// 차트 이름이 라벨 값이다(kcloud-operator.name). 개명 전 값 "npu-operator" 를
-												// 그대로 두면 이 셀렉터가 아무 pod 도 못 집어 anti-affinity 가 무동작이었다.
+												// 차트 이름이 라벨 값이다(kcloud-operator.name). 이 값이 차트와 어긋나면
+												// 셀렉터가 아무 pod 도 못 집어 anti-affinity 가 무동작이 된다.
 												"app.kubernetes.io/name":      "kcloud-operator",
 												"app.kubernetes.io/component": "controller",
 											},
@@ -312,10 +312,10 @@ func renderDriverDaemonSet(pol *npuv1alpha1.DriverInstallPolicy) *appsv1.DaemonS
 	}
 
 	// Furiosa APT 인증 Secret 마운트 (Warboy 전용).
-	// Warboy 는 사설 archive.furiosa.ai 인증(furiosa.conf)이 필수라 secret 부재 시 fail-fast 로 설계.
+	// Warboy 는 사설 archive.furiosa.ai 인증(furiosa.conf)이 필수라 secret 부재 시 fail-fast 가 맞다.
 	// 반면 RNGD 는 공개 repo 를 사용하여 entrypoint 가 /secrets 를 전혀 참조하지 않으므로, secret
 	// 오브젝트(furiosa-apt-auth)를 하드코딩 마운트하면 공개 repo 클러스터에서 secret 부재 시 파드가
-	// 스케줄되지 못한다(service 클러스터 실측 버그). → RNGD 는 마운트를 부착하지 않는다.
+	// 스케줄되지 못한다. → RNGD 는 마운트를 부착하지 않는다.
 	if a, ok := driveradapter.ForModel(pol.Spec.Vendor, pol.Spec.Model); ok && a.AptAuthRequired() {
 		ds.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 			ds.Spec.Template.Spec.Containers[0].VolumeMounts,
@@ -354,7 +354,7 @@ func driverNodeSelector(vendor, model string) map[string]string {
 	return map[string]string{}
 }
 
-// versionSourceOrDefault 는 (c) VersionSource 가 빈 값이면 기존 동작인 "Policy" 를 반환합니다.
+// versionSourceOrDefault 는 VersionSource 가 빈 값이면 기존 동작인 "Policy" 를 반환합니다.
 // CRD default 가 적용되기 전(구 CR)에도 회귀 없이 Policy 로 동작하도록 보장합니다.
 func versionSourceOrDefault(vs string) string {
 	if vs == "" {

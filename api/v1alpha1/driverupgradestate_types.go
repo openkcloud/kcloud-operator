@@ -1,7 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-11 (ConsumedRollbackRequest 필드 추가 — 소비된 rollback 요청 재소비 차단; 계획서 항목 토큰 제거;
-//                                        VersionObservationAllowed 술어 추가)
+// 생성일: 2026-04-13 | 수정일: 2026-10-11
 
 package v1alpha1
 
@@ -33,15 +32,10 @@ func RollbackRequestAccepted(state string) bool {
 
 // VersionObservationAllowed 는 NodeDeviceReport 실측을 status.currentVersion 에 반영하고
 // 버전 드리프트를 판정해도 되는 상태인지다. 조정자(internal/controller)와 드리프트 검출기
-// (internal/verification)가 같은 술어를 쓴다 — 두 곳이 갈리면 한쪽만 감지가 꺼진다.
-//
-// 사이클 중간(UpgradeRequired~Rebooting·Rollback)은 제외다: DesiredVersion·PreviousVersion
-// 을 상태 기계가 소유하고 그 기록을 밖에서 덮으면 롤백이 깨지며, 불일치 자체가 정상이라
-// 드리프트로 읽으면 오경보가 된다. 받아들이는 둘은 보고 전용 종점이다 — Idle 과, 허용 목록
-// 밖 버전이 주차하는 UnverifiedVersion(Job 도 cordon 도 만들지 않는다).
-//
-// Failed 는 뺀다: 그 상태의 복구 판정이 currentVersion 을 근거로 쓰므로 밖에서 같은 값을
-// 바꾸면 판정 주체가 둘이 된다.
+// (internal/verification)가 같은 술어를 써야 한쪽만 감지가 꺼지는 것을 막는다.
+// 사이클 중간은 상태 기계가 DesiredVersion·PreviousVersion 을 소유해 밖에서 덮으면 롤백이 깨지고,
+// 그 사이의 불일치는 설계상 정상이라 드리프트로 읽으면 오경보가 되므로 제외한다. Failed 는 복구
+// 판정이 currentVersion 을 근거로 쓰므로 제외한다 — 받아들이는 것은 Idle 과 UnverifiedVersion 뿐이다.
 func VersionObservationAllowed(state string) bool {
 	switch state {
 	case UpgradeStateIdle, UpgradeStateUnverifiedVersion:
@@ -110,7 +104,7 @@ type DriverUpgradeStateStatus struct {
 	CurrentVersion string `json:"currentVersion,omitempty"`
 	// DesiredVersion은 목표 드라이버 버전입니다.
 	DesiredVersion string `json:"desiredVersion,omitempty"`
-	// State는 현재 업그레이드 단계입니다. (Idle, UpgradeRequired, PreFlight, Cordoning, Draining, Upgrading, Validating, Uncordoning, Rollback)
+	// State 는 현재 업그레이드 단계입니다(UpgradeState* 상수 값 중 하나).
 	State string `json:"state,omitempty"`
 	// LastTransitionTime은 마지막 상태 전환 시각입니다.
 	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
@@ -121,14 +115,9 @@ type DriverUpgradeStateStatus struct {
 	// PreviousImage는 롤백 시 복구할 이전 드라이버 컨테이너 이미지 전체 레퍼런스입니다.
 	// 빌드 접미사를 포함한 원본 이미지를 그대로 보존하기 위해 태그 치환 대신 원본 이미지를 저장합니다.
 	PreviousImage string `json:"previousImage,omitempty"`
-	// ResolvedImage는 정책 기준으로 고른 설치 이미지입니다. 고르는 순서는 셋입니다 —
-	// kernelImages 에 노드 커널의 검증된 항목이 있으면 그 이미지, 없고
-	// driver.kernelImageBuildRevision 이 선언됐으면 태그 규약으로 조립한 이미지, 둘 다 아니면
-	// driver.image 입니다. 조립한 이미지도 맵 값과 같은 검증(검증 빌드 태그·버전 토큰 대조)을
-	// 통과해야 여기에 실립니다. 전이 중 preflight 단계와 Idle 재진입마다 다시 계산되므로,
-	// 정책에서 kernelImages 항목이나 빌드 개정을 빼면 Idle 상태에서도 곧 driver.image 로
-	// 돌아옵니다. 이 값은 install Job 에만 실립니다(mode=job) — 롤백 대상 이미지는 커널 이미지의
-	// 빌드 개정이 일반 설치 이미지의 개정과 다르므로 이 값이 아니라 driver.image 에서 만듭니다.
+	// ResolvedImage는 정책 기준으로 고른 설치 이미지입니다 — kernelImages 에 노드 커널의 검증된
+	// 항목이 있으면 그 이미지, 없고 kernelImageBuildRevision 이 있으면 태그 규약으로 조립한
+	// 이미지, 둘 다 아니면 driver.image 입니다. install Job 에만 실립니다(mode=job).
 	ResolvedImage string `json:"resolvedImage,omitempty"`
 	// RollbackAttempts는 현재 업그레이드 사이클에서의 롤백 시도 횟수입니다.
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
@@ -141,7 +130,7 @@ type DriverUpgradeStateStatus struct {
 	// RebootRequestedTime 은 마지막 재부팅을 트리거한 시각입니다.
 	// Rebooting 상태에서 NotReady→Ready 전이 및 rebootTimeout 판정 기준입니다.
 	RebootRequestedTime metav1.Time `json:"rebootRequestedTime,omitempty"`
-	// RebootBootID 는 reboot Job 생성 직전에 캡처한 node.status.nodeInfo.bootID 입니다(P2 premature-Ready 가드).
+	// RebootBootID 는 reboot Job 생성 직전에 캡처한 node.status.nodeInfo.bootID 입니다(premature-Ready 가드).
 	// Rebooting 상태에서 node 가 Ready 로 보여도 bootID 가 이 값과 동일하면 실제 재부팅 전이므로 전진을 보류합니다.
 	// 캡처 실패(빈 값) 시에는 기존 isNodeReady 기반으로 보수 전진합니다(교착 방지 fallback).
 	RebootBootID string `json:"rebootBootID,omitempty"`
@@ -150,7 +139,6 @@ type DriverUpgradeStateStatus struct {
 	// QuiescedDeployments 는 Cordoning 진입 시 scale=0 으로 patch 한 Deployment 목록입니다.
 	// Idle/Failed 진입 시 원래 replicas 로 복구하기 위한 backup 이며,
 	// `npu.ai/quiesce-on-driver-upgrade=true` 라벨이 붙은 Deployment 만 대상입니다.
-	// (architectural plan §A6.1 — opt-in quiesce on driver upgrade)
 	QuiescedDeployments []QuiescedDeployment `json:"quiescedDeployments,omitempty"`
 	// DriftFirstSeen 은 Idle 에서 선언 버전과 실측 버전의 불일치를 처음 본 시각이다. 일치하거나
 	// 업그레이드 사이클에 들어가면 nil 로 되돌린다. 디바운스 기준이며 다른 목적과 공유하지 않는다.

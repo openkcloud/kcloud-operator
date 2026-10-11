@@ -2,7 +2,7 @@
 // acceleratordescriptor_controller.go: AcceleratorDescriptor 감시 컨트롤러
 // 상세: 검증기·판정기를 돌려 status.feasibleBackends 와 refusals 를 채운다. 배포물
 //       적용은 이 컨트롤러가, resolve 는 NDR 카드별 entry(count=1, pcieAddress — report.go fan-out)에서 한다.
-// 생성일: 2026-09-15 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-09-15 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -232,13 +232,10 @@ func (r *AcceleratorDescriptorReconciler) Reconcile(
 
 // verifyResolvedDevices 는 feasible 판정이 성공한 노드마다 Verify 를 불러 AcceleratorEvidence 를
 // upsert 한다. Reconcile 밖으로 뺀 것은 gocyclo 상한(30) 때문이다(sharingRefusal 과 같은 사유).
-// probe Pod 실행 여부(AllocationProbe 정책)는 Verify 내부가 가른다 — 여기서는 Request 만 만든다.
-//
-// 에러를 반환하지 않는다(비치명 side effect) — 노드 하나의 Verify 실패(예: 등록 해제된 노드를
-// 가리키는 낡은 NodeDeviceReport 로 corev1.Node 조회가 실패하는 경우, verifier.go 의 Node 조회는
-// NotFound 를 관용하지 않는다)가 이 descriptor 전체의 재조정(backend apply/prune, status 반영)을
-// 막거나 나머지 노드의 evidence 수집을 가로막으면 안 된다. acpp 쪽의 같은 Verify 호출(gateReady)
-// 도 실패를 로그만 남기고 진행하는 것과 같은 이유다.
+// probe Pod 실행 여부는 Verify 내부가 정책으로 가른다 — 여기서는 Request 만 만든다. 에러는
+// 반환하지 않는다 — 노드 하나의 Verify 실패(예: 등록 해제된 노드를 가리키는 낡은 NodeDeviceReport
+// 로 Node 조회가 실패하는 경우, NotFound 를 관용하지 않는다)가 전체 재조정이나 나머지 노드의
+// evidence 수집을 막으면 안 된다. acpp 의 같은 호출(gateReady)도 로그만 남기고 진행한다.
 func (r *AcceleratorDescriptorReconciler) verifyResolvedDevices(
 	ctx context.Context, desc *npuv1alpha1.AcceleratorDescriptor, feasible []string,
 ) {
@@ -247,14 +244,12 @@ func (r *AcceleratorDescriptorReconciler) verifyResolvedDevices(
 	}
 	resourceName := descriptor.ResourceNameFor(desc.Spec)
 	for _, nd := range desc.Status.ResolvedDevices {
-		// 관측 geometry 를 resolve 된 장치 ID 로 채운다 — 비워 두면 DeviceObservation 이 "관측
-		// 없음" 으로 실패해(agreement.go) evidence 가 매 재조정마다 등급을 못 받는다. descriptor 는
-		// per-PCI geometry 를 관측하지 않으므로 값은 비운다(존재만 남기고 geometry 비교는 하지
-		// 않는다 — acceleratorpartitionpolicy_controller.go 의 rngd 분기와 같은 관용구).
-		// TargetDevices 는 비워 둔다 — stableID 가 "PCI-" 접두사를 붙여 NodeDeviceReport 의 PCI
-		// 키와 맞지 않으므로, 채우면 보고서 대조가 통째로 실패한다.
-		// 보고서 대조는 제품명(Product)과 resolve 된 장치 수로 하고, 벤더 device-plugin 검증은
-		// 적용하지 않는다(descriptor 가 backend 를 공급한다).
+		// 관측 맵은 키(resolve 된 장치 ID)만 채우고 값(geometry)은 비운다 — 비우지 않으면
+		// DeviceObservation 이 "관측 없음" 으로 실패해 evidence 가 매 재조정마다 등급을 못 받는다.
+		// descriptor 는 per-PCI geometry 를 관측하지 않아 존재만 남기고 비교는 하지 않는다
+		// (acceleratorpartitionpolicy_controller.go 의 rngd 분기와 같은 관용구). TargetDevices 도
+		// 비운다 — stableID 의 "PCI-" 접두사가 NodeDeviceReport 의 PCI 키와 안 맞아 채우면 보고서
+		// 대조가 실패한다. 대조는 제품명과 resolve 된 장치 수로 하고, device-plugin 검증은 안 쓴다.
 		observed := make(map[string]string, len(nd.IDs))
 		for _, id := range nd.IDs {
 			observed[id] = ""
@@ -275,13 +270,12 @@ func (r *AcceleratorDescriptorReconciler) verifyResolvedDevices(
 	}
 }
 
-// sharingSupport 는 descriptor 의 sharing 게이트에 쓸 vendor/product 의 timeSlicing 선언이다
-// (R2-1, review round 1 로 descriptorRegistryKey 매핑 추가). registry 가 그 (vendor,
-// product) 키를 알면 그 값을, 모르면 제품을 가르지 않는 벤더(product="")의 값으로만
-// 폴백한다. LookupVendor 로 폴백하지 않는 이유: 그 함수는 벤더의 아무 제품 값이나 물려주므로
-// furiosa/<모르는 제품> 이 warboy 나 rngd 의 판정을 상속해 버린다 — 제품을 모르는 채로
-// 다른 제품의 실측을 빌려 쓰는 것은 sharing 게이트가 하면 안 되는 일이다. 둘 다 없으면
-// 빈 State/Reason 인 채로 거절 문구가 나가는 것을 막기 위해 Unknown + 사유를 합성해 돌려준다.
+// sharingSupport 는 descriptor 의 sharing 게이트에 쓸 vendor/product 의 timeSlicing 선언이다.
+// registry 가 그 (vendor, product) 키를 알면 그 값을, 모르면 제품을 가르지 않는 벤더
+// (product="")의 값으로만 폴백한다. LookupVendor 로 폴백하지 않는 이유: 그 함수는 벤더의
+// 아무 제품 값이나 물려주므로 furiosa/<모르는 제품> 이 warboy 나 rngd 의 판정을 상속한다 —
+// 제품을 모르는 채로 다른 제품의 실측을 빌려 쓰면 안 된다. 둘 다 없으면 빈 State/Reason 대신
+// Unknown + 사유를 합성해 돌려준다.
 func sharingSupport(vendor, product string) vendorcap.Support {
 	rv, rp := descriptorRegistryKey(vendor, product)
 	return registryCapSupport(rv, rp, vendorcap.CapTimeSlicing)
@@ -332,11 +326,10 @@ func normalizeVendor(vendor, model string) string {
 
 // descriptorRegistryKey 는 descriptor 어휘(vendor/product)를 internal/vendorcap 레지스트리
 // 키로 맞춘다. normalizeVendor 와 반대 방향의 같은 "rngd 특례" 다 — descriptor 는 RNGD 를
-// vendor="rngd" 하나로 부르지만(internal/descriptor/compile_test.go 의 rngdSpec,
-// acceleratordescriptor_apply.go 의 descriptorVendorManaged 의 case vendorRngd 참고)
+// vendor="rngd" 하나로 부르지만(internal/descriptor/compile_test.go 의 rngdSpec 참고)
 // registry·internal/intent 어휘는 furiosa 아래 product="rngd" 로 가른다
-// (internal/intent/resources.go 의 productResource). furiosa 벤더 자체(오늘은
-// product="warboy")는 product 를 그대로 넘긴다.
+// (internal/intent/resources.go 의 productResource). furiosa 벤더 자체는 product 를
+// 그대로 넘긴다.
 func descriptorRegistryKey(vendor, product string) (string, string) {
 	switch strings.ToLower(vendor) {
 	case vendorRngd:

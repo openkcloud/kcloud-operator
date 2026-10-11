@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: NVIDIA ACPP 시분할 적용·해제로 kcloud_acpp_apply_total 라이브 표본을 남긴다(k8s-worker1)
-# 상세: acpp-timesliced.yaml(순수 공유, layout 없음)을 적용해 result="ready" 를, 이어서 같은
-#       객체를 spec.sharing.mode=exclusive 로 patch(merge, timeSlicing:null)해 result="disabled"
-#       를 kcloud_acpp_apply_total{vendor="nvidia",...} 로 찍는다. 스크레이프는 kubectl
-#       port-forward pod/<operator pod> 18083:8080 + curl 방식을 쓴다. 지표
-#       엔드포인트는 기본 꺼짐이라 helm upgrade --reset-then-reuse-values --set metrics.enabled=true,
-#       metrics.service.enabled=true 로 켜고, 끝에 preflight 가 저장한 사용자 values 로
-#       --reset-values 원복한다(tt-kmd-precompiled/run.sh 의 VALUES_BASE 관례). k8s-worker1 의
-#       NVIDIA device-plugin(kube-system, label kcloud.ai/dp-vendor=nvidia)이 apply/patch/delete
-#       마다 재시작되고 allocatable nvidia.com/gpu 광고가 바뀐다 — 표본 목적의 1회 적용·해제다.
-#       EXIT 트랩이 실패 시에도 exclusive patch(best-effort) → delete → device-plugin 복원 확인 →
-#       metrics 스위치 원복을 시도한다. DRY_RUN=1 은 mutating 명령(helm upgrade, kubectl apply/
-#       patch/delete, port-forward)만 출력하고 건너뛴다 — preflight 의 읽기 전용 조회는
-#       DRY_RUN 여부와 무관하게 항상 실행한다(tt-kmd-precompiled 의 phase_preflight 관례).
-# 생성일: 2026-09-23 | 수정일: 2026-10-11 (세션 전용 식별자 제거; 가리킬 곳 없는 "그대로" 제거)
+# 상세: acpp-timesliced.yaml 을 적용해 result="ready", 같은 객체를 exclusive 로 patch 해
+#       result="disabled" 를 kcloud_acpp_apply_total{vendor="nvidia",...} 로 찍는다.
+#       port-forward+curl 로 스크레이프하며, 지표 엔드포인트는 helm upgrade 로 켰다가 끝에
+#       원복한다(세부는 cleanup()·demo 섹션 참고). DRY_RUN=1 은 mutating 명령만 건너뛴다.
+# 생성일: 2026-09-23 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

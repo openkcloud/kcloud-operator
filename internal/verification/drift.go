@@ -1,10 +1,8 @@
 // ============================================================
 // drift.go: 검증 통과 후 광고 붕괴 감지 (감지 전용 — 되돌리지 않는다)
-// 상세: fresh evidence 가 기록한 광고 기준선과 현재 allocatable 을 비교한다. 정상 롤아웃·재부팅
-//
-//	대기·적용 중은 억제하고, 붕괴가 유예 시간 이상 지속돼야 확정한다.
-//
-// 생성일: 2026-07-31
+// 상세: fresh evidence 가 기록한 광고 기준선과 현재 allocatable 을 비교한다. 정상 롤아웃·재부팅 대기·적용
+// 중은 억제하고, 붕괴가 유예 시간 이상 지속돼야 확정한다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -25,9 +23,9 @@ const (
 	DriftNone DriftVerdict = "None"
 	// DriftSuppressed: 지금은 판단하지 않는다(롤아웃·재부팅·적용 중 등). 의심 카운터를 리셋한다.
 	DriftSuppressed DriftVerdict = "Suppressed"
-	// DriftSuspected: 불일치를 봤지만 아직 유예 시간을 넘지 않았다.
+	// DriftSuspected: 불일치를 봤지만 아직 유예 시간을 넘지 않은 상태다.
 	DriftSuspected DriftVerdict = "Suspected"
-	// DriftConfirmed: 불일치가 유예 시간 이상 지속됐다.
+	// DriftConfirmed: 불일치가 유예 시간 이상 지속되는 상태다.
 	DriftConfirmed DriftVerdict = "Confirmed"
 )
 
@@ -48,7 +46,7 @@ type DriftInput struct {
 	FirstSuspectedAt *metav1.Time
 	// AlreadyConfirmed 는 직전 pass 가 이미 확정 판정을 내렸는지다. 확정 뒤에는 유예를 다시 재지
 	// 않는다 — 확정 상태에는 "의심 시작 시각" 이 없어서, 다시 재면 매 pass 마다 의심으로
-	// 되돌아가 확정이 1초도 유지되지 않는다(라이브 실측 2026-08-04: Ready↔Degraded 무한 진동).
+	// 되돌아가 확정이 1초도 유지되지 않는다(Ready↔Degraded 무한 진동).
 	AlreadyConfirmed bool
 	Now              metav1.Time
 	Grace            time.Duration

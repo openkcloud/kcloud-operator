@@ -1,16 +1,9 @@
-// ============================================================
 // vendorcap_test.go: 성적표 층 조인 규칙 시험
-// 상세: 표 기반. 신선한 AllocationVerified evidence → devicePlugin/dra Verified,
-//
-//	ACPP Verified → partition Verified, Degraded 우선, 미지원은 NotApplicable.
-//	review round 1: 실제 노드 라벨 어휘(furiosa rngd/warboy)·DRA 광고 키(furiosa→rngd)·
-//	sharing 검증 reason 게이트·multi-target 집계·CollectVendorCapabilitiesWith 도 고정한다.
-//	review round 2: evidence.Spec.Vendor 우선(다중 벤더 노드)·furiosa.present→warboy 확정·
-//	Warboy 의 DRA 광고 키(furiosa)·SharingVerified 의 partition 함의도 고정한다.
-//	최종 리뷰: AcceleratorVerificationPolicy 의 invalidateOn·nodeSelector 반영도 고정한다.
-//
-// 생성일: 2026-09-19 | 수정일: 2026-09-19(review round 1·2, 최종 리뷰)
-// ============================================================
+// 상세: 신선한 AllocationVerified evidence → devicePlugin/dra Verified, ACPP Verified →
+// partition Verified(Degraded 우선, 미지원은 NotApplicable)를 표 기반으로 본다. 실제
+// 노드 라벨 어휘(furiosa rngd/warboy)·DRA 광고 키·sharing 검증 reason 게이트·
+// multi-target 집계·AcceleratorVerificationPolicy 반영도 함께 고정한다.
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -112,9 +105,9 @@ func TestDeriveUnsupportedIsNotApplicable(t *testing.T) {
 }
 
 // ACPPCondVerified/ACPPCondDegraded 는 오브젝트 최상위 Status 가 아니라 노드별
-// Status.Targets[].Conditions 에 실린다(controller 의 setCond(ts *TargetStatus, ...) 가
-// 그 자리에만 쓴다 — acceleratorpartitionpolicy_controller.go:1401). Status.Conditions 는
-// 존재하지 않는 필드라 브리프 원안 그대로면 컴파일이 실패해(RED 로 확인) Targets 경유로 바꿨다.
+// Status.Targets[].Conditions 에 실린다(controller 의 setCond,
+// acceleratorpartitionpolicy_controller.go:1401) — AcceleratorPartitionPolicyStatus 에
+// top-level Conditions 필드는 없다.
 func TestDerivePartitionVerifiedAndDegradedFromACPP(t *testing.T) {
 	layout := []v1alpha1.PartitionLayout{{Profile: "1g.6gb", CountPerDevice: 1}}
 	verifiedCond := []metav1.Condition{
@@ -140,7 +133,7 @@ func TestDerivePartitionVerifiedAndDegradedFromACPP(t *testing.T) {
 	}
 }
 
-// --- review round 1: finding #3 — discovery/driver·fallthrough 전용 어서션 ---
+// --- discovery/driver·fallthrough 전용 어서션 ---
 
 func TestDeriveFunctionallyVerifiedGrantsDiscoveryAndDriverOnly(t *testing.T) {
 	rows := DeriveVendorCapabilities(
@@ -167,7 +160,7 @@ func TestDeriveAllocationVerifiedGrantsDiscoveryDriverAndDevicePlugin(t *testing
 	}
 }
 
-// --- review round 1: finding #1 — Furiosa 실측 라벨 어휘(rngd/warboy/furiosa-family) ---
+// --- Furiosa 실측 라벨 어휘(rngd/warboy/furiosa-family) ---
 
 // live rngd-1 은 kcloud.ai/rngd.present + furiosa-family.present 를 붙인다(furiosa.present 는
 // 없다) — nodeVendorProduct 가 이 조합에서 product="rngd" 를 확정해야 한다.
@@ -187,12 +180,12 @@ func TestDeriveFuriosaRNGDNodeResolvesRNGDProductOnly(t *testing.T) {
 	}
 }
 
-// review round 2 finding D 정정: 실측 Warboy 노드(k8s-worker1)는 furiosa.present +
-// furiosa-family.present 를 갖지만 nvidia.present·gpu.present 도 같이 갖는다(다중 벤더 노드 —
-// mixed-node 시험이 따로 다룬다). 이 시험은 그 라벨 세트가 "단독으로" 있을 때 product 해석만
-// 본다: furiosa.present 자체가 Warboy 노드 라벨이라(driver_daemonset_controller.go:354,
-// npuclusterpolicy_controller.go:673) product="warboy" 로 확정된다 — round 1 의 "product
-// 미상" 전제는 틀렸었다.
+// 실측 Warboy 노드(k8s-worker1)는 furiosa.present + furiosa-family.present 를 갖지만
+// nvidia.present·gpu.present 도 같이 갖는다(다중 벤더 노드 — mixed-node 시험이 따로
+// 다룬다). 이 시험은 그 라벨 세트가 "단독으로" 있을 때 product 해석만 본다:
+// furiosa.present 자체가 Warboy 노드 라벨이라(api/v1alpha1.PresentNodeLabel 의 계약)
+// product="warboy" 로 확정된다 — furiosa-family.present 만으로는 product 를 못 정하지만,
+// furiosa.present 가 함께 있으면 더 이상 미상이 아니다.
 func TestDeriveFuriosaPresentLabelResolvesWarboyProduct(t *testing.T) {
 	n := labeledNode("warboy-only-1", map[string]string{
 		"kcloud.ai/furiosa.present":        labelValueTrue,
@@ -228,7 +221,7 @@ func TestDeriveFuriosaFamilyOnlyAppliesToAllProducts(t *testing.T) {
 }
 
 // DRA-owned 라벨은 advertise 벤더 키로 붙는다(furiosa→"rngd") — furiosa.dra-owned 가 아니라
-// rngd.dra-owned 를 봐야 한다(finding #1 두 번째 불일치).
+// rngd.dra-owned 를 봐야 한다.
 func TestDeriveFuriosaDRAOwnedUsesRNGDAdvertiseKey(t *testing.T) {
 	n := labeledNode("rngd-1", map[string]string{
 		"kcloud.ai/rngd.present":           labelValueTrue,
@@ -246,10 +239,9 @@ func TestDeriveFuriosaDRAOwnedUsesRNGDAdvertiseKey(t *testing.T) {
 	}
 }
 
-// review round 2 finding C: Warboy 는 advertise 벤더 키가 furiosa 다(RNGD 의 rngd 와 다른 키
-// — reconcileDRAOwnedLabels 가 Warboy 노드엔 kcloud.ai/furiosa.dra-owned 를 붙인다,
-// rngd.dra-owned 가 아니다). round 1 의 draAdvertiseVendorKey 는 furiosa→rngd 로만 매핑해
-// 이 라벨이 닿을 길이 없었다.
+// Warboy 는 advertise 벤더 키가 furiosa 다(RNGD 의 rngd 와 다른 키 — reconcileDRAOwnedLabels
+// 가 Warboy 노드엔 kcloud.ai/furiosa.dra-owned 를 붙인다, rngd.dra-owned 가 아니다). furiosa
+// 를 rngd 로만 매핑하면 이 라벨이 닿을 길이 없어진다.
 func TestDeriveFuriosaWarboyDRAOwnedUsesFuriosaAdvertiseKey(t *testing.T) {
 	n := labeledNode("warboy-1", map[string]string{
 		"kcloud.ai/furiosa.present":               labelValueTrue,
@@ -267,10 +259,9 @@ func TestDeriveFuriosaWarboyDRAOwnedUsesFuriosaAdvertiseKey(t *testing.T) {
 	}
 }
 
-// review round 2 finding A + ruling(4): 실측 k8s-worker1 은 nvidia.present 와 furiosa.present
-// 를 동시에 갖는다(Warboy 위에 GPU 도 꽂힌 노드) — 라벨 순서(nvidia 먼저)로만 벤더를 정하면
-// Furiosa evidence 가 엉뚱하게 nvidia 를 verified 로 만든다. evidence 자신의 Spec.Vendor 를
-// 우선해야 한다.
+// k8s-worker1 은 nvidia.present 와 furiosa.present 를 동시에 갖는다(Warboy 위에 GPU 도
+// 꽂힌 노드) — 라벨 순서(nvidia 먼저)로만 벤더를 정하면 Furiosa evidence 가 엉뚱하게
+// nvidia 를 verified 로 만든다. evidence 자신의 Spec.Vendor 를 우선해야 한다.
 func worker1() corev1.Node {
 	return labeledNode("k8s-worker1", map[string]string{
 		"kcloud.ai/nvidia.present":         labelValueTrue,
@@ -311,7 +302,7 @@ func TestDeriveMixedVendorNodeUsesEvidenceVendorNotLabelOrder(t *testing.T) {
 	}
 }
 
-// --- review round 1: finding #4 — multi-target 집계 ---
+// --- multi-target 집계 ---
 
 func TestDeriveMultiTargetOneVerifiedOneDegradedIsDegraded(t *testing.T) {
 	layout := []v1alpha1.PartitionLayout{{Profile: "1g.6gb", CountPerDevice: 1}}
@@ -332,14 +323,13 @@ func TestDeriveMultiTargetOneVerifiedOneDegradedIsDegraded(t *testing.T) {
 	}
 }
 
-// --- review round 1: finding #2 / review round 2 finding B — ACPPCondVerified 의 reason 게이트 ---
+// --- ACPPCondVerified 의 reason 게이트 ---
 
-// review round 2 finding B 정정: 컨트롤러는 partition 이 Ready 인 뒤에만 sharing 을 얹는다
-// (acceleratorpartitionpolicy_controller.go:355-365). sharing 검증도 같은 Verified 조건 자리에
-// SetStatusCondition 으로 덮어써 reason 만 SharingVerified 로 남으므로(acpp_sharing.go:579-581),
-// reason=SharingVerified 는 "partition 은 물론 sharing 까지" 검증됐다는 뜻이다 — round 1 은
-// 이걸 "sharing 만" 으로 잘못 좁혀 partition=required 를 기대했었다(RED 로 확인, 아래 round 2
-// 참고).
+// 컨트롤러는 partition 이 Ready 인 뒤에만 sharing 을 얹는다
+// (acceleratorpartitionpolicy_controller.go:355-365). sharing 검증도 같은 Verified 조건
+// 자리에 SetStatusCondition 으로 덮어써 reason 만 SharingVerified 로 남으므로
+// (acpp_sharing.go:579-581), reason=SharingVerified 는 "partition 은 물론 sharing 까지"
+// 검증됐다는 뜻이다 — "sharing 만" 으로 좁혀 partition=required 를 기대하면 틀린다.
 func TestDeriveACPPVerifiedReasonGatesPartitionVsSharing(t *testing.T) {
 	layout := []v1alpha1.PartitionLayout{{Profile: "1g.6gb", CountPerDevice: 1}}
 	sharing := &v1alpha1.SharingSpec{Mode: v1alpha1.SharingModeTimeSliced}
@@ -399,7 +389,7 @@ func TestDeriveACPPDegradedCoversAllClaimedCapabilities(t *testing.T) {
 	}
 }
 
-// --- review round 1: finding #4 — CollectVendorCapabilitiesWith 자체 ---
+// --- CollectVendorCapabilitiesWith 자체 ---
 
 // bootIDBeforeReboot 는 nodeAndReportFor 가 만드는 노드의 현재 BootID(boot-1) 직전 값이다 —
 // 재부팅으로 환경이 바뀐 evidence 지문을 만들 때 쓴다.
@@ -466,13 +456,11 @@ func TestCollectVendorCapabilitiesWithStaleEvidenceIsRequired(t *testing.T) {
 }
 
 // 감시축을 고정 DefaultPolicy 로 두면 운영자가 설치한 AcceleratorVerificationPolicy 를 이
-// 뷰만 무시해, 같은 evidence 를 컨트롤러는 신선하다고 이 뷰는 낡았다고 본다. invalidateOn 에서
-// BootID 를 뺀 정책 아래선 재부팅으로 BootID 가 바뀐 evidence 도 verified 여야 한다 — 같은
-// 픽스처가 정책 없이는 required 로 떨어지는 것은 TestCollectVendorCapabilitiesWithStaleEvidenceIsRequired
-// 가 고정한다. 두 시험이 짝이 돼 "정책이 실제로 반영된다" 를 증명한다.
-//
-// nodeSelector 는 이 노드의 실제 라벨(kcloud.ai/nvidia.present)로 준다 — 빈 selector 로 두면
-// verification.Resolve 의 노드 라벨 선택 경로를 지나지 않아 정책 선택 자체가 검증되지 않는다.
+// 뷰만 무시해, 같은 evidence 를 컨트롤러는 신선하다고 이 뷰는 낡았다고 본다. invalidateOn
+// 에서 BootID 를 뺀 정책 아래선 재부팅으로 BootID 가 바뀐 evidence 도 verified 여야 한다 —
+// 정책 없이 같은 픽스처가 required 로 떨어지는 것은 짝을 이루는 위 시험이 고정하므로,
+// 두 시험이 함께 "정책이 실제로 반영된다"를 증명한다. nodeSelector 는 이 노드의 실제
+// 라벨로 준다 — 빈 selector 는 노드 라벨 선택 경로를 거치지 않는다.
 func TestCollectVendorCapabilitiesHonoursVerificationPolicy(t *testing.T) {
 	n, ndr := nodeAndReportFor("n1")
 	fp := verification.Compute(n, ndr, "nvidia", 1)
@@ -536,7 +524,7 @@ func TestCollectVendorCapabilitiesIgnoresNonMatchingPolicy(t *testing.T) {
 }
 
 // Assurance(선언이 어디까지 확인됐는지, internal/vendorcap.Support.Assurance())는
-// Verified(실측 성적표)와 기준이 다르다(계획 L) — 능력 칸이 Assurance 도 실어야 REST/CLI 가
+// Verified(실측 성적표)와 기준이 다르다 — 능력 칸이 Assurance 도 실어야 REST/CLI 가
 // "구현했다"와 "확인했다"를 다시 섞지 않는다. Declared/Verified 는 그대로 두고 값만 늘린다.
 func TestDeriveCapabilityRowsCarryAssurance(t *testing.T) {
 	rows := DeriveVendorCapabilities(nil, nil, nil, alwaysFresh)

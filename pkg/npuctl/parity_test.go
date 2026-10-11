@@ -1,11 +1,8 @@
 // parity_test.go: CLI·REST 두 진입점이 pkg/npuctl 참조를 유지하는지 고정
-// 상세: 같은 물음(벤더 능력·상태 조회 등)을 두 곳에서 각자 구현하면 한쪽만 고쳐져
-//
-//	답이 갈린다. cmd/kubectl-npu·internal/apiserver 각각에 pkg/npuctl 을 import 하는
-//	파일이 하나 이상 있는지 go/parser 로 확인한다 — 문자열 검색은 주석만 있어도
-//	통과하므로 실제 import 선언만 판정 대상으로 삼는다.
-//
-// 생성일: 2026-09-28
+// 상세: 같은 물음을 두 곳에서 각자 구현하면 한쪽만 고쳐져 답이 갈린다. cmd/kubectl-npu·
+// internal/apiserver 각각에 pkg/npuctl 을 import 하는 파일이 있는지 go/parser 로 본다 —
+// 문자열 검색은 주석만 있어도 통과하므로 실제 import 선언만 판정 대상으로 삼는다.
+// 생성일: 2026-09-28 | 수정일: 2026-10-11
 package npuctl
 
 import (

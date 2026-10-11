@@ -2,7 +2,7 @@
 // ui_test.go: 정적 대시보드 서빙 테스트
 // 상세: 셸은 무인증 200 이어야 하고(브라우저가 헤더를 못 싣는다), 그 안에 클러스터 데이터가
 //       한 글자도 없어야 하며, 기존 /api 경로를 가로채지 않아야 한다.
-// 생성일: 2026-07-30 | 수정일: 2026-08-12
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -87,7 +87,7 @@ func TestUI_RendersPartitionSupportLevel(t *testing.T) {
 }
 
 // replica 는 광고 배수일 뿐 물리 장치 개수가 아니다 — "×N" 배지만 있으면 "장치 N 개" 로 오독된다.
-// 대시보드 표에 공유·격리 없음 문구가 실제로 붙는지 고정한다(리뷰 I-1).
+// 대시보드 표에 공유·격리 없음 문구가 실제로 붙는지 고정한다.
 func TestUI_RendersSharedNoIsolationWording(t *testing.T) {
 	body := string(indexHTML)
 	if !strings.Contains(body, "물리 장치 1개 공유") {
@@ -95,7 +95,7 @@ func TestUI_RendersSharedNoIsolationWording(t *testing.T) {
 	}
 }
 
-// oversubscribed(D-1): 광고 수가 물리 장치 수를 넘는다는 관측만으로 "시분할"·"격리 없음" 이라고
+// oversubscribed: 광고 수가 물리 장치 수를 넘는다는 관측만으로 "시분할"·"격리 없음" 이라고
 // 단정하면 안 된다(RNGD PE 처럼 하드웨어 격리가 있는 경우가 있다) — shareCell 이 이 상태를 별도
 // 문구로 렌더하는지 고정한다. shareCell 의 호출부는 TestUI_HonestyBadgesAreActuallyCalled 가 이미
 // 고정하므로(호출부가 지워지면 그쪽이 깨진다), 여기서는 이 상태 전용 문구만 고정한다.
@@ -109,10 +109,10 @@ func TestUI_RendersOversubscribedWording(t *testing.T) {
 }
 
 // cordoned 행도 stale/pending 과 같은 부류다 — 장치는 있어도 스케줄되지 않는다. 대시보드 표는
-// invTree 와 달리 노드 헤더가 없으므로 healthBadge 가 schedulable 을 직접 반영해야 한다(리뷰 I-2).
+// invTree 와 달리 노드 헤더가 없으므로 healthBadge 가 schedulable 을 직접 반영해야 한다.
 // 주의: "!x.schedulable" 이나 "cordoned" 만으로는 고정되지 않는다 — 둘 다 집계 카드와
-// 인벤토리 탭 노드 헤더에 이미 있어서 healthBadge 분기를 지워도 통과한다(재리뷰가 삭제
-// 실험으로 확인). 이 분기에만 있는 캡션을 검사한다.
+// 인벤토리 탭 노드 헤더에 이미 있어서 healthBadge 분기를 지워도 통과한다. 이 분기에만
+// 있는 캡션을 검사한다.
 func TestUI_RendersCordonedRow(t *testing.T) {
 	body := string(indexHTML)
 	const want = "스케줄 불가 — 배치되지 않음"
@@ -122,12 +122,10 @@ func TestUI_RendersCordonedRow(t *testing.T) {
 }
 
 // 네 상태다. "측정해서 못 한다" 와 "아직 못 봤다" 를 같게 그리면 관측이 비어 있는 장치가
-// 못 하는 장치로 보이고, 화면이 그 판정으로 선택지를 잠근다(2026-08-11 라이브에서 그렇게
-// 공유 경로가 통째로 닫혔다). 반대로 미관측 칸이 미지원 칸을 삼키면 진짜로 안 되는 장치를
-// 고르게 되므로, 네 갈래가 모두 남아 있어야 한다.
+// 못 하는 장치로 보여 화면이 선택지를 잠근다. 반대로 미관측 칸이 미지원 칸을 삼키면 진짜로
+// 안 되는 장치를 고르게 된다 — 네 갈래가 모두 남아 있어야 한다.
 // 어서션 문자열은 shareBadge 안에서만 나오는 것을 고른다 — "미관측 — 판정 불가" 는
-// partitionBadge 에도 있어서, 그것만 찾으면 공유 분기를 지워도 시험이 통과한다(실제로
-// 그렇게 한 번 통과시켰다).
+// partitionBadge 에도 있어서, 그것만 찾으면 공유 분기를 지워도 이 시험이 통과한다.
 func TestUI_ShareBadgeFourStateIsPinned(t *testing.T) {
 	body := string(indexHTML)
 	for _, want := range []string{
@@ -164,10 +162,10 @@ func TestUI_공유_선택_판정은_배지와_같은_축(t *testing.T) {
 
 // 정직성 배지는 정의만으로는 아무것도 못 한다 — 호출부가 사라지면 화면에서 사라진다.
 // 위 테스트들은 전부 헬퍼 "본문"(파라미터명이 다르거나 그 안의 문자열)에 어서션을 걸어서,
-// 호출부만 지워도(헬퍼 자체는 죽은 코드로 남아) 계속 통과한다(최종 리뷰 Important #6, 삭제
-// 실험으로 확증됨). 여기서는 호출부에만 나타나는 형태를 고정한다.
-// healthBadge 는 정의(`function healthBadge(x) {`)와 호출부(`healthBadge(x)`)가 같은 파라미터명을
-// 써서 단순 "healthBadge(x)" 로는 구분이 안 된다 — 호출부에만 있는 뒤따르는 인자까지 고정한다.
+// 호출부만 지워도(헬퍼 자체는 죽은 코드로 남아) 계속 통과한다. 여기서는 호출부에만
+// 나타나는 형태를 고정한다. healthBadge 는 정의(`function healthBadge(x) {`)와
+// 호출부(`healthBadge(x)`)가 같은 파라미터명을 써서 단순 "healthBadge(x)" 로는 구분이
+// 안 된다 — 호출부에만 있는 뒤따르는 인자까지 고정한다.
 func TestUI_HonestyBadgesAreActuallyCalled(t *testing.T) {
 	body := string(indexHTML)
 	for _, want := range []string{
@@ -261,7 +259,7 @@ func blockAfter(t *testing.T, body, marker string) string {
 
 // 적용 버튼 잠금은 이 배치의 안전 경계에서 가장 중요한 한 줄이다. 잠금을 세우는 자리가
 // 셋이고 여는 자리가 하나여야 하며, 셋 중 하나만 사라져도 검증하지 않은 값이 적용된다.
-// 파일 전역 문자열 검사로는 셋을 통째로 지워도 잡히지 않는다(2026-08-11 리뷰가 변이로 확증).
+// 파일 전역 문자열 검사로는 셋을 통째로 지워도 잡히지 않는다.
 func TestUI_적용_버튼_잠금_세_자리(t *testing.T) {
 	body := string(indexHTML)
 
@@ -422,12 +420,9 @@ func TestUIHasStatusTab(t *testing.T) {
 
 // 배제 배지는 operator 가 붙인 라벨을 옮긴 값이다 — 여기서 사유를 다시 판정하면 규칙이
 // 두 곳으로 갈린다. 헬퍼 정의가 아니라 호출부(exclBadge(n) 를 실제로 부르는 자리)를
-// 고정한다(TestUI_HonestyBadgesAreActuallyCalled 와 같은 규율 — 정의만 남고 호출이 사라지면
-// 화면엔 안 나온다).
-//
-// 호출부는 둘이어야 한다. 가속기 없는 control-plane 은 status.devices 가 비어 장치 표에
-// 행이 0개이므로, 노드 단위 표(노드별 광고량)에도 배제 열이 있어야 배제 사실이 화면에
-// 남는다 — 장치 표에만 있으면 GPU 없는 master 에서 배지가 사라진다.
+// 고정한다. 호출부는 둘이어야 한다 — 가속기 없는 control-plane 은 status.devices 가 비어
+// 장치 표에 행이 0개이므로, 노드 단위 표(노드별 광고량)에도 배제 열이 있어야 배제 사실이
+// 화면에 남는다. 장치 표에만 있으면 GPU 없는 master 에서 배지가 사라진다.
 func TestUIStatusTabRendersExclusionBadge(t *testing.T) {
 	body := blockAfter(t, string(indexHTML), "async function loadStatus()")
 	if n := strings.Count(body, "exclBadge(n)"); n < 2 {
@@ -464,7 +459,7 @@ func TestUI_적용_전_dryRun_호출(t *testing.T) {
 func TestUI_AcceptsTokenFromFragmentAndClearsIt(t *testing.T) {
 	body := string(indexHTML)
 	// 주석이 아니라 호출부를 고정한다 — 같은 낱말이 위 설명에도 있어서, 낱말만 세면
-	// 코드를 지워도 통과한다(2026-09-03 삭제 실험).
+	// 코드를 지워도 통과한다.
 	for _, want := range []string{"location.hash", `get("token")`, `history.replaceState(null, ""`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("fragment 토큰 처리 누락: %q", want)

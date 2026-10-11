@@ -39,9 +39,9 @@ func TestLintWorkflowRunsDocCiteCheck(t *testing.T) {
 	}
 }
 
-// docs-path-check·private-ip-check·lint-config 는 셋 다 make 타깃은 있었지만 어느
-// 워크플로도 부르지 않아 한 번도 돌지 않은 채 초록이었다(git 훅도 안 부른다 — 사람이
-// 손으로 돌릴 때만 돌았다). 같은 표에 고정한다(workspace-cite-check 는 신설 타깃).
+// docs-path-check·private-ip-check·lint-config·workspace-cite-check·comment-check 는
+// make 타깃은 있어도 어느 워크플로가 부르지 않으면 한 번도 돌지 않은 채 초록이 된다
+// (git 훅도 부르지 않는다 — 사람이 손으로 돌릴 때만 돈다). 같은 표에 고정한다.
 func TestLintWorkflowRunsGateTargets(t *testing.T) {
 	const wfPath = "../../.github/workflows/lint.yml"
 	for _, target := range []string{"docs-path-check", "private-ip-check", "lint-config", "workspace-cite-check", "comment-check"} {

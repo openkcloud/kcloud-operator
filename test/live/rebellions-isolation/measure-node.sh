@@ -2,23 +2,9 @@
 # ============================================================
 # measure-node.sh: node5 에서 vLLM 서비스를 멈추고 ATOM 두 장치(0·1)에 각각 프로세스를 붙여
 #                  연산·용량·대역폭·장애 네 축의 격리를 실측(run.sh 가 ssh 로 이 스크립트를 실행)
-# 상세: rebellions-timeslice/measure-node.sh 를 확장했다. 같은 장치를 공유하는 시분할이 아니라
-#       서로 다른 물리 장치(device 0=0000:c3:00.0, device 1=0000:c4:00.0) 사이의 간섭을 잰다.
-#         연산   : device 0 solo iters/s 대 device 1 최대 부하 중 device 0 iters/s.
-#         용량   : device 1 이 K-chain(Linear+ReLU CHAIN_K 겹)으로 큰 텐서를 쥔 채로 device 0 가
-#                  같은 크기를 잡고 계속 돌 수 있는지(성공/실패) + rbln-smi 메모리 열 스냅샷.
-#         대역폭 : OP=scale(원소별 곱)로 계산을 최소화해 처리시간을 전송이 지배하게 한 뒤
-#                  solo 대 co-run 처리량.
-#         장애   : device 1 프로세스를 kill -9 하고 이어 형상 불일치로 실패시키는 동안 device 0
-#                  프로세스가 끊김 없이 완주하는지, 끝난 뒤 rbln-smi 가 정상인지.
-#       각 축의 RESULT/INIT 줄을 축별 접두사로 stdout 에 낸다(run.sh 가 grep 으로 파싱). 용량
-#       축은 컴파일 소요를 고정 sleep 으로 추정하지 않고, 워크로드가 찍는 PHASE_READY 줄을
-#       기다렸다가(wait_ready) rbln-smi 를 찍는다. 장애 축은 kill 대상을 래퍼 서브셸이 아니라
-#       실제 python3 워커 PID(pidfile 로 전달)로 정확히 지정한다. 트랩이 EXIT·시그널에서
-#       SERVICE 복원과 산출물 디렉터리(OUT) 삭제를 함께 한다 — ssh 세션이 끊겨도 정리된다.
-#       node5 의 /home/kcloud/rebellions-isolation-<RUN_ID>/ 아래에만 쓰고 끝에 지운다. 저장소
-#       산출물이며 test/live/rebellions-isolation 아래에 둔다.
-# 생성일: 2026-09-28
+# 상세: 각 축의 RESULT/INIT 줄을 축별 접두사로 stdout 에 내고(run.sh 가 grep 으로 파싱), 트랩이
+#       EXIT·시그널에서 SERVICE 복원과 OUT 삭제를 함께 해 ssh 세션이 끊겨도 정리된다.
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -u
 
@@ -132,9 +118,9 @@ emit_lines COMPUTE_D1 "$OUT/compute-d1.log"
 
 # ── axis 2: capacity — device 1 이 K-chain 으로 큰 텐서를 쥔 채 device 0 도 같은 크기 시도 ───
 # ponytail: 최대 할당 가능량을 찾는 이분 탐색 대신 고정 크기(CHAIN_K·CAP_DIM) 한 점만 잰다 —
-# 두 NPU 는 이미 rbln-smi 에 별도 Memory(used/total) 행으로 잡혀(node5, 2026-09-25) 공유
-# 풀일 가능성이 낮고, 이 태스크의 물음은 "같은 크기가 co-run 에서도 성공하는가" 이지 최대치를
-# 정밀히 재는 것이 아니다. 상한을 더 정밀히 재려면 CAP_K/CAP_DIM 을 올려 재실행.
+# 두 NPU 는 rbln-smi 에 별도 Memory(used/total) 행으로 잡혀 공유 풀일 가능성이 낮고, 이 측정의
+# 물음은 "같은 크기가 co-run 에서도 성공하는가" 이지 최대치를 정밀히 재는 것이 아니다. 상한을
+# 더 정밀히 재려면 CAP_K/CAP_DIM 을 올려 재실행.
 echo "MEASURE_AXIS capacity"
 run_bg "$OUT/capacity-solo.log" capacity-solo "$DEV0" chain "$CAP_DIM" "$CAP_DUR" &
 PCS=$!

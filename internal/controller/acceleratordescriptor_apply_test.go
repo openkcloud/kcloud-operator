@@ -1,10 +1,8 @@
 // ============================================================
 // acceleratordescriptor_apply_test.go: descriptor auto-apply envtest
-// 상세: 중재(관리 벤더 거절)·SSA apply·능동 prune 을 실 apiserver(envtest)에서 검증한다.
-//       fake client 는 server-side apply 를 지원하지 않아 envtest 가 필요하다. DeviceClass
-//       (resource.k8s.io/v1)를 쓰므로 이 파일의 TestMain 은 가장 높은 bin/k8s 버전을 고른다
-//       (suite_test.go 의 Ginkgo env 는 첫 정렬 버전 1.31 을 잡아 DRA v1 을 못 낸다).
-// 생성일: 2026-09-18 | 수정일: 2026-10-11 (혼재 거절 기준을 물리 벤더로, 빈 모델 표기; 발견 규칙 시험 추가; furiosa+rngd 거절 시험 주석의 출하 경로 인용 정정)
+// 상세: 중재(관리 벤더 거절)·SSA apply·능동 prune 을 실 apiserver(envtest)에서 검증한다. fake
+//       client 는 SSA 를 지원 못 해 DeviceClass(v1) 서빙 가능한 가장 높은 bin/k8s 버전을 직접 고른다.
+// 생성일: 2026-09-18 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -353,15 +351,12 @@ func TestAutoApplyRefusesWhenImageUnset(t *testing.T) {
 	}
 }
 
-// sharing 이 선언됐어도 레지스트리가 그 벤더/제품의 timeSlicing 을 Software 로 선언하지
-// 않으면 auto-apply 를 거절해야 한다 — 동시 접근 안전 실측 없이 SW 시분할을
-// 켜면 격리 없는 공유가 조용히 나간다. RNGD 는 배타적 open 이라 registry 상 Unsupported.
-//
-// vendor 는 "rngd" 다(furiosa 가 아니다) — descriptor 어휘는 RNGD 를 vendor="rngd" 하나로
-// 부른다(internal/descriptor/compile_test.go 의 rngdSpec, descriptorVendorManaged 의 case
-// vendorRngd 참고). registry 키는 furiosa 아래 product="rngd" 라 sharingSupport 가
-// descriptorRegistryKey 로 매핑해야 이 시험이 실제로 프로덕션이 만드는 조합을 검증한다
-// (review round 1: vendor="furiosa" 로 두면 우연히 같은 registry 키에 맞아 결함을 놓친다).
+// sharing 이 선언됐어도 레지스트리가 그 벤더/제품의 timeSlicing 을 Software 로 선언하지 않으면
+// auto-apply 를 거절해야 한다 — 동시 접근 안전 실측 없이 SW 시분할을 켜면 격리 없는 공유가
+// 조용히 나간다(RNGD 는 배타적 open 이라 Unsupported). vendor 는 "rngd" 다(furiosa 가 아니다) —
+// descriptor 어휘는 RNGD 를 vendor="rngd" 로 부르지만 registry 키는 furiosa 아래 product="rngd"
+// 라, descriptorRegistryKey 매핑을 거쳐야 프로덕션과 같은 조합이 된다. vendor="furiosa" 로 두면
+// 우연히 같은 registry 키에 맞아 이 매핑 결함을 놓친다.
 func TestAutoApplyRefusesSharingWhenVendorNotSoftwareTimeSlicing(t *testing.T) {
 	ctx := context.Background()
 	desc := &npuv1alpha1.AcceleratorDescriptor{ObjectMeta: metav1.ObjectMeta{Name: "aa-share-rngd"},
@@ -388,11 +383,9 @@ func TestAutoApplyRefusesSharingWhenVendorNotSoftwareTimeSlicing(t *testing.T) {
 
 // registry Lookup 이 (vendor, product) 를 못 찾으면(ok=false) 폴백이 돌고, 그 결과가 Software 가
 // 아니면 sharing 은 거절돼야 한다 — Lookup ok=false 일 때 폴백·거절 경로가 실제로 도는지 이
-// 시험이 못박는다(조용히 통과하는 회귀 차단). 예전엔 rebellions(product 키 없음 → vendor ""
-// 폴백이 Unknown)로 봤으나, rebellions 는 2026-09-22 유휴 재실측으로 timeSlicing 이 Software 가
-// 돼 더는 "Unknown 이라 거절" 예시가 아니다(모든 벤더 "" 키가 이제 Software). 지금은 레지스트리에
-// 아예 없는 벤더(acme)를 써서 product·vendor "" 두 Lookup 이 모두 ok=false → sharingSupport 가
-// 합성 Unknown("vendor/product 키 없음")을 돌려주는 경로로 거절을 확인한다.
+// 시험이 못박는다(조용히 통과하는 회귀 차단). 레지스트리에 아예 없는 벤더(acme)를 써서
+// product·vendor "" 두 Lookup 이 모두 ok=false 가 되게 한다 — 그러면 sharingSupport 가 합성
+// Unknown("vendor/product 키 없음")을 돌려주는 경로로 거절을 확인한다.
 func TestAutoApplyRefusesSharingWhenVendorUnknownTimeSlicing(t *testing.T) {
 	ctx := context.Background()
 	desc := &npuv1alpha1.AcceleratorDescriptor{ObjectMeta: metav1.ObjectMeta{Name: "aa-share-unknown-vendor"},
@@ -448,7 +441,7 @@ func TestAutoApplyAllowsSharingWhenVendorSoftwareTimeSlicing(t *testing.T) {
 		t.Fatalf("sharing 게이트를 통과했으면 DaemonSet %q 이 실제로 적용돼야 한다: %v", name, err)
 	}
 	// DaemonSet 존재만으론 spec.sharing 이 실제로 컴파일에 실렸는지 못 본다 — ConfigMap 의
-	// backend.json 에 replicas 가 들어갔는지까지 확인한다(review round 1).
+	// backend.json 에 replicas 가 들어갔는지까지 확인한다.
 	var cm corev1.ConfigMap
 	if err := aaClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &cm); err != nil {
 		t.Fatalf("생성 ConfigMap %q 이 없다: %v", name, err)
@@ -459,10 +452,10 @@ func TestAutoApplyAllowsSharingWhenVendorSoftwareTimeSlicing(t *testing.T) {
 }
 
 // sharingSupport 는 descriptor 어휘(vendor/product)를 registry 키로 매핑한 뒤 timeSlicing
-// 을 읽는다. review round 1 이 잡은 결함: RNGD 는 descriptor vendor 가 "rngd" 인데 registry
-// 키는 furiosa/rngd 라 매핑 없이 물으면 벤더 키 자체가 없어 zero-value Support{}(State="")
-// 가 나오고, 그 값을 그대로 거절 사유에 실으면 "timeSlicing 이  ()" 처럼 State/Reason 이
-// 빈 문구가 나간다. final review F4: 폴백은 단일 제품 키(product="")까지만이다.
+// 을 읽는다. RNGD 는 descriptor vendor 가 "rngd" 인데 registry 키는 furiosa/rngd 라, 매핑
+// 없이 물으면 벤더 키 자체가 없어 zero-value Support{}(State="")가 나오고, 그 값을 그대로
+// 거절 사유에 실으면 "timeSlicing 이  ()" 처럼 State/Reason 이 빈 문구가 나간다. 폴백은
+// 단일 제품 키(product="")까지만이다.
 func TestSharingSupport(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -473,23 +466,20 @@ func TestSharingSupport(t *testing.T) {
 	}{
 		{"rngd(descriptor 특례 vendor) 는 furiosa/rngd 로 매핑돼 Unsupported", "rngd", "rngd",
 			vendorcap.StateUnsupported, "EBUSY"},
-		// registry 의 furiosa/warboy timeSlicing 은 review round 1 작성 시점엔 Unknown 이었으나,
-		// 병행 진행 중인 동시-open 라이브 실측(2026-09-19 동시 open 라이브 실측*.md)이
-		// 그사이 Unsupported(EBUSY)로 갱신했다 — 여기서 검증하려는 것은 특정 State 값이 아니라
-		// "furiosa 는 product 를 그대로 넘겨 direct Lookup 이 성공한다"는 배선이라, 값이 바뀌어도
-		// 여전히 유효한 현재 registry 값으로 맞춘다(rngd 와 같은 EBUSY 사유 — 같은 드라이버 스택).
+		// 검증 목적은 특정 State 값이 아니라 "furiosa 는 product 를 그대로 넘겨 direct Lookup
+		// 이 성공한다"는 배선이다 — 값이 바뀌어도 여전히 유효한 현재 registry 값
+		// (Unsupported/EBUSY, rngd 와 같은 드라이버 스택)으로 맞춘다.
 		{"furiosa/warboy 는 direct Lookup 성공(현재 registry 값 Unsupported/EBUSY)", "furiosa", "warboy",
 			vendorcap.StateUnsupported, "EBUSY"},
 		// furiosa 는 registry 에 warboy·rngd 두 제품만 있고 product="" 키가 없다. 모르는
 		// 제품(대문자 "RNGD" 는 descriptorRegistryKey 가 소문자 특례로 잡지 않는다)을 주면
-		// 아무 제품의 판정도 상속하지 않고 Unknown 이어야 한다 — 예전 LookupVendor 폴백은
-		// 여기서 warboy/rngd 중 하나의 값을 물려줬다(final review F4).
+		// 아무 제품의 판정도 상속하지 않고 Unknown 이어야 한다.
 		{"furiosa + 모르는 제품은 다른 제품 판정을 상속하지 않고 Unknown", "furiosa", "RNGD",
 			vendorcap.StateUnknown, "vendor/product 키 없음"},
 		{"nvidia 는 단일 제품 키(\"\")로 폴백해 Software", "nvidia", "a30", vendorcap.StateSoftware, ""},
 		// tenstorrent 는 registry 키가 tenstorrent/""(product 미분기) 뿐이라 descriptor
 		// product(blackhole-p150)로 direct Lookup 이 안 되고 단일 제품 키로 폴백한다 —
-		// 그 폴백값은 co-run 직렬화 실측(2026-09-23)으로 Unsupported 다.
+		// 그 폴백값은 co-run 직렬화로 Unsupported 다.
 		{"tenstorrent 는 단일 제품 키 폴백 — co-run 직렬화로 Unsupported", "tenstorrent", "blackhole-p150",
 			vendorcap.StateUnsupported, "직렬화"},
 		{"모르는 벤더는 Unknown + 사유 합성", "acme", "x", vendorcap.StateUnknown, "vendor/product 키 없음"},

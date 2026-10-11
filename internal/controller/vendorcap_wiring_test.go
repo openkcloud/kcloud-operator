@@ -1,11 +1,9 @@
 // ============================================================
 // vendorcap_wiring_test.go: 선언 레지스트리와 실제 벤더 배선의 일치 가드
-// 상세: "명세서에 지원이라 적혔는데 Go 타입이 없거나, 그 반대"를 빌드 시점에 잡는다.
-//
-//	partition ⟺ backendFor 가 backend 를 돌려줌, timeSlicing/multiProcess ⟺ SharingBackend 구현,
-//	devicePlugin ⟺ NPUClusterPolicyReconciler 의 ensure*DevicePlugin 메서드.
-//
-// 생성일: 2026-09-19 | 수정일: 2026-09-19
+// 상세: "명세서에 지원이라 적혔는데 Go 타입이 없거나, 그 반대"를 빌드 시점에 잡는다. partition
+// ⟺ backendFor, timeSlicing/multiProcess ⟺ SharingBackend 구현, devicePlugin ⟺
+// NPUClusterPolicyReconciler 의 ensure*DevicePlugin 메서드가 서로 맞아야 한다.
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

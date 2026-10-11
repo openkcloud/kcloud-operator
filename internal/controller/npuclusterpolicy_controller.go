@@ -62,7 +62,7 @@ const ownerAnnotation = "npu.ai/owner"
 const vendorNvidia = "nvidia"
 
 // nvidiaDevicePluginVendorLabel 은 mixed/flat 두 device-plugin DaemonSet 이 공통으로 다는 라벨이다.
-// 두 DS 는 selector 충돌을 피하려 서로 다른 app.kubernetes.io/name 을 쓰므로(C-1),
+// 두 DS 는 selector 충돌을 피하려 서로 다른 app.kubernetes.io/name 을 쓰므로,
 // restartNvidiaDevicePlugin 이 어느 쪽 pod 이든 찾으려면 이 공통 라벨로 List 해야 한다.
 const nvidiaDevicePluginVendorLabel = "kcloud.ai/dp-vendor"
 
@@ -70,7 +70,7 @@ const nvidiaDevicePluginVendorLabel = "kcloud.ai/dp-vendor"
 const vendorFuriosa = "furiosa"
 
 // Tenstorrent Blackhole device plugin 기본 상수.
-// #21: TT plugin 은 공식 벤더 plugin 이 없어 kcloud 가 자체 구현했으므로(3rd party 아님),
+// TT plugin 은 공식 벤더 plugin 이 없어 kcloud 가 자체 구현했으므로(3rd party 아님),
 // 분류 정합상 namespace 는 operator 네임스페이스(kcloud, naming.OperatorNamespace())로 배치한다.
 // DaemonSet 이름 `kcloud-tt-device-plugin`(자체 개발 표기). 타 벤더 plugin 은 3rd party 라 kube-system 유지.
 // 이미지는 Harbor(global.registry) 경유로 조립되며,
@@ -81,13 +81,13 @@ const (
 	ttImageDefault    = "kcloud-tt-device-plugin:v0.1.0"
 )
 
-// Furiosa 통합 device-plugin(A' 방안) 상수.
+// Furiosa 통합 device-plugin 상수.
 // 단일 DS 가 Warboy/RNGD 양 노드에 스케줄되며(공통 PCI vendor 라벨), entrypoint 가
 // PCI device ID 로 모델을 감지해 해당 벤더 바이너리를 exec 한다.
 const (
 	// 모델별 device-plugin DS 이름. 벤더 공개 이미지를 그대로 실행하는 3rd-party 워크로드라
 	// kube-system 에 kcloud- 접두 없이 둔다(nvidia-device-plugin·rbln-device-plugin 과 같은 규칙).
-	// kcloud 네임스페이스는 kcloud 가 개발한 리소스만 담는다(2026-09-09 원칙).
+	// kcloud 네임스페이스는 kcloud 가 개발한 리소스만 담는다.
 	furiosaWarboyDSName = "furiosa-warboy-device-plugin"
 	furiosaRngdDSName   = "furiosa-rngd-device-plugin"
 	// 개명 전 이름. 조정 때 있으면 지우는 정리 전용이다 — DS selector 가 immutable 이라
@@ -252,7 +252,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	// -- node-manager(detector) — 리소스명은 kcloud-node-manager, 이미지/기능은 detector 그대로(#21 리네임)
+	// -- node-manager(detector) — 리소스명은 kcloud-node-manager, 이미지/기능은 detector 그대로(이름만 변경)
 	if err := r.ensureDetector(ctx, &policy); err != nil {
 		logger.Error(err, "failed to ensure kcloud-node-manager")
 		r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "ReconcileFailed", "Failed to ensure %s: %v", "kcloud-node-manager", err)
@@ -279,23 +279,12 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 	} else if policy.Spec.Nvidia.IsOperatorOwned() {
-		// 토글 off 는 광고를 멈춰야 한다 — 두 DaemonSet(mixed/flat)을 모두 회수한다. 하나만 지우면
-		// 남은 쪽이 계속 nvidia.com/* 를 광고해 "꺼졌다"는 사용자 기대와 어긋난다.
-		// Furiosa(cleanupDisabledFuriosaLegacyDS)·Tenstorrent(TenstorrentDevicePluginRemoveFailed
-		// 분기)·Rebellions(RebellionsDevicePluginRemoveFailed 분기)도 대칭이다 — Enabled=false
-		// 이고 operator-owned(managed)이면 소유 DaemonSet 만 회수하며(owner annotation 확인),
-		// 3rd-party 동명 DS 는 보존한다.
-		//
-		// cleanupOwnedResources(CR 삭제)는 device-plugin 을 소유 여부와 무관하게 항상
-		// 보존한다 — 지우면 전벤더 allocatable 순단이 나서다(#16 §5). 이 토글은 정반대 요청("이
-		// 벤더만 광고 중단")이라 지우는 게 맞지만, mixed 이름(nvidia.DevicePluginNameMixed =
-		// "nvidia-device-plugin")은 #19 무중단 이관을 위해 기존 3rd-party 리소스와 일부러 같은
-		// 이름을 쓴다(timeslicing.go:148). 그래서 이름만 보고 지우면 이 operator 가 한 번도
-		// reconcile 하지 않은(=owner annotation 이 없는) 3rd-party DS 까지 지울 수 있다.
-		// ensureNvidiaDevicePlugin 이 매 reconcile 마다 owner annotation 을 stamp 하므로
-		// (createOrUpdateDS 의 update 분기가 annotation 까지 덮어쓴다), enabled=true 로 한 번이라도
-		// reconcile 된 DS 는 owned 상태가 되고 이 토글로 정상 회수된다 — 실제로 지워지지 않는 것은
-		// 이 operator 가 그 벤더를 켠 적이 전혀 없는 DS 뿐이다.
+		// 토글 off 는 두 DaemonSet(mixed/flat)을 모두 회수해야 한다 — 하나만 지우면 남은 쪽이
+		// 계속 광고한다. Furiosa·Tenstorrent·Rebellions 도 대칭이다: owner annotation 이 있는
+		// DS 만 회수하고 3rd-party 동명 DS 는 보존한다. mixed 이름(nvidia.DevicePluginNameMixed)
+		// 은 무중단 이관을 위해 기존 3rd-party 리소스와 일부러 같은 이름을 쓰므로
+		// (timeslicing.go:148) 이름만 보고 지우면 한 번도 reconcile 하지 않은 DS 까지 지울 수
+		// 있다 — enabled=true 로 한 번이라도 reconcile 되면 owner annotation 이 찍혀 정상 회수된다.
 		for _, ds := range []struct{ name, reason string }{
 			{nvidia.DevicePluginNameMixed, "NvidiaDevicePluginMixedRemoveFailed"},
 			{nvidia.DevicePluginNameFlat, "NvidiaDevicePluginFlatRemoveFailed"},
@@ -323,7 +312,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// -- Rebellions ATOM+ (기본 kube-system; spec.rebellions.namespace 로 전용 네임스페이스를 지정하면 생성 + PSA privileged; ClusterRole/Binding)
+	// -- Rebellions ATOM+ (기본 kube-system; 전용 네임스페이스 지정 시 생성 + PSA privileged; ClusterRole/Binding)
 	// delegated·external 이면 배포하지도 회수하지도 않는다 — 관측만 한다.
 	if policy.Spec.Rebellions.Enabled && policy.Spec.Rebellions.IsOperatorOwned() {
 		logger.Info("Ensuring Rebellions ATOM+ Device Plugin")
@@ -378,7 +367,7 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// -- All ensureXxx succeeded: set Ready=True and record success event.
 	// external·delegated 벤더가 하나라도 있으면 "배포물이 없어도 정상"임을 사유로 가른다 —
-	// 실패 경로는 모두 위에서 Ready=False 로 return 하므로, 여기 도달했다면 관리 대상은 전부 준비됐다.
+	// 실패 경로는 모두 위에서 Ready=False 로 return 하므로, 여기 도달하면 관리 대상은 전부 준비된 상태다.
 	readyReason, readyMessage := "AllResourcesReady", "All resources reconciled successfully"
 	if ext, del := nonOperandVendorNames(&policy); len(ext)+len(del) > 0 {
 		readyReason = "ExternalManaged"
@@ -403,12 +392,12 @@ func (r *NPUClusterPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// DRA 드라이버가 아직 발행 전이면 다시 본다. 발행물은 드라이버가 뜬 뒤 몇 초 지나
 	// 생기는데 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가 없으면 상태가
-	// Installing 에 굳는다(2026-08-07 실측).
+	// Installing 에 굳는다.
 	return ctrl.Result{RequeueAfter: draRequeue(&policy)}, nil
 }
 
 // reconcileFuriosaDevicePlugins 는 Furiosa 의 device-plugin 을 spec 에 맞춘다.
-// Unified=true 면 Warboy/RNGD 를 단일 통합 DS 로(A' 방안), 기존 2-DS 는 제거(전환).
+// Unified=true 면 Warboy/RNGD 를 단일 통합 DS 로 전환하고 기존 2-DS 는 제거한다.
 // Unified=false(기본) 면 기존 2-DS 경로 유지 + 통합 DS 제거(롤백).
 // delegated·external 이면 warboy/rngd/unified 를 배포도 회수도 하지 않는다(RNGD 포함 —
 // RngdSpec 에는 별도 관리 모드가 없고 Furiosa 의 모드를 따른다). 통합 전환·롤백 정리도 건너뛴다.
@@ -484,7 +473,7 @@ func (r *NPUClusterPolicyReconciler) syncNodeLabels(ctx context.Context, policy 
 
 // draRequeue 는 발행 관측을 기다리는 DRA 드라이버가 있으면 재확인 간격을 준다.
 // 0 이면 재큐하지 않는다. 이 컨트롤러는 ResourceSlice 를 watch 하지 않아, 재큐가
-// 없으면 발행이 생겨도 상태가 Installing 에 굳는다(2026-08-07 실측).
+// 없으면 발행이 생겨도 상태가 Installing 에 굳는다.
 func draRequeue(policy *npuv1alpha1.NPUClusterPolicy) time.Duration {
 	for _, d := range policy.Status.DRADrivers {
 		if d.Phase == npuv1alpha1.DRAPhaseInstalling {
@@ -548,7 +537,7 @@ func (r *NPUClusterPolicyReconciler) setReadyCondition(ctx context.Context, poli
 
 // ownedScanNamespaces 는 owner-annotation 소유 리소스를 스캔할 네임스페이스 목록을 반환한다.
 // device-plugin(kube-system) + operator 부속(detector, kcloud)이 서로 다른 ns 에 존재하므로,
-// #16 이관 과도기·정상 모두 양쪽을 스캔해야 orphan 이 남지 않는다. env 미설정(둘이 동일)이면 1개.
+// 이관 과도기·정상 모두 양쪽을 스캔해야 orphan 이 남지 않는다. env 미설정(둘이 동일)이면 1개.
 func ownedScanNamespaces() []string {
 	opNS := naming.OperatorNamespace()
 	if opNS == naming.KubeSystemNamespace {
@@ -565,7 +554,7 @@ func isDevicePluginResource(name string) bool {
 }
 
 // cleanupOwnedResources deletes all DaemonSets and ConfigMaps with the owner annotation matching this policy.
-// device-plugin(3rd party)은 보존한다(#19 무중단 이관 — isDevicePluginResource).
+// device-plugin(3rd party)은 보존한다(무중단 이관 — isDevicePluginResource).
 // 배제 라벨(kcloud.ai/excluded·excluded-reason)도 이 정책이 남긴 것이라 함께 회수한다.
 func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	ownerValue := fmt.Sprintf("%s/%s", policy.Namespace, policy.Name)
@@ -579,7 +568,7 @@ func (r *NPUClusterPolicyReconciler) cleanupOwnedResources(ctx context.Context, 
 		for i := range dsList.Items {
 			ds := &dsList.Items[i]
 			// device-plugin(3rd party, kube-system 고정)은 무중단 이관을 위해 보존 —
-			// NCP 삭제(operator 이관/제거) 시 device-plugin 을 지우면 전벤더 allocatable 순단(#16 §5).
+			// NCP 삭제(operator 이관/제거) 시 device-plugin 을 지우면 전벤더 allocatable 가 순단된다.
 			if ds.Annotations[ownerAnnotation] == ownerValue && !isDevicePluginResource(ds.Name) {
 				if err := r.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
 					return err
@@ -641,7 +630,7 @@ func setOwnerAnnotation(obj *metav1.ObjectMeta, policy *npuv1alpha1.NPUClusterPo
 	obj.Annotations[ownerAnnotation] = fmt.Sprintf("%s/%s", policy.Namespace, policy.Name)
 }
 
-// kcloud-node-manager ServiceAccount 상수. Namespace 는 operator 부속으로 kcloud(#16)로 이동 —
+// kcloud-node-manager ServiceAccount 상수. Namespace 는 operator 부속으로 kcloud 를 쓴다 —
 // naming.OperatorNamespace()(OPERATOR_NAMESPACE env, 미설정 시 kube-system)를 SA/DS 에 공통 사용.
 const detectorServiceAccountName = "kcloud-node-manager"
 
@@ -655,8 +644,8 @@ func applyImagePullSecrets(spec *corev1.PodSpec, secrets []corev1.LocalObjectRef
 }
 
 // -- ensureNvidiaDevicePlugin creates the mixed(MIG 관리 노드) 와 flat(그 외) device-plugin
-// DaemonSet 두 개를 렌더한다 — MPS 근본해결(D-8) 4단계. mixed 는 --mig-strategy=mixed 로 MIG
-// 프로파일을, flat 은 그 플래그 없이 순정 GPU 를 광고하며 MigActiveNodeLabel 부재 노드만 맡는다.
+// DaemonSet 두 개를 렌더한다. mixed 는 --mig-strategy=mixed 로 MIG 프로파일을, flat 은 그
+// 플래그 없이 순정 GPU 를 광고하며 MigActiveNodeLabel 부재 노드만 맡는다.
 func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
@@ -695,7 +684,7 @@ func (r *NPUClusterPolicyReconciler) ensureNvidiaDevicePlugin(ctx context.Contex
 // selector 는 과거 값 {app.kubernetes.io/name: nvidia-device-plugin} 그대로 둔다 — 바꾸면 기존
 // 클러스터에서 422 로 영구 실패한다. flat 은 자기 이름을 selector 값으로 써 자동으로 비겹침이다.
 // 두 DS 는 nvidiaDevicePluginVendorLabel 을 공통으로 달아 restartNvidiaDevicePlugin 의 노드별
-// pod 삭제가 어느 쪽이든 찾는다 — MPS 근본해결(D-8).
+// pod 삭제가 어느 쪽이든 찾는다.
 func (r *NPUClusterPolicyReconciler) buildNvidiaDevicePluginDS(policy *npuv1alpha1.NPUClusterPolicy, name string, baseSel map[string]string, mixed bool) *appsv1.DaemonSet {
 	labels := map[string]string{"app.kubernetes.io/name": name, nvidiaDevicePluginVendorLabel: "nvidia"}
 	nvidiaRuntime := vendorNvidia
@@ -919,16 +908,11 @@ interval: 10`,
 }
 
 // rngdDevicePluginArgs returns the binary args for the Furiosa RNGD device plugin DaemonSet.
-// 빈 문자열 또는 "none" 이면 --policy flag 미추가 (회귀 0). 그 외 (single-core/dual-core/quad-core)
-// 면 `--policy=<value>` 를 append 한다 (libfuriosa-kubernetes PartitioningPolicy enum 과 1:1).
-//
-// 벤더 이미지 세대마다 받는 flag 가 다르다(2026-09-09 실측):
-//   - 사내 파티션 지원 빌드: --debugMode 와 --policy 를 모두 받는다
-//   - 공개 ghcr.io/furiosa-ai/furiosa-device-plugin: 둘 다 unknown flag 로 거부하고 죽는다
-//
-// 그래서 둘 다 껐을 때는 args 를 아예 비운다. 그 상태라야 공개 이미지가 뜬다.
-// 비-none 정책은 여전히 파티션 지원 이미지가 필요하다
-// (helm values.furiosa.rngd.devicePluginImage 로 override).
+// 빈 문자열 또는 "none" 이면 --policy flag 를 안 붙인다. 그 외(single-core/dual-core/quad-core)
+// 는 `--policy=<value>` 를 append 한다(libfuriosa-kubernetes PartitioningPolicy enum 과 1:1).
+// 벤더 이미지 세대마다 받는 flag 가 다르다 — 사내 파티션 지원 빌드는 --debugMode·--policy 를
+// 모두 받지만 공개 ghcr.io/furiosa-ai/furiosa-device-plugin 은 둘 다 unknown flag 로 거부해
+// 죽는다. 그래서 둘 다 끄면 args 를 비운다 — 비-none 정책은 파티션 지원 이미지가 필요하다.
 func rngdDevicePluginArgs(partitionPolicy string, debugMode *bool) []string {
 	var args []string
 	// debugMode 미지정(nil)은 켠 것으로 읽는다 — 기존 배포의 동작을 그대로 둔다.
@@ -941,29 +925,12 @@ func rngdDevicePluginArgs(partitionPolicy string, debugMode *bool) []string {
 	return args
 }
 
-// -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device plugin.
-// NodeSelector uses self-reliant label kcloud.ai/rngd.present=true by default (node-manager applied, NFD-free);
-// override via Spec.Furiosa.Rngd.NodeSelector.
-//
-// Pod spec는 Furiosa 공식 helm chart (furiosa-device-plugin:2026.1.0) 의 DaemonSet 템플릿을 따른다:
-//   - entrypoint: ./main (working dir 기준). 바이너리가 PCI scan 으로 RNGD 디바이스를 자동 인식하므로
-//     --resource-name 등 인자는 불필요.
-//   - /dev 전체 + /sys + device-plugin 소켓 디렉토리를 마운트.
-//   - Privileged=false, drop=ALL capabilities, priorityClassName=system-node-critical.
-//
-// Spec.Furiosa.Rngd.ResourceName / ConfigMapName 필드는 CRD 에 남아 있지만, 현재 공식 이미지가
-// 이를 자동 처리하므로 이 함수에서 참조하지 않는다 (backward-compat: 필드 존재는 허용).
-//
-// partitionPolicy: NPUClusterPolicy.Spec.Furiosa.Rngd.PartitionPolicy 의 string 값
-// ("none"/"single-core"/"dual-core"/"quad-core"/"" 중 하나).
-// 빈 문자열 또는 "none" 이면 args 변경 없이 기존 1:1 카드 동작 유지 (회귀 0).
-// 그 외 값이면 `--policy=<value>` 가 binary args 에 append 된다.
-//
-// 주의 (2026-04-29 worker-pa 분석): upstream image `docker.io/furiosaai/furiosa-device-plugin:2026.1.0`
-// 는 cobra binary 가 `--debugMode` flag 만 노출 — `--policy` flag 미지원. cobra 는 unknown flag 거부.
-// 따라서 v2026.1.0 image 로 partitionPolicy="dual-core" 운영 시 binary 시작 자체 실패.
-// dual-core/single-core/quad-core 운영을 위해서는 별도 빌드된 partition-aware device plugin image
-// (helm values.furiosa.rngd.devicePluginImage 로 override) 가 필요하다.
+// -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device
+// plugin. NodeSelector 는 자립 라벨 kcloud.ai/rngd.present=true 가 기본이며 override 는
+// Spec.Furiosa.Rngd.NodeSelector 다. entrypoint ./main 은 PCI scan 으로 장치를 자동 인식해
+// --resource-name 류 인자가 불필요하다(ResourceName/ConfigMapName CRD 필드는 공식 이미지가
+// 자동 처리해 참조하지 않는다 — backward-compat). upstream v2026.1.0 은 --debugMode 만 지원하고
+// --policy 는 unknown flag 로 거부해 기동이 실패하므로, partitionPolicy≠none 에는 custom 이미지가 필요하다.
 func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, partitionPolicy string) error {
 	log := logf.FromContext(ctx)
 
@@ -1011,13 +978,9 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 					Image:           image,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{"./main"},
-					// --debugMode 는 Furiosa device plugin 이 device 를 인식·등록하는 데
-					// 필요 (기본 모드에서는 "couldn't recognize any furiosa devices" 출력
-					// 후 종료됨. v1.5 follow-up F-1 반영.
-					// partitionPolicy 가 비어있거나 "none" 이면 --policy flag 미추가 (기존 동작).
-					// 그 외 (single-core/dual-core/quad-core) 면 partition-aware image 가
-					// libfuriosa-kubernetes 의 PartitioningPolicy 와 1:1 매핑되는 flag 로 받는다.
-					// (upstream v2026.1.0 image 는 미지원 — partition-aware custom image 필요)
+					// --debugMode 가 없으면 기본 모드가 "couldn't recognize any furiosa devices" 로
+					// 종료한다. partitionPolicy 가 비거나 "none" 이면 --policy 를 안 붙이고, 그 외는
+					// partition-aware 이미지가 필요하다(ensureFuriosaRngdDevicePlugin 주석 참고).
 					Args: rngdDevicePluginArgs(partitionPolicy, policy.Spec.Furiosa.Rngd.DebugMode),
 					Env: []corev1.EnvVar{
 						{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{
@@ -1159,7 +1122,7 @@ func (r *NPUClusterPolicyReconciler) deleteOwnedDaemonSetInIfExists(ctx context.
 	return nil
 }
 
-// -- ensureFuriosaUnifiedDevicePlugin creates a single DaemonSet serving both Warboy and RNGD (A' 방안).
+// -- ensureFuriosaUnifiedDevicePlugin creates a single DaemonSet serving both Warboy and RNGD.
 // 동봉 이미지 entrypoint 가 PCI vendor 0x1ed2 + device ID(0x0000=Warboy, 0x0001=RNGD)로 모델을 감지해
 // 해당 벤더 바이너리를 exec 한다(proxy 없음, 노드당 한 모델). 리소스명은 각 바이너리가 광고하므로 불변
 // (Warboy=beta.furiosa.ai/npu, RNGD=furiosa.ai/rngd). nodeSelector 는 양 노드 공통 PCI vendor 라벨.
@@ -1335,7 +1298,7 @@ func setUnifiedEnvValue(ds *appsv1.DaemonSet, name, value string) {
 
 // ensureTenstorrentDevicePlugin creates a DaemonSet for the Tenstorrent Blackhole NPU device plugin.
 // Pod spec: /dev + /sys(ReadOnly) + /var/lib/kubelet/device-plugins 마운트, privileged=true (PCIe 디바이스 직접 접근).
-// /sys 는 plugin discovery 가 /sys/class/tenstorrent 를 참조하므로 ReadOnly 로 마운트해 장치 감지 가능하게 함 (commit eddfb49).
+// /sys 는 plugin discovery 가 /sys/class/tenstorrent 를 참조하므로 ReadOnly 로 마운트해 장치 감지 가능하게 함.
 // NodeSelector: 기본값 tenstorrent-blackhole=true (수동 라벨 전략); Spec.Tenstorrent.NodeSelector 로 재정의 가능.
 // ResourceName: 기본값 "tenstorrent.com/blackhole"; Spec.Tenstorrent.ResourceName 으로 재정의 가능 (TT_RESOURCE_NAME env 로 주입).
 func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
@@ -1395,7 +1358,7 @@ func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.C
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "kubelet-socket", MountPath: "/var/lib/kubelet/device-plugins"},
 						{Name: "dev-fs", MountPath: "/dev"},
-						// plugin discovery 가 /sys/class/tenstorrent 를 참조 (commit eddfb49)
+						// plugin discovery 가 /sys/class/tenstorrent 를 참조
 						{Name: "sys-fs", MountPath: "/sys", ReadOnly: true},
 					},
 				}},
@@ -1423,7 +1386,7 @@ func (r *NPUClusterPolicyReconciler) ensureTenstorrentDevicePlugin(ctx context.C
 }
 
 // Rebellions ATOM+ default constants (Rebellions 공식 daemonset.yaml / configmap.yaml 스펙 준수)
-// 2026-04-22: namespace/name 을 기존 `npu-op-*` 컨벤션 (kube-system) 으로 통일.
+// namespace/name 을 기존 `npu-op-*` 컨벤션 (kube-system) 으로 통일.
 // Rebellions 공식 default `rbln-system/rbln-device-plugin` 대신 Warboy/RNGD/NVIDIA 와 동일 위치.
 const (
 	rbllnsNamespaceDefault     = "kube-system"
@@ -1443,17 +1406,11 @@ func rbllnsResolveNamespace(policy *npuv1alpha1.NPUClusterPolicy) string {
 	return rbllnsNamespaceDefault
 }
 
-// ensureRbllnsNamespace creates/ensures the Rebellions device plugin namespace with Pod
-// Security Admission (PSA) privileged labels when a dedicated namespace is configured.
-//
-// 2026-04-22: `kube-system` 및 기타 시스템 네임스페이스는 early-return 한다. 이유:
-//  1. kube-system 은 이미 존재하며 kubelet/kube-proxy 등 시스템 컴포넌트를 위한 PSA
-//     설정이 클러스터 운영자에 의해 관리됨. operator 가 PSA 라벨을 덮어쓰면 전체
-//     클러스터 보안 경계가 흔들림.
-//  2. PSA 가 기본 `privileged` 가 아닌 `baseline`/`restricted` 로 설정된 환경이라도,
-//     kube-system 에 배포되는 DS/DaemonSet 들은 대개 예외 규칙 (system-node-critical
-//     priority, legitimate privileged) 으로 허용된다. 별도 namespace label 갱신이
-//     필요하지 않다.
+// ensureRbllnsNamespace creates/ensures the Rebellions device plugin namespace with Pod Security
+// Admission (PSA) privileged labels when a dedicated namespace is configured. kube-system 등
+// 시스템 네임스페이스는 early-return 한다 — PSA 설정이 클러스터 운영자 관리이고 operator 가
+// 덮어쓰면 보안 경계가 흔들리며, PSA 가 restricted 라도 kube-system DS 는 대개 예외 규칙
+// (system-node-critical 등)으로 허용돼 별도 라벨 갱신이 필요 없다.
 func (r *NPUClusterPolicyReconciler) ensureRbllnsNamespace(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 	name := rbllnsResolveNamespace(policy)
@@ -1669,8 +1626,8 @@ func (r *NPUClusterPolicyReconciler) ensureRbllnsConfigMap(ctx context.Context, 
 // ensureRebellionsDevicePlugin creates the DaemonSet running the Rebellions device
 // plugin. Spec mirrors Rebellions 공식 daemonset.yaml (hostNetwork, privileged).
 // 벤더 도구 경로는 고정하지 않는다. 플러그인이 Allocate 응답에서 /usr/bin/rbln-smi 와
-// /usr/bin/rbln-stat 를 직접 마운트하고(2026-09-15 node5 실측), SDK 판마다 설치 위치가
-// 다르다. 호스트 /usr/bin 과 /usr/local/bin 을 읽기 전용으로 붙이는 것까지가 우리 몫이다.
+// /usr/bin/rbln-stat 를 직접 마운트하고, SDK 판마다 설치 위치가 다르다. 호스트
+// /usr/bin 과 /usr/local/bin 을 읽기 전용으로 붙이는 것까지가 우리 몫이다.
 func (r *NPUClusterPolicyReconciler) ensureRebellionsDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy) error {
 	log := logf.FromContext(ctx)
 
@@ -1904,9 +1861,9 @@ func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *
 							// 이중 보고를 막는다.
 							Command: []string{"/podresources-writer"},
 							Args:    []string{"--podresources-writer"},
-							// writer 모드는 NODE_NAME 을 읽지 않는다 — env 를 주지 않는다(images 리뷰 m-2).
+							// writer 모드는 NODE_NAME 을 읽지 않는다 — env 를 주지 않는다.
 							// kubelet pod-resources 디렉터리는 root:root 0750, 소켓은 root 소유라 연결에 소켓 쓰기 권한이
-							// 필요하다 — root 가 아니면 못 읽는다(2026-10-05 노드 측정). 그래서 이 컨테이너만 uid 0 으로
+							// 필요하다 — root 가 아니면 못 읽는다. 그래서 이 컨테이너만 uid 0 으로
 							// 돌리고, 능력은 전부 버리고 rootfs 는 읽기 전용으로 둔다. 할 수 있는 일은 소켓 읽기와
 							// /run/podresources 쓰기뿐이다. detector 본체의 비특권 설계는 그대로다.
 							SecurityContext: &corev1.SecurityContext{
@@ -1959,16 +1916,12 @@ func renderDetectorDS(image string, pullSecrets []corev1.LocalObjectReference) *
 // Create 경로이므로 Create 통과는 필수다.
 var nodeEventFilter predicate.Predicate = predicate.LabelChangedPredicate{}
 
-// SetupWithManager sets up the controller with the Manager.
-//
-// Node watch 가 필요한 이유: 배제 라벨은 노드 라벨을 보고 붙는데 NCP 만 watch 하면 노드가
-// 합류하거나 사용자가 배제 라벨을 붙여도 그 사건으로는 reconcile 이 돌지 않는다. 남는
-// 트리거는 캐시 re-sync 뿐이다 — cmd/main.go 가 SyncPeriod 를 60초로 줄여 뒀으므로
-// (controller-runtime 기본 10시간이 아니다) 낡음 창은 최대 60초 + detector 스캔 최대 30초
-// ≈ 90초다. 즉 정확성 결함이 아니라 응답성 문제다. 그래도 watch 를 붙이는 이유는 "노드에
-// 라벨을 붙여 뺀다" 가 이 축의 대표 사용법이고, 90초 지연과 즉시 반응은 사용감이 다르며
-// 하트비트를 걸러내는 비용이 predicate 하나로 끝나서다. 주기 재큐를 새로 넣거나 SyncPeriod
-// 를 건드리지는 않는다 — re-sync 가 이미 안전망이다.
+// SetupWithManager sets up the controller with the Manager. 노드 watch 가 필요한 이유: 배제
+// 라벨은 노드 라벨을 보고 붙는데 NCP 만 watch 하면 노드 합류·라벨 변경은 reconcile 을 깨우지
+// 못한다. 유일한 안전망은 캐시 re-sync(cmd/main.go 가 SyncPeriod 를 60초로 줄여 둠)라 낡음
+// 창은 최대 90초(60초+detector 스캔 30초)다 — 정확성 결함이 아니라 응답성 문제다. 그래도 라벨
+// 즉시 반응이 이 축의 대표 사용법이라 predicate 하나 비용으로 watch 를 건다. 주기 재큐나
+// SyncPeriod 변경은 하지 않는다 — re-sync 가 이미 안전망이다.
 func (r *NPUClusterPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&npuv1alpha1.NPUClusterPolicy{}).
@@ -2039,10 +1992,10 @@ func appendNodeAffinityRequirements(spec *corev1.PodSpec, reqs ...corev1.NodeSel
 }
 
 // applyDriverUpgradeAntiAffinity는 기존 Affinity를 보존하면서
-// driver-upgrading-blocking 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다.
-// architectural plan §4.4 옵션 A: 좁은 lifecycle 의 blocking 라벨로 phase-aware 차단.
-// Cordoning ~ Upgrading 단계: 라벨 활성 → detector / device-plugin 차단 (rmmod 보호).
-// Validating 단계: 라벨 자동 제거 → detector spawn 가능 → NDR 갱신 → Validator 통과.
+// driver-upgrading-blocking 라벨이 없는 노드에만 스케줄되도록 제약을 추가한다 — 좁은
+// lifecycle 의 blocking 라벨로 phase-aware 차단을 건다. Cordoning ~ Upgrading 단계는
+// 라벨이 활성화돼 detector·device-plugin 을 차단(rmmod 보호)하고, Validating 단계는
+// 라벨이 자동 제거돼 detector spawn → NDR 갱신 → Validator 통과로 이어진다.
 func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
 	appendNodeAffinityRequirements(spec, corev1.NodeSelectorRequirement{
 		Key:      upgrade.DriverUpgradingBlockingLabelKey,
@@ -2050,13 +2003,12 @@ func applyDriverUpgradeAntiAffinity(spec *corev1.PodSpec) {
 	})
 }
 
-// applyControlPlaneExclusion는 GPU/NPU 스택(device-plugin·toolkit·driver installer)
-// 워크로드가 control-plane/master 노드에 스케줄되지 않게 하여, 제어 평면이 가속기
-// 리소스(예: nvidia.com/gpu)를 광고하지 않도록 한다. driver_upgrade_controller 가 이미
-// 강제하는 라벨 기반 제외(control-plane/master skip)와 동일 규칙이다. worker 노드는 두
-// 라벨이 모두 없으므로 영향 0. detector(node-manager) DS 에는 적용하지 않는다(전 노드 상주).
-// ponytail: 라벨 기반 제외(기존 driver-install 정책과 동일)이므로, control-plane taint 를
-// 제거하고 라벨만 유지하는 단일 노드 클러스터도 제외된다. 그런 형상이 필요하면 values 토글 추가.
+// applyControlPlaneExclusion는 GPU/NPU 스택(device-plugin·toolkit·driver installer) 워크로드가
+// control-plane/master 노드에 스케줄되지 않게 한다 — driver_upgrade_controller 가 이미 강제하는
+// control-plane/master 라벨 제외와 동일 규칙이며 worker 노드는 두 라벨이 없어 영향 0 이다.
+// detector(node-manager) DS 에는 적용하지 않는다(전 노드 상주). ponytail: 라벨 기반 제외라
+// control-plane taint 를 제거하고 라벨만 유지하는 단일 노드 클러스터도 제외된다 — 그런 형상이
+// 필요하면 values 토글을 추가한다.
 func applyControlPlaneExclusion(spec *corev1.PodSpec) {
 	appendNodeAffinityRequirements(spec,
 		corev1.NodeSelectorRequirement{Key: controlPlaneNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist},
@@ -2064,16 +2016,12 @@ func applyControlPlaneExclusion(spec *corev1.PodSpec) {
 	)
 }
 
-// applyExcludeNodeSelector 는 sel 이 고르는 노드를 이 벤더 배포 대상에서 뺀다. 기존
-// nodeSelector(map[string]string, 양성 선택)의 반대 방향 축 — 노드 하나를 빼려고 나머지
-// 전부에 라벨을 붙이지 않아도 된다. applyControlPlaneExclusion 과 별개로 위에 얹는다
-// (control-plane 배제는 이 축과 무관하게 항상 걸린다). nodeExclusion(node_exclusion.go)
-// 이 같은 필드를 보고 kcloud.ai/excluded 라벨의 policy 사유를 판정하므로 조건이 갈라지지 않는다.
-//
-// 배제 의미론은 "조건 하나라도 맞으면 뺀다" 다 — 조건별 NOT 을 requiredDuringScheduling
-// term 하나에 AND 로 합성해 그것을 표현한다. 조건 목록은 exclusionConditions 가 만들고
-// 라벨 경로(matchesAnyExcludeNodeSelector)가 같은 목록을 소비하므로, 조건이 여럿이어도
-// 두 경로가 같은 노드를 뺀다. 유효하지 않은 조건은 exclusionConditions 가 이미 버렸다.
+// applyExcludeNodeSelector 는 sel 이 고르는 노드를 이 벤더 배포 대상에서 뺀다 — 기존
+// nodeSelector(양성 선택)의 반대 축이다. applyControlPlaneExclusion 과 별개로 위에 얹는다
+// (control-plane 배제는 이 축과 무관하게 항상 걸린다). nodeExclusion(node_exclusion.go)이
+// 같은 필드로 kcloud.ai/excluded 라벨의 사유를 판정하므로 두 경로가 갈리지 않는다. 배제
+// 의미론은 "조건 하나라도 맞으면 뺀다" — 조건별 NOT 을 requiredDuringScheduling term 하나에
+// AND 로 합성해 표현한다(유효하지 않은 조건은 exclusionConditions 가 이미 버렸다).
 func applyExcludeNodeSelector(spec *corev1.PodSpec, sel *metav1.LabelSelector) {
 	conds, _ := exclusionConditions(sel)
 	reqs := make([]corev1.NodeSelectorRequirement, 0, len(conds))

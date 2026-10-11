@@ -1,14 +1,8 @@
 // ============================================================
 // chart_rbac_test.go: operator ClusterRole 에서 코드가 쓰지 않는 권한이 렌더되지 않는지 고정한다.
-// 상세: secrets·poddisruptionbudgets·roles·rolebindings 는 어느 컨트롤러도 client 로 읽거나
-// 쓰지 않는다 — secrets 는 pod 볼륨(SecretVolumeSource)으로만, PDB 는 Eviction API 가 API
-// server 에서 대신 검사, roles/rolebindings 는 코드에 대상이 없다. 이 넷이 operator ClusterRole
-// 에 다시 실리면 최소권한이 소리 없이 되돌아가므로 렌더 결과로 부재를 고정한다.
-// clusterroles/clusterrolebindings 는 descriptor auto-apply 가 실제로 만들므로 남는다.
-// 배포 생성·삭제 라우트가 쓰는 acceleratorworkloads create·delete 는 반대로 존재를 고정한다.
-// 범위: helm 렌더 결과 문자열만 본다(helm 이 없으면 helmTemplate 이 건너뛴다). rbacRule·
-// verbsByResource 는 rbac_sync_test.go 것을 그대로 쓴다.
-// 생성일: 2026-09-22 | 수정일: 2026-10-09 (벤더 operator 상태 읽기 권한 존재 시험)
+// 상세: secrets·poddisruptionbudgets·roles·rolebindings 는 부재를, clusterroles·
+// clusterrolebindings 는 존재를, acceleratorworkloads 의 create·delete 는 존재를 고정한다.
+// 생성일: 2026-09-22 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -134,8 +128,8 @@ func mainClusterRoleRules(t *testing.T) (string, []rbacRule) {
 }
 
 // TestOperatorClusterRoleGrantsWorkloadWrite 는 관리 API 의 배포 생성·삭제 라우트가 operator SA
-// 로 CR 을 만들고 지우므로 main ClusterRole 에 그 동사가 있어야 함을 고정한다(라이브 rev 83 에서
-// create 부재로 403 이 난 결함의 회귀 가드). status 하위 자원에는 create·delete 를 주지 않는다.
+// 로 CR 을 만들고 지우므로 main ClusterRole 에 그 동사가 있어야 함을 고정한다. status 하위
+// 자원에는 create·delete 를 주지 않는다.
 func TestOperatorClusterRoleGrantsWorkloadWrite(t *testing.T) {
 	roleName, rules := mainClusterRoleRules(t)
 	byResource := verbsByResource(rules)

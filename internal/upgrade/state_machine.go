@@ -1,13 +1,8 @@
 // ============================================================
 // state_machine.go: Driver Upgrade 상태 머신
-// 상세: NVIDIA GPU Operator 참조, 노드별 드라이버 업그레이드 상태 전이를 관리
-//       Idle → UpgradeRequired → PreFlight → Cordoning → Draining →
-//       Upgrading → Validating → Uncordoning → Idle (실패 시 Rollback)
-//       Rollback 도 maxRollbackAttempts 초과 시 터미널 Failed 로 전이 (자동 복구 중단).
-// 생성일: 2026-04-13 | 수정일: 2026-10-10 (verifiedVersions 허용 목록 검사를 autoUpgrade 게이트 앞으로 이동;
-//       WorkloadProbe 제한시간이 검증 예산을 넘으면 PreFlight 경고 추가;
-//       UpgradeVendor FieldManager 명시에 맞춰 ownSpecManagerPrefixes 주석 갱신; 계획서 항목 토큰 제거;
-//       검증 예산 경고에 그 값의 출처(정책값/기본값) 표기)
+// 상세: 노드별 드라이버 업그레이드 상태 전이를 관리한다. Idle → UpgradeRequired → PreFlight →
+//       Cordoning → Draining → Upgrading → Validating → Uncordoning → Idle(실패 시 Rollback).
+// 생성일: 2026-04-13 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -48,9 +43,8 @@ const driverUpgradingLabelKey = "npu.ai/driver-upgrading"
 // driverUpgradingBlockingLabelKey 는 detector / device-plugin 등 driver pod 의 rmmod 와
 // 충돌할 수 있는 워크로드의 spawn 을 차단하는 좁은 lifecycle 의 라벨이다.
 // driver-upgrading 라벨이 사이클 전체 (Cordoning ~ Uncordoning) 에 걸친 추적용이라면,
-// 이 라벨은 Cordoning 진입 시 추가되고 Validating 진입 시점에 제거된다 (architectural plan §4.4
-// 옵션 A). Validating 부터 detector 가 다시 spawn 가능 → NDR 갱신 → DriverModuleValidator
-// 통과 → Validating 데드락 차단.
+// 이 라벨은 Cordoning 진입 시 추가되고 Validating 진입 시점에 제거된다. Validating 부터
+// detector 가 다시 spawn 가능 → NDR 갱신 → DriverModuleValidator 통과 → Validating 데드락 차단.
 const driverUpgradingBlockingLabelKey = "npu.ai/driver-upgrading-blocking"
 
 // DriverUpgradingLabelKey 는 외부 패키지(controller 의 stuck-label sweep / defer cleanup)가
@@ -64,17 +58,16 @@ const DriverUpgradingBlockingLabelKey = driverUpgradingBlockingLabelKey
 // quiesceOnDriverUpgradeLabelKey 는 driver upgrade cycle 동안 자동으로 scale=0 으로 quiesce
 // 하고 cycle 종료 시 원래 replicas 로 복구할 Deployment 를 식별하는 opt-in 라벨 키이다.
 // gpu-stress 같은 NodeAffinity reject 로 Failed Pod 가 누적되는 테스트/내부 워크로드만 라벨을
-// 붙이고 production critical workload 는 PDB + drain 표준 흐름을 따른다 (architectural plan §A6.1).
+// 붙이고 production critical workload 는 PDB + drain 표준 흐름을 따른다.
 const quiesceOnDriverUpgradeLabelKey = "npu.ai/quiesce-on-driver-upgrade"
 
 // QuiesceOnDriverUpgradeLabelKey 는 외부 패키지(test/manifest)가 동일한 라벨을 가리키도록
 // 노출하는 상수다.
 const QuiesceOnDriverUpgradeLabelKey = quiesceOnDriverUpgradeLabelKey
 
-// QuiesceReplicasBackupAnnotation 은 quiesce 시 Deployment 의 원래 replicas 값을 dual-write
-// 하는 annotation 키다 (followup plan §F2). DUS.Status.QuiescedDeployments 백업과 함께
-// 저장되어 operator restart 후 status 손실 시 fallback 복구 경로로 활용된다.
-// 값은 base-10 정수 문자열 (예: "3").
+// QuiesceReplicasBackupAnnotation 은 quiesce 시 Deployment 의 원래 replicas 값을 DUS.Status.
+// QuiescedDeployments 백업과 함께 이중 기록하는 annotation 키다. operator restart 로 status 를
+// 잃어도 이 값으로 fallback 복구한다. 값은 base-10 정수 문자열 (예: "3").
 const QuiesceReplicasBackupAnnotation = "npu.ai/replicas-backup"
 
 // cordonOwnerAnnotationKey 는 이 상태머신이 직접 노드를 unschedulable 로 뒤집었을 때만 노드에
@@ -136,14 +129,9 @@ func (m *UpgradeStateMachine) TransitionState(
 	// 현재 상태를 Prometheus 메트릭에 기록
 	metrics.SetUpgradeState(state.Spec.NodeName, state.Spec.Vendor, state.Status.State)
 
-	// 관리자 롤백 요청(어노테이션)은 Idle·Failed 에서만 받는다 — 전이 중에는 자동 롤백 경로가
-	// 이미 있고 둘이 겹치면 진행 상태가 뒤섞인다.
-	//
-	// 어노테이션은 결과(상태 전이)가 영속된 뒤에 지운다 — 먼저 지우고 나중에 영속하면, 영속이
-	// 실패했을 때 요청 신호(어노테이션)는 이미 사라졌는데 상태는 그대로 남아 다음 reconcile 이
-	// 재시도할 방법이 없어진다. 그래서 이 분기는 상태를 스스로(m.Status().Update) 영속한다 —
-	// 위 broken-PreviousImage 정리와 같은 패턴이며, 호출자(controller)가 뒤이어 하는
-	// Status().Update 는 이미 영속된 값을 다시 쓰는 멱등 호출이 된다.
+	// 관리자 롤백 요청(어노테이션)은 Idle·Failed 에서만 받는다. 전이 중에는 자동 롤백 경로와 겹친다.
+	// 어노테이션은 상태 전이를 영속한 뒤에 지운다. 먼저 지우면 영속 실패 시 재시도 신호가 사라진다.
+	// 그래서 이 분기는 상태를 스스로 영속하고, 호출자의 Status().Update 는 멱등 호출이 된다.
 	if requestedAt, ok := state.Annotations[v1alpha1.RollbackRequestedAnnotation]; ok {
 		if requestedAt == state.Status.ConsumedRollbackRequest {
 			// 이미 소비한 요청이 제거 실패로 남은 것이다(Idle·Failed 재진입 이후까지 미뤄져도) —
@@ -163,7 +151,7 @@ func (m *UpgradeStateMachine) TransitionState(
 				m.Recorder.Eventf(state, corev1.EventTypeNormal, "RollbackRequested",
 					"관리자 요청(%s)으로 Rollback 전이 (node=%s)", requestedAt, state.Spec.NodeName)
 				if err := m.clearRollbackRequest(ctx, state); err != nil {
-					// 상태는 이미 Rollback 으로 영속됐다 — 아래 case(state==Rollback)가 다음
+					// 상태 전이는 이미 영속되어 있다 — 아래 case(state==Rollback)가 다음
 					// reconcile 에서 어노테이션 제거만 재시도한다(재전이는 하지 않는다).
 					logger.Error(err, "롤백 요청 어노테이션 제거 실패 — 다음 reconcile 에서 재시도")
 				}
@@ -196,13 +184,11 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateUpgrading:
 		return m.handleUpgrading(ctx, state, policy)
 	case v1alpha1.UpgradeStateValidating:
-		// install 성공 후 cross-major 로 커널 모듈 교체에 재부팅이 필요하면(NDR.needsReboot),
-		// validator 체인 앞에서 RebootRequired 로 분기(재부팅 전엔 validator 가 구 버전을 보고 실패).
-		// 마커가 없으면 이 분기를 절대 타지 않는다 — 근거 없는 재부팅은 고착보다 나쁘다.
-		// 마커가 있을 때 남는 문제는 그 관측을 믿어도 되는가다: 재부팅 후 install Job 이 host
-		// 마커를 소거해도 NDR 반영은 detector 스캔주기(30s)만큼 지연되어, stale-true 를 읽으면
-		// "재부팅이 안 먹혔다"로 오판→MaxReboots 초과→Failed 가 된다(실측 25~30s > requeue 20s).
-		// 그래서 rebootMarkerIsFresh 가 "이번 install Job 완료보다 나중 관측인가"로 가른다.
+		// install 성공 후 cross-major 로 모듈 교체에 재부팅이 필요하면(NDR.needsReboot), validator
+		// 체인 앞에서 RebootRequired 로 분기한다 — 재부팅 전엔 validator 가 구 버전을 보고 실패한다.
+		// 마커가 없으면 이 분기를 타지 않는다. 마커가 있어도 NDR 반영은 detector 스캔주기(30s)만큼
+		// 지연되므로, rebootMarkerIsFresh 로 "이번 install Job 완료보다 나중 관측인가"를 확인해
+		// stale 마커로 인한 오판(MaxReboots 초과→Failed)을 막는다.
 		if need, nerr := m.nodeNeedsReboot(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model); nerr == nil &&
 			need && m.rebootMarkerIsFresh(ctx, state) {
 			return m.transitionTo(state, v1alpha1.UpgradeStateRebootRequired,
@@ -320,10 +306,9 @@ func (m *UpgradeStateMachine) handleIdle(
 	}
 
 	// verifiedVersions 화이트리스트 검사는 autoUpgrade 게이트보다 앞이다 — 허용 목록 밖 버전은
-	// 자동 업그레이드를 끈 정책에서도 거부 사유를 드러내야 한다. 종전 순서에서는 autoUpgrade=false
-	// 가 먼저 돌려보내 UpgradeAvailable("새 버전 있음") 경고만 남고, 진짜 이유(목록 밖)는
-	// 어디에도 보이지 않았다(2026-10-09 라이브 확인). 이 전이는 Job 을 만들지 않고 cordon 도
-	// 하지 않으며, 버전이 목록에 다시 들어오면 handleUnverifiedVersion 이 Idle 로 되돌린다.
+	// 자동 업그레이드를 끈 정책에서도 거부 사유를 드러내야 한다. 이 전이는 Job 을 만들지 않고
+	// cordon 도 하지 않으며, 버전이 목록에 다시 들어오면 handleUnverifiedVersion 이 Idle 로
+	// 되돌린다.
 	if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
 		msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
 			desiredVersion, policy.Spec.VerifiedVersions)
@@ -345,9 +330,8 @@ func (m *UpgradeStateMachine) handleIdle(
 	}
 
 	// IdleCooldown 가드 — Idle 진입 직후 (default 10s) 연속 trigger 거부.
-	// rolling-update 테스트에서 사용자가 trigger 를 빠르게 두 번 던지면 첫 사이클의
-	// Uncordoning→Idle 직후 다시 Cordoning 으로 진입하여 05_verify 가 mid-state 를
-	// PASS 로 오인하는 결함 (followup plan §F3) 을 차단한다.
+	// 사용자가 trigger 를 빠르게 두 번 던지면 첫 사이클의 Uncordoning→Idle 직후 다시 Cordoning 으로
+	// 진입해, 검증 스크립트가 mid-state 를 완료로 오인하는 결함을 막는다.
 	// IdleCooldownSeconds 가 nil 이면 default, 0/음수면 비활성화.
 	cooldown := defaultIdleCooldown
 	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.IdleCooldownSeconds != nil {
@@ -381,7 +365,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	// 버전 불일치 + autoUpgrade: UpgradeRequired로 전이
 	// PreviousImage는 이번 사이클에서 handleUpgrading이 DS로부터 다시 수집하도록 비움.
 	// 이전 업그레이드 값이 남아있으면 잘못된 이미지로 롤백될 수 있음.
-	// RollbackAttempts는 새 사이클이므로 0으로 초기화 (P2 무한 루프 방지).
+	// RollbackAttempts는 새 사이클이므로 0으로 초기화(무한 루프 방지).
 	state.Status.DesiredVersion = desiredVersion
 	state.Status.PreviousVersion = currentVersion
 	state.Status.PreviousImage = ""
@@ -510,7 +494,7 @@ func (m *UpgradeStateMachine) handleCordoning(
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeCordoned",
 		"업그레이드를 위해 노드 %s cordon 완료", state.Spec.NodeName)
 
-	// architectural plan §A6.1: opt-in 라벨이 붙은 Deployment 를 노드별로 quiesce(scale=0).
+	// opt-in 라벨이 붙은 Deployment 를 노드별로 quiesce(scale=0)한다.
 	// gpu-stress 등 NodeAffinity reject 로 Failed Pod 가 누적되는 결함을 차단한다.
 	// 실패 시 사이클은 계속 진행 (best-effort) — backup 이 비어 있으면 restore 도 no-op.
 	if err := m.QuiesceLabeledDeployments(ctx, state); err != nil {
@@ -578,20 +562,12 @@ func (m *UpgradeStateMachine) handleDraining(
 		return true, 15 * time.Second, nil
 	}
 
-	// Pod 축이 비었어도 claim 축은 따로 본다 — DRA 는 장치를 Pod 이 아니라 ResourceClaim 이
-	// 쥔다. Pod 이 사라져도 claim 이 deallocate 되기 전에는 장치가 여전히 잡혀 있고, 반대로
-	// 다른 컨트롤러가 만든 claim 은 대응하는 Pod 이 이 노드에 없을 수도 있다.
-	//
-	// "아직 할당돼 있다" 는 Pod 축의 "아직 Pod 가 남았다" 와 같은 등급이므로 오류가 아니라 정상
-	// 재조정으로 돌린다. DRA 는 kubelet NodeUnprepare → reservedFor 비움 → deallocate 순서라
-	// Pod 이 사라진 뒤에도 claim 이 한동안 할당 상태로 남는 구간을 정상 drain 이 반드시 지난다.
-	// 그 구간을 오류로 올리면 DRA 노드가 정상 drain 될 때마다 오류 로그와 reconcile 오류 지표가
-	// 오르고, 15초 고정 주기 대신 controller-runtime 지수 backoff 를 타 drain 타임아웃 안의
-	// 재시도 간격이 의도보다 길어진다. 읽기 실패(List·Node Get)만 오류로 올린다.
-	//
-	// 이 분기는 transitionTo 를 쓰지 않으므로 LastTransitionTime 이 보존되고, Draining 진입점이
-	// 하나라 다음 재조정이 머리의 drain 타임아웃 검사를 다시 밟는다 — 끝내 비지 않으면 그 검사가
-	// 롤백 또는 Failed 로 보낸다.
+	// Pod 축이 비었어도 claim 축은 따로 본다 — DRA 는 장치를 Pod 이 아니라 ResourceClaim 이 쥔다.
+	// kubelet 은 NodeUnprepare → reservedFor 비움 → deallocate 순서라, Pod 이 사라진 뒤에도 claim
+	// 이 한동안 할당 상태로 남는 구간을 정상 drain 이 반드시 지난다. 그래서 "아직 할당돼 있다"는
+	// Pod 축의 "아직 Pod 가 남았다"와 같은 등급으로 보고 오류가 아니라 정상 재조정(requeue)으로
+	// 돌린다 — 읽기 실패(List·Node Get)만 오류로 올린다. transitionTo 를 쓰지 않아
+	// LastTransitionTime 은 보존되고, 끝내 비지 않으면 머리의 drain 타임아웃 검사가 처리한다.
 	if err := draclaim.AssertNoneAllocatedOnNode(ctx, m.Client, state.Spec.NodeName); err != nil {
 		if !errors.Is(err, draclaim.ErrClaimStillAllocated) {
 			return false, 0, fmt.Errorf("drain 완료 전 ResourceClaim 검사 실패: %w", err)
@@ -648,10 +624,10 @@ func (m *UpgradeStateMachine) handleUpgrading(
 	}
 
 	if updated {
-		// 롤백 시 빌드 접미사 포함 원본 이미지를 복구하기 위해 패치 직전에 기록.
-		// architectural plan §3 (defense-in-depth): broken plain tag (예: ":580.126.09") 이
-		// PreviousImage 로 캡처되어 rollback 시 broken Pod 으로 회귀하는 것을 차단.
-		// isVerifiedBuildTag 가 true 인 (-v<N> 접미사 또는 검증된) 태그만 저장.
+		// 롤백 시 빌드 접미사 포함 원본 이미지를 복구하기 위해 패치 직전에 기록한다.
+		// broken plain tag (예: ":580.126.09") 가 PreviousImage 로 캡처되어 rollback 시
+		// broken Pod 으로 회귀하는 것을 막는다. isVerifiedBuildTag 가 true 인
+		// (-v<N> 접미사 또는 검증된) 태그만 저장한다.
 		if state.Status.PreviousImage == "" && prevImage != "" && prevImage != desiredImage {
 			if isVerifiedBuildTag(prevImage) {
 				state.Status.PreviousImage = prevImage
@@ -695,15 +671,10 @@ func validatorsFor(policy *v1alpha1.DriverInstallPolicy) []validator.Validator {
 }
 
 // handleValidating 은 validator 체인을 순차 실행해 새 드라이버가 정상 동작하는지 검증한다.
-//
-// 각 validator 의 의미:
-//   - Run 이 (Passed=true) 면 다음 validator 로 진행.
-//   - (Passed=false) 면 caller wall-clock budget 안에서 재시도 (requeueAfter 10s).
-//   - error 는 controller-runtime 으로 전파 (재시도 가능 API 오류).
-//
-// 추가 안전장치:
-//   - 전체 ValidationTimeout 초과 → Rollback (정책에 따라) / Failed.
-//   - 드라이버 Pod CrashLoopBackOff 즉시 감지 → Rollback / Failed (재시도 무의미).
+// validator 가 Passed=true 면 다음으로 진행하고, Passed=false 면 caller wall-clock budget 안에서
+// 재시도(requeueAfter 10s)하며, error 는 재시도 가능 API 오류로 보고 controller-runtime 에
+// 전파한다. 추가 안전장치: 전체 ValidationTimeout 초과 시 정책에 따라 Rollback/Failed, 드라이버
+// Pod CrashLoopBackOff 는 재시도가 무의미하므로 즉시 Rollback/Failed.
 func (m *UpgradeStateMachine) handleValidating(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -716,9 +687,9 @@ func (m *UpgradeStateMachine) handleValidating(
 
 	logger := logf.FromContext(ctx)
 
-	// architectural plan §4.4 옵션 A: Validating 진입 시점에 detector 차단 라벨만 제거.
-	// driver-upgrading 라벨은 사이클 추적용으로 보존 (Uncordoning 에서 함께 제거).
-	// detector 재spawn → NDR 갱신 → DriverModuleValidator 통과를 가능케 함.
+	// Validating 진입 시점에 detector 차단 라벨만 제거한다.
+	// driver-upgrading 라벨은 사이클 추적용으로 보존(Uncordoning 에서 함께 제거).
+	// detector 재spawn → NDR 갱신 → DriverModuleValidator 통과로 이어진다.
 	if err := m.EnsureUpgradingBlockingLabelRemoved(ctx, state.Spec.NodeName); err != nil {
 		logger.Error(err, "Validating 진입 시 blocking 라벨 제거 실패", "node", state.Spec.NodeName)
 	} else {
@@ -771,8 +742,8 @@ func (m *UpgradeStateMachine) handleValidating(
 		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "드라이버 Pod CrashLoopBackOff: 수동 조치 필요", 0)
 	}
 
-	// 새 Pod 이 아직 준비되지 않은 경우 (wrong-image 캐시 / NotReady 등) 단순 requeue.
-	// ValidationTimeout 안에 안정되지 않으면 architectural plan §1 의 timeout 가드가 Rollback / Failed 로 전이한다.
+	// 새 Pod 이 아직 준비되지 않은 경우 (wrong-image 캐시 / NotReady 등) 단순 requeue 한다.
+	// ValidationTimeout 안에 안정되지 않으면 위 timeout 가드가 Rollback / Failed 로 전이한다.
 	if !ready {
 		logger.Info("Validating: 새 Pod 미준비 (이미지 불일치 또는 NotReady)",
 			"node", state.Spec.NodeName)
@@ -824,8 +795,8 @@ func (m *UpgradeStateMachine) handleUncordoning(
 	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUncordoned",
 		"노드 %s uncordon 완료, 업그레이드 성공", state.Spec.NodeName)
 
-	// architectural plan §A6.1: 사이클 정상 종료 시 quiesce 된 Deployment 복구.
-	// uncordon 후 Idle 진입 직전이 가장 안전한 시점 (노드 schedulable + 새 driver 준비 완료).
+	// 사이클 정상 종료 시 quiesce 된 Deployment 를 복구한다.
+	// uncordon 후 Idle 진입 직전이 가장 안전한 시점이다 (노드 schedulable + 새 driver 준비 완료).
 	if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
 		logf.FromContext(ctx).Error(err, "restoreQuiescedDeployments 실패 (수동 조치 필요)",
 			"node", state.Spec.NodeName)
@@ -836,42 +807,23 @@ func (m *UpgradeStateMachine) handleUncordoning(
 	return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
 }
 
-// handleFailed 는 터미널 Failed 상태를 처리한다. 자동 복구(상태 전이 / DS image patch /
-// install Job 재생성)는 여전히 하지 않는다 — rollback infinite-loop 방지(plan §R1)는 그대로다.
-// 여기서 하는 일은 단 하나, **이 사이클이 걸어 둔 cordon 을 조건이 맞으면 푸는 것**이다.
-// 상태는 Failed 로 남고 사람의 수동 조치는 여전히 필요하다.
-//
-// 왜 푸는가 — 라이브 실측(2026-08-05):
-// worker1 의 Furiosa 드라이버가 사라지자 DUS 가 Draining("노드 cordon 완료") → Failed("롤백할
-// 이전 버전 없음(job)") 로 착지했고, cordon 이 남은 채 방치됐다. cordon 된 노드는 BuildSnapshot
-// 이 후보에서 통째로 뺀다. 그래서 같은 노드에서 멀쩡히 돌던 NVIDIA GPU 2장까지 배치 불가가
-// 되고 NVIDIA 워크로드가 NoCandidateNodes 로 거절됐다 — 한 벤더의 드라이버 소실이 그 노드의
-// 모든 벤더를 인질로 잡는다. cordon 은 노드 단위 도구라 "이 벤더만 못 쓴다" 를 표현하지 못한다.
-// 실패한 벤더의 배제는 광고(extended resource)가 이미 담당한다.
-//
-// 왜 무조건 풀지 않는가: 같은 실측에서 device-plugin 이 드라이버 소실과 함께 광고를 0 으로
-// 내렸지만 그것은 **관측 하나이지 보장이 아니다**. 드라이버 없이도 광고를 유지하는 플러그인이
-// 있다면 cordon 을 푸는 순간 드라이버 없는 장치 위로 워크로드가 떨어진다. 그래서 해제 직전에
-// 그 벤더의 광고가 실제 0 인지 확인하고, 확인하지 못하면 cordon 을 유지한다. 가드가 해제
-// 자체보다 중요하다.
+// handleFailed 는 터미널 Failed 상태를 처리한다. 자동 복구(상태 전이 / DS image patch / install
+// Job 재생성)는 하지 않는다 — rollback 무한루프 방지가 그대로 적용된다. 여기서 하는 일은 이
+// 사이클이 건 cordon 을 조건이 맞으면 푸는 것뿐이고, 상태는 Failed 로 남아 수동 조치가 필요하다.
+// cordon 은 노드 단위 도구라 "이 벤더만 못 쓴다"를 표현하지 못해, 한 벤더의 드라이버 소실이 같은
+// 노드의 다른 벤더까지 배치 불가로 만든다 — 그래서 벤더 광고가 실제 0 임을 확인했을 때만 푼다.
+// 광고가 0 이라는 관측 하나가 보장은 아니므로, 확인하지 못하면 해제보다 cordon 유지를 우선한다.
 func (m *UpgradeStateMachine) handleFailed(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 ) (bool, time.Duration, error) {
 	logger := logf.FromContext(ctx).WithValues("node", state.Spec.NodeName, "vendor", state.Spec.Vendor)
 
-	// 탈출 (2026-08-07 라이브): 노드가 이미 목표를 만족하고 있으면 Failed 로 붙잡아 둘 이유가
-	// 없다. `.91` k8s-worker3-tenstorrent 가 current=desired=2.8.0 에 드라이버도 로드된 채로
-	// 사흘을 Failed 로 남아 있었다 — 실패를 만든 조건이 이미 사라졌는데 상태에 나가는 길이
-	// 없었기 때문이다. 사람이 손댈 것이 없는 상태에서 "수동 조치 필요" 를 말하는 것은 상태를
-	// 잘못 표현하는 것이고, 그 노드는 운영자의 확인 목록에 영원히 남는다.
-	//
-	// 왜 이 조건에서만 여는가: 여기서 Idle 로 보내면 handleIdle 이 다시 판정한다. 버전이 같고
-	// 드라이버가 로드돼 있으면 handleIdle 은 아무것도 하지 않는다(Job 모드 self-heal 은
-	// driverLoaded=false 로만 발동하고, 버전 일치 분기는 Idle 을 유지한다). 그래서 왕복이
-	// 생기지 않는다. 조건을 넓히면 — 예컨대 버전만 보고 열면 — Idle 이 설치를 다시 걸고 같은
-	// 이유로 실패해 Failed 로 돌아오는 왕복이 생기고, 그 왕복은 고착보다 나쁘다(노드를 계속
-	// 건드린다).
+	// 노드가 이미 목표 버전을 만족하고 드라이버도 로드돼 있으면 Failed 로 붙잡아 둘 이유가 없다 —
+	// 실패를 만든 조건이 사라졌는데 나가는 길이 없으면 "수동 조치 필요"가 상태를 잘못 표현한다.
+	// Idle 로 보내는 이유: handleIdle 은 버전이 같고 드라이버가 로드돼 있으면 아무것도 하지 않으므로
+	// (Job 모드 self-heal 은 driverLoaded=false 로만 발동) 왕복이 생기지 않는다. 조건을 버전만으로
+	// 넓히면 Idle 이 설치를 다시 걸어 같은 이유로 실패하는 왕복이 생기고, 그 왕복은 고착보다 나쁘다.
 	if recovered, err := m.failedStateRecovered(ctx, state); err != nil {
 		return false, 0, err
 	} else if recovered {
@@ -931,7 +883,7 @@ func (m *UpgradeStateMachine) handleFailed(
 	if !decidable || stillAdvertised != "" {
 		// 유지. 보류이지 포기가 아니므로 다시 볼 기회를 남긴다 — 광고는 device-plugin 이
 		// 뒤늦게 재시작하며 떨어질 수 있다. 여기서 반환하는 requeue 는 상태 전이도 DS 패치도
-		// Job 생성도 하지 않으므로 plan §R1 의 무한 롤백 방지와 충돌하지 않는다(같은 switch 의
+		// Job 생성도 하지 않으므로 무한 롤백 방지와 충돌하지 않는다(같은 switch 의
 		// UnverifiedVersion 이 이미 같은 방식으로 터미널 상태를 재확인한다).
 		logger.Info("Failed 터미널 상태 — cordon 유지(벤더 광고 0 미확인)",
 			"advertisedResource", stillAdvertised, "vendorKnown", decidable)
@@ -959,15 +911,11 @@ func (m *UpgradeStateMachine) handleFailed(
 	return false, 0, nil
 }
 
-// failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다.
-// 만족의 정의는 둘 다여야 한다: (a) 목표 버전이 지정돼 있고 현재 버전과 같다,
-// (b) 그 벤더 장치의 드라이버가 실제로 로드돼 있다.
-//
-// (b) 를 함께 보는 이유: 버전 문자열은 마지막 관측의 잔상일 수 있다. 모듈이 빠진 노드를
-// 버전만 보고 "만족" 으로 읽으면 Idle 로 보냈다가 self-heal 이 설치를 걸고, 그 설치가 원래
-// 실패하던 이유로 다시 실패해 Failed 로 돌아온다. 근거를 하나 더 요구해 그 왕복을 막는다.
-//
-// NDR 이 없으면 (b) 를 확인할 수 없으므로 false 다 — 확인하지 못한 것을 만족으로 읽지 않는다.
+// failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다. 만족의
+// 정의는 둘 다여야 한다: (a) 목표 버전이 현재 버전과 같다, (b) 그 벤더 장치의 드라이버가 실제로
+// 로드돼 있다. (b)를 함께 보는 이유: 버전 문자열만 보고 "만족"으로 읽으면 모듈이 빠진 노드도
+// Idle 로 보내 self-heal 이 설치를 걸고 같은 이유로 다시 실패하는 왕복이 생긴다. NDR 이 없어
+// (b)를 확인할 수 없으면 false 다 — 확인하지 못한 것을 만족으로 읽지 않는다.
 func (m *UpgradeStateMachine) failedStateRecovered(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -990,18 +938,12 @@ func (m *UpgradeStateMachine) failedStateRecovered(
 	return !notLoaded, nil
 }
 
-// vendorStillAdvertised 는 노드가 그 벤더의 extended resource 를 아직 광고 중인지 본다.
-// 반환값은 (0 이 아닌 리소스명, 판정 가능 여부)이며 ("", true) 만이 "광고가 0 임을 확인했다"
-// 는 뜻이다.
-//
-// 카탈로그(internal/intent)가 모르는 벤더는 어떤 리소스명을 봐야 하는지 알 수 없으므로
-// decidable=false 를 돌린다 — 찾은 게 없는 것을 0 으로 읽으면 안 된다.
-//
-// 카탈로그의 고정 이름과 대조하지 않고 allocatable 을 훑어 VendorForResource 로 되짚는 이유:
-// NVIDIA mixed MIG 는 프로파일마다 nvidia.com/mig-<profile> 이라는 동적 리소스명으로 광고해서
-// nvidia.com/gpu 하나만 보면 MIG 장치가 살아 있는데도 0 으로 읽힌다. furiosa 처럼 한 벤더
-// 아래 제품이 둘(rngd/warboy)인 경우도 이 방식이면 product 를 몰라도 둘 다 걸린다 — cordon 은
-// 벤더 단위 DUS 가 걸었으므로 해제도 그 벤더 전체가 0 일 때만 해야 한다.
+// vendorStillAdvertised 는 노드가 그 벤더의 extended resource 를 아직 광고 중인지 본다. 반환값은
+// (0 이 아닌 리소스명, 판정 가능 여부)이며 ("", true) 만 "광고가 0 임을 확인했다"는 뜻이다. 카탈로그
+// (internal/intent)가 모르는 벤더는 decidable=false 다 — 찾지 못한 것을 0 으로 읽지 않는다.
+// 고정 이름과 대조하지 않고 allocatable 을 훑어 VendorForResource 로 되짚는 이유: NVIDIA mixed MIG 는
+// 프로파일마다 동적 리소스명(nvidia.com/mig-<profile>)으로 광고해 nvidia.com/gpu 만 보면 오판되고,
+// furiosa 의 두 제품(rngd/warboy)도 함께 걸린다 — cordon 은 벤더 단위이므로 해제도 전체가 0 일 때만 한다.
 func vendorStillAdvertised(node *corev1.Node, vendor string) (string, bool) {
 	if !intent.KnownVendor(vendor) {
 		return "", false
@@ -1030,7 +972,7 @@ func (m *UpgradeStateMachine) handleRollback(
 
 	metrics.RecordRollback(state.Spec.Vendor)
 
-	// P2: 롤백 시도 횟수 제한. 반복 실패 시 무한 루프 방지.
+	// 롤백 시도 횟수를 제한한다. 반복 실패 시 무한 루프를 방지한다.
 	maxRollbacks := int32(3)
 	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.MaxRollbackAttempts > 0 {
 		maxRollbacks = policy.Spec.UpgradePolicy.MaxRollbackAttempts
@@ -1236,19 +1178,11 @@ func (m *UpgradeStateMachine) nodeNeedsReboot(ctx context.Context, nodeName, ven
 }
 
 // rebootMarkerIsFresh 는 needsReboot 관측을 이번 사이클의 재부팅 근거로 써도 되는지 판정한다.
-//
-// 기준은 "관측이 이번 install Job 완료보다 나중인가" 다. install Job 이 끝난 뒤에 남은 마커는
-// 그 Job 이 방금 쓴 것이므로 진짜이고, 완료 이전 관측은 소거 전 상태를 보고 있는 stale 이다.
-//
-// 왜 시도 횟수로 가르지 않는가 — 원래 규율은 RebootAttempts==0 이었다. 그러면 "재부팅 후에
-// 다시 돈 install Job 이 새로 남긴 마커" 를 표현할 방법이 없다. 라이브 실측(2026-08-07 `.91`
-// k8s-worker1): 05:43 에 시작한 580.173.02 install Job 이 05:49 에 마커를 남기고 정상 종료했는데
-// 앞선 재부팅이 예산을 이미 써버려 상태기계가 Validating 에서 나가지 못했고, 사람이 노드를
-// 재부팅할 때까지 9분을 멈춰 있었다. 나가는 길이 없는 상태였다.
-//
-// 근거를 확보하지 못하면(NDR 에 observedAt 없음 / Job 없음 / 완료시각 없음 — daemonset 모드가
-// 여기 해당) 기존 규율로 후퇴한다. 재부팅 예산 자체는 여기서 정하지 않는다 —
-// handleRebootRequired 의 MaxReboots 한 곳이 갖는다.
+// 기준은 "관측이 이번 install Job 완료보다 나중인가" 다 — 완료 후 남은 마커는 그 Job 이 방금 쓴
+// 것이라 진짜이고, 완료 이전 관측은 소거 전 상태를 보는 stale 이다. 시도 횟수(RebootAttempts==0)
+// 만으로 가르면 재부팅 후 다시 돈 install Job 이 새로 남긴 마커를 표현할 방법이 없어 예산을 다 쓴
+// 상태기계가 Validating 에서 나가지 못하고 멈춘다. 근거가 없으면(NDR 에 observedAt 없음 / Job
+// 없음 / 완료시각 없음) 시도 횟수 기준으로 후퇴한다. 재부팅 예산은 handleRebootRequired 가 갖는다.
 func (m *UpgradeStateMachine) rebootMarkerIsFresh(ctx context.Context, state *v1alpha1.DriverUpgradeState) bool {
 	firstReboot := state.Status.RebootAttempts == 0
 
@@ -1288,7 +1222,7 @@ func (m *UpgradeStateMachine) handleRebootRequired(ctx context.Context, state *v
 		return m.transitionTo(state, v1alpha1.UpgradeStateValidating, "needsReboot 해소 — 검증으로 복귀", 0)
 	}
 
-	// kured executor 는 1차 미구현(계획 §5, 수요 시). 기본 Job 만 실행.
+	// kured executor 는 미구현 상태다(수요 시 추가 예정). 기본 Job 만 실행한다.
 	if policy.Spec.RebootExecutor == "kured" {
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RebootExecutorUnsupported",
 			"kured executor 는 1차 미구현(후속 과제) — DIP.driver.rebootExecutor=Job 사용")
@@ -1304,7 +1238,7 @@ func (m *UpgradeStateMachine) handleRebootRequired(ctx context.Context, state *v
 		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "재부팅 한도 초과: 수동 조치 필요", 0)
 	}
 
-	// P2 premature-Ready 가드: reboot Job 생성 **이전에** 현재 node.status.nodeInfo.bootID 를
+	// premature-Ready 가드: reboot Job 생성 **이전에** 현재 node.status.nodeInfo.bootID 를
 	// DUS status 에 persist 한다(persist-then-Job). 재부팅으로 bootID 가 바뀌므로 handleRebooting 은
 	// 이 값과의 차이로 "실제 재부팅 완료"를 판정한다(kubelet 이 재부팅 직전 잠깐 Ready 를 유지하는 레이스 차단).
 	// 캡처 실패 시 빈 값을 저장 → handleRebooting 이 기존 isNodeReady 로 보수 전진(교착 방지 fallback).
@@ -1355,17 +1289,18 @@ func (m *UpgradeStateMachine) handleRebooting(ctx context.Context, state *v1alph
 	if !isNodeReady(&node) {
 		return true, 15 * time.Second, nil // 재부팅 중(NotReady) → 대기
 	}
-	// P2 premature-Ready 가드: bootID 가 재부팅 직전 캡처값과 아직 같으면 실제 재부팅 전(kubelet 이
+	// premature-Ready 가드: bootID 가 재부팅 직전 캡처값과 아직 같으면 실제 재부팅 전(kubelet 이
 	// 잠깐 Ready 를 유지하는 레이스) → 전진 보류. bootID 캡처 실패(빈 값)면 기존 isNodeReady 로 보수 전진.
 	if state.Status.RebootBootID != "" && node.Status.NodeInfo.BootID == state.Status.RebootBootID {
 		logger.Info("노드 Ready 이나 bootID 미변경 — 재부팅 미완료로 판단, 대기",
 			"node", state.Spec.NodeName, "bootID", state.Status.RebootBootID)
 		return true, 15 * time.Second, nil
 	}
-	// Ready 복귀 — 재부팅으로 신 모듈이 로드됐다. 구 install Job 을 삭제해 재실행을 강제하고 Upgrading 재진입:
-	// 재실행 install Job(entrypoint)이 (a) 모듈 재로드 확인 (b) major 일치 시 host needs-reboot 마커 소거(WP-R2)
-	// 를 수행한다 → 이후 Validating 이 needsReboot=false 로 정상 검증. (재부팅만으로는 host 마커를 지울 주체가
-	// install Job 재실행뿐이므로 Validating 직행 시 needsReboot 잔존→RebootRequired 재진입→MaxReboots→Failed 가 된다.)
+	// Ready 복귀 — 재부팅으로 신 모듈이 로드된다. 구 install Job 을 삭제해 재실행을 강제하고 Upgrading
+	// 재진입: 재실행 install Job(entrypoint)이 (a) 모듈 재로드 확인 (b) major 일치 시 host
+	// needs-reboot 마커 소거를 수행해야 이후 Validating 이 needsReboot=false 로 정상 검증한다.
+	// 재부팅만으로는 host 마커를 지울 주체가 install Job 재실행뿐이므로, Validating 로 직행하면
+	// needsReboot 가 남아 RebootRequired 재진입→MaxReboots→Failed 로 이어진다.
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	oldJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: driverjob.Namespace}}
 	if err := client.IgnoreNotFound(m.Delete(ctx, oldJob, client.PropagationPolicy(metav1.DeletePropagationBackground))); err != nil {
@@ -1514,7 +1449,7 @@ func (m *UpgradeStateMachine) uncordonNode(ctx context.Context, nodeName string,
 
 // reapStaleCordonClaim 은 우리가 노드의 unschedulable==false 를 관측했는데 우리 소유 annotation
 // 이 남아 있으면 그 annotation 을 지운다. 사람이 uncordon 한 뒤 stale 로 남아 이후 남의 cordon 을
-// 오인 해제하는 것을 막는다(마커 수명==cordon 수명 불변식 복원, EC-1).
+// 오인 해제하는 것을 막는다(마커 수명은 cordon 수명과 같아야 한다는 불변식 유지).
 func (m *UpgradeStateMachine) reapStaleCordonClaim(ctx context.Context, node *corev1.Node, state *v1alpha1.DriverUpgradeState) error {
 	if node.Spec.Unschedulable || node.Annotations[cordonOwnerAnnotationKey] != state.Name {
 		return nil
@@ -1557,12 +1492,11 @@ func (m *UpgradeStateMachine) clearUpgradingLabel(ctx context.Context, nodeName 
 // 패턴과 같다.
 var acceleratorDomains = intent.AcceleratorResourceDomains()
 
-// hasAcceleratorResourceName 은 리소스명이 등록된 벤더의 가속기 extended resource
-// 도메인 밑에 있는지를 본다. intent.AcceleratorResourceDomains 를 그대로 써서 uninstall
-// 게이트(internal/uninstall/gate.go)와 같은 fail-closed 판정을 공유한다 — 전에는
-// hasDeviceWorkloads·podUsesDevice 가 이 판정을 각자 세 문자열로 따로 적어 두고 있었고,
-// 그 목록에 rebellions.ai/ 가 빠져 있어 rebellions ATOM 파드가 드라이버 업그레이드
-// drain 에서 PDB 를 존중하는 eviction 대상으로 인식되지 못했다.
+// hasAcceleratorResourceName 은 리소스명이 등록된 벤더의 가속기 extended resource 도메인 밑에
+// 있는지를 본다. intent.AcceleratorResourceDomains 를 그대로 써서 uninstall 게이트
+// (internal/uninstall/gate.go)와 같은 fail-closed 판정을 공유한다. hasDeviceWorkloads·
+// podUsesDevice 가 이 판정을 따로 복제하면, 벤더 도메인이 하나라도 빠질 때 그 벤더의 파드가
+// drain 대상에서 빠져나간다.
 func hasAcceleratorResourceName(rn string) bool {
 	for _, domain := range acceleratorDomains {
 		if strings.Contains(rn, domain) {
@@ -1594,12 +1528,8 @@ func (m *UpgradeStateMachine) hasDeviceWorkloads(ctx context.Context, nodeName s
 
 // evictDevicePods는 노드에서 GPU/NPU 리소스를 사용하는 Pod를 PDB를 존중하며 축출합니다.
 // policy/v1 Eviction API를 사용하므로 API server가 PodDisruptionBudget을 자동 검사합니다.
-//
-// 에러 처리:
-//   - 429 TooManyRequests: PDB 위반. force=false면 이벤트만 발행하고 다음 주기에 재시도.
-//     force=true면 직접 Delete로 폴백 (kubectl drain --force 동등).
-//   - 404 NotFound: 이미 삭제된 Pod, 성공 처리.
-//   - 기타 에러: 상위로 전파.
+// 에러 처리: 429(PDB 위반)는 force=false면 다음 주기 재시도, force=true면 Delete로 폴백
+// (kubectl drain --force 동등). 404(이미 삭제됨)는 성공 처리. 기타 에러는 상위로 전파.
 func (m *UpgradeStateMachine) evictDevicePods(ctx context.Context, state *v1alpha1.DriverUpgradeState, force bool) error {
 	logger := logf.FromContext(ctx)
 	var podList corev1.PodList
@@ -1655,16 +1585,12 @@ func podPhaseDrainable(pod *corev1.Pod) bool {
 	return pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed
 }
 
-// podUsesDevice는 Pod가 GPU/NPU 장치를 쥐고 있는지 반환합니다 — device-plugin 축
-// (extended resource limits, containers + initContainers)과 DRA 축(pod.spec.resourceClaims)을
-// 모두 봅니다.
-//
-// DRA 로 뜬 Pod 은 resources.limits 가 비어 있다 — 장치를 extended resource 가 아니라
-// pod.spec.resourceClaims 로 쥐기 때문이다. limits 만 보면 그런 Pod 은 "아무것도 안 쥔 Pod"
-// 으로 보여 drain 대상에서 빠지고, 그 위에서 커널 모듈이 교체된다.
-// claim 을 DeviceClass→driver 로 되짚어 벤더를 가리지는 않는다: 이 판정은 안전 게이트라
-// 과하게 잡는 쪽이 옳다(과하면 가속기와 무관한 DRA claim Pod 가 한 번 쫓겨날 뿐,
-// 모자라면 장치가 밑에서 바뀐다).
+// podUsesDevice는 Pod가 GPU/NPU 장치를 쥐고 있는지 반환합니다 — device-plugin 축(extended
+// resource limits, containers + initContainers)과 DRA 축(pod.spec.resourceClaims)을 모두 봅니다.
+// DRA 로 뜬 Pod 은 resources.limits 가 비어 있어(장치를 resourceClaims 로 쥐기 때문) limits 만
+// 보면 drain 대상에서 빠지고 그 위에서 커널 모듈이 교체된다. claim 을 DeviceClass→driver 로
+// 되짚어 벤더를 가리지는 않는다 — 이 판정은 안전 게이트라 과하게 잡는 쪽이 옳다(모자라면 장치가
+// 밑에서 바뀐다).
 func podUsesDevice(pod *corev1.Pod) bool {
 	if len(pod.Spec.ResourceClaims) > 0 {
 		return true
@@ -1686,7 +1612,7 @@ func podUsesDevice(pod *corev1.Pod) bool {
 // 커널 모듈 참조를 잡으므로, drain 시 삭제해야 rmmod가 가능합니다.
 func (m *UpgradeStateMachine) deleteDevicePluginPods(ctx context.Context, nodeName string) error {
 	// device-plugin 은 벤더별로 다른 네임스페이스에 상주한다(3rd-party=kube-system,
-	// TT=kcloud, #21). 하드코딩 대신 전 네임스페이스 조회 후 nodeName+이름/라벨로 필터.
+	// TT=kcloud). 하드코딩 대신 전 네임스페이스 조회 후 nodeName+이름/라벨로 필터.
 	var podList corev1.PodList
 	if err := m.List(ctx, &podList); err != nil {
 		return err
@@ -1825,16 +1751,12 @@ const (
 	eventPolicySharedOwnership = "PolicySharedOwnership"
 )
 
-// assembleKernelImage 는 태그 규약으로 노드 커널용 사전 컴파일 이미지 참조를 조립한다.
-// 조립 조건이 서지 않으면 빈 문자열을 돌려준다. 두 번째 반환값은 조립을 시도했으나 포기한
-// 이유이며, 애초에 조립할 것이 없으면 빈 문자열이다 — 알릴 것이 없는데 경고를 내면 PreFlight
-// 마다 같은 경고가 반복된다.
-//
-// 조립을 켜는 것은 spec.driver.kernelImageBuildRevision 이다 — 빌드 개정은 발행하는 쪽만 알아
-// 유도할 수 없다. 버전 토큰은 spec.driver.version 에서, variant 토큰은
-// spec.driver.kernelImageVariant 에서, 커널 토큰은 노드가 보고한 커널에서, 저장소 경로는
-// spec.driver.image 에서 온다. variant 유무가 벤더마다 달라 그 차이는 차트가 채운다 —
-// 여기서 벤더 이름으로 분기하지 않는다.
+// assembleKernelImage 는 태그 규약으로 노드 커널용 사전 컴파일 이미지 참조를 조립한다. 조립 조건이
+// 서지 않으면 빈 문자열을 돌려준다. 두 번째 반환값은 조립을 포기한 이유이며, 애초에 조립할 것이
+// 없으면 빈 문자열이다 — 알릴 것이 없는데 경고를 내면 PreFlight 마다 같은 경고가 반복된다.
+// 조립을 켜는 것은 spec.driver.kernelImageBuildRevision 이다. 버전 토큰은 spec.driver.version,
+// variant 토큰은 spec.driver.kernelImageVariant, 커널 토큰은 노드가 보고한 커널, 저장소 경로는
+// spec.driver.image 에서 온다. variant 유무는 벤더마다 달라 차트가 채우며 여기서는 분기하지 않는다.
 func assembleKernelImage(policy *v1alpha1.DriverInstallPolicy, kernelVersion string) (image string, skipReason string) {
 	build := policy.Spec.Driver.KernelImageBuildRevision
 	version := policy.Spec.Driver.Version
@@ -1870,30 +1792,12 @@ func assembleKernelImage(policy *v1alpha1.DriverInstallPolicy, kernelVersion str
 // docker 태그가 받는 문자(영숫자·점·밑줄·하이픈)만 허용한다.
 var tagSafeTokenRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지가 정책에 선언돼 있거나 태그 규약으로
-// 조립되면 그것을, 아니면 기본 설치 이미지를 돌려준다. 두 번째 반환값은 그 커널 이미지를 쓰지 않은
-// 이유이며, 이미지를 썼거나 애초에 커널 이미지가 없으면 빈 문자열이다. 호출부가 이 이유를 경고로
-// 드러낸다. 비어 있지 않은 사유를 내는 경로는 셋이다 — 찾은 이미지를 무시하는 둘과, 선언한 맵에서
-// 그 커널을 아예 찾지 못하는 하나(아래 "맵에 노드 커널 항목이 없으면" 단락). 무시하는 둘은 이렇다.
-//   - 태그가 검증 빌드 태그(…-vN)가 아니다. 존재하지 않는 이미지를 Job 에 싣지 않기 위해서다.
-//   - 태그의 버전 토큰이 spec.driver.version 과 다르다. 사전 컴파일 이미지는 자기가 구운 사용자
-//     공간과 모듈을 함께 설치하므로 그 둘이 어긋날 수는 없다. 그래도 이 검사를 두는 이유는 정책이
-//     선언한 버전과 이미지가 실제로 담은 버전이 다를 때 운영자 의도와 다른 드라이버가 깔리기
-//     때문이다. 기본 이미지로 되돌아가면 DKMS 가 spec.driver.version 으로 컴파일하므로 선언과
-//     결과가 맞는다.
-//
-// 맵에 노드 커널 항목이 없으면 kernelImageBuildRevision 이 선언됐을 때만 태그 규약으로 조립한다
-// (assembleKernelImage). 조립한 참조도 위 두 검사를 그대로 거친다 — 조립이 검증을 우회하면
-// spec.driver.version 을 잘못 적은 정책이 레지스트리에 없는 태그를 Job 에 싣는다.
-//
-// 세 번째 반환값은 skipReason 을 드러낼 이벤트 reason 이다. skipReason 이 비면 빈 문자열이다.
-//
-// 두 경로에서 spec.driver.version 의 뜻이 다르다. 사전 컴파일 경로에서는 이미지가 설치 버전을
-// 정하고 이 값은 위 대조에만 쓰인다. DKMS 경로에서는 이 값이 설치 버전을 정하므로 노드의 apt
-// 저장소에 실재해야 한다 — 그래서 차트 기본값은 우분투 아카이브에 있는 버전이어야 한다.
-//
-// spec.driver.version 이 비어 있으면 대조 기준이 없으므로 버전 검사를 건너뛴다. 버전을 비우는 것은
-// 설치기가 버전을 고르는 하위호환 경로다.
+// resolveDriverImage 는 노드 커널에 맞는 사전 컴파일 이미지(정책 선언 또는 태그 규약으로 조립)가
+// 있으면 그것을, 아니면 기본 설치 이미지를 돌려준다. 둘째 반환값은 그 이미지를 쓰지 않은 이유
+// (썼거나 애초에 없으면 빈 문자열), 셋째는 그 이유를 드러낼 이벤트 reason 이다. 무시하는 경우는
+// 둘: 태그가 검증 빌드 태그(…-vN)가 아니거나, 태그의 버전 토큰이 spec.driver.version 과 달라
+// 사전 컴파일 모듈·사용자공간과 어긋날 때다. spec.driver.version 이 비면 대조 기준이 없어 이
+// 버전 검사를 건너뛴다 — 그 경로는 설치기가 버전을 고르는 하위호환 경로다.
 func resolveDriverImage(
 	policy *v1alpha1.DriverInstallPolicy, kernelVersion string,
 ) (image string, skipReason string, skipEventReason string) {
@@ -1941,15 +1845,11 @@ func resolveDriverImage(
 }
 
 // ownSpecManagerPrefixes 는 경고에서 제외하는 관리자 이름 접두 목록이다 — helm 과 제품 자신의
-// 제어 경로. pkg/npuctl.UpgradeVendor 는 이제 FieldManager 를 `kcloud-operator-upgrade` 로
-// 명시한다(= kcloud-operator 접두에 걸림). `manager`·`kubectl-npu` 는 그 전에 FieldManager 없이
-// patch 해서 API 서버가 User-Agent(= 바이너리 파일명)에서 이름을 유도했을 때 남은 과거 항목이다 —
-// 라이브 .91 조회로 확인한 실제 이름은 operator 바이너리 `manager`(Dockerfile 산출물 이름,
-// DriverUpgradeState 항목이 그 이름), CLI `kubectl-npu`. 라이브 managedFields 에 그 이름이
-// 더는 없을 때 접두 목록에서 제거한다. 접두로 비교하는 이유는 버전 접미가 붙는 변형을 함께
-// 거르기 위해서다. `manager` 는 kubebuilder 기본 바이너리 이름이라 같은 이름의 제3 컨트롤러도 함께 빠진다 —
-// 자기 제어 경로를 "외부 개입" 으로 지목하는 쪽이 보고된 결함이라 그 방향을 택했다.
-// `kubectl` 전체를 넣지 않는다: 사람이 돌린 kubectl patch/edit 는 그대로 경고 대상이다.
+// 제어 경로. pkg/npuctl.UpgradeVendor 는 FieldManager `kcloud-operator-upgrade` 를 명시한다.
+// `manager`·`kubectl-npu` 는 FieldManager 를 명시하기 전 API 서버가 User-Agent 에서 이름을
+// 유도했을 때 남은 과거 항목이라, 라이브 managedFields 에 그 이름이 더는 없을 때 접두 목록에서
+// 제거한다. `manager` 는 kubebuilder 기본 바이너리 이름이라 같은 이름의 제3 컨트롤러도 함께
+// 빠진다 — 자기 제어 경로를 "외부 개입"으로 잘못 지목하는 쪽이 더 나쁜 오류이므로 그 방향을 택한다.
 var ownSpecManagerPrefixes = []string{"helm", "kubectl-npu", "kcloud-operator", "manager"}
 
 // isOwnSpecManager 는 관리자 이름이 제외 접두 중 하나로 시작하는지 본다.
@@ -1965,9 +1865,9 @@ func isOwnSpecManager(name string) bool {
 // foreignSpecManagers 는 spec 을 쥔 제3 field manager 목록이다(정렬·중복 제거). 둘이 같은 spec
 // 필드를 쥐면 helm 이 값을 바꾸는 다음 upgrade 가 충돌한다. kubectl-label·kubectl-annotate 처럼
 // metadata 만 쥔 관리자는 세지 않는다.
-// Operation 은 가리지 않는다: helm 은 라이브 .91 에서 Apply 로, 세방향 병합 경로에서는 Update 로
-// 남고 둘 다 이름으로 빠진다. 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Apply 라
-// Update 한정이 있으면 전부 빠졌다 — 다음 helm upgrade 를 실제로 멈추는 쪽이 이들이다.
+// Operation 은 가리지 않는다: helm 은 운용 환경에 따라 Apply 로도 Update 로도 남고 둘 다 이름으로
+// 빠진다. 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Apply 만 쓴다 — Operation 을
+// Update 로 한정하면 다음 helm upgrade 를 실제로 멈추는 이들을 놓친다.
 func foreignSpecManagers(entries []metav1.ManagedFieldsEntry) []string {
 	seen := map[string]bool{}
 	for _, e := range entries {
@@ -1986,13 +1886,12 @@ func foreignSpecManagers(entries []metav1.ManagedFieldsEntry) []string {
 	return out
 }
 
-// refreshResolvedImage 는 status.ResolvedImage 를 지금 정책 기준으로 다시 계산한다.
-// PreFlight 에서만 계산하면 정책에서 kernelImages 항목을 뺀 뒤에도 옛 태그가 status 에 남아
-// 운영자가 그 이미지를 아직 쓰는 것으로 오해한다. 노드 조회는 controller-runtime 캐시에서
-// 읽으므로 API 호출이 늘지 않는다. 노드를 찾지 못하면 값을 그대로 둔다 — 노드가 빠지는
-// 중일 수 있고 그때 마지막 관측값을 지우는 것은 얻는 것이 없다.
+// refreshResolvedImage 는 status.ResolvedImage 를 지금 정책 기준으로 다시 계산한다. PreFlight
+// 에서만 계산하면 정책에서 kernelImages 항목을 뺀 뒤에도 옛 태그가 status 에 남아 운영자가 그
+// 이미지를 아직 쓰는 것으로 오해한다. 노드 조회는 controller-runtime 캐시를 쓰므로 API 호출이
+// 늘지 않는다. 노드를 찾지 못하면 값을 그대로 둔다 — 마지막 관측값을 지우는 것은 얻는 것이 없다.
 // 이미지를 쓰지 않은 사유는 여기서 버린다. 경고 이벤트는 실제 설치가 일어나는 PreFlight 에서만
-// 낸다(Idle 은 60초마다 다시 들어오므로 같은 경고가 반복된다).
+// 낸다(Idle 은 60초마다 재진입해 같은 경고가 반복된다).
 func (m *UpgradeStateMachine) refreshResolvedImage(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -2104,16 +2003,9 @@ func replaceImageTag(image string, newTag string) string {
 }
 
 // verifiedBuildTagRegexp 는 검증된 빌드 태그 패턴을 정의한다.
-// 허용:
-//   - "vN"           : v1, v16
-//   - ".+-vN"        : 1.9.8-3-v2, 580.126.09-v16, 1.7.8-v3
-//   - "latest"       : latest 태그 (개발 환경)
-//
-// 거부:
-//   - plain semver   : 580.126.09, 1.9.8-3, 590.48.01 — broken plain tag (architectural plan §3)
-//
-// architectural plan §3.4: rollback 시 broken plain tag 가 PreviousImage 로 저장되어
-// rollback 발동 시 broken Pod 으로 회귀하는 결함을 defense-in-depth 로 차단.
+// 허용: "vN"(v1, v16), ".+-vN"(1.9.8-3-v2, 580.126.09-v16, 1.7.8-v3), "latest"(개발 환경).
+// 거부: plain semver(580.126.09, 1.9.8-3, 590.48.01) — broken plain tag 가 rollback 시
+// PreviousImage 로 저장되어 rollback 발동 시 broken Pod 으로 회귀하는 것을 막는 defense-in-depth.
 var verifiedBuildTagRegexp = regexp.MustCompile(`:(v[0-9]+|.+-v[0-9]+|latest)$`)
 
 // isVerifiedBuildTag 는 image reference 의 태그가 검증된 빌드 태그인지 확인한다.
@@ -2128,12 +2020,9 @@ func isVerifiedBuildTag(image string) bool {
 }
 
 // EnsureUpgradingLabelRemoved 는 노드에서 npu.ai/driver-upgrading 라벨을 idempotent 하게 제거한다.
-// controller 의 defer cleanup / stuck-label sweep 가 호출하기 위한 외부 진입점.
-//
-// 동작:
-//   - 라벨 없으면 no-op (라벨 patch 호출 없음 → API 부하 0)
-//   - 라벨 있으면 MergeFrom patch 로 제거. Conflict 발생 시 최대 3회 재시도.
-//   - reconcile context cancel 와 무관하게 cleanup 이 진행되도록 호출자가 별도 ctx 를 주입할 책임.
+// controller 의 defer cleanup / stuck-label sweep 가 호출하는 외부 진입점이다. 라벨이 없으면
+// no-op(API 호출 0), 있으면 MergeFrom patch 로 제거하고 Conflict 시 최대 3회 재시도한다.
+// reconcile context cancel 과 무관하게 cleanup 이 진행되도록 호출자가 별도 ctx 를 주입할 책임이 있다.
 func (m *UpgradeStateMachine) EnsureUpgradingLabelRemoved(ctx context.Context, nodeName string) error {
 	return m.ensureLabelRemoved(ctx, nodeName, driverUpgradingLabelKey)
 }
@@ -2175,19 +2064,15 @@ func (m *UpgradeStateMachine) ensureLabelRemoved(ctx context.Context, nodeName, 
 }
 
 // ─────────────────────────────────────────────
-// A6.1 Quiesce-on-Driver-Upgrade (opt-in label)
+// Quiesce-on-Driver-Upgrade (opt-in label)
 // ─────────────────────────────────────────────
 
 // QuiesceLabeledDeployments 는 cordon 직후 호출되어 노드별로 quiesce-on-driver-upgrade 라벨이
-// 붙은 Deployment 를 spec.replicas=0 으로 patch 하고, 원래 replicas 를
-// state.Status.QuiescedDeployments backup 에 기록한다 (architectural plan §A6.1).
-//
-// 매칭 기준 (deploymentTargetsNode):
-//   - PodTemplate 의 nodeSelector["kubernetes.io/hostname"] == 노드명, 또는
-//   - PodTemplate 의 nodeAffinity required term 의 hostname In 매칭
-//
-// 다른 라벨 기반 selector (예: app=workload + nodeAffinity 가 GPU 라벨) 은 1차 구현 범위
-// 밖이며, follow-up 으로 확장한다. quiesce 실패는 best-effort 로 사이클 진행을 막지 않는다.
+// 붙은 Deployment 를 spec.replicas=0 으로 patch 하고, 원래 replicas 를 state.Status.
+// QuiescedDeployments backup 에 기록한다. 매칭 기준(deploymentTargetsNode)은 PodTemplate 의
+// nodeSelector["kubernetes.io/hostname"] 또는 nodeAffinity required term 의 hostname In 매칭
+// 뿐이며, 다른 라벨 기반 selector 는 범위 밖이다. quiesce 실패는 best-effort 로 사이클 진행을
+// 막지 않는다.
 func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -2213,8 +2098,8 @@ func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
 		}
 		original := *d.Spec.Replicas
 		base := d.DeepCopy()
-		// dual-write (followup plan §F2): annotation 으로도 backup 저장 →
-		// DUS.Status 손실 시 (operator restart 등) annotation 으로 fallback 복구 가능.
+		// annotation 으로도 backup 을 이중 기록한다 — operator restart 등으로 DUS.Status 를
+		// 잃어도 annotation 으로 fallback 복구할 수 있다.
 		if d.Annotations == nil {
 			d.Annotations = make(map[string]string)
 		}
@@ -2242,10 +2127,9 @@ func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
 	}
 	state.Status.QuiescedDeployments = quiesced
 
-	// followup plan §F2: status backup 을 즉시 영구 저장 — handleCordoning 이 transitionTo
-	// 로 다음 상태(Draining)로 넘어가기 전에 commit 해야 operator restart resilience 가 보장됨.
-	// 외부 Reconcile 의 최종 Status.Update 가 bumped ResourceVersion 을 받아도 conflict 시
-	// requeue 로 처리되므로 race 안전.
+	// status backup 을 즉시 영구 저장한다 — handleCordoning 이 다음 상태(Draining)로 넘어가기
+	// 전에 commit 해야 operator restart 내구성이 보장된다. 외부 Reconcile 의 최종 Status.Update
+	// 가 bumped ResourceVersion 을 받아도 conflict 시 requeue 로 처리되므로 race 안전하다.
 	if err := m.Status().Update(ctx, state); err != nil {
 		logger.Error(err, "quiesce status backup 영구 저장 실패",
 			"node", state.Spec.NodeName, "count", len(quiesced))
@@ -2254,23 +2138,19 @@ func (m *UpgradeStateMachine) QuiesceLabeledDeployments(
 	return nil
 }
 
-// RestoreQuiescedDeployments 는 cycle 종료(Idle/Failed) 시 호출되어 backup 의 OriginalReplicas
-// 로 Deployment.spec.replicas 를 복구하고 backup 을 비운다 (architectural plan §A6.1).
-//
-// 안전성:
-//   - backup 이 비어 있으면 annotation fallback 으로 복구 시도 (followup plan §F2 — operator
-//     restart 시 status 손실에 대한 방어).
-//   - Deployment NotFound (이미 삭제됨) 는 graceful skip — 이벤트만 발행.
-//   - 개별 patch 실패는 로그/이벤트로 보고하지만 다른 entry 처리는 계속.
-//   - 모든 entry 처리 후 backup 을 nil 로 비워 다음 cycle 에 누수되지 않게 한다.
+// RestoreQuiescedDeployments 는 cycle 종료(Idle/Failed) 시 호출되어 backup 의 OriginalReplicas 로
+// Deployment.spec.replicas 를 복구하고 backup 을 비운다. backup 이 비어 있으면(operator restart 로
+// status 를 잃은 경우) annotation fallback 으로 복구를 시도한다. Deployment NotFound(이미 삭제됨)
+// 는 이벤트만 발행하고 넘어가고, 개별 patch 실패는 로그·이벤트로 보고한 뒤 다른 entry 는 계속
+// 처리한다. 모든 entry 처리 후 backup 을 nil 로 비워 다음 cycle 에 누수되지 않게 한다.
 func (m *UpgradeStateMachine) RestoreQuiescedDeployments(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 ) error {
 	logger := logf.FromContext(ctx)
 	if len(state.Status.QuiescedDeployments) == 0 {
-		// followup plan §F2: status 손실 시 annotation 기반 fallback 복구 시도.
-		// 정상 흐름에서는 backup 이 채워져 있으므로 no-op 으로 끝남.
+		// status 손실 시 annotation 기반 fallback 복구를 시도한다.
+		// 정상 흐름에서는 backup 이 채워져 있으므로 no-op 으로 끝난다.
 		return m.restoreFromAnnotationFallback(ctx, state)
 	}
 	for _, q := range state.Status.QuiescedDeployments {
@@ -2293,8 +2173,8 @@ func (m *UpgradeStateMachine) RestoreQuiescedDeployments(
 		base := d.DeepCopy()
 		original := q.OriginalReplicas
 		d.Spec.Replicas = &original
-		// dual-write annotation cleanup (followup plan §F2): restore 와 동시에 backup
-		// annotation 을 제거하여 다음 cycle 의 fallback 이 stale 값을 사용하지 않게 한다.
+		// restore 와 동시에 backup annotation 을 제거해 다음 cycle 의 fallback 이 stale 값을
+		// 쓰지 않게 한다.
 		if d.Annotations != nil {
 			delete(d.Annotations, QuiesceReplicasBackupAnnotation)
 		}
@@ -2322,10 +2202,8 @@ func (m *UpgradeStateMachine) RestoreQuiescedDeployments(
 
 // restoreFromAnnotationFallback 은 DUS.Status.QuiescedDeployments 가 비어있는 상황 (operator
 // restart 후 status 손실 등) 에서 Deployment annotation (npu.ai/replicas-backup) 으로부터
-// replicas 를 복구하는 fallback 경로다 (followup plan §F2).
-//
-// 매칭: quiesce 라벨 + node hostname 매칭 + annotation 존재. 동작은 idempotent —
-// annotation 이 없거나 값이 invalid 한 Deployment 는 graceful skip.
+// replicas 를 복구하는 fallback 경로다. 매칭 기준은 quiesce 라벨 + node hostname 매칭 +
+// annotation 존재이며, annotation 이 없거나 값이 invalid 한 Deployment 는 graceful skip 한다.
 func (m *UpgradeStateMachine) restoreFromAnnotationFallback(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -2375,16 +2253,12 @@ func (m *UpgradeStateMachine) restoreFromAnnotationFallback(
 	return nil
 }
 
-// deploymentTargetsNode 는 Deployment 의 PodTemplate 이 특정 노드를 대상으로 함을 표시하는지
-// 확인한다 (architectural plan §A6.1 1차 구현 — hostname 기반만 매칭).
-//
-// 매칭 규칙:
-//  1. spec.template.spec.nodeSelector["kubernetes.io/hostname"] == nodeName
-//  2. spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution
-//     의 NodeSelectorTerms 중 하나의 MatchExpressions 가 hostname In [...nodeName...]
-//
-// preferredDuringScheduling / 다른 라벨 기반은 false 반환 (false negative 보수적 처리).
-// 잘못된 quiesce 위험을 피하기 위함이며, follow-up 으로 확장 가능.
+// deploymentTargetsNode 는 Deployment 의 PodTemplate 이 특정 노드를 대상으로 하는지 hostname
+// 기반으로만 확인한다. 매칭 규칙: (1) spec.template.spec.nodeSelector["kubernetes.io/hostname"]
+// == nodeName, 또는 (2) nodeAffinity 의 requiredDuringSchedulingIgnoredDuringExecution 에서
+// NodeSelectorTerms 중 하나의 MatchExpressions 가 hostname In [...nodeName...]. preferred
+// DuringScheduling / 다른 라벨 기반은 false 를 반환한다 — 잘못된 quiesce 를 피하기 위한 보수적
+// false negative 처리다.
 func deploymentTargetsNode(d *appsv1.Deployment, nodeName string) bool {
 	if d == nil || nodeName == "" {
 		return false
@@ -2433,26 +2307,12 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-// DeviceModelMatches 는 정책·상태에 적힌 모델 이름(specModel)이 NodeDeviceReport 의 장치
-// 모델(deviceModel)과 같은 대상을 가리키는지 판정한다. 모델 매칭 규칙의 정본이다 —
-// DriverUpgradeState 소비자 둘(state_machine.go·state_machine_job.go)과 정책 선택
-// (findPolicy, controller/driver_upgrade_controller.go)이 모두 이 함수만 부른다.
-// 규칙을 복제하면 다음에 또 한 곳만 고친다(2026-08-11 에 그렇게 findPolicy 가 빠졌다).
-//
-// "generic" 은 이름이 아니라 **모른다는 표시**다 — detector 가 제품을 판정하지 못했을 때
-// 남기는 값이라 어느 쪽에 있든 와일드카드로 봐야 한다.
-//
-// 구체명이 붙는 방향도 같은 문제다. detector 가 표준 PCI DB 계층을 붙이면 장치 이름이
-// `a100` 이 아니라 `a100-pcie-40gb`(실측 10de:20f1), GTX 970 은 `geforce-gtx-970` 이 된다.
-// 사용자가 쓰는 `spec.model: a100` 은 제품군 이름이라 문자열 비교로는 영영 안 걸리고,
-// 양쪽 다 "generic" 이 아니어서 와일드카드도 안 걸린다 — findPolicy 가 nil 을 돌려주고
-// 증상은 "아무 일도 안 일어남" 이다. 그래서 한쪽이 다른 쪽의 `-` 경계 접두어면 같은 대상으로
-// 본다. 경계를 요구하므로 `a30` 은 `a100-pcie-40gb` 에 안 걸린다(과잉 매칭 방어).
-//
-// 양방향인 이유: spec.model 은 만들어질 때 한 번 기록된 값이라 detector 가 갱신되면 장치
-// 쪽만 구체화되고, detector 를 되돌리거나 `update-pciids` 로 표기가 바뀌면 반대 방향으로
-// 같은 일이 생긴다. 한 방향만 보면 그때 모든 장치가 걸러져 재부팅 게이트와 자가복구
-// 게이트가 조용히 죽는다.
+// DeviceModelMatches 는 정책·상태의 모델 이름(specModel)과 NodeDeviceReport 의 장치 모델
+// (deviceModel)이 같은 대상을 가리키는지 판정하는 유일한 정본이다 — 소비자가 각자 규칙을
+// 복제하면 한쪽만 고치는 결함이 생긴다. "generic" 은 모른다는 표시(detector 가 제품을 판정하지
+// 못했을 때의 값)라 어느 쪽에 있든 와일드카드로 본다. detector 가 PCI DB 로 구체화하면 장치
+// 이름이 `a100-pcie-40gb` 처럼 되어 사용자가 쓰는 제품군 이름 `a100` 과 문자열이 안 맞으므로,
+// 한쪽이 다른 쪽의 `-` 경계 접두어면 같은 대상으로 본다(양방향, 경계로 과잉 매칭 방어).
 func DeviceModelMatches(deviceModel, specModel string) bool {
 	if specModel == "" || strings.EqualFold(specModel, "generic") {
 		return true

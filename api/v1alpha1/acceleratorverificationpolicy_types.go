@@ -1,9 +1,7 @@
 // ============================================================
 // acceleratorverificationpolicy_types.go: AcceleratorVerificationPolicy CRD 타입
 // 상세: R&D base v0.1 §8.4. 어떤 체크를 돌리고, 근거를 얼마나 믿고(ttl), 무엇이 바뀌면 버릴지
-//
-//	(invalidateOn)를 노드 선택 단위로 정한다. CRD 가 없어도 내장 기본값으로 동작한다.
-//
+// (invalidateOn)를 노드 선택 단위로 정한다. CRD 가 없어도 내장 기본값으로 동작한다.
 // 생성일: 2026-07-31
 // ============================================================
 package v1alpha1

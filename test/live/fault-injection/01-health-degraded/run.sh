@@ -1,43 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: 건강 저하(AdvertisementMismatch) kind 재현 — 할당 차단·재검증 요청·배치 후보 제외
-# 상세: test/fault/fault_test.go 의 F12("실제 조각 수와 광고 수 불일치", :396-428)와 같은 신호
-#       조합(광고 기준선 > 실제 allocatable, 유예 경과)을 실제 apiserver 위에서 재현한다. 이
-#       스크립트가 직접 쓰는 것은 입력뿐이다 — 가짜 NodeDeviceReport(observedAt 을 신선하게
-#       유지), 가짜 AcceleratorPartitionPolicy(usableBaseline 이 요구하는 "존재하는 근거 출처
-#       정책" 하나, nodeSelector 는 아무 노드도 못 맞춰 그 컨트롤러 자신은 아무 일도 하지
-#       않는다), 가짜 AcceleratorEvidence(광고 기준선 4). AcceleratorHealth.status 는 절대
-#       손으로 patch 하지 않는다 — acceleratorhealth_controller.go 가 이 입력들을 읽어 스스로
-#       계산하게 두고, 그 결과를 관측만 한다("hand-patching the state under test" 회피).
-#       AcceleratorHealthReconciler 는 corev1.Node 를 감시 대상으로 하므로(SetupWithManager),
-#       NDR/ACPP/Evidence 를 먼저 적용해도 그 자체로는 reconcile 이 안 걸린다 — 노드에
-#       kcloud.ai/nvidia.present=true 라벨을 마지막에 붙여 첫 reconcile 을 튼다.
-#       세 가지를 관측한다(전부 컨트롤러가 실제로 쓴 status/label 이지, 이 스크립트가 쓴
-#       값이 아니다): ① AcceleratorHealth.status.state=Degraded, allocationAllowed=false
-#       (evaluate.go 의 AdvertisementMismatch 분기) ② 같은 reconcile 이 만드는 Revalidate
-#       AcceleratorOperation(ensureRecovery, remediation.go operationForReason) ③ 노드
-#       라벨 kcloud.ai/health.quarantined=true(syncQuarantineLabel — quarantineWorthy 는
-#       Degraded 도 포함하므로 "새 워크로드를 놓지 말라"는 배치 신호가 노드 자체에 남는다).
-#       유예(기본 30초)·감시주기(기본 30초)·반복 실패 임계는 기본 AcceleratorHealthPolicy
-#       그대로 쓴다(F12 가 검증하는 것과 같은 기본값). 딱 하나, ndrFreshnessSeconds 만
-#       넉넉히 늘린 전용 정책을 하나 더 얹는다 — 실측(2026-09-20 1차 실행)에서 드러난 사실:
-#       AdvertisementMismatch 는 SuspectedAt 이 없어야(=최근에 격리 조치가 없었어야) 유예가
-#       쌓이는데, health 자신이 만드는 Revalidate 작업이 존재하는 동안은 RecoveryInFlight 로
-#       Recovering 상태가 되고, 그 경로는 Advertisement 신호 자체를 기록하지 않아
-#       SuspectedAt 을 지운다(nextSuspectedAt) — 그래서 Degraded 는 계속 다시 쌓였다 사라지는
-#       주기(약 55~60초)를 반복하는 짧은 blip 이지 고정 상태가 아니다. 기본 NDR 신선도
-#       유예(90초)로는 이 반복 대기 도중 이 스크립트가 한 번만 심어 둔 observedAt 이 중간에
-#       stale 이 돼 버려(관측 결과가 이를 직접 보여줬다: Degraded 대신 Unknown 으로 새버림)
-#       의도한 신호를 아예 못 보게 된다 — 그래서 이 항목만 늘린다(테스트 시간 예산 때문이지
-#       Advertisement 판정 로직과는 무관).
-#       기록해 둘 것: AcceleratorHealthStatus.AllocationAllowed 는 `json:"...,omitempty"` 라
-#       컨트롤러가 실제로 false 를 쓰면(Go 구조체 마샬링이 필드 자체를 뺀다) `kubectl -o
-#       jsonpath` 로는 빈 문자열로 보인다("false" 문자열이 아니다) — operator 자신의 로직에는
-#       영향이 없다(디코딩 시 키 부재는 Go bool 기본값 false 와 동치) 그러나 이 값을 읽는
-#       외부 스크립트는 jsonpath 대신 `-o json | jq '// false'` 로 읽어야 한다. 이 스크립트는
-#       그렇게 읽는다.
-#       DRY_RUN=1 이면 클러스터 상태를 바꾸는 명령을 하나도 실행하지 않는다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-20(1차 라이브 실행에서 위 두 가지 발견 반영)
+# 상세: 가짜 NodeDeviceReport·AcceleratorPartitionPolicy·AcceleratorEvidence 입력만 쓰고
+#       AcceleratorHealth.status 는 컨트롤러가 계산하게 두고 관측만 한다(DRY_RUN=1 이면 무변경).
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -55,8 +21,8 @@ QUARANTINE_LABEL="kcloud.ai/health.quarantined"
 ACPP_NAME="${ACPP_NAME:-fault01-baseline}"
 POLICY_NAME="${POLICY_NAME:-fault01-ndr-freshness}"
 
-# Degraded 는 blip 성 상태(주석 참고, 약 55~60초 주기로 재발)라 넉넉한 시간 예산과 촘촘한
-# 표본 간격으로 잡는다. 다른 두 검사는 Degraded 를 잡은 직후 바로 확인하므로 짧아도 된다.
+# Degraded 는 반복되는 blip 이다(policy_apply 주석 참고) — 넉넉한 시간 예산과 촘촘한 표본
+# 간격으로 잡는다. 다른 두 검사는 Degraded 를 잡은 직후 바로 확인하므로 짧아도 된다.
 T_DEGRADED="${T_DEGRADED:-240}"
 IV_DEGRADED="${IV_DEGRADED:-2}"
 T_REVALIDATE="${T_REVALIDATE:-60}"
@@ -144,8 +110,11 @@ EOF
 }
 
 # policy_apply — 이 노드(ACCEL_LABEL 로 선택)에만 적용되는 전용 정책. ndrFreshnessSeconds
-# 하나만 늘린다 — 유예·감시주기·임계는 0(미설정)으로 둬 기본값을 그대로 물려받는다
-# (F12 가 실제로 검증하는 기준은 건드리지 않는다. 헤더 주석의 "기록해 둘 것" 참고).
+# 만 늘리고 유예·감시주기·임계는 기본값을 물려받는다(검증하는 기준 자체는 그대로 둔다).
+# AdvertisementMismatch 는 health 가 만드는 Revalidate 작업이 떠 있는 동안 RecoveryInFlight 로
+# Recovering 이 되며 그 경로가 Advertisement 신호를 기록하지 않아 SuspectedAt 을 지운다 —
+# 그래서 Degraded 는 약 55~60초 주기로 반복되는 blip 이다. 기본 NDR 신선도 유예(90초)로는 이
+# 반복 대기 중 한 번만 심은 observedAt 이 stale 해져 신호를 못 보게 되므로 이 항목만 늘린다.
 policy_apply() {
   cat <<EOF | kcapply >&2
 apiVersion: npu.ai/v1alpha1
@@ -176,8 +145,10 @@ op_lines() {
 }
 
 # health_state_line — state/allocationAllowed 를 "State/true"|"State/false" 로 낸다. jsonpath
-# 대신 jq 로 읽는다 — allocationAllowed=false 는 omitempty 로 키 자체가 빠져 jsonpath 로는
-# 빈 문자열이 된다(헤더 주석의 "기록해 둘 것" 참고, 1차 실행에서 발견).
+# 대신 jq 로 읽는다 — AcceleratorHealthStatus.AllocationAllowed 는 `omitempty` 라 컨트롤러가
+# 실제로 false 를 쓰면 Go 구조체 마샬링이 그 키를 빼버려 jsonpath 로는 "false" 문자열이 아니라
+# 빈 문자열이 된다(디코딩 시 키 부재는 Go bool 기본값 false 와 동치라 operator 로직에는
+# 영향 없다). 외부에서 이 값을 읽을 때는 `-o json | jq '(.status.x // false)'` 로 읽어야 한다.
 health_state_line() {
   kubectl get acceleratorhealth "$NODE" -o json 2>/dev/null \
     | jq -r '(.status.state // "") + "/" + ((.status.allocationAllowed // false) | tostring)' 2>/dev/null || true

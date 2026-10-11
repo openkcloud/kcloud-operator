@@ -1,11 +1,8 @@
 // ============================================================
 // webhookpath_test.go: 매니저 등록 validator ↔ 배포 webhook 설정 경로 일치 테스트
-// 상세: ctrl.NewWebhookManagedBy 등록만으로는 API 서버가 요청을 보내지 않는다 — 이 저장소는
-// ValidatingWebhookConfiguration 을 controller-gen 이 아니라 deploy/helm/templates/webhook.yaml 에
-// 손으로 적는다(리뷰 C1). 여기서 코드가 등록한 각 타입의 경로를 controller-runtime 이
-// 실제로 만드는 것과 같은 공식으로 계산해 그 yaml 텍스트에 있는지 대조한다 — validator 를
-// 등록만 하고 yaml 을 안 고치면 이 테스트가 잡는다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 상세: ctrl.NewWebhookManagedBy 등록만으로는 API 서버가 요청을 보내지 않는다 — ValidatingWebhookConfiguration
+// 은 controller-gen 없이 deploy/helm/templates/webhook.yaml 에 손으로 적으므로, 등록된 경로를 같은 공식으로 계산해 대조한다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package webhook
 
@@ -25,6 +22,7 @@ func generateValidatePath(group, version, kind string) string {
 	return "/validate-" + strings.ReplaceAll(group, ".", "-") + "-" + version + "-" + strings.ToLower(kind)
 }
 
+// 등록은 됐는데 yaml 이 안 고쳐지면 admission 요청이 서버에 닿지 못한다 — 이 테스트가 그 어긋남을 잡는다.
 func TestWebhookConfigMatchesRegisteredValidators(t *testing.T) {
 	group := npuv1alpha1.GroupVersion.Group
 	version := npuv1alpha1.GroupVersion.Version

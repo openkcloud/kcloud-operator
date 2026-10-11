@@ -1,11 +1,7 @@
 // main_test.go: kubectl-npu 사람용 텍스트 출력 포맷 테스트
-// 상세: 같은 노드에 붙은 장치 여러 대가 표에서 서로 구분되는지 본다(라이브에서 동일 행 중복 관측).
-//
-//	describe 명령의 렌더·인자 파싱도 여기서 시험한다.
-//
-// 생성일: 2026-08-11 | 수정일: 2026-10-10 (NPUClusterPolicy 벤더 operator 조건 렌더 시험
-//
-//	추가, 열 폭 측정·Ready 없음 조합 시험 보강)
+// 상세: 같은 노드에 붙은 장치 여러 대가 표에서 서로 구분되는지 본다(벤더·모델·버전이
+// 같고 PCI 만 다른 경우). describe 명령의 렌더·인자 파싱도 여기서 시험한다.
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 package main
 
 import (
@@ -40,9 +36,9 @@ func captureStdout(t *testing.T, f func()) string {
 	return string(out)
 }
 
-// TestPrintStatusText_DistinguishesDevicesOnSameNode 는 벤더·모델·버전이 모두 같고 PCI 주소만
-// 다른 두 장치가 표에서 다른 행으로 읽히는지 본다. 라이브(2026-08-11)에서 A30 과 A2 가 완전히
-// 동일한 두 줄로 나와 구분이 불가능했다.
+// TestPrintStatusText_DistinguishesDevicesOnSameNode 는 벤더·모델·버전이 모두 같고 PCI
+// 주소만 다른 두 장치가 표에서 다른 행으로 읽히는지 본다 — PCI 를 행에 포함하지 않으면
+// 나머지 열이 전부 같아져 두 줄이 완전히 동일해져 구분할 수 없다.
 func TestPrintStatusText_DistinguishesDevicesOnSameNode(t *testing.T) {
 	status := &npuctl.ClusterStatus{
 		Nodes: []npuctl.NodeStatus{{
@@ -147,8 +143,6 @@ func TestPrintStatusText_ShowsExclusionForNodeWithoutDevices(t *testing.T) {
 	}
 }
 
-// TestPrintStatusText_OmitsEmptyReasonParens 는 사유가 빈 배제 노드에 빈 괄호(`제외됨()`)를
-// 내지 않는지 본다 — 사유가 있는 줄 알게 만든다.
 // TestPrintStatusText_ClusterPolicyShowsVendorOperatorLines 는 NPUClusterPolicy 절에
 // 벤더 operator 조건이 Ready 줄 바로 다음에, 전달받은 순서대로 나오는지 본다.
 func TestPrintStatusText_ClusterPolicyShowsVendorOperatorLines(t *testing.T) {
@@ -272,6 +266,8 @@ func TestPrintStatusText_ClusterPolicyNoReadyConditionStillShowsVendorLines(t *t
 	}
 }
 
+// TestPrintStatusText_OmitsEmptyReasonParens 는 사유가 빈 배제 노드에 빈 괄호(`제외됨()`)를
+// 내지 않는지 본다 — 사유가 있는 줄 알게 만든다.
 func TestPrintStatusText_OmitsEmptyReasonParens(t *testing.T) {
 	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{
 		{Name: "k8s-master", Excluded: true},
@@ -285,9 +281,9 @@ func TestPrintStatusText_OmitsEmptyReasonParens(t *testing.T) {
 	}
 }
 
-// 라이브(2026-08-11)에서 tenstorrent/blackhole-p150(26자)이 15자 열을 11자 넘겨
-// 그 행부터 PCI 이후가 전부 밀렸다. 표를 눈으로 훑는 것이 이 명령의 용도이므로
-// 한 행이 어긋나면 열을 따라갈 수 없다. 헤더와 모든 데이터 행에서 각 열의 시작
+// tenstorrent/blackhole-p150(26자)처럼 긴 장치 이름이 고정폭 15자 열을 넘기면 그
+// 행부터 PCI 이후 열이 전부 밀린다. 표를 눈으로 훑는 것이 이 명령의 용도이므로 한
+// 행이라도 어긋나면 열을 따라갈 수 없다. 헤더와 모든 데이터 행에서 각 열의 시작
 // 위치가 같은지 본다 — 폭을 하드코딩으로 되돌리면 이 단언이 걸린다.
 func TestPrintStatusText_ColumnsAlignWithLongestDeviceName(t *testing.T) {
 	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{
@@ -355,12 +351,11 @@ func runeColStart(t *testing.T, line, marker string) int {
 }
 
 // TestPrintTable_한글REASON은절대rune폭으로찍힌다 는 REASON 열에 8-rune(24-byte) 한글
-// 셀이 있을 때 그 뒤 SOURCE 열이 정확히 "가장 긴 셀의 rune 수 + 구분자 2칸" 위치에서
-// 시작하는지 절대값으로 본다. 행끼리 상대 비교(두 행의 SOURCE 위치가 같다)만으로는 이
-// 성질이 깨져도 안 걸린다 — width 계산이 len()(byte)으로 퇴행해도 그 잘못된(더 큰) 폭이
-// 표 전체 행에 똑같이 적용돼 fmt 의 %-*s 가 넘겨받은 숫자를 그대로 rune 개수로 채우므로
-// 행끼리는 여전히 정렬돼 보인다. 그래서 절대 위치를 rune 폭 공식으로 못박는다 — len()
-// 으로 재면 SOURCE 가 24+2=26 에서 시작해 아래 want(8+2=10)와 어긋나 실패한다.
+// 셀이 있을 때 SOURCE 열이 "가장 긴 셀의 rune 수 + 구분자 2칸" 위치에서 시작하는지
+// 절대값으로 본다. 행끼리 상대 비교(두 행의 SOURCE 위치가 같다)만으로는 width 계산이
+// len()(byte)으로 퇴행해도 그 잘못된 폭이 모든 행에 똑같이 적용돼 여전히 정렬돼 보여
+// 못 걸린다 — 그래서 절대 위치를 rune 폭 공식으로 못박는다. len() 으로 재면 SOURCE 가
+// 24+2=26 에서 시작해 want(8+2=10)와 어긋나 실패한다.
 func TestPrintTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 	if n := utf8.RuneCountInString(eightRuneKorean); n != 8 {
 		t.Fatalf("테스트 전제가 깨졌다: rune 수 %d", n)
@@ -386,8 +381,7 @@ func TestPrintTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 }
 
 // TestRenderTable_한글REASON은절대rune폭으로찍힌다 는 위와 같은 절대폭 성질을 renderTable
-// (describe 하위 표 전용, 매 줄 앞 들여쓰기 2칸)에서도 본다 — 이 함수엔 그동안 비-ASCII
-// 셀을 쓰는 시험이 없었다.
+// (describe 하위 표 전용, 매 줄 앞 들여쓰기 2칸)에서도 본다.
 func TestRenderTable_한글REASON은절대rune폭으로찍힌다(t *testing.T) {
 	out := renderTable([]string{"REASON", "SOURCE"}, [][]string{
 		{eightRuneKorean, "docs/a.md"}, // doc-cite-check: ignore
@@ -502,11 +496,11 @@ func TestParseDescribeArgs_이름과JSON플래그(t *testing.T) {
 }
 
 // TestRenderNodeDetails_실패노드는건너뛰고빈줄은실제출력블록수를따른다 는 cmdDescribe
-// 전체노드 경로가 하는 것과 같은 전제(조회 실패 노드는 details 목록에서 이미 걸러짐)로
-// renderNodeDetails 를 시험한다. 리뷰에서 지적된 결함 재발 방지용 — 예전엔 루프 인덱스
-// `i > 0` 을 그대로 빈 줄 판정에 썼는데, names=[실패, ok, ok] 처럼 앞쪽 노드가 조회에
-// 실패하면 실제로 처음 찍히는 블록 앞에도 빈 줄이 붙었다. 여기선 애초에 실패한 노드가
-// details 슬라이스에 들어오지 않으므로 그 버그가 구조적으로 재발할 수 없다.
+// 전체노드 경로와 같은 전제(조회 실패 노드는 details 목록에서 이미 걸러짐)로
+// renderNodeDetails 를 시험한다. 빈 줄 판정에 루프 인덱스 `i > 0` 을 그대로 쓰면
+// names=[실패, ok, ok] 처럼 앞쪽 노드가 실패할 때 처음 찍히는 블록 앞에도 빈 줄이
+// 붙는다 — 실패한 노드가 details 슬라이스에 애초에 들어오지 않으므로 이 결함은
+// 구조적으로 재발할 수 없다.
 func TestRenderNodeDetails_실패노드는건너뛰고빈줄은실제출력블록수를따른다(t *testing.T) {
 	// 빈 목록: 출력 없음.
 	if out := renderNodeDetails(nil); out != "" {
@@ -537,8 +531,8 @@ func TestRenderNodeDetails_실패노드는건너뛰고빈줄은실제출력블�
 	}
 }
 
-// TestRenderNodeDetail_Health사유없으면빈괄호없음 은 Reason 이 빈 Health 에서 "Healthy ()" 같은
-// 빈 괄호를 내지 않는지 본다. 라이브 두 노드 모두 이 상태다(리뷰에서 지적).
+// TestRenderNodeDetail_Health사유없으면빈괄호없음 은 Reason 이 빈 Health 에서 "Healthy ()"
+// 같은 빈 괄호를 내지 않는지 본다.
 func TestRenderNodeDetail_Health사유없으면빈괄호없음(t *testing.T) {
 	d := &npuctl.NodeDetail{
 		Name:   "k8s-worker1",
@@ -570,13 +564,12 @@ func TestRenderNodeDetail_Evidence식별자없음은명시(t *testing.T) {
 	}
 }
 
-// TestRenderNodeDetail_Evidence식별자없음표열정렬 은 VENDOR·LEVEL 이 둘 다 빈
-// evidence 때문에 EXPIRES 열 위치가 실제 vendor·level 이 있는 표와 달라지지
-// 않는지 본다. 리뷰 지적 — 이전엔 "식별자 없음"(16바이트)을 VENDOR 칸에 그대로
-// 넣어 renderTable 이 폭을 재는 len()(바이트 수)이 헤더("VENDOR", 6바이트)보다
-// 훨씬 커졌고, 그 결과 EXPIRES 열이 실제 vendor 가 있는 표보다 훨씬 오른쪽에서
-// 시작했다(k8s-master·k8s-worker3 실측). "—" 로 바꾼 지금은 두 표의 EXPIRES
-// 열이 같은 자리에서 시작해야 한다.
+// TestRenderNodeDetail_Evidence식별자없음표열정렬 은 VENDOR·LEVEL 이 둘 다 빈 evidence
+// 때문에 EXPIRES 열 위치가 실제 vendor·level 이 있는 표와 달라지지 않는지 본다.
+// "식별자 없음"(16바이트) 문자열을 VENDOR 칸에 직접 넣으면 그 길이가 헤더("VENDOR",
+// 6바이트)보다 커져 renderTable 의 폭 측정(len() 기준)이 어긋나고, EXPIRES 열이 실제
+// vendor 가 있는 표보다 오른쪽으로 밀린다 — "—" 로 바꾸면 두 표의 EXPIRES 열이 같은
+// 자리에서 시작한다.
 func TestRenderNodeDetail_Evidence식별자없음표열정렬(t *testing.T) {
 	withVendor := renderNodeDetail(&npuctl.NodeDetail{
 		Name:     "k8s-worker1",
@@ -1095,8 +1088,8 @@ func TestParseDriverRollbackArgs_전체인자(t *testing.T) {
 	}
 }
 
-// TestParseDriverRollbackArgs_Force생략기본값false 는 --force 를 안 쓰면 false 로 남는지 본다
-// (확인 게이트가 기본으로 걸려 있어야 한다 — 공통 정정 §3).
+// TestParseDriverRollbackArgs_Force생략기본값false 는 --force 를 안 쓰면 false 로 남는지
+// 본다(확인 게이트가 기본으로 걸려 있어야 한다).
 func TestParseDriverRollbackArgs_Force생략기본값false(t *testing.T) {
 	got, err := parseDriverRollbackArgs([]string{"--node", "n1"})
 	if err != nil {
@@ -1134,8 +1127,8 @@ func TestConfirmRollback_y입력이면통과(t *testing.T) {
 }
 
 // TestConfirmRollback_다른입력이면거절_force안내 는 y/yes 가 아닌 입력(빈 입력 포함)이면
-// 거절하고, 그 메시지가 반드시 "--force" 를 언급하는지 본다(공통 정정 §3의 명시 요구 —
-// 대화식만으로는 스크립트가 못 쓰고 시험도 약해진다).
+// 거절하고, 그 메시지가 반드시 "--force" 를 언급하는지 본다 — 대화식만으로는 스크립트가
+// 못 쓰고 시험도 약해진다.
 func TestConfirmRollback_다른입력이면거절_force안내(t *testing.T) {
 	for _, in := range []string{"n\n", "no\n", "", "\n"} {
 		ok, msg := confirmRollback(strings.NewReader(in), false)
@@ -1164,7 +1157,7 @@ func TestParseAllocationSwitchArgs_전체인자(t *testing.T) {
 }
 
 // TestParseAllocationSwitchArgs_Force생략기본값false 는 --force 를 안 쓰면 false 로
-// 남는지 본다(확인 게이트가 기본으로 걸려야 한다 — 공통 정정 §3).
+// 남는지 본다(확인 게이트가 기본으로 걸려야 한다).
 func TestParseAllocationSwitchArgs_Force생략기본값false(t *testing.T) {
 	got, err := parseAllocationSwitchArgs([]string{"--vendor", "nvidia", "--to", "dra"})
 	if err != nil {
@@ -1245,12 +1238,11 @@ func TestParsePartitionApplyArgs_필수누락(t *testing.T) {
 	}
 }
 
-// TestScanFlags_값누락뒤플래그는거절 은 리뷰가 실제로 재현한 결함을 네 명령 전부에서
-// 고정한다 — 값이 필요한 플래그 바로 뒤에 다른 플래그 이름이 오면(사용자가 값 하나를
-// 빠뜨리고 습관적으로 --force 를 마지막에 붙인 경우) 그 토큰을 값으로 삼키지 않고
-// 즉시 에러를 낸다. 고치기 전에는 그 토큰을 값으로 삼켜 뒤로 밀린 진짜 --force 가
-// 정상 위치에서 인식됐다 — force=true, 에러 없음이었다(네 명령 모두 재현됨). 지금은
-// 넷 다 에러이고 force 는 건드려지기 전에 반환되므로 항상 false 다.
+// TestScanFlags_값누락뒤플래그는거절 은 값이 필요한 플래그 바로 뒤에 다른 플래그
+// 이름이 오는 경우(사용자가 값 하나를 빠뜨리고 습관적으로 --force 를 마지막에 붙인
+// 경우)를 네 명령 전부에서 고정한다. 그 토큰을 값으로 삼키면 뒤로 밀린 진짜 --force
+// 가 정상 위치에서 인식돼 force=true·에러 없음이 된다 — 그래서 지금은 그 자리에서
+// 즉시 에러를 내고, force 는 건드려지기 전에 반환되므로 항상 false 다.
 func TestScanFlags_값누락뒤플래그는거절(t *testing.T) {
 	t.Run("partition_apply", func(t *testing.T) {
 		got, err := parsePartitionApplyArgs([]string{
@@ -1294,8 +1286,8 @@ func TestScanFlags_값누락뒤플래그는거절(t *testing.T) {
 	})
 }
 
-// TestScanFlags_마지막토큰이값필요플래그면거절 은 리뷰가 "생각해 보라"고 명시한 변형이다
-// — 값이 필요한 플래그가 인자 목록의 맨 끝에 와 뒤에 아무 토큰도 없는 경우.
+// TestScanFlags_마지막토큰이값필요플래그면거절 은 값이 필요한 플래그가 인자 목록의
+// 맨 끝에 와 뒤에 아무 토큰도 없는 경우를 본다.
 func TestScanFlags_마지막토큰이값필요플래그면거절(t *testing.T) {
 	got, err := parsePartitionApplyArgs([]string{"--node", "n1", "--vendor", "nvidia", "--profile"})
 	if err == nil {
@@ -1382,9 +1374,9 @@ func TestParseSharingApplyArgs_필수누락(t *testing.T) {
 
 // TestPrintApplyResult_상태별출력 은 partition apply·sharing apply 가 공유하는 결과
 // 출력이 생성·patch·무변경 세 경우를 서로 다른 마지막 줄로 구분하는지, 생성·patch
-// 두 경우는 실제 적용 결과를 컨트롤러가 판정한다는 고지를 담는지 본다(리뷰 지적:
-// admission webhook 이 이 CRD 에서 failurePolicy=Ignore 라 거절이 컨트롤러에서만 올
-// 수 있는데, 이전 출력은 완료된 것처럼 읽혔다).
+// 두 경우는 실제 적용 결과를 컨트롤러가 판정한다는 고지를 담는지 본다 — admission
+// webhook 이 이 CRD 에서 failurePolicy=Ignore 라 거절은 컨트롤러에서만 올 수 있으므로,
+// 이 고지가 없으면 출력이 이미 완료된 것처럼 읽힌다.
 func TestPrintApplyResult_상태별출력(t *testing.T) {
 	cases := []struct {
 		name              string

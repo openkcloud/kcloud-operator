@@ -1,14 +1,8 @@
 // ============================================================
 // main.go: DriverInstallPolicy 로부터 Tenstorrent install Job YAML 렌더
-// 상세: 상태기계(internal/upgrade)는 업그레이드 전이(desired != current)나 NDR
-//       driverLoaded=false self-heal 일 때만 install Job 을 만든다 — 둘 다 이번
-//       라이브 검증에서는 금지(버전 2.8.0 유지, 모듈 언로드 금지). 그래서 이 프로그램은
-//       상태기계를 거치지 않고 정책이 이미 선언한 image/version 그대로
-//       internal/driverjob.RenderInstallJob 을 직접 호출한다. entrypoint.sh 는 현재
-//       DKMS 버전이 target 과 같으면 설치를 건너뛰므로(images/kcloud-operator-images/
-//       driver-installer/tenstorrent/entrypoint.sh:164-192) 이 Job 적용은 멱등·비파괴다.
-//       출력은 run.sh 가 그대로 kubectl apply -f - 로 흘려보낸다.
-// 생성일: 2026-09-20
+// 상세: 상태기계(internal/upgrade)를 거치지 않고 정책이 선언한 image/version 그대로
+//       internal/driverjob.RenderInstallJob 을 직접 호출해 install Job YAML 을 stdout 에 낸다.
+// 생성일: 2026-09-20 | 수정일: 2026-10-11
 // ============================================================
 
 // Command render prints the install Job that internal/driverjob would build for a

@@ -4,7 +4,7 @@
 //
 //	클러스터를 읽지 않는다. 수집은 컨트롤러가, 배치 반영은 internal/intent 가 한다.
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -58,7 +58,7 @@ func evaluateDevice(d DeviceInput, p EffectivePolicy) DeviceResult {
 	}
 
 	// MIG 관측 실패는 상태를 좌우하지 않는다 — "MIG 를 못 읽는다" 와 "GPU 를 못 쓴다" 는 다른
-	// 사실이다(2026-08-04 라이브: master 의 GeForce GTX 970 은 MIG 자체를 지원하지 않아 관측이
+	// 사실이다(예: master 의 GeForce GTX 970 은 MIG 자체를 지원하지 않아 관측이
 	// 영원히 실패하지만 GPU 로서는 멀쩡하다). 신호로만 남겨 운영자가 볼 수 있게 하고, 상태는
 	// 드라이버 축으로만 정한다. 보고서 신선도는 이미 NDRFreshness 가 따로 감시한다.
 	if d.MigObservationError != "" {
@@ -81,8 +81,8 @@ func evaluateDevice(d DeviceInput, p EffectivePolicy) DeviceResult {
 
 // WorstDeviceState 는 장치 상태를 노드 상태 하나로 접는다 — 가장 나쁜 장치를 따른다.
 // 장치가 없으면 빈 문자열(판정 대상 없음)을 돌려준다.
-// StateUnknown 등급은 남아 있지만 EvaluateDevices 는 더는 이 상태를 만들지 않는다(관측 실패가
-// 상태를 바꾸지 않도록 바뀌었다, 2026-08-04 라이브) — 죽은 갈래다.
+// StateUnknown 등급은 랭크 맵에 남아 있지만 EvaluateDevices 가 이 상태를 내지 않는 한
+// 죽은 갈래다 — 관측 실패를 다시 상태에 반영하게 되면 되살아난다.
 func WorstDeviceState(devs []DeviceResult) (string, string) {
 	rank := map[string]int{StateHealthy: 0, StateUnknown: 1, StateDegraded: 2, StateUnhealthy: 3}
 	worst, reason, best := "", "", -1

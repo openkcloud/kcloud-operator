@@ -1,6 +1,6 @@
 // ============================================================
 // policy_test.go: 실효 정책 해석 시험
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package health
 
@@ -74,7 +74,7 @@ func TestRemediationOverrideWins(t *testing.T) {
 }
 
 // TestMonitorIntervalDefaultsAndOverride 는 감시 주기가 기본값을 갖고 정책으로 낮춰지는지 본다.
-// 기본 30초로는 자가치유가 빠른 장애(라이브 실측 13초)를 아예 관측하지 못한다.
+// 기본 30초로는 자가치유가 빠른 장애를 아예 관측하지 못한다.
 func TestMonitorIntervalDefaultsAndOverride(t *testing.T) {
 	if got := DefaultPolicy().MonitorInterval; got != 30*time.Second {
 		t.Fatalf("기본 감시 주기 = %v, want 30s", got)

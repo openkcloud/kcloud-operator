@@ -1,4 +1,4 @@
-<!-- README.md: test/collect/ evidence 수집 스크립트 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 (출력 경로를 중립 자리표시자로 교체) -->
+<!-- README.md: test/collect/ evidence 수집 스크립트 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 
 # test/collect — §3.6 evidence 레코드 수집
 
@@ -59,11 +59,11 @@ bash test/collect/read-commit-test.sh   # commit 폴백 순서 자체 점검(클
 ## 두 레코드 형식(이 스키마가 검증하지 않는 것)
 
 이 `schema.json` 은 **점검 단위(per-check) §3.6 레코드**를 고정한다 — (노드, 벤더, 명령)
-하나에 레코드 하나. Round 1~4 의 라운드 JSON 은 **라운드 요약(round
-summary) 레코드**로 형식이 다르며 이 스키마로 검증되지 않는다(요약 파일의 `verdict` 는
-`PASS` 대문자에 사유 산문이 붙고, `nodes[]`·`tests[]` 배열을 담는다). 두 형식의 필드 대응:
+하나에 레코드 하나. **라운드 요약(round summary) 레코드**는 형식이 달라 이 스키마로
+검증되지 않는다(요약 파일의 `verdict` 는 `PASS` 대문자에 사유 산문이 붙고, `nodes[]`·
+`tests[]` 배열을 담는다). 두 형식의 필드 대응:
 
-| per-check(이 스키마) | round summary(Round 1~4 JSON) |
+| per-check(이 스키마) | round summary |
 |---|---|
 | date | date |
 | kcloudVersion | kcloud_version |
@@ -84,7 +84,7 @@ summary) 레코드**로 형식이 다르며 이 스키마로 검증되지 않는
 
 ## 예: Tenstorrent install-Job 재생성
 
-`--command` 값이 저장소 루트 기준 경로이므로 저장소 루트에서 실행한다(features 문서와 동일).
+`--command` 값이 저장소 루트 기준 경로이므로 저장소 루트에서 실행한다.
 
 ```bash
 cd kcloud-operator
@@ -95,6 +95,4 @@ cd kcloud-operator
 ```
 
 `test/live/tt-install-job/run.sh` 는 현재 로드된 드라이버 버전과 DIP 선언 버전이 같을 때
-설치를 건너뛰는 멱등 경로다(k8s-worker3 에 Job 하나를 만들고 지운다). 산출 레코드는
-2026-09-20 설치 Job 수기 evidence 와 verdict·DUS·라벨·
-allocatable 이 일치한다.
+설치를 건너뛰는 멱등 경로다(k8s-worker3 에 Job 하나를 만들고 지운다).

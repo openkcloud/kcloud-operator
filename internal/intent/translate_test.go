@@ -1,7 +1,7 @@
 // ============================================================
 // translate_test.go: 추상 의도 → 벤더 리소스 번역 테스트
 // 상세: 벤더 우선순위, DRA 거절, 축을 지목하는 오류 전파, 노드 후보 확정.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package intent
 
@@ -235,13 +235,12 @@ func TestTranslateMultiVendorNode(t *testing.T) {
 	}
 }
 
-// D-2 라이브 재현: k8s-worker1(Warboy — 같은 furiosa 벤더지만 furiosa.ai/rngd 은 광고하지 않음)과
-// rngd-1(RNGD, 물리 1대인데 4개 광고 — oversubscribed, D-1 이후 CheckMode 가 exclusive 를 거절함)이
-// 함께 있을 때, exclusive RNGD 요청의 거절은 rngd-1 의 실제 사유여야 한다. 벤더만 보는 낡은 후보
-// 필터는 worker1 도 후보로 들여 그 사소한 "광고 안 함" 이 rngd-1 의 진짜 거절을 가린다.
-// 두 순서 모두 확인한다 — BuildSnapshot 은 이름 사전순으로 정렬해 "k8s-worker1" 이 항상 먼저
-// 오지만("k8s-worker1" < "rngd-1"), 고침이 반복 순서가 아니라 후보 판정 자체를 고쳐야 한다는
-// 것을 보이기 위해 반대 순서도 함께 돈다.
+// k8s-worker1(Warboy — 같은 furiosa 벤더지만 furiosa.ai/rngd 은 광고하지 않음)과 rngd-1(RNGD, 물리 1대인데
+// 4개를 oversubscribed 로 광고해 CheckMode 가 exclusive 를 거절)이 함께 있을 때, exclusive RNGD 요청의
+// 거절은 rngd-1 의 실제 사유여야 한다. 벤더만 보는 후보 필터는 worker1 도 들여보내 그 사소한
+// "광고 안 함" 이 rngd-1 의 진짜 거절을 가린다. 두 순서 모두 확인한다 — BuildSnapshot 은 이름 사전순
+// 정렬로 "k8s-worker1" 이 항상 먼저 오므로, 고침이 반복 순서가 아니라 후보 판정 자체를 고쳐야
+// 한다는 것을 보이려면 반대 순서도 함께 돌려야 한다.
 func TestTranslateRNGDExclusiveReportsRealRejectionNotWrongNode(t *testing.T) {
 	warboy := NodeCapability{NodeName: nodeK8sWorker1, Vendor: vendorFuriosa,
 		Advertised: map[string]int32{"beta.furiosa.ai/npu": 1}, SharingMode: v1alpha1.SharingModeExclusive}
@@ -359,9 +358,8 @@ func TestTranslateDRASuccess(t *testing.T) {
 }
 
 // TestTranslateDRAThroughRealSnapshot 은 BuildDRACapability→BuildSnapshot→TranslateWithDRA 를
-// 손으로 짠 NodeCapability 없이 실제로 관통시킨다 — 두 계층을 손으로 각각 짠 픽스처로 시험하면
-// 계층이 어긋나도(예: BuildSnapshot 이 DRADevices 를 채우는 방식이 바뀌어도) 양쪽 테스트가 모두
-// 초록으로 남는다(이 저장소에서 실제로 있었던 일).
+// 손으로 짠 NodeCapability 없이 실제로 관통시킨다 — 두 계층을 각각 손으로 짠 픽스처로 시험하면
+// 계층이 어긋나도(예: BuildSnapshot 이 DRADevices 를 채우는 방식이 바뀌어도) 양쪽 테스트가 모두 초록으로 남는다.
 func TestTranslateDRAThroughRealSnapshot(t *testing.T) {
 	classes := []resourcev1.DeviceClass{{ObjectMeta: metav1.ObjectMeta{Name: "gpu.nvidia.com"}}}
 	slices := []resourcev1.ResourceSlice{{Spec: resourcev1.ResourceSliceSpec{
@@ -552,7 +550,7 @@ func TestDRACandidateExcludesMIGFragmentNode(t *testing.T) {
 func TestDRACandidateExcludesZeroCountAdvertisement(t *testing.T) {
 	res, err := translateDRAChain(t, draRequest(v1alpha1.AccessSpec{Mode: v1alpha1.AccessModeExclusive}, ""),
 		[]corev1.Node{node(nodeWorker1, map[string]string{"nvidia.com/gpu": "0"})}, nil)
-	// 배제 이유가 이중 광고이므로 사유도 그것이다 — 이 노드는 DRA 장치를 내고 있었다.
+	// 배제 이유가 이중 광고이므로 사유도 그것이다 — 이 노드는 DRA 장치를 내고 있다.
 	if rj := draReject(t, res, err); rj.Reason != v1alpha1.AWReasonDRADoubleAdvertised {
 		t.Fatalf("reason = %q, want %q", rj.Reason, v1alpha1.AWReasonDRADoubleAdvertised)
 	}
@@ -584,9 +582,9 @@ func rngdDRAMapping() v1alpha1.AcceleratorMapping {
 		DeviceClassName: draClassRngd, DRADriver: draClassRngd}
 }
 
-// 라이브(2026-08-05) 재현: rngd-1 이 furiosa.ai/rngd 4개와 npu.furiosa.ai DRA 장치 1개를 동시에
-// 내는 순간 사용자가 받은 것은 "아무 노드도 그 드라이버로 장치를 내지 않는다" 였다. 사실과
-// 반대라 사용자는 멀쩡한 DRA 드라이버를 다시 깔러 간다 — 고칠 곳은 그 노드의 device-plugin 이다.
+// RNGD 재현: rngd-1 이 furiosa.ai/rngd 4개와 npu.furiosa.ai DRA 장치 1개를 동시에 내는 순간, 사용자가
+// 받는 메시지는 "아무 노드도 그 드라이버로 장치를 내지 않는다" 다 — 사실과 반대라 사용자는 멀쩡한
+// DRA 드라이버를 다시 깔러 간다. 고칠 곳은 그 노드의 device-plugin 이다.
 func TestTranslateDRARejectsDoubleAdvertisedWithActionableReason(t *testing.T) {
 	req := Request{ClassName: "c", AllocationAPI: v1alpha1.AllocationAPIDRA,
 		Access:   v1alpha1.AccessSpec{Mode: v1alpha1.AccessModeExclusive},
@@ -674,9 +672,8 @@ func TestBuildRequestMergesClassAndWorkload(t *testing.T) {
 	}
 }
 
-// 이중 광고 거절 메시지는 "device plugin 을 끄라" 로 끝나면 안 된다 — 끄는 방법을 우리가
-// 제공하기 전까지는 사용자가 손으로 DaemonSet 을 건드렸고 operator 가 그걸 되돌렸다.
-// 이제 그 방법이 spec 에 있으므로 메시지가 그 축을 지목해야 한다.
+// 이중 광고 거절 메시지는 "device plugin 을 끄라" 로 끝나면 안 된다 — 사용자가 손으로 DaemonSet 을
+// 건드리면 operator 가 선언한 상태로 되돌린다. 끄는 방법은 spec 의 advertiseBy 뿐이므로 메시지가 그 축을 지목해야 한다.
 func TestDRADoubleAdvertisedMessagePointsAtAdvertiseSwitch(t *testing.T) {
 	res, err := translateDRAChain(t, draRequest(v1alpha1.AccessSpec{Mode: v1alpha1.AccessModeExclusive}, ""),
 		[]corev1.Node{node(nodeWorker1, map[string]string{"nvidia.com/gpu": "2"})}, nil)
@@ -689,9 +686,8 @@ func TestDRADoubleAdvertisedMessagePointsAtAdvertiseSwitch(t *testing.T) {
 	}
 }
 
-// 광고 주체를 DRA 로 넘긴 노드는 이중 광고가 아니다. device-plugin 이 물러난 뒤에도
-// allocatable 에는 0 으로 굳은 키가 남는데, 그것을 이중 광고로 세면 스위치를 켜도 그 노드가
-// 영원히 DRA 후보가 되지 못한다 — 라이브에서 실제로 그렇게 막혔다.
+// 광고 주체를 DRA 로 넘긴 노드는 이중 광고가 아니다. device-plugin 이 물러난 뒤에도 allocatable 에는
+// 0 으로 굳은 키가 남는데, 그것을 이중 광고로 세면 스위치를 켜도 그 노드가 영원히 DRA 후보가 되지 못한다.
 func TestDRACandidateIncludesDRAOwnedNode(t *testing.T) {
 	n := node(nodeWorker1, map[string]string{"nvidia.com/gpu": "0"})
 	n.Labels = map[string]string{"kcloud.ai/nvidia.dra-owned": "true"}

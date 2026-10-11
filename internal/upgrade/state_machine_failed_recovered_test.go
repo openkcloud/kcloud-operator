@@ -1,20 +1,9 @@
 // ============================================================
-// state_machine_failed_recovered_test.go: 노드가 이미 정책을 만족하는데 Failed 로 남아 있던
-//
-//	상태의 탈출 경로 단위 테스트
-//
-// 상세: 라이브 결함(2026-08-07, `.91` k8s-worker3-tenstorrent) — current 와 desired 가 같고
-//
-//	드라이버도 로드돼 있는데 DUS 가 사흘째 Failed 로 남아 있었다. Failed 는 cordon 해제
-//	말고는 아무것도 하지 않는 절대 터미널이라 나갈 길이 없었다. 할 일이 없는 상태에서
-//	사람의 손을 기다리는 것은 상태를 잘못 표현하는 것이다.
-//
-// 경계: 탈출은 "노드가 이미 정책을 만족한다" 가 확인될 때만이다. 버전이 다르거나 드라이버가
-//
-//	빠져 있으면 Failed 로 남는다 — 그러지 않으면 Idle 이 설치를 다시 걸고 실패해
-//	Failed 로 돌아오는 왕복이 생긴다.
-//
-// 생성일: 2026-08-07
+// state_machine_failed_recovered_test.go: 노드가 이미 정책을 만족하는데 Failed 로 남은 상태의
+// 탈출 경로 단위 테스트
+// 상세: Failed 가 이미 정책을 만족한 노드를 Idle 로 내보내는 탈출 조건과 그 경계(버전 불일치·
+//       NDR 없음·cordon 소유권)를 고정한다.
+// 생성일: 2026-08-07 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -66,8 +55,8 @@ func makeUncordonedNode() *corev1.Node {
 }
 
 // ── 시험 1: 이미 정책을 만족 → Idle 로 탈출 ─────────────────────────────
-// 라이브에서 실제로 막혀 있던 조합이다. 목표 버전이 이미 깔려 있고 드라이버도 로드돼 있으니
-// 이 상태기계가 할 일은 없다. 할 일이 없으면 Idle 이다.
+// 목표 버전이 이미 깔려 있고 드라이버도 로드돼 있으면 이 상태기계가 할 일은 없다.
+// 할 일이 없으면 Idle 이다.
 func TestHandleFailed_AlreadySatisfiesPolicy_ReturnsToIdle(t *testing.T) {
 	dus := makeFailedDUSWithVersions(verNew, verNew)
 	dip := makeCordonTestDIP()
@@ -148,8 +137,8 @@ func TestHandleFailed_NoDeviceReport_StaysFailed(t *testing.T) {
 }
 
 // ── 시험 4: Failed→Idle 탈출이 남은 cordon 을 푼다 ─────────────────────────
-// 해제 로직이 Uncordoning 경로(state_machine.go:680)에만 있어서, 복구 탈출로 나가면
-// 드라이버가 정상인데 노드가 계속 cordon 된다(2026-09-17 라이브에서 수동 uncordon 필요).
+// 해제 로직이 Uncordoning 경로에만 있어서, 복구 탈출로 나가면 드라이버가 정상인데 노드가
+// 계속 cordon 된 채로 남을 수 있다 — 탈출 경로에서도 같은 해제를 걸어야 한다.
 func TestFailedStateRecovered_ReleasesCordon(t *testing.T) {
 	dus := makeFailedDUSWithVersions(verNew, verNew)
 	node := makeCordonedNode(dus.Name, nil)

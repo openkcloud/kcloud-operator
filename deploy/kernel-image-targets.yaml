@@ -1,26 +1,18 @@
 # ============================================================
 # kernel-image-targets.yaml: 사전 컴파일 드라이버 이미지를 구울 커널·벤더 목록
-# 상세: spec.driver.kernelImageBuildRevision 을 켜면 operator 가
-#       "<version>[-<variant>]-k<커널>-<빌드 개정>" 태그로 이미지 참조를 조립한다. 그 태그가
-#       실재해야 install Job 이 그것을 당길 수 있으므로, 어느 커널의 이미지를 미리 구워 둘지
-#       여기에 명시한다. hack/kernel-image-targets.sh 가 이 목록에서 전체 이미지 참조와
-#       images 저장소 release-bundle.yaml 의 kernel-images 묶음을 유도한다.
-#       버전·variant·저장소 경로는 deploy/helm/values.yaml 에서 읽는다 — 여기 두 번 적지 않는다.
-#       목록은 자동으로 늘지 않는다. 노드에서 관측한 커널을 여기에 자동 추가하는 경로는 없다 —
-#       커널 조합마다 이미지를 구워 둘 수는 없어서 이 명시 목록이 상한 역할을 한다.
-# 생성일: 2026-10-05
+# 상세: kernelImageBuildRevision 를 켜면 operator 가 "<version>[-<variant>]-k<커널>-<빌드
+#       개정>" 태그를 조립해 당긴다. hack/kernel-image-targets.sh 가 이 목록에서 전체 이미지
+#       참조와 images 저장소 kernel-images 묶음을 유도한다(버전·variant·경로는
+#       deploy/helm/values.yaml 소관). 목록은 자동으로 늘지 않는다 — 수동 상한이다.
+# 생성일: 2026-10-05 | 수정일: 2026-10-11
 # ============================================================
 
-# 대상 커널. 라이브 클러스터가 쓰는 세 커널이 출발점이다.
-#
-# 이 목록은 사전 컴파일 경로를 켜고 끄는 스위치가 아니다. 노드가 커널 이미지를 당기게 하는
-# 것은 차트의 driver.kernelImageBuildRevision 이고 네 벤더 모두 기본이 빈 값이다 — 끄기는
-# 이미 기본 상태다. 여기 적는 것은 "어느 커널의 이미지를 구워 둘지" 뿐이다.
-#
-# 비우면 유도 결과가 0건이 되는데, 그것은 기본 게이트를 빨강으로 만든다 —
-# internal/upgrade/kernel_image_targets_test.go 가 대상 0건을 공허한 대조로 보고 t.Fatalf
-# 한다(그 가드가 없으면 목록을 비운 채 검사가 늘 초록이 된다). 대상을 정말 비우려면 그
-# 시험도 함께 고쳐야 한다.
+# 대상 커널. 라이브 클러스터가 쓰는 세 커널이 출발점이다. 이 목록은 사전 컴파일 경로를
+# 켜고 끄는 스위치가 아니다 — 그 스위치는 차트의 driver.kernelImageBuildRevision 이다(네
+# 벤더 기본 빈 값이라 끄기는 이미 기본 상태). 여기 적는 것은 "어느 커널의 이미지를 구워
+# 둘지" 뿐이다. 비우면 유도 결과가 0건이 되어 기본 게이트를 빨강으로 만든다 —
+# internal/upgrade/kernel_image_targets_test.go 의 t.Fatalf 가드가 없으면 목록을 비운
+# 채 검사가 늘 초록이 된다(대상을 정말 비우려면 그 시험도 함께 고쳐야 한다).
 kernels:
   - 5.15.0-171-generic
   - 5.15.0-191-generic

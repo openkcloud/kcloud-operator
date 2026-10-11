@@ -83,8 +83,8 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values --s
 - `crdUpgrade.enabled=true`(기본): helm upgrade 시 operator 의 `apply-crds` 서브명령 Job 이 CRD 를
   자동 적용(Helm 은 crds/ 를 install 전용으로 다루므로). 비활성화 시 수동 `kubectl apply -f crds/` 필요.
 - **`--reuse-values` 금지**: Helm v4.0.1 에서 이 옵션은 직전 릴리스가 계산해 둔 값을 통째로
-  재사용하므로, 사용자 값이 우선하지 않는 차트 기본값 변경이 반영되지 않는다. 2026-09-24 에 NVIDIA
-  검증 목록 변경이 이 때문에 리비전 세 개 동안 조용히 빠졌다. 값을 바꿔 반영할 때는 위 명령처럼
+  재사용하므로, 사용자 값이 우선하지 않는 차트 기본값 변경이 반영되지 않는다. 그 결과 차트
+  기본값 변경이 여러 리비전 동안 조용히 빠질 수 있다. 값을 바꿔 반영할 때는 위 명령처럼
   `--reset-then-reuse-values` 를 쓴다 — 차트 기본값을 다시 계산한 뒤 사용자 값을 다시 적용하므로
   둘 다 반영된다. `make helm-option-check` 가 저장소 안 `--reuse-values` 단독 사용을 검사한다.
 - **반영 후 확인**: 리비전이 올라간 것만으로는 값이 반영됐다는 증거가 아니다. 바꾼 필드가 실제로
@@ -258,7 +258,7 @@ Helm 은 설계상 `crds/` 디렉터리의 CRD 를 삭제하지 않습니다. `u
 | `tenstorrent.dra` | `ghcr.io` | `tenstorrent/tt-dra-driver` | Tenstorrent DRA 를 켤 때 |
 | `tenstorrent.dra.fabricManager` | `ghcr.io` | `tenstorrent/tt-fabric-manager` | Tenstorrent DRA 를 켤 때(드라이버가 이 데몬 없이 기동하지 못함) |
 
-`bitnamilegacy` 는 오타가 아닙니다. Bitnami 가 2025-08 에 공개 카탈로그를 정리하면서
+`bitnamilegacy` 는 오타가 아닙니다. Bitnami 가 공개 카탈로그를 정리하면서
 `docker.io/bitnami/kubectl` 의 태그를 모두 내리고 `bitnamilegacy` 로 옮겼습니다.
 사설 미러를 옛 `<registry>/bitnami/kubectl` 경로에 두고 있다면 `crdUpgrade.kubectlImage`
 로 그 경로를 직접 지정하세요.
@@ -383,57 +383,54 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
 - **기존 릴리스에서 올릴 때**: `global.vendorRegistry` 는 새로 생긴 값이라 기존 사용자 값에 없다.
   사설 미러를 쓰는 클러스터는 upgrade 시 이 값을 함께 주지 않으면 벤더 이미지 아홉 개가
   upstream 을 직접 당기려 하고, air-gap 이면 `ImagePullBackOff` 로 멈춘다.
-- **RNGD partition**: 기본값은 공개 벤더 이미지 + `partitionPolicy: none` + `debugMode: false` 다(2026-09-09).
+- **RNGD partition**: 기본값은 공개 벤더 이미지 + `partitionPolicy: none` + `debugMode: false` 다.
   `partitionPolicy != none` 은 operator 가 device-plugin 에 `--policy` 를 전달하므로 파티션 지원 내부 이미지
   (`kcloud/furiosa-device-plugin-mi`)로 함께 바꿔야 한다. 공개 이미지는 `--policy` 를 거부해 CrashLoop.
 - **driver DS 수명주기**(v0.5.22+): driver DaemonSet 은 DriverInstallPolicy 에 ownerReference 가 걸려
   DIP 삭제 시 K8s GC 가 cascade 삭제.
-- **설치 정책은 릴리스 자원**(2026-09-24): 벤더별 `DriverInstallPolicy` 네 개는 helm hook 이
-  아니라 릴리스 자원으로 관리된다. hook 으로 두면 업그레이드마다 삭제·재생성되어 uid 가 바뀌고,
-  정책을 소유자로 참조하는 toolkit DaemonSet 이 연쇄로 다시 만들어졌다. 정책에 직접 넣은 값도
-  다음 업그레이드에서 사라졌다. 이 변경 이전에 설치한 클러스터는 정책에 helm 소유 표시가 없으므로
-  `helm upgrade` 전에 `hack/adopt-helm-resources.sh --apply` 를 한 번 실행한다. 릴리스 자원이 되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제 삭제 동작은 달라지지 않는다. `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가 `npu.ai` 사용자 정의 자원을 먼저 순서대로 지우기 때문이다. 실행하지 않고
-  업그레이드하면 helm 이 "already exists" 로 거절한다.
-- **레지스트리 도달성**: 다른 클러스터 배포 시 노드가 이미지 레지스트리에 도달 가능해야 함. 상세 절차는
-  운영 노트(`operator/tester.md` §5) 참조.
+- **설치 정책은 릴리스 자원**: 벤더별 `DriverInstallPolicy` 네 개는 helm hook 이 아니라 릴리스
+  자원으로 관리한다. hook 으로 관리하면 업그레이드마다 삭제·재생성되어 uid 가 바뀌고, 정책을
+  소유자로 참조하는 toolkit DaemonSet 이 연쇄로 재생성되며 정책에 직접 넣은 값도 다음
+  업그레이드에서 사라진다. 릴리스 자원 관리로 전환하기 전에 설치한 클러스터는 정책에 helm
+  소유 표시가 없으므로 `helm upgrade` 전에 `hack/adopt-helm-resources.sh --apply` 를 한 번
+  실행한다. 실행하지 않고 업그레이드하면 helm 이 "already exists" 로 거절한다. 릴리스 자원이
+  되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제 삭제 동작은 달라지지 않는다 —
+  `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가 `npu.ai` 사용자 정의
+  자원을 먼저 순서대로 지우기 때문이다.
+- **레지스트리 도달성**: 다른 클러스터에 배포할 때 노드가 이미지 레지스트리에 도달 가능해야
+  한다. 안 되면 파드가 `ImagePullBackOff` 로 멈춘다.
 - **CRD**: helm 자체는 `crds/` 의 CRD 를 삭제하지 않는다. 차트의 `post-delete` Job 이
   대신 지운다(`uninstall.purgeCRDs`, 기본 참). 남기려면 그 값을 거짓으로 둔다.
-- **containerdMinVersion 제거**(2026-10-04): `DriverInstallPolicy` 에서 `containerdMinVersion`
-  필드를 없앴다. kubectl 1.25+ 는 서버 측 필드 검증이 기본 strict 라, 이 필드를 든 손으로 쓴
-  DIP 매니페스트는 조용히 무시되지 않고 거절된다. 오류 메시지가 필드 이름을 알려주므로 그
-  한 줄만 지우면 된다. **이 차트 자신의 values·템플릿·샘플에서는 이미 지웠다.** 그러나 더
-  흔한 경로는 이쪽이다 — 그 전에 설치한 **사이트**가 자기 `-f` values 파일에
-  `driverInstallPolicies.<vendor>.driver.containerdMinVersion` 을 그대로 들고 있으면,
+- **containerdMinVersion 미지원**: `DriverInstallPolicy` 에 `containerdMinVersion` 필드가
+  없다. kubectl 1.25+ 는 서버 측 필드 검증이 기본 strict 라, 이 필드를 든 손으로 쓴 DIP
+  매니페스트는 조용히 무시되지 않고 거절된다. 오류 메시지가 필드 이름을 알려주므로 그 한
+  줄만 지우면 된다. 자기 `-f` values 파일에
+  `driverInstallPolicies.<vendor>.driver.containerdMinVersion` 을 들고 있는 **사이트**는
   `values.schema.json`(아래 항목) 이 kubectl 과 무관하게 `helm upgrade`/`template` 자체를
   거절한다(`additional properties 'containerdMinVersion' not allowed`). 그 값 파일에서
   그 줄을 지우고 다시 올린다.
-- **detector.namespace 제거**(2026-10-04): 소비하는 템플릿·컨트롤러 코드가 없던 죽은 값이라
-  지웠다. detector(node-manager)의 실제 네임스페이스는 operator 가 설치된 release
-  namespace 로 고정이며, 이 값으로 바꿀 수 있던 적이 없다. 위와 같은 이유로, 그 전에 자기
-  values 파일에 `detector.namespace` 를 들고 있던 사이트는 `helm upgrade` 가 거절된다 —
-  그 줄을 지운다.
-- **읽는 코드가 없던 CRD 필드 제거**(2026-10-05): `DriverInstallPolicy` 에서 `driver.secrets`·
-  `driver.extraHostMounts`·`toolkit.method`·`toolkit.version`·`toolkit.secrets`·
-  `toolkit.extraHostMounts` 를, `AcceleratorPartitionPolicy` 에서 `quiescePolicy` 블록 전체
-  (`quiescePolicy` 자신과 그 안의 `timeoutSeconds`·`onTimeout`)를 없앴다. 전부 컨트롤러가
-  한 번도 읽지 않은 필드다 — 값을 적어도 동작이 달라진 적이 없다. `toolkit` 에서 남는 키는
-  `enabled`·`image`·`env` 셋뿐이다. 위 두 항목과 같은 이유로, 이 필드를 든 손으로 쓴
-  매니페스트는 kubectl 1.25+ 의 strict 서버 측 필드 검증에서 조용히 무시되지 않고 거절된다.
-  오류 메시지가 필드 이름을 알려주므로 그 줄만 지우면 된다. **이 차트 자신의
-  values·`values.schema.json`·샘플에서는 이미 지웠다**(`values.yaml`·`values-dev.yaml`·
-  `values-k8s1.34.yaml` 세 곳이 `toolkit.method: apt` 를 주고 있었다). 그 전에 설치한
-  **사이트**가 자기 `-f` values 파일에 `driverInstallPolicies.<vendor>.toolkit.method`
-  (또는 `.version`·`.secrets`·`.extraHostMounts`)를 들고 있으면 `values.schema.json` 이
-  kubectl 과 무관하게 `helm upgrade`/`template` 자체를 거절한다 — 그 줄을 지우고 다시 올린다.
+- **detector.namespace 미지원**: `detector.namespace` 값은 없다. detector(node-manager)의
+  네임스페이스는 operator 가 설치된 release namespace 로 고정이며 이 값으로 바꿀 수 없다.
+  자기 values 파일에 `detector.namespace` 를 들고 있는 사이트는 `helm upgrade` 가 거절된다
+  — 그 줄을 지운다.
+- **CRD 미지원 필드**: `DriverInstallPolicy` 에는 `driver.secrets`·`driver.extraHostMounts`·
+  `toolkit.method`·`toolkit.version`·`toolkit.secrets`·`toolkit.extraHostMounts` 가 없고,
+  `AcceleratorPartitionPolicy` 에는 `quiescePolicy` 블록(`quiescePolicy` 자신과 그 안의
+  `timeoutSeconds`·`onTimeout`)이 없다. 컨트롤러가 이 필드들을 읽지 않으므로 값을 적어도
+  동작이 달라지지 않는다. `toolkit` 에서 남는 키는 `enabled`·`image`·`env` 셋뿐이다. 이
+  필드를 든 손으로 쓴 매니페스트는 kubectl 1.25+ 의 strict 서버 측 필드 검증에서 조용히
+  무시되지 않고 거절된다. 오류 메시지가 필드 이름을 알려주므로 그 줄만 지우면 된다. 자기
+  `-f` values 파일에 `driverInstallPolicies.<vendor>.toolkit.method`(또는 `.version`·
+  `.secrets`·`.extraHostMounts`)를 들고 있는 **사이트**는 `values.schema.json` 이 kubectl 과
+  무관하게 `helm upgrade`/`template` 자체를 거절한다 — 그 줄을 지우고 다시 올린다.
   `quiescePolicy` 는 차트 값이 아니라 손으로 쓰는 ACPP 자원에만 있으므로 kubectl 쪽만
   해당한다 — `quiescePolicy: {}` 처럼 빈 객체로 들고 있어도 거절된다.
-- **values.schema.json**(2026-10-04 추가): 이 차트는 선언되지 않은 값 키를 `helm
-  template`/`install`/`upgrade` 단계에서 거절한다. 이전에는 helm 이 모르는 키를 조용히
-  버렸다 — 오타 키나 죽은 키가 몇 달째 아무 효과 없이 values 파일에 쌓이는 사고가 반복돼
-  막은 것이다. 거절되면 오류가 `at '/<부모경로>': additional properties '<키>' not allowed`
+- **values.schema.json**: 이 차트는 선언되지 않은 값 키를 `helm template`/`install`/`upgrade`
+  단계에서 거절한다. 오타 키나 쓰이지 않는 키가 효과 없이 values 파일에 남는 것을 막기
+  위해서다. 거절되면 오류가 `at '/<부모경로>': additional properties '<키>' not allowed`
   형태로 **키 경로를 그대로** 알려주므로, 그 경로의 그 줄만 지우면 된다. 벤더가 읽지
   않는 키(예: furiosa 의 `toolkit`, nvidia 의 `driver.trackOnly`)는 문구가 다르다 —
   `at '/driverInstallPolicies/furiosa': 'allOf' failed` 다음 줄에 `at
   '.../toolkit': false schema` 로 나온다. 문구는 달라도 경로는 똑같이 알려준다.
   `affinity`, `resources.limits`/`resources.requests` 는 쿠버네티스 쪽 키라 임의 값을
-  그대로 열어 뒀다 — 그 외 블록은 모르는 키를 전부 막는다.
+  그대로 허용한다 — 그 외 블록은 모르는 키를 전부 막는다.

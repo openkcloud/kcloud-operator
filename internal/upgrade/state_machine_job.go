@@ -1,13 +1,8 @@
 // ============================================================
 // state_machine_job.go: driver Job 모드 상태 핸들러 (Mode=job)
-// 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 이
-//       Mode=job 일 때 early-return 으로 진입하는 대체 경로. 검증된 안전 순서
-//       (cordon→drain→install→validate→uncordon) 와 validator 체인은 그대로
-//       재사용하되, "DS 이미지 patch + pod 삭제" 를 "install Job 생성/재생성" 으로,
-//       "DS pod Ready 관찰" 을 "Job 성공 종료 + NDR 일치" 로 재정의한다.
-//       daemonset 경로 본문은 바이트 불변(additive-only).
-//       install Job 의 신원은 이미지 + DRIVER_VERSION 두 축이다(jobTargetsInstall).
-// 생성일: 2026-07-16 | 수정일: 2026-10-11 (validator 체인 호출을 validatorsFor(policy) 로 교체; 계획서 항목 토큰 제거)
+// 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 의 Mode=job 대체
+//       경로다. DS patch 를 install Job 생성/재생성으로, Pod Ready 관찰을 Job 완료+NDR 일치로 재정의한다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -170,8 +165,8 @@ func (m *UpgradeStateMachine) handleValidatingJob(
 
 	// install Job 이 아직 돌고 있으면 검증 예산을 쓰지 않는다. Job 에는 자기 시한
 	// (activeDeadlineSeconds, 기본 30m)이 있고 초과하면 위 실패 분기가 받는다. 여기서 별도
-	// 시계를 돌리면 정상 진행 중인 설치를 실패로 단정한다 — 라이브 실측: apt 로 313MB 를 받는
-	// 도중 검증 예산 10분이 끝나 롤백으로 밀려났고, 그 롤백이 없는 이미지를 집어 노드가 굳었다.
+	// 시계를 돌리면 정상 진행 중인 설치를 실패로 단정해, 그 롤백이 없는 이미지를 집어 노드가
+	// 굳는 결과로 이어진다.
 	if jobFound && !jobComplete(&job) {
 		logger.Info("install Job 진행 중 — 완료 대기", "job", jobName)
 		return true, 10 * time.Second, nil
@@ -376,7 +371,7 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 	metrics.RecordRollback(state.Spec.Vendor)
 	// RenderInstallJob 이 아니라 RenderRollbackJob 이다 — 롤백 Job 은 다운그레이드를 허용받아야
 	// 하고 정책 선언 버전이 아니라 지시받은 이전 버전을 설치해야 한다. 일반 설치 Job 으로 렌더링하면
-	// installer 자신의 다운그레이드 가드가 거부해 롤백이 무동작이 된다(2026-08-10 라이브).
+	// installer 자신의 다운그레이드 가드가 거부해 롤백이 무동작이 된다.
 	desired := driverjob.RenderRollbackJob(policy, state.Spec.NodeName, prevImage, prevVersion)
 	if err := m.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
 		return false, 0, fmt.Errorf("rollback install Job 생성 실패: %w", err)
@@ -431,30 +426,28 @@ func captureJobPreviousImage(state *v1alpha1.DriverUpgradeState, dipImage, insta
 	}
 }
 
-// reconstructPrevImage 는 DIP 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해
-// 이전 버전 이미지를 재구성한다. variant 미검출/검증 실패 시 빈 문자열.
-//
-// dipImage 는 반드시 policy.Spec.Driver.Image 다. status.resolvedImage 를 주면 조립·맵으로 고른
-// 커널 이미지의 빌드 개정이 결과 태그에 붙는다. 커널 이미지의 개정과 일반 설치 이미지의 개정은
-// 서로 다른 수이므로(그래서 kernelImageBuildRevision 이 별도 필드다) 그렇게 만든 태그는 거의 항상
-// 레지스트리에 없고, 아래 주석이 적은 고착이 정확히 그때 일어난다. spec.driver.image 는 사이트가
-// 적은 발행된 참조라 거기서 뜬 개정은 실재한다.
+// reconstructPrevImage 는 DIP 이미지의 variant 접미사(-vN)와 prevVersion 을 결합해 이전 버전
+// 이미지를 재구성한다. variant 미검출/검증 실패 시 빈 문자열을 돌려준다.
+// dipImage 는 반드시 policy.Spec.Driver.Image 여야 한다 — status.resolvedImage 를 주면 조립·맵으로
+// 고른 커널 이미지의 빌드 개정이 결과 태그에 붙는데, 그 개정은 일반 설치 이미지의 개정과 다른 수라
+// (kernelImageBuildRevision 이 별도 필드인 이유) 그렇게 만든 태그는 거의 항상 레지스트리에 없어
+// 고착으로 이어진다. spec.driver.image 는 사이트가 적은 발행된 참조라 그 개정은 항상 실재한다.
 func reconstructPrevImage(dipImage, installer, prevVersion string, versionBaked bool) string {
 	if dipImage == "" || prevVersion == "" {
 		return ""
 	}
 	// apt/script 인스톨러는 보통 이미지가 버전을 담지 않는다 — 드라이버 버전은 DRIVER_VERSION 환경
 	// 변수로 들어간다. 그런데도 태그를 버전으로 갈아 끼우면 레지스트리에 없는 이미지가 만들어지고,
-	// rollback Job 이 ImagePullBackOff 로 앉아 노드가 cordon 상태로 고착된다(라이브 실측).
+	// rollback Job 이 ImagePullBackOff 로 앉아 노드가 cordon 상태로 고착된다.
 	// 되돌릴 대상은 같은 이미지 + 이전 버전이다. 단 DIP 가 imageVersionBaked 를 선언한 이미지는
 	// 태그가 곧 설치 버전이라(tenstorrent-driver-ds:2.8.0-v1) 같은 이미지로는 이전 버전을 설치할
 	// 수 없다 — ngc 와 같이 이전 버전 태그를 재구성한다.
 	if installer != v1alpha1.DriverInstallerNGC && !versionBaked {
 		// 예외: 사전 컴파일 커널 이미지(태그 <version>-k<kernel>-vN)는 apt 라도 태그에 박힌
 		// 버전의 모듈만 담아 DRIVER_VERSION 으로 다른 버전을 설치하지 못한다. 되돌릴 버전이 그
-		// 박힌 버전과 다르면 설치기 정합성 가드가 동봉 모듈≠DRIVER_VERSION 으로 거부하므로(라이브:
-		// 580.126.09-k… 이미지 + DRIVER_VERSION 580.178.04, 노드 CrashLoopBackOff) 재구성 불가로
-		// 돌려 호출부가 버전 비종속 기본 이미지로 되돌아가게 한다. 박힌 버전이 같으면 그대로 쓴다.
+		// 박힌 버전과 다르면 설치기 정합성 가드가 동봉 모듈≠DRIVER_VERSION 으로 거부해(노드가
+		// CrashLoopBackOff 가 된다) 재구성 불가로 돌려 호출부가 버전 비종속 기본 이미지로
+		// 되돌아가게 한다. 박힌 버전이 같으면 그대로 쓴다.
 		if isPrecompiledKernelImage(dipImage) && extractKernelImageVersion(dipImage) != prevVersion {
 			return ""
 		}
@@ -485,15 +478,11 @@ func jobContainerImage(job *batchv1.Job) string {
 }
 
 // jobTargetsInstall 은 잔여 Job 이 지금 하려는 설치(이미지 + 목표 버전)와 같은 것인지 반환한다.
-//
-// 이미지만으로는 판정할 수 없다. apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을
-// 설치하고 목표 버전은 DRIVER_VERSION env 로만 들어간다 — 그래서 지난 사이클이 남긴 완료된
-// Job 과 이번 사이클의 Job 이 이미지 상으로는 구별되지 않는다. 라이브 실측(2026-08-07
-// `.91` k8s-worker1): 595.84 사이클 종료 12초 뒤 시작한 580.173.02 사이클이 앞 사이클의
-// 완료된 Job 을 재사용해, 580 설치를 한 번도 만들지 않은 채 validator 가 앞 Job 의 결과를
-// 10분간 채점했다.
-//
-// DRIVER_VERSION 이 없는 Job(구 operator 산물)은 불일치로 본다 — 삭제 후 재생성이 안전한 쪽이다.
+// 이미지만으로는 판정할 수 없다. apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을 설치하고
+// 목표 버전은 DRIVER_VERSION env 로만 들어간다 — 그래서 지난 사이클이 남긴 완료된 Job 과 이번
+// 사이클의 Job 이 이미지 상으로는 구별되지 않고, 판정을 이미지에만 맡기면 새 사이클이 그 Job 을
+// 재사용해 실제 설치 없이 앞 Job 의 결과로 검증이 끝난다. DRIVER_VERSION 이 없는 Job(구 operator
+// 산물)은 불일치로 본다 — 삭제 후 재생성이 안전한 쪽이다.
 func jobTargetsInstall(job *batchv1.Job, image, version string) bool {
 	return jobContainerImage(job) == image && jobDriverVersion(job) == version
 }

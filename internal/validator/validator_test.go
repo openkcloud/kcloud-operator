@@ -2,7 +2,7 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27 | 수정일: 2026-10-09 (빈 workloadProbe.image 비통과 시험 추가)
+// 생성일: 2026-04-27 | 수정일: 2026-10-11
 // ============================================================
 
 package validator
@@ -199,7 +199,7 @@ func TestDevicePluginValidator_FailWhenPodMissing(t *testing.T) {
 
 // TestDevicePluginValidator_PassWhenTTPodInKcloudNS 는 TT device-plugin 이
 // kube-system 이 아닌 kcloud 네임스페이스에 "kcloud-tt-device-plugin" 이름으로
-// 상주해도(#21) 검증이 통과하는지 확인한다. namespace 하드코딩 제거 + "tt" vendor
+// 상주해도 검증이 통과하는지 확인한다. namespace 하드코딩 제거 + "tt" vendor
 // 별칭 회귀 고정.
 func TestDevicePluginValidator_PassWhenTTPodInKcloudNS(t *testing.T) {
 	const nodeName = "k8s-worker3"
@@ -411,7 +411,7 @@ func TestWorkloadValidator_ProbePodHasActiveDeadline(t *testing.T) {
 
 // TestDriverModule_HostMismatch_ActionableMessage 는 host kernel module 이
 // desiredVersion 과 다를 때 fail 메시지에 host/desired 버전과 actionable 조치
-// (ssh + rmmod) 가 포함되는지 검증한다 (R3 fix, plan 2026-04-28).
+// (ssh + rmmod) 가 포함되는지 검증한다.
 func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 	const (
 		nodeName = "k8s-worker1"
@@ -440,7 +440,7 @@ func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 // TestDriverModule_NeedsReboot_NoRmmodGuidance 는 NDR 이 needsReboot 을 보고할 때
 // rmmod 안내를 내지 않는 것을 고정한다. cross-major 교체는 목표 버전 모듈이 이미 디스크에
 // 준비됐고 구 모듈이 사용 중이라 삽입만 못 하는 상태이며, rmmod 로는 풀리지 않는다 —
-// 그 지시를 따르는 사람은 시간만 버린다(2026-08-07 라이브).
+// 그 지시를 따르는 사람은 시간만 버린다.
 func TestDriverModule_NeedsReboot_NoRmmodGuidance(t *testing.T) {
 	const (
 		nodeName = "k8s-worker1"

@@ -66,9 +66,8 @@ func TestPolicyWrite_이름_없는_삭제는_400(t *testing.T) {
 	}
 }
 
-// 상태를 바꾸는 라우트는 누가 눌렀는지 남겨야 한다. 기존 제어 라우트(upgrade/rollback/
-// toggle)는 s.audit 를 부르는데 이 둘은 부르지 않아, 재부팅을 부를 수 있는 조작의 주체가
-// 로그에 없었다(2026-08-11 리뷰).
+// 상태를 바꾸는 라우트는 누가 눌렀는지 감사 기록에 남겨야 한다 — 재부팅을 부를 수 있는
+// 조작의 주체가 로그에서 빠지면 추적할 수 없다.
 func TestPolicyWrite_상태_변경은_감사_기록을_남긴다(t *testing.T) {
 	for _, name := range []string{"createPolicy", "deletePolicy"} {
 		if !strings.Contains(policyWriteSource(t), `s.audit(r, "`+name+`"`) {

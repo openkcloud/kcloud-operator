@@ -2,7 +2,7 @@
 // resources_test.go: CR 투영(classes/policies/workloads) 테스트
 // 상세: 미수렴 정책이 converged=false 로 표시되는지, 거절 워크로드가 축과 원문 메시지를
 //       모두 노출하는지, 축 추출에 실패해도 메시지가 살아남는지 본다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -19,8 +19,8 @@ import (
 )
 
 func TestAxisFromMessage(t *testing.T) {
-	// 리뷰 I-2: 리터럴로 손으로 쓰지 않고 실제 생산자(intent.Reject.Error())로 메시지를 만든다
-	// — mode.go 의 Sprintf 포맷이 바뀌면 이 테스트도 같이 깨져야 한다.
+	// 리터럴로 손으로 쓰지 않고 실제 생산자(intent.Reject.Error())로 메시지를 만든다 —
+	// mode.go 의 Sprintf 포맷이 바뀌면 이 테스트도 같이 깨져야 한다.
 	msg := (&intent.Reject{
 		Axis: "spec.accelerator.access.mode", Reason: "BackendUnsupported",
 		Message: "node worker1 does not advertise time-slicing",
@@ -221,7 +221,7 @@ func TestClassesPoliciesWorkloads_Endpoints(t *testing.T) {
 }
 
 // TestClassesPoliciesWorkloads_ForbiddenWithoutAuthz 는 각 라우트가 자기 리소스의 list 권한을
-// 실제로 요구하는지 본다(I-2 선례: authz 를 빼먹으면 무권한 요청도 200 이 나간다).
+// 실제로 요구하는지 본다 — authz 를 빼먹으면 무권한 요청도 200 이 나간다.
 func TestClassesPoliciesWorkloads_ForbiddenWithoutAuthz(t *testing.T) {
 	for _, tc := range []struct {
 		path     string

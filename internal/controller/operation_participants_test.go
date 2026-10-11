@@ -1,7 +1,7 @@
 // ============================================================
 // operation_participants_test.go: participant 구현 envtest
 // 상세: 재검증 participant 가 아무것도 바꾸지 않으면서 검증 요청은 정확히 만드는지 본다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -119,7 +119,6 @@ var _ = Describe("revalidate participant", func() {
 
 	// 증명: 소유 정책 자체가 없으면(삭제됨) 에러가 아니라 "검증 대상 아님" 으로 답한다 —
 	// 정책이 사라진 걸 장애로 보고하면 이미 끝난 operation 이 영원히 실패로 남는다.
-	// 브리핑이 준 3개 fixture 중 이 분기(owner Get 이 NotFound)를 짚는 것이 없었다 — 추가.
 	// 깨는 뮤테이션: apierrors.IsNotFound 분기를 지우고 모든 Get 오류를 그대로 전파하면
 	// 이 테스트가 "Expect(err).NotTo(HaveOccurred())" 에서 깨진다.
 	It("declines to build a request when the owner policy is gone", func() {
@@ -136,7 +135,6 @@ var _ = Describe("revalidate participant", func() {
 
 	// 증명: Rollback 도 read-only 다 — 계약은 되돌릴 것을 요구하지만 revalidate 는 애초에
 	// 바꾼 게 없으므로 Compensated 를 즉시 보고하고 executor 를 부르지 않는다.
-	// 브리핑이 준 3개 fixture 중 Rollback 을 한 번도 부르지 않았다 — 추가.
 	// 깨는 뮤테이션: Rollback 의 Event 를 EventApplyDone 으로 바꾸면 실패한다.
 	It("rolls back to Compensated without touching hardware", func() {
 		steps := 0
@@ -154,8 +152,7 @@ var _ = Describe("revalidate participant", func() {
 
 	// 증명: 재진입 안전 — Coordinator 는 죽었다 살아나면 같은 phase 를 다시 부를 수 있으므로,
 	// Apply/Rollback 을 여러 번 불러도 매번 같은 Outcome 이어야 한다. 세 번만 불러 확인하면
-	// "네 번째부터 무너지는" 종류의 상태 누적 버그를 놓친다(이 Stage 에서 실제로 있었던 사고) —
-	// 다섯 번 반복한다.
+	// "네 번째부터 무너지는" 종류의 상태 누적 버그를 놓친다 — 다섯 번 반복한다.
 	// 깨는 뮤테이션: Apply 안에 호출 횟수를 세는 은닉 상태를 넣어 4번째 호출부터 다른 Event 를
 	// 돌려주게 하면(3회까지만 통과하는 실수를 재현), 이 테스트가 4·5번째 반복에서 잡는다.
 	It("is safe to call repeatedly with identical inputs (reentrancy)", func() {
@@ -211,8 +208,8 @@ var _ = Describe("revalidate participant", func() {
 	})
 })
 
-// TestPublishMigObservationTo_UpdatesMigFieldThroughPatch: Update → Patch 전환(images 리뷰
-// m-4) 뒤에도 정상 경로(관측값이 실제로 바뀌는 경우)가 여전히 기록되는지 fake client 로
+// TestPublishMigObservationTo_UpdatesMigFieldThroughPatch: Update → Patch 전환 뒤에도
+// 정상 경로(관측값이 실제로 바뀌는 경우)가 여전히 기록되는지 fake client 로
 // 확인한다. consumers 보존 자체는 아래 바이트 단언이 증명한다 — 이 fake client(controller-
 // runtime v0.22)는 내부적으로 unstructured 왕복을 거쳐 빈 슬라이스(omitempty)를 seed 시점에
 // 이미 nil 로 바꿔 버리므로(사전 확인), "저장된 값이 [] 로 남는가" 는 이 하네스로는 못 본다.
@@ -241,8 +238,8 @@ func TestPublishMigObservationTo_UpdatesMigFieldThroughPatch(t *testing.T) {
 	}
 }
 
-// TestPublishMigObservationToPatch_LeavesUnchangedConsumersOutOfPatchBytes: images 리뷰
-// m-4 의 핵심 — detector 가 쓴 consumers: []("쥔 컨테이너 없음")는 MIG 필드만 바뀌는 patch
+// TestPublishMigObservationToPatch_LeavesUnchangedConsumersOutOfPatchBytes: detector 가
+// 쓴 consumers: []("쥔 컨테이너 없음")는 MIG 필드만 바뀌는 patch
 // 에 실리면 안 된다. publishMigObservationTo 와 같은 순서(base 를 변경 전에 뜨고, 바뀐
 // 필드만 적용)로 patch 바이트를 직접 계산해 "consumers" 키 부재·"migModeCurrent" 존재를
 // 고정한다(envtest·fake client 모두 불필요 — client.MergeFrom 의 순수 바이트 계산만 쓴다).
@@ -275,7 +272,7 @@ func TestPublishMigObservationToPatch_LeavesUnchangedConsumersOutOfPatchBytes(t 
 // 계속 통과한다 — fake client 가 seed 시점에 이미 빈 슬라이스를 nil 로 바꿔 버려(사전 확인) MIG
 // 필드 갱신은 Update 로도 똑같이 성공하고, 패치 바이트 시험은 publishMigObservationTo 를 아예
 // 부르지 않는다. 그래서 호출부 문자열 자체를 고정한다 — policywrite_test.go 의
-// policyWriteSource 와 같은 가드(images 리뷰 m-4 회귀 전용).
+// policyWriteSource 와 같은 종류의 회귀 가드다.
 func TestPublishMigObservationTo_UsesPatchNotUpdate(t *testing.T) {
 	b, err := os.ReadFile("operation_participants.go")
 	if err != nil {

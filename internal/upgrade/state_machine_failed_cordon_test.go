@@ -1,10 +1,8 @@
 // ============================================================
 // state_machine_failed_cordon_test.go: Failed 터미널 상태의 cordon 해제 단위 테스트
-// 상세: 라이브 결함(2026-08-05 k8s 1.34 검증) —
-//   한 벤더의 드라이버 소실로 DUS 가 Failed 로 착지하면 그 사이클이 건 cordon 이 영구히 남아
-//   같은 노드의 다른 벤더 장치까지 배치 불가가 됐다. 해제되는 쪽과 해제되지 않는 쪽(광고가
-//   아직 살아 있음 / 남이 건 cordon / 진행 중 상태)을 함께 고정한다.
-// 생성일: 2026-08-05
+// 상세: Failed 터미널 상태에서 cordon 해제 조건(벤더 광고 0·소유권·진행 중 상태 여부)을
+//       고정한다. 한 벤더의 드라이버 소실이 같은 노드의 다른 벤더까지 배치 불가로 만들지 않아야 한다.
+// 생성일: 2026-08-05 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -79,8 +77,8 @@ func getNode(t *testing.T, sm *UpgradeStateMachine) *corev1.Node {
 }
 
 // ── 시험 1: Failed + 그 벤더 광고 0 → cordon 해제 ──────────────────────
-// 라이브에서 Furiosa 드라이버가 빠지자 device-plugin 이 광고를 0 으로 내렸다. 그 시점의 cordon
-// 은 그 벤더에겐 중복이고 같은 노드의 다른 벤더에겐 순손해다.
+// 드라이버가 빠져 device-plugin 이 그 벤더 광고를 0 으로 내리면, cordon 은 그 벤더에겐
+// 중복이고 같은 노드의 다른 벤더에겐 순손해다.
 func TestHandleFailed_ZeroAdvertisement_ReleasesCordon(t *testing.T) {
 	dus := makeFailedDUS("nvidia")
 	dip := makeCordonTestDIP()
@@ -313,9 +311,9 @@ func TestFailedCordonRecheckInterval_IsPositive(t *testing.T) {
 }
 
 // ── 시험 6: 사람이 uncordon 한 뒤 남은 stale 소유권 annotation 을 reaper 가 정리 ──────
-// EC-1: 사람이 kubectl uncordon 하면 Unschedulable=false 가 되지만 소유권 annotation 은
-// 그대로 남는다(operator 에 reaper 가 없었다). 그 뒤 다른 주체가 같은 노드를 cordon 하면
-// stale annotation 때문에 handleFailed 가 남의 cordon 을 우리 것으로 오인해 풀 수 있었다.
+// 사람이 kubectl uncordon 하면 Unschedulable=false 가 되지만 소유권 annotation 은 그대로
+// 남는다. reaper 가 이 stale annotation 을 지우지 않으면, 그 뒤 다른 주체가 같은 노드를
+// cordon 했을 때 handleFailed 가 남의 cordon 을 우리 것으로 오인해 풀 위험이 있다.
 func TestHandleFailed_ReapsStaleClaimOnHumanUncordon(t *testing.T) {
 	dus := makeFailedDUS("nvidia")
 	dip := makeCordonTestDIP()

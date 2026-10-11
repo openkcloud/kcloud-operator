@@ -1,16 +1,8 @@
 // ============================================================
 // chart_version_sync_test.go: chart 선언 버전과 배포 프리셋이 갈라지지 않는지 고정한다.
-// 상세: Chart.yaml 의 appVersion 은 릴리스마다 손으로 올려야 하는데, 실제 배포는
-//
-//	values 의 image.tag 로 결정된다. 둘이 갈라져도 아무 데서도 실패하지 않아
-//	2026-08-06 시점에 appVersion=v0.5.79 인 채 v0.5.103 이 돌고 있었다.
-//	선언값을 진실로 믿고 무엇이 떠 있는지 판단하면 틀리게 된다.
-//
-// 범위: 이 시험은 "chart 가 스스로에 대해 일관된가" 만 본다. 클러스터에 실제로 무엇이
-//
-//	떠 있는지는 라이브 검증의 몫이다(여기서 클러스터를 조회하지 않는다).
-//
-// 생성일: 2026-08-06 | 수정일: 2026-10-04
+// 상세: Chart.yaml 의 appVersion 은 릴리스마다 손으로 올리고, 실제 배포는 values 의
+// image.tag 로 결정된다. 둘이 갈라지면 선언값을 진실로 믿는 판단이 틀리게 된다.
+// 생성일: 2026-08-06 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -52,7 +44,7 @@ func presetImageTag(t *testing.T, path string) string {
 }
 
 // imageTagIn 은 values 문서 바이트에서 image.tag 를 읽는다. 작업 트리의 파일과 고정
-// 커밋의 blob 이 같은 파서를 쓰게 하려고 분리했다.
+// 커밋의 blob 이 같은 파서를 쓰도록 분리한 함수다.
 func imageTagIn(t *testing.T, raw []byte, name string) string {
 	t.Helper()
 	// image: 블록 아래 tag: 만 잡는다(detector 등 다른 블록의 tag 와 섞이지 않게).
@@ -125,13 +117,10 @@ const otherLinePresetEnv = "KCLOUD_OTHER_LINE_PRESET"
 
 // TestChartAppVersionMatchesPresets 는 이 라인 프리셋이 Chart.yaml 의 appVersion 을
 // 가리키는지 본다. 두 라인은 릴리스 번호가 따로 붙으므로(1.28 = v0.6.0-k8s1.28,
-// 1.34 = v0.7.0) 접미사만 붙여 유도할 수 없다.
-//
-// 반대 라인 프리셋은 더 이상 이 차트에 없다 — kubeVersion 선언과 실재를 맞추려고 뺐다.
-// 짝 릴리스 번호의 대조 상대는 deploy/integration/release.yaml 의 1.26~1.30 operatorTag
-// 이고, 그 대조는 release_manifest_sync_test.go 의
-// TestReleaseManifestPairedLineMatchesAnnotation 이 한다. 같은 대조를 여기에 다시 적으면
-// 한쪽만 고쳐 또 어긋난다.
+// 1.34 = v0.7.0) 접미사만 붙여 유도할 수 없다. 반대 라인 프리셋은 kubeVersion 선언과
+// 실재를 맞추기 위해 이 차트에는 없다 — 짝 릴리스 번호 대조는
+// release_manifest_sync_test.go 의 TestReleaseManifestPairedLineMatchesAnnotation 이 한다.
+// 같은 대조를 여기 또 적으면 한쪽만 고쳐 어긋난다.
 func TestChartAppVersionMatchesPresets(t *testing.T) {
 	const preset134 = "../../deploy/helm/values-k8s1.34.yaml"
 	app := chartAppVersion(t)
@@ -156,11 +145,8 @@ func TestChartAppVersionMatchesPresets(t *testing.T) {
 
 // TestChartCarriesNoOutOfRangePreset 은 이 차트가 kubeVersion 범위 밖 라인의 프리셋을
 // 싣지 않는지 본다. 싣고 있으면 선언과 실재가 어긋나고, 그 조합으로 설치하면 하한보다
-// 낮은 라인의 operator 가 1.31+ CRD 를 덮어쓴다. 프리셋을 되돌려 넣는 것이 그 어긋남을
-// 다시 만드는 경로이므로 여기서 막는다.
-//
-// 이름 하나를 집지 않고 deploy/helm 의 values-k8s*.yaml 전부를 본다 — 파일 이름만
-// 막으면 values-k8s1.30.yaml 처럼 다른 이름으로 같은 어긋남이 다시 들어온다.
+// 낮은 라인의 operator 가 1.31+ CRD 를 덮어쓴다. 이름 하나를 집지 않고 deploy/helm 의
+// values-k8s*.yaml 전부를 본다 — 파일 이름만 막으면 다른 이름으로 같은 어긋남이 다시 들어온다.
 func TestChartCarriesNoOutOfRangePreset(t *testing.T) {
 	decl, floor := chartKubeVersionFloor(t)
 	entries, err := os.ReadDir("../../deploy/helm")
@@ -224,14 +210,10 @@ func TestChartKubeVersionRejectsOtherLine(t *testing.T) {
 
 // TestChartRejectsOtherLineImageTag 는 반대 라인 operator 태그를 render 단계에서
 // 거절하는지 본다. kubeVersion 은 클러스터 버전만 보므로 1.31+ 클러스터에
-// `--set image.tag=v0.6.2-k8s1.28` 로 라인을 섞는 경로를 막지 못한다. 그 조합은
-// pre-upgrade Job 이 구 라인 operator 로 1.31+ CRD 를 덮어쓰게 만든다.
-//
-// 바이너리 쪽 표식 대조(internal/crdapply)로는 이 경로를 전부 닫을 수 없다 — 이미
-// 발행된 구 이미지에는 그 코드가 없고, 그 구 바이너리는 표식을 지우기까지 한다.
-// render 단계 거절은 이미지 내용과 무관하게 성립해 install 경로까지 닫는다.
-//
-// 주의: os/exec 로 helm 을 부르므로 손으로 돌릴 때는 -count=1 을 붙일 것.
+// `--set image.tag=v0.6.2-k8s1.28` 로 라인을 섞는 경로를 막지 못한다. 바이너리 쪽
+// 표식 대조(internal/crdapply)는 전부 닫지 못한다 — 이미 발행된 구 이미지에는 그 코드가
+// 없고, 그 구 바이너리는 표식을 지우기까지 한다. render 단계 거절은 이미지 내용과
+// 무관하게 install 경로까지 닫는다.
 func TestChartRejectsOtherLineImageTag(t *testing.T) {
 	bin := helmBinary(t)
 	render := func(args ...string) (string, error) {
@@ -265,8 +247,7 @@ func TestChartRejectsOtherLineImageTag(t *testing.T) {
 }
 
 // TestDefaultValuesTagMatchesAppVersion 은 기본 values.yaml 도 이 브랜치의 릴리스를
-// 가리키는지 본다. 프리셋 없이 설치하는 경로가 낡은 태그를 당겨 옛 operator 가 뜨는
-// 사고가 반복돼 왔다 — 기본값이 낡은 것 자체가 결함이다.
+// 가리키는지 본다. 기본값이 낡으면 프리셋 없이 설치하는 경로가 옛 operator 이미지를 당긴다.
 func TestDefaultValuesTagMatchesAppVersion(t *testing.T) {
 	app := chartAppVersion(t)
 	if got := presetImageTag(t, "../../deploy/helm/values.yaml"); got != app {
@@ -309,16 +290,8 @@ func findImageCoordinates(node any, path string, out *[]string) {
 // 재정의하지 않는지 본다. 라인별로 갈리는 산출물은 operator 하나뿐이라는 것이 이 설계의
 // 전제다(k8s 라이브러리를 링크하는 것이 operator 뿐 — detector 는 k8s.io v0.29, tenstorrent
 // device-plugin 은 kubelet API 만, 나머지는 k8s 의존 없음). 프리셋에 다른 이미지가 끼면
-// 그 전제가 조용히 깨진다.
-//
-// 이미지 좌표만 막는다. 기능 토글(api.enabled 등)은 프리셋에 있어야 하는 것이다 —
-// 그것이 없어서 차트만으로 설치하면 라이브와 다른 물건이 뜨던 것을 릴리스 게이트가
-// 잡았고, 그래서 프로파일에 토글을 넣었다.
-//
-// 반대 라인 프리셋은 이 차트에 없다(release/k8s-1.28 브랜치에만 둔다). 그래서 그 파일은
-// otherLinePresetEnv 로 받는다 — hack/release-prepare.sh 가 발행 준비에서 그 브랜치의
-// blob 을 임시 파일로 꺼내 이 시험에 넘긴다. 변수가 비면 작업 트리 프리셋만 본다
-// (make test 경로. CI 체크아웃에는 그 브랜치가 없을 수 있다).
+// 그 전제가 조용히 깨진다. 이미지 좌표만 막는다 — 기능 토글(api.enabled 등)은 프리셋에
+// 있어야 하는 것이라 막지 않는다. 반대 라인 프리셋은 otherLinePresetEnv 로 받는다.
 func TestReleaseLinePresetsShareNonOperatorImages(t *testing.T) {
 	paths := []string{"../../deploy/helm/values-k8s1.34.yaml"}
 	if p := os.Getenv(otherLinePresetEnv); p != "" {
@@ -350,7 +323,7 @@ func TestReleaseLinePresetsShareNonOperatorImages(t *testing.T) {
 // 이 차트를 설치할 수 있는 K8s 범위를 적는 자리가 일곱이다(Chart.yaml 의 kubeVersion·
 // description, values-k8s1.34.yaml 머리글, release.yaml 의 range, INSTALL.md 표,
 // README.md, deploy/helm/README.md). 한 곳만 고치고 나머지를 두면 아무 데서도 실패하지
-// 않았다 — 이 시험이 그 자리들을 묶어 대조한다.
+// 않는다 — 이 시험이 그 자리들을 묶어 대조한다.
 
 // otherLineRange 는 반대 라인(1.26~1.30, release/k8s-1.28 브랜치)의 범위다. 같은
 // 파일·같은 문장에 공존하는 이 범위를 이 차트의 범위로 잘못 읽지 않으려고 식별용으로
@@ -358,16 +331,12 @@ func TestReleaseLinePresetsShareNonOperatorImages(t *testing.T) {
 // 갱신해야 한다.
 var otherLineRange = [2]int{126, 130}
 
-// rangeTildeRe 는 "1.31~1.34" 꼴에서 두 마이너를 뽑는다. 붙임표(-)는 release.yaml 의
-// range 필드와 Chart.yaml description 의 반대 라인 절에서만 쓰여 이 정규식과 겹치지
-// 않으므로 물결표(~)만 본다.
-//
-// 앞뒤를 좁힌 이유: 숫자 세 토막짜리 버전 범위("0.8.0~0.9.0")가 문서에 들어오면 넓은
-// 꼴은 가운데 "8.0~0.9" 를 집어 K8s 마이너 범위로 읽고, 범위 선언과 아무 상관 없는
-// 이유로 이 시험을 실패시킨다. 앞을 숫자·점이 아닌 문자(또는 줄머리)로 막고, 뒤에
-// ".숫자" 가 더 붙으면 세 토막 버전이므로 호출부가 건너뛴다. m[3] 이 그 꼬리다.
-// 두 토막 버전 범위("0.8~0.9")는 K8s 마이너 범위와 글자 모양이 같아 여전히 구분되지
-// 않는다 — 그 꼴을 문서에 쓰려면 이 정규식을 다시 봐야 한다.
+// rangeTildeRe 는 "1.31~1.34" 꼴에서 두 마이너를 뽑는다. 붙임표(-)는 release.yaml 의 range
+// 필드와 Chart.yaml description 의 반대 라인 절에서만 쓰여 물결표(~)만 본다. 앞을 숫자·점이
+// 아닌 문자(또는 줄머리)로 막고, 뒤에 ".숫자" 가 더 붙으면(m[3]) 세 토막 버전 범위("0.8.0~0.9.0")
+// 라 호출부가 건너뛴다 — 그러지 않으면 가운데 "8.0~0.9" 를 K8s 마이너 범위로 잘못 읽는다.
+// 두 토막 버전 범위("0.8~0.9")는 K8s 마이너 범위와 글자 모양이 같아 구분되지 않는다 — 그
+// 꼴을 문서에 쓰려면 이 정규식을 다시 봐야 한다.
 var rangeTildeRe = regexp.MustCompile(`(?:^|[^\d.])(\d+\.\d+)~(\d+\.\d+)(\.\d+)?`)
 
 // chartDescRangeRe 는 Chart.yaml description 의 "targets Kubernetes 1.31+ (verified
@@ -460,22 +429,12 @@ func floorOnlyAgrees(t *testing.T, re *regexp.Regexp, raw []byte, where string, 
 	}
 }
 
-// TestVersionRangeStatementsAgreeAcrossRepo 는 이 차트를 설치할 수 있는 K8s 범위를
-// 적는 일곱 자리가 서로 같은 말을 하는지 본다. 정본은 둘이다 — 하한은 Chart.yaml 의
-// kubeVersion(helm 이 실제로 강제한다), 확인된 상한은 release.yaml 의
-// kubernetesProfiles[].range 다. 나머지 다섯 자리(Chart.yaml description,
-// values-k8s1.34.yaml 머리글, INSTALL.md 표, README.md, deploy/helm/README.md)는 그
-// 둘과 같은 말을 해야 한다.
-//
-// 자리마다 표기 형태가 다르다(">=1.31.0-0", "1.31+ … verified through 1.34",
-// "1.31~1.34", "1.31-1.34", "1.31 미만을 거절") — 문자열이 아니라 마이너 번호로
-// 정규화해 비교한다(minorOf). 같은 파일에 반대 라인(1.26~1.30) 문장도 있어, 그 범위는
-// otherLineRange 로 식별만 하고 정본과 대조하지 않는다.
-//
-// 깨는 뮤테이션: Chart.yaml 의 kubeVersion·description, values-k8s1.34.yaml 머리글,
-// release.yaml 의 range, INSTALL.md 표, README.md 의 "~"·"미만을 거절" 두 구절,
-// deploy/helm/README.md 의 "~"·kubeVersion 인용 두 구절 — 이 중 어느 한 곳의 숫자만
-// 바꿔도 실패한다.
+// TestVersionRangeStatementsAgreeAcrossRepo 는 이 차트를 설치할 수 있는 K8s 범위를 적는
+// 일곱 자리가 서로 같은 말을 하는지 본다. 정본은 둘이다 — 하한은 Chart.yaml 의 kubeVersion
+// (helm 이 강제한다), 상한은 release.yaml 의 kubernetesProfiles[].range 다. 나머지 다섯
+// 자리(Chart.yaml description·values-k8s1.34.yaml 머리글·INSTALL.md·README.md·
+// deploy/helm/README.md)는 표기 형태가 달라도 같은 마이너 번호를 가리켜야 한다.
+// 깨는 뮤테이션: 일곱 자리 중 어느 한 곳의 숫자만 바꿔도 실패한다.
 func TestVersionRangeStatementsAgreeAcrossRepo(t *testing.T) {
 	_, canonLo := chartKubeVersionFloor(t) // 하한 정본: Chart.yaml 의 kubeVersion
 

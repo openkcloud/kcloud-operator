@@ -1,6 +1,6 @@
 // control_test.go: UpgradeVendor/SetVendorEnabled 단위 테스트(fake client)
 // 상세: 가드레일에 따라 제어 경로는 라이브 클러스터에서 실행하지 않고 fake client로만 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (FieldManager 단언 시험 추가)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -469,9 +469,8 @@ func TestPreviewDriverRollback_값만돌려주고Patch안함(t *testing.T) {
 // 다른 product 장치가 섞여(furiosa Warboy+RNGD 혼재) DUS.spec.model 이 "generic"(=
 // internal/controller 의 modelUnknown)으로 뭉개진 경우를 다룬다. 이 값을 그대로
 // vendorKeyForDIP 에 넘기면 "furiosa" 키가 나와 warboy(TrackOnly 아님) 정책과 매칭돼
-// TrackOnly 검사를 통과해 버린다 — 걸러내지 않으면 이 시험은 에러 없이 성공해 버린다
-// (재검토가 재현한 것과 같은 결함). CLI 는 어느 정책이 적용되는지 알 수 없으므로
-// 거절해야 한다.
+// TrackOnly 검사를 조용히 통과해 버린다 — 이 시험이 걸러내지 못하면 CLI 는 어느
+// 정책이 적용되는지 알 수 없는 채로 롤백을 받아들이게 된다.
 func TestTriggerDriverRollback_모델뭉개진혼재노드는거절(t *testing.T) {
 	dus := &npuv1alpha1.DriverUpgradeState{
 		ObjectMeta: metav1.ObjectMeta{Name: "hybrid-node1-furiosa"},

@@ -3,7 +3,7 @@
 # count.sh: 렌더된 매니페스트·라이브 파드에서 K8s 리소스 개수를 센다
 # 상세: 정적(kind 별 개수) 집계와 라이브(파드/요청량/사용량) 집계 함수를 한곳에 모은다.
 #       세는 단위를 한곳에 두어 대상마다 다르게 세는 일을 막는다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-21(discover_prometheus, prom_used 추가)
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 # shellcheck shell=bash
 
@@ -18,7 +18,6 @@ require_cmd() {
 
 # yaml_docs <경로> — 다중 문서 YAML 을 JSON 배열 하나로. snap yq 가 /tmp 를 못 읽어
 # python 으로 간다. 매핑이 아닌 문서(빈 문서 등)는 버린다.
-# (출처: tester/kwok/lib/privilege.sh 의 yaml_docs, 2026-08-10)
 yaml_docs() {
   python3 -c 'import sys,yaml,json; json.dump([d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d,dict)], sys.stdout)' "$1"
 }
@@ -45,7 +44,6 @@ kind_counts() {
 
 # median <숫자…> — 중앙값. 값이 없으면 빈 문자열. 정수로 떨어지면 정수로 편다.
 # 평균 대신 중앙값을 쓰는 이유: 기동 직후 한 번의 폭주가 평균을 통째로 끌고 간다.
-# (출처: tester/kwok/lib/measure.sh 의 median, 2026-08-10)
 median() {
   [[ $# -eq 0 ]] && { echo ""; return 0; }
   printf '%s\n' "$@" | sort -g | awk '

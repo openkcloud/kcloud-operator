@@ -1,4 +1,4 @@
-<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 | 수정일: 2026-10-04 -->
+<!-- INSTALL.md: kcloud-operator Helm 설치와 확인 절차 | 생성일: 2026-09-14 | 수정일: 2026-10-11 -->
 
 # kcloud-operator 설치 · 확인 절차
 

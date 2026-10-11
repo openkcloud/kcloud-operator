@@ -1,13 +1,10 @@
 // ============================================================
 // vendoroperator_status_test.go: 벤더 operator CR 상태 조회·Ready 조건 시험
-// 상세: readVendorOperatorState 단위 시험(nvidia 실재·probe 없는 벤더) + detectVendorOperator
+// 상세: readVendorOperatorState 단위 시험 + detectVendorOperator 가 그 결과로
 //
-//	가 그 결과로 <Vendor>OperatorReady 조건을 세우는지 통합 시험. clusterPolicyObj 는
-//	nvidia.com/v1 ClusterPolicy 를 unstructured 로 만든다 — fake client 는 스킴에 없는
-//	GVK 도 unstructured 로 보관·List 한다(controller-runtime fake client 의 unstructured
-//	지원, client.go 의 addToSchemeIfUnknownAndUnstructuredOrPartial).
+//	<Vendor>OperatorReady 조건을 세우는지 통합 시험(clusterPolicyObj 는 unstructured 로 만든다).
 //
-// 생성일: 2026-10-09 | 수정일: 2026-10-09 (Unknown 의 NoClusterPolicy·StatusProbeUnavailable 두 사유 시험 추가)
+// 생성일: 2026-10-09 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -58,13 +55,11 @@ func TestReadVendorOperatorState_NoProbeIsUnknown(t *testing.T) {
 }
 
 // TestReadVendorOperatorState_NoClusterPolicy: 표에 있는 벤더(nvidia)인데 ClusterPolicy CR 이
-// 하나도 없으면(List 성공·0개) probe=true, found=false, blocked=false 여야 한다 — blocked(CRD·
-// 권한 문제로 조회 자체가 막힘)와는 다른 경로라 호출부가 NoClusterPolicy 로 가른다. 관측: 빈
-// fake 클라이언트(WithScheme 없음, 기본 scheme.Scheme)에 대해 GVK 가 찍힌 *unstructured.
-// UnstructuredList 로 List 하면 NoMatch 가 아니라 빈 목록이 돌아온다 — fakeClient.List 가
-// addToSchemeIfUnknownAndUnstructuredOrPartial 로 List Kind 를 자기 스킴에 즉석 등록한 뒤
-// tracker.List 를 부르기 때문이다(TestReadVendorOperatorState_Nvidia 와 같은 메커니즘). 별도
-// 스킴 등록이 필요 없었다.
+// 하나도 없으면(List 성공·0개) probe=true, found=false, blocked=false 다 — blocked(CRD·권한
+// 문제로 조회 자체가 막힘)와는 다른 경로라 호출부가 NoClusterPolicy 로 가른다. 빈 fake
+// 클라이언트에 GVK 가 찍힌 *unstructured.UnstructuredList 로 List 하면 NoMatch 가 아니라 빈
+// 목록이 돌아온다 — fakeClient.List 가 List Kind 를 즉석 등록한 뒤 tracker.List 를 부르기
+// 때문이다(TestReadVendorOperatorState_Nvidia 와 같은 메커니즘).
 func TestReadVendorOperatorState_NoClusterPolicy(t *testing.T) {
 	r := &NPUClusterPolicyReconciler{APIReader: fake.NewClientBuilder().Build()}
 	st, err := r.readVendorOperatorState(context.Background(), "nvidia")

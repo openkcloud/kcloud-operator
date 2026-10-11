@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh: managementMode=external 라이브 데모(preflight/demo/cleanup 3함수) — DS 부재·라벨 유지·descriptor 거절·복원
-# 상세: 한 벤더를 external 로 돌린 뒤, 그 벤더의 device-plugin DaemonSet 이 없고
-#       kcloud.ai/<vendor>.present 라벨은 유지되며 NPUClusterPolicy 의 Ready 사유가
-#       ExternalManaged 인지, external 벤더 descriptor 가 중재에서 거절되는지 확인한다.
-#       마지막에 managementMode 를 지우고 enabled 를 원값으로 되돌린다(실패 시에도 trap 으로 복원).
-#       자체 NPUClusterPolicy 필드(enabled/managementMode)만 패치하고 자체 descriptor 만
-#       만들고 지운다 — 외부 워크로드에는 손대지 않는다. 데모가 external 로 전환하는 동안
-#       그 벤더의 device-plugin 은 잠시 내려갔다가 복원되므로 데모/실험 클러스터에서 실행한다.
-#       VENDOR 로 프로파일 선택: tenstorrent(기본)·nvidia.
-# 생성일: 2026-09-20
+# run.sh: managementMode=external 라이브 데모(preflight/demo/cleanup)
+# 상세: 한 벤더를 external 로 돌려 device-plugin DaemonSet 부재·라벨 유지·Ready 사유
+#       (ExternalManaged)·descriptor 거절을 확인한다. 자체 NCP 필드·자체 descriptor 만
+#       건드리고 외부 워크로드는 손대지 않는다(복원은 cleanup() 참고). 전환 중 그 벤더
+#       device-plugin 이 잠시 내려가므로 데모/실험 클러스터에서 실행한다.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

@@ -1,10 +1,8 @@
 // ============================================================
 // verifier.go: 검증 실행과 근거 기록 (R&D base v0.1 §8.5/§8.8)
-// 상세: 노드·NodeDeviceReport·정책을 읽어 판정 입력을 모으고, Evaluate 결과를
-//
-//	AcceleratorEvidence 로 upsert 한다. 판정 실패는 에러가 아니라 등급 없는 근거다.
-//
-// 생성일: 2026-07-31 | 수정일: 2026-09-21
+// 상세: 노드·NodeDeviceReport·정책을 읽어 판정 입력을 모으고, Evaluate 결과를 AcceleratorEvidence 로
+// upsert 한다. 판정 실패는 에러가 아니라 등급 없는 근거다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -67,7 +65,7 @@ type Request struct {
 	ObservationErrors map[string]string
 	// TargetDevices 는 이 정책이 실제로 건드린 장치다(PCI). 비어 있으면 벤더 장치 전부를 본다.
 	// 채워지면 보고서 대조를 그 장치들로 좁힌다 — 같은 노드의 비대상 GPU(예: 파티션하지 않는 A2)를
-	// 정책의 기대 geometry 로 판정하면 절대 통과할 수 없는 실패가 난다(라이브 실측, 2026-08-04).
+	// 정책의 기대 geometry 로 판정하면 절대 통과할 수 없는 실패가 난다.
 	TargetDevices []string
 	// Product 는 descriptor 요청의 제품명(예: blackhole-p150)이다. 비어 있지 않으면 보고서 대조를
 	// 벤더 문자열이 아니라 제품(DeviceEntry.Model)으로 하고 ExpectedDevices 개 이상 보고돼야 한다 —
@@ -183,16 +181,12 @@ func (v *Verifier) Verify(ctx context.Context, req Request) (*v1alpha1.Accelerat
 	return v.upsert(ctx, req, policy, res, &node, ndr)
 }
 
-// reusableProbe 는 직전 AllocationProbe 결과를 새 probe 대신 쓸 수 있는지 본다(검증 pass 마다
-// probe Pod 재기동 완화). 재사용 창은 "직전 실제 probe 시각(check.ProbedAt) + TTL" 이다 — evidence
-// 자신의 ExpiresAt 을 창으로 쓰면 upsert 가 재조정마다 ExpiresAt 을 갱신해(reused pass 포함) 창이
-// 무한히 밀려 실 probe 가 영영 안 돌게 되므로, probe 를 실제로 돌린 시각에 창을 고정한다. 창을
-// TTL 보다 길게 두면 그만큼 실 장치 실패를 늦게 잡으므로 창의 상한은 TTL 자체다.
-//
-// 대상 식별은 벤더와 check 의 Target 이다 — Target 은 Evaluate 가 Expectation.ProbeResource 를
-// 그대로 담아 기록하므로(agreement.go record 호출) 별도 필드 없이 자원까지 식별한다. 실패했던
-// probe·다른 자원/벤더를 향한 probe·ProbedAt 이 없는(구버전) check 는 재사용하지 않고 다시
-// 확인한다. 돌려주는 probedAt 은 호출부가 새 check 에 그대로 이어실어 창이 밀리지 않게 한다.
+// reusableProbe 는 직전 AllocationProbe 결과를 새 probe 대신 쓸 수 있는지 본다. 재사용 창은
+// "직전 실제 probe 시각(check.ProbedAt) + TTL" 이다 — evidence 자신의 ExpiresAt 을 창으로 쓰면
+// upsert 가 매 재조정마다 그것을 갱신해 창이 무한히 밀려 실 probe 가 영영 안 돌게 된다. 창의
+// 상한은 TTL 자체다. 대상 식별은 벤더와 check 의 Target(Evaluate 가 Expectation.ProbeResource 를
+// 그대로 기록)이다. 실패했던 probe·다른 자원/벤더를 향한 probe·ProbedAt 이 없는 check 는 재사용하지
+// 않고 다시 확인하며, 돌려주는 probedAt 을 호출부가 새 check 에 그대로 이어실어 창이 밀리지 않게 한다.
 func reusableProbe(ev *v1alpha1.AcceleratorEvidence, req Request, now time.Time, ttl time.Duration) (message string, probedAt *metav1.Time, reused bool) {
 	if ev == nil || ev.Spec.Vendor != req.Vendor {
 		return "", nil, false
@@ -278,8 +272,8 @@ func (v *Verifier) upsert(ctx context.Context, req Request, p EffectivePolicy, r
 	// 내용이 같고 만료까지 TTL/2 보다 많이 남았으면 쓰지 않는다 — 재조정마다 노드당 무조건 status 를
 	// 갱신하던 비용(etcd 쓰기)을 없앤다. ExpiresAt 은 TTL/2 안쪽으로 들어오면 갱신해
 	// CheckFreshness(freshness.go)·usableBaseline(acceleratorhealth_controller.go)이 만료로 읽지 않게 한다.
-	// 불변식: 이 게이트가 생긴 뒤로는 재조정 간격이 TTL/2 보다 짧아야 evidence 가 만료 전에 늘 갱신된다
-	// (게이트 이전에는 TTL 보다 짧기만 하면 됐다).
+	// 불변식: 이 게이트 때문에 재조정 간격이 TTL/2 보다 짧아야 evidence 가 만료 전에 늘 갱신된다 —
+	// 게이트가 없다면 TTL 보다 짧기만 해도 충분하다.
 	if statusEquivalent(ev.Status, next) && ev.Status.ExpiresAt != nil &&
 		now.Add(p.TTL/2).Before(ev.Status.ExpiresAt.Time) {
 		return ev, nil
@@ -317,7 +311,7 @@ func reportGeometry(ndr *v1alpha1.NodeDeviceReport, vendor string, targets []str
 		}
 		// PCI 가 없는 벤더(Furiosa 는 detector 가 PCI 를 채우지 않는다)도 "보고서에 장치가 있다"
 		// 는 사실은 남겨야 한다 — PCI 없는 항목을 버리면 보고서가 멀쩡한데도 "보고서 없음" 으로
-		// 읽혀 근거가 영영 등급을 못 받는다(라이브 실측, 2026-08-04).
+		// 읽혀 근거가 영영 등급을 못 받는다.
 		if len(want) > 0 && !want[d.PCIeAddress] {
 			continue
 		}

@@ -299,7 +299,7 @@ function setStatus(msg, cls) { $("status").textContent = msg; $("status").classN
 function esc(v) { return String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 // truncated: 마지막으로 불러온 목록이 limit 에 잘렸을 때의 경고 문구. 카드 합계·표가 잘린 첫
-// 페이지를 전체인 것처럼 보여주면(리뷰 Important #5) 감사 화면이 "이게 전부" 로 읽힌다.
+// 페이지를 전체인 것처럼 보여주면 감사 화면이 "이게 전부" 로 읽힌다.
 let truncated = "";
 async function api(path, opts) {
   if (!token) throw new Error("토큰이 필요하다. 상단에 Bearer 토큰을 넣고 적용을 누른다.");
@@ -365,7 +365,7 @@ function partitionBadge(p) {
   }).join(" ");
 }
 // healthBadge: stale/pending 행은 정상 행과 시각적으로 달라야 한다(같아 보이면 낡은 값을 지금
-// 사실로 오인한다) — AcceleratorView.Stale/Pending 를 위해 Task 2 가 낸 Critical fix 두 건의 이유다.
+// 사실로 오인한다). AcceleratorView 가 Stale/Pending 을 구분하는 이유다.
 // 세 조건은 서로 배타적이지 않다(stale 인 노드가 동시에 cordon 될 수 있다) — early-return 이면
 // 먼저 맞은 배지 하나만 남고 나머지가 조용히 사라진다. 그래서 합성한다.
 function healthBadge(x) {
@@ -378,9 +378,9 @@ function healthBadge(x) {
   return b.length ? b.join(" ") : '<span class="badge ok">ok</span>';
 }
 // shareCell: 공유 상태는 stale/pending 행에서 관측값이 아니라 초기화 기본값이다 — 확정 배지로
-// 렌더하면 실제로는 시분할 중인 장치가 exclusive 로 보인다(리뷰 Important #2). 대시보드/인벤토리
-// 두 탭이 각자 렌더하다 배수 표기까지 갈라졌던 것(Medium #8)도 이 헬퍼 하나로 합친다.
-// oversubscribed(D-1): 광고 수가 물리 장치 수를 넘는다는 것만 확인됐고 원인(복제냐 벤더의
+// 렌더하면 실제로는 시분할 중인 장치가 exclusive 로 보인다. 대시보드/인벤토리
+// 두 탭이 각자 렌더하다 배수 표기까지 갈라졌던 것도 이 헬퍼 하나로 합친다.
+// oversubscribed: 광고 수가 물리 장치 수를 넘는다는 것만 확인됐고 원인(복제냐 벤더의
 // 하드웨어 서브유닛이냐)은 모른다 — "시분할" 이나 "격리 없음" 이라고 단정하면 안 된다(예:
 // Furiosa RNGD 의 PE 는 하드웨어 격리가 있는데 이 문구를 그대로 쓰면 거짓말이 된다).
 function shareCell(x) {
@@ -406,7 +406,7 @@ async function loadDash() {
   const items = inv.items || [];
   const physical = items.length;
   // partitionProfiles 는 노드 단위 값이라 장치 행마다 그대로 실린다 — 장치 수만큼 더하면 같은
-  // profile 을 노드의 장치 개수만큼 중복해서 센다(리뷰 Important #3). 노드×profile 로 중복을 없앤다.
+  // profile 을 노드의 장치 개수만큼 중복해서 센다. 노드×profile 로 중복을 없앤다.
   const profs = new Set();
   items.forEach(x => (x.partitionProfiles || []).forEach(p => profs.add(x.nodeName + "/" + p)));
   // 논리 파티션 수는 profile 이름 개수가 아니라 장치당 인스턴스 수의 합이다 — 항목 1개가
@@ -483,7 +483,7 @@ async function loadInv() {
         : "";
       // pending: 정책이 이 노드를 타깃하지만 아직 장치를 보고하지 않았다 — uid/model 이 없으므로
       // 일반 장치 행처럼 그리면 "빈 장치" 로 오인한다. 별도 placeholder 로 낸다. staleTag 는 pending
-      // 이어도(둘 다 true 일 수 있다) 화면에서 사라지면 안 되므로 continue 앞에 붙인다(리뷰 Critical #1).
+      // 이어도(둘 다 true 일 수 있다) 화면에서 사라지면 안 되므로 continue 앞에 붙인다.
       if (d.pending) {
         html += "<li>" + staleTag + "<span class='badge warn'>pending</span> 이 노드는 정책이 타깃하지만 "
           + "아직 장치를 보고하지 않았다(governed, 수렴 중 또는 stale)</li>";

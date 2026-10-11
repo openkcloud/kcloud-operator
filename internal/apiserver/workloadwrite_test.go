@@ -126,8 +126,7 @@ func TestDeleteWorkload_RemovesAndReportsNotFound(t *testing.T) {
 	}
 }
 
-// 상태를 바꾸는 라우트는 누가 눌렀는지 남겨야 한다 — policywrite_test.go 와 같은 가드
-// (최종 리뷰 Minor m-5: 배포 생성·삭제에는 이 가드가 없었다).
+// 상태를 바꾸는 라우트는 누가 눌렀는지 남겨야 한다 — policywrite_test.go 와 같은 가드다.
 func TestWorkloadWrite_상태_변경은_감사_기록을_남긴다(t *testing.T) {
 	for _, name := range []string{"createWorkload", "deleteWorkload"} {
 		if !strings.Contains(workloadWriteSource(t), `s.audit(r, "`+name+`"`) {

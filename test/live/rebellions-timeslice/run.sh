@@ -1,31 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: Rebellions ATOM SW 시분할 실 워크로드 동시 실행 라이브 하네스(node5)
-# 상세: 두 rebel 프로세스가 같은 ATOM 장치(DEVICE_ID=0)를 동시에 열어 실제 연산을 돌릴 때
-#       처리량이 어떻게 나뉘는지, 그리고 동시 실행이 되는지(Tenstorrent 처럼 직렬화되는지)를
-#       라이브로 잰다. 두 단계다. (1) 운영자 공유 경로: descriptor(sharing timeSliced replicas 2,
-#       /dev/rbln0)를 적용해 생성 device-plugin 이 rebellions/atom 을 2개로 광고하는지 확인한다
-#       (sharingRefusal 이 rebellions timeSlicing=Software 를 받아들여야 광고된다). (2) 실측:
-#       node5 의 atomplus-vllm.service 를 멈추고 두 프로세스를 같은 DEVICE_ID 에 고정해(장치가
-#       두 장이라 반드시 고정) solo → co-run(배리어로 측정 창 정렬) 순으로 workload.py 를 돌린다.
-#       판정: 두 co-run 측정 창이 실제로 겹쳤는지 먼저 보고(안 겹치면 처리량 비교 안 함), 겹쳤고
-#       두 프로세스가 모두 실질적 진행(각 solo 의 0.3배 이상)을 내면 동시 실행 성립이다. 초기화
-#       시간(device_open·init)을 반드시 남긴다 — 동시 open 이 직렬화되면 진 프로세스의 이 값이
-#       늘어난다(Tenstorrent 선례). 끝에 descriptor 를 지우고 서비스를 복원한다(실패·중단 시에도
-#       트랩·node 트랩 이중으로). 자체 descriptor 와 node5 의 atomplus-vllm.service 만 건드린다.
-#       node5 는 rebellions 워크로드 검증 노드다. DRY_RUN=1 이면 명령만 출력.
-#
-#       측정 모드 둘: host(기본, MEASURE_MODE=host)는 위 (2)를 node5 호스트 프로세스로 그대로
-#       돌린다. pods(MEASURE_MODE=pods)는 descriptor 가 광고한 rebellions/atom 자원으로 파드
-#       3개(solo, corun-a, corun-b)를 node5 에 스케줄해 같은 측정을 한다 — 이미지는 images
-#       저장소 rbln-workload(호스트와 같은 Ubuntu 22.04 계열, glibc 2.35)라 네이티브 초기화가
-#       된다. 파드 안 compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
-#       precompile_host 가 호스트에서 미리 컴파일한 모델을
-#       파드가 RBLN_COMPILED_PATH 로 적재만 한다. 장치 경합은 두 모드 모두 /dev/rbln0+KMD
-#       수준에서 같다. 두 모드 모두 서비스 복원은 preflight 가 기록한 시작값
-#       (ORIG_SERVICE_STATE)으로만 한다 — node5 의 이 서비스는 다른 계정이 운영하므로 우리가
-#       멈춘 것만 다시 켠다(자세한 내용은 README).
-# 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 줄폭 재접음)
+# 상세: descriptor 적용→실측(host 원격 프로세스 또는 pods)→판정→정리 순서로 돈다(모드·판정
+#       기준은 README 참고). 자체 descriptor 와 node5 의 atomplus-vllm.service 만 건드린다.
+# 생성일: 2026-09-25 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -65,7 +43,7 @@ NCP="${NCP:-npuclusterpolicy-sample}"
 NCP_DS_NS="${NCP_DS_NS:-kube-system}"
 NCP_DS="${NCP_DS:-rbln-device-plugin}"
 
-MEASURE_MODE="${MEASURE_MODE:-host}"          # host(2026-09-25 방식) | pods(CR 광고 자원으로 파드 스케줄)
+MEASURE_MODE="${MEASURE_MODE:-host}"          # host(호스트 프로세스) | pods(CR 광고 자원으로 파드 스케줄)
 # 파드 이미지 태그는 pod-*.yaml 에 고정값으로 두고, env 다섯(MATMUL_DIM·DURATION·DEVICE_ID·
 # RBLN_NPU_NAME·RBLN_COMPILED_PATH)은 render_pod 가 여기 변수로 채운다.
 CONSUMER_NS="${CONSUMER_NS:-default}"

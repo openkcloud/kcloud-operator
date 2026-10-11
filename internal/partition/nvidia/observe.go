@@ -1,11 +1,8 @@
 // ============================================================
 // observe.go: operator-driven MIG 관측 — privileged nsenter Job + fail-closed parse (spec §16)
-// 상세: detector 가 host nvidia-smi 실행 불가라, operator 가 kcloud-host-exec Job(nsenter)으로 MIG
-//
-//	mode/geometry/lgip 를 per-PCI 관측한다. 관측 결과는 Backend.WithObservations 로 in-memory
-//	주입(NDR 미patch). parse 규칙은 detector 와 동일 fail-closed(spec §15.3).
-//
-// 생성일: 2026-07-27 | 수정일: 2026-10-09 (§ 인용 문서명 보강)
+// 상세: detector 가 host nvidia-smi 실행 불가라, operator 가 kcloud-host-exec Job(nsenter)으로
+// MIG mode/geometry/lgip 를 per-PCI 관측해 Backend.WithObservations 로 in-memory 주입한다.
+// 생성일: 2026-07-27 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -99,7 +96,7 @@ func parseObservation(pci, modeCsv, lgi, lgip string) Observation {
 
 // summarizeMigGeometryStrict 는 `mig -lgi` 원문을 요약한다. current=Enabled 인데 파싱 불가면
 // error 를 반환한다(fail-closed) — Enabled 상태에서 조용히 "disabled" 로 보고하지 않는다.
-// 모델 B(§17.1): Enabled + "No GPU instances found"(GI 없음) → "" (enabled-no-GI, 안전 baseline).
+// 모델 B: Enabled + "No GPU instances found"(GI 없음) → "" (enabled-no-GI, 안전 baseline).
 func summarizeMigGeometryStrict(lgi string) (string, error) {
 	if strings.Contains(lgi, "No MIG-enabled devices") {
 		return geomDisabled, nil
@@ -145,7 +142,7 @@ type MigObserver struct {
 // 제어 루프를 가리킨다(정책 적용 경로 / 상시 관측 경로). 노드 이름만으로 Job 을 식별하면 같은
 // 노드를 보는 두 루프가 **서로의 Job 을 지운다** — Observe 는 stale 재사용을 막으려 시작할 때
 // 기존 Job 을 지우기 때문이다. 진 쪽은 fail-closed 관측(Err 채움)을 받고, 그 관측은 보고서에
-// 기록되지 않아 NodeDeviceReport 의 geometry 가 영영 갱신되지 않는다(2026-08-05 라이브).
+// 기록되지 않아 NodeDeviceReport 의 geometry 가 영영 갱신되지 않는다.
 func NewMigObserver(c client.Client, namespace, image, stream string) *MigObserver {
 	return &MigObserver{c: c, namespace: namespace, image: image, stream: stream}
 }
@@ -167,17 +164,11 @@ func observeJobName(stream, nodeName string) string {
 	return "acpp-mig-observe-" + stream + "-" + shortHash(nodeName)
 }
 
-// observePCIsPerJob 은 관측 Job 하나가 담는 PCI 수다.
-//
-// 1 인 이유는 전송 채널 때문이다 — 관측 출력은 `/dev/termination-log` 로 나가고 kubelet 이
-// 이를 **4096 바이트에서 자른다**. MIG 를 켜면 `mig -lgi`/`-lgip` 표가 커져 A30 한 장이 약
-// 2.5KB 를 쓰므로, 두 장만 담아도 한 장의 섹션이 통째로 잘린다(2026-08-06 A30 2장 실측 합계
-// 5018 바이트).
-//
-// 잘린 장치는 "missing PCI section" 으로 fail-closed 되고, MIG-capability 판정에서 빠져
-// target 집합이 줄어든다. 그러면 ApplyRecord 의 GPUPCIs 와 개수가 어긋나 ACPP 가 **자기가 방금
-// 적용한 배치를 남이 만든 것으로 판정**하고 terminal Failed 로 굳는다(하드웨어와 광고는 정상인데
-// 정책만 실패로 남는다). 장치 수가 늘수록 확실히 재발하므로 장치당 한 Job 으로 고정한다.
+// observePCIsPerJob 은 관측 Job 하나가 담는 PCI 수다. 1 인 이유는 전송 채널이다 — 관측 출력은
+// `/dev/termination-log` 로 나가고 kubelet 이 이를 4096 바이트에서 자른다. MIG 를 켠 A30 한
+// 장의 표가 약 2.5KB 라 두 장만 담아도 한 섹션이 통째로 잘린다(실측 합계 5018 바이트). 잘린
+// 장치는 fail-closed 되어 target 집합이 줄고, ApplyRecord 와 개수가 어긋나 ACPP 가 자기 배치를
+// 남의 것으로 오판해 terminal Failed 로 굳는다. 장치당 한 Job 으로 고정해 막는다.
 const observePCIsPerJob = 1
 
 // Observe 는 nodeName 의 각 pci 에 대해 mode/-lgi/-lgip 를 privileged Job 으로 조회하고

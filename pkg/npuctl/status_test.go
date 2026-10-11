@@ -1,6 +1,6 @@
 // status_test.go: CollectStatus 단위 테스트(fake client, envtest 불필요)
 // 상세: NCP/DIP(+rngd 서브벤더)/NDR/DUS/Node를 섞어 넣고 ClusterStatus 집약 결과를 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-10 (벤더 operator 조건 집계 시험 추가)
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -314,8 +314,8 @@ func TestCollectStatus_ObservedModelsCopied(t *testing.T) {
 	t.Fatalf("observedModels 가 CLI 상태에 옮겨지지 않았다: %+v", status.Nodes)
 }
 
-// 벤더 operator 조건이 집계에 실린다 — 종전에는 Ready 조건만 읽어 <Vendor>OperatorReady 가
-// 어느 출력에도 나오지 않았다.
+// 벤더 operator 조건도 집계에 포함된다 — Ready 조건만 읽으면 <Vendor>OperatorReady 가
+// 출력에서 빠진다.
 func TestBuildClusterPolicyStatuses_IncludesVendorOperatorConditions(t *testing.T) {
 	ncp := npuv1alpha1.NPUClusterPolicy{}
 	ncp.Name = "default"

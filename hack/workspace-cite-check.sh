@@ -2,13 +2,9 @@
 # ============================================================
 # workspace-cite-check.sh: 추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를
 #                           인용하는 것을 막는다
-# 상세: .superpowers/ 는 .gitignore 로 막혀 어디에도 커밋되지 않는다. 추적 파일이
-#       디렉터리 접두가 붙어도 그 경로나 task-N-*.md 파일명(접미 임의)을 인용하면
-#       받는 사람은 열 수 없는 경로를 안내받는다. 패턴은 아래 PATTERN 한 곳에만
-#       정의한다. --self-test 는 임시 저장소에서 자가시험 여섯 경우(bare task-N 인용·
-#       .superpowers/ 경로 인용·디렉터리 접두가 붙은 경로 인용·task-N 접미 확장 인용·
-#       위반 0건 통과·git 저장소 아님)로 자가 검증한다.
-# 생성일: 2026-10-11 | 수정일: 2026-10-11 (디렉터리 접두·task-N 접미 확장; 자가시험 경우 추가; 머리말을 패턴과 맞춤)
+# 상세: .superpowers/ 와 그 안의 task-N 보고서(접미 임의)는 .gitignore 로 막혀 커밋되지
+#       않는다. 디렉터리 접두가 붙어도 그 경로나 파일명을 인용하면 열 수 없는 경로를 안내받는다.
+# 생성일: 2026-10-11 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -68,8 +64,8 @@ self_test() {
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
   [ "$rc" -eq 1 ] && [ "$out" = "$expected" ] || { echo "self-test 2: 종료 $rc 출력 '$out'" >&2; return 1; }
 
-  # 3) 디렉터리 접두가 붙은 .superpowers/ 경로 인용 → 종료 1(Critical: 선두 문자 클래스가
-  #    / 를 거부해 놓치던 바로 그 모양)
+  # 3) 디렉터리 접두가 붙은 .superpowers/ 경로 인용 → 종료 1(선두 문자 클래스가 /
+  #    를 거부하면 이 모양을 놓친다)
   rm "$tmp/repo/internal/b.go"
   printf '// 참고: docs/.superpowers/worklog/x.md 확인\n' > "$tmp/repo/internal/c.go"  # doc-cite-check: ignore
   git -C "$tmp/repo" add -A

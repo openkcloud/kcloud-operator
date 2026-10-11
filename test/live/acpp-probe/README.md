@@ -1,26 +1,24 @@
-<!-- README.md: 벤더별 기능 probe(ACPP allocation probe) 라이브 점검 켜는 법 | 생성일: 2026-09-20 -->
+<!-- README.md: 벤더별 기능 probe(ACPP allocation probe) 라이브 점검 켜는 법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # ACPP 벤더 기능 probe 라이브 점검
 
 ## 왜
 
-`internal/controller/acpp_verifier.go` 의 `vendorProbes` 표(커밋 5bd719b)는
+`internal/controller/acpp_verifier.go` 의 `vendorProbes` 표는
 등록된 벤더에 한해 `nvidia-smi -L` / `tt-smi -s` / `furiosa-smi info` / `rbln-stat` 를 probe Pod
 에서 1회 실행하고 종료코드로 판정한다. 표에 이미지가 없는 벤더는 기존 pause/Running 판정을
-그대로 쓴다(회귀 0). 이 디렉터리는 그 표를 **라이브에서 켜는 절차**와 **2026-09-20 실제 적용본**을
+그대로 쓴다(회귀 0). 이 디렉터리는 그 표를 **라이브에서 켜는 절차**와 **적용 샘플**을
 함께 담는다.
 
-nvidia probe 는 2026-09-20 .91(operator v0.7.43, k8s-worker1 A30)에 실제로 적용했다. 두 번 돌렸다.
-1회차는 `deletionPolicy: Retain`(`acpp-a30-mig-retain.yaml`), 2회차는 baseline 복원용 `RestoreMode`
+nvidia probe 는 k8s-worker1 A30 에 적용한다. 두 단계로 나뉜다 — 1단계는
+`deletionPolicy: Retain`(`acpp-a30-mig-retain.yaml`), 2단계는 baseline 복원용 `RestoreMode`
 (`acpp-a30-mig-restoremode.yaml`)이며, 둘 다 `avp-allocation-probe-worker1.yaml`(k8s-worker1 에만
-AllocationProbe 를 켠 검증 정책)과 함께 적용했다. 타임라인: Applied → 약 4분간 `Verified=False`
-/`EvidenceDisagreement`(NodeDeviceReport 관측 지연 — report geometry `""` != expected `1g.6gb x4`,
-이 구간에도 AllocationProbe 는 이미 `exit=0` 으로 통과) → `Verified=True`/`AllocatableConverged` →
-evidence Level `AllocationVerified`. probe 파드는 매 검증 pass 마다 다시 떠, 두 실행에서 각각 11개
-·17개가 스케줄됐다. `Retain` 은 MIG mode 를 `Enabled` 로 남겨 GPU 0 이 다시 광고되지 않으므로
+AllocationProbe 를 켠 검증 정책)과 함께 적용한다. 적용 뒤 NodeDeviceReport 관측 지연으로 약 4분간
+`Verified=False`/`EvidenceDisagreement`(report geometry 가 기대 지오메트리와 불일치)를 거치는데, 이
+구간에도 AllocationProbe 는 이미 `exit=0` 으로 통과한다. 수렴하면 `Verified=True`/
+`AllocatableConverged` → evidence Level `AllocationVerified` 로 올라간다. probe 파드는 매 검증
+pass 마다 다시 뜬다. `Retain` 은 MIG mode 를 `Enabled` 로 남겨 GPU 0 이 다시 광고되지 않으므로
 (gpu 1 유지), baseline(gpu 2)으로 되돌리려면 `RestoreMode` 로 재적용해야 한다(k8s-worker1 재부팅
-동반). 수렴 구간과 probe 실행 횟수의 근거 기록은
-2026-09-20 Round 3 실측(이 수정 wave 이후 컨트롤러가
-생성)에 남는다.
+동반).
 
 매 pass 마다 다시 뜨는 문제는 `internal/verification/verifier.go`(`reusableProbe`)가
 완화한다. 같은 노드·벤더·자원의 직전 AllocationProbe 가 evidence 안에서 이미 pass 했고
@@ -53,7 +51,7 @@ probe 한다).
    `AllocationProbe` 체크는 기본 꺼져 있다(`internal/verification/policy.go` `DefaultPolicy()` —
    매 검증마다 테스트 Pod 를 띄우면 노드가 불안정해진다). 이 checks 를 정책으로 켜야 근거 재계산
    시에도 벤더 probe 가 돈다. `avp-allocation-probe.yaml`(전 노드)과
-   `avp-allocation-probe-worker1.yaml`(k8s-worker1 한정, 2026-09-20 적용본)이 그 정책 샘플이다.
+   `avp-allocation-probe-worker1.yaml`(k8s-worker1 한정)이 그 정책 샘플이다.
 
 ## 켜는 절차
 
@@ -65,14 +63,14 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values \
   --set acpp.probeImages.furiosa=<레지스트리>:5100/kcloud/furiosaai/furiosa-smi:2026.1.0
 
 # furiosa 는 NEEDS VENDOR RESEARCH 상태다 — 이미지에 furiosa-smi CLI 바이너리가 없어(라이브러리만
-# 포함, 2026-09-20 확인) 이대로 켜면 probe 가 매번 exec 실패로 끝난다. HostPathBinary 연결(코드
-# 변경, 이번 태스크 범위 밖) 전까지는 furiosa 값을 비워 두고 기존 pause 판정에 맡기는 편이 안전하다.
+# 포함) 이대로 켜면 probe 가 매번 exec 실패로 끝난다. HostPathBinary 연결(코드 변경 필요) 전까지는
+# furiosa 값을 비워 두고 기존 pause 판정에 맡기는 편이 안전하다.
 
 kubectl -n kcloud rollout status deploy/kcloud-operator   # env 반영 재시작 확인
 
-# 2) (선택) capability status 재검증에도 같은 probe 를 쓰려면 정책을 적용한다. 2026-09-20 라이브
-#    에서는 노드 한정 정책 avp-allocation-probe-worker1.yaml 을 k8s-worker1 에 적용했다
-#    (전 노드 샘플은 avp-allocation-probe.yaml).
+# 2) (선택) capability status 재검증에도 같은 probe 를 쓰려면 정책을 적용한다. 노드 한정 정책
+#    avp-allocation-probe-worker1.yaml 을 k8s-worker1 에 적용한다(전 노드 샘플은
+#    avp-allocation-probe.yaml).
 kubectl apply -f test/live/acpp-probe/avp-allocation-probe-worker1.yaml
 ```
 

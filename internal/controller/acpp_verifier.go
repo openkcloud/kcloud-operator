@@ -1,12 +1,8 @@
 // ============================================================
 // acpp_verifier.go: ACPP 하드웨어 검증 구현 — Node allocatable + 1-파티션 테스트 Pod (spec 전제2/3)
-// 상세: VerifyAllocatable 은 Node.status.allocatable 을 읽어 순수 비교(allocatableMet)로 판정한다.
-//
-//	VerifyAllocation 은 operator 네임스페이스에 1-파티션 리소스를 요청하는 probe Pod 를
-//	대상 노드에 스케줄한다. 표에 등록된 벤더는 벤더 명령(nvidia-smi 등)을 돌려 종료코드로,
-//	그 외에는 기존대로 pause Pod 의 Running 전이로 판정한 뒤 정리한다(spec 전제3).
-//
-// 생성일: 2026-07-23 | 수정일: 2026-09-20
+// 상세: VerifyAllocatable 은 Node.status.allocatable 비교로 판정하고, VerifyAllocation 은
+// 1-파티션 probe Pod 로 판정한다 — 표에 등록된 벤더는 명령 종료코드로, 그 외는 Running 전이로 본다.
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -43,7 +39,7 @@ const (
 )
 
 // defaultProbeImage 는 ACPP_PROBE_IMAGE 미설정 시 fallback — air-gap(Harbor mirror) 클러스터는
-// 이 이미지가 미러링되어 있지 않으면 ImagePullBackOff 로 verify 가 실패한다(finding #3).
+// 이 이미지가 미러링되어 있지 않으면 ImagePullBackOff 로 verify 가 실패한다.
 const defaultProbeImage = "registry.k8s.io/pause:3.9"
 
 // probeLogLines/probeLogLimitBytes 는 판정 근거로 남기는 probe 파드 로그 상한이다 —
@@ -358,8 +354,7 @@ func (v *liveVerifier) tailLogs(ctx context.Context, namespace, name string) str
 }
 
 // allocationProber 는 기존 partition.Verifier 의 테스트 Pod 프로브를 verification 계약으로
-// 올린다. 코드를 옮기지 않는 이유는 이 프로브가 이미 라이브에서 검증된 경로이기 때문이다 —
-// 계약만 바꾸고 구현은 그대로 둔다.
+// 올린다 — 계약만 바꾸고 구현은 그대로 둔다. 이미 동작하는 프로브 로직을 다시 쓸 이유가 없다.
 type allocationProber struct{ v partition.Verifier }
 
 // NewAllocationProber 는 partition.Verifier 를 verification.AllocationProber 로 감싼다.

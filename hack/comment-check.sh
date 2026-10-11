@@ -3,7 +3,7 @@
 # comment-check.sh: 주석·문서에 남은 이력 서술·세션 식별자·날짜·긴 주석 블록을 거부한다
 # 상세: 머리말 수정일의 괄호 설명, 머리말 밖의 날짜, 과거 서술 종결, 세션 식별자, 7줄 이상
 #       주석 블록을 위반으로 본다. 규칙은 아래 PY 한 곳에만 둔다. 인자: [ROOT] [PREFIX…].
-#       --self-test 는 임시 저장소에서 열한 경우로 자가 검증한다.
+#       --self-test 는 임시 저장소에서 열여섯 경우로 자가 검증한다.
 # 생성일: 2026-10-11 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
@@ -12,7 +12,10 @@ set -euo pipefail
 #   hack/comment-check.sh        — 규칙 문자열과 자가시험 픽스처 자체.
 #   hack/comment-only-check.sh   — 자가시험 픽스처 문자열.
 #   hack/workspace-cite-check.sh — .superpowers·작업공간·task-N 문자열이 자기 규칙 설명이다.
-ALLOW='^(hack/comment-check\.sh|hack/comment-only-check\.sh|hack/workspace-cite-check\.sh)$'
+#   config/default/kustomization.yaml·config/manager/manager.yaml·config/manifests/
+#   kustomization.yaml·config/prometheus/kustomization.yaml — kubebuilder 가 생성한
+#   스캐폴드(주석 처리된 예시 템플릿). 우리 서술이 아니고 주석 해제로 켜는 경로다.
+ALLOW='^(hack/comment-check\.sh|hack/comment-only-check\.sh|hack/workspace-cite-check\.sh|config/default/kustomization\.yaml|config/manager/manager\.yaml|config/manifests/kustomization\.yaml|config/prometheus/kustomization\.yaml)$'
 
 PY=$(cat <<'EOF'
 import os, re, signal, subprocess, sys
@@ -21,7 +24,7 @@ root = sys.argv[1]
 prefixes = [p.rstrip('/') for p in sys.argv[2:]]
 allow = re.compile(os.environ['ALLOW'])
 skip = re.compile(r'(^|/)(go\.sum|go\.mod|.*\.json|zz_generated.*|.*\.pb\.go|.*\.tgz|.*\.png|.*\.svg|LICENSE.*)$'
-                  r'|(^|/)(testdata|fixtures|runs)/|^(config/crd/bases|internal/crdapply/crd|deploy/helm/crds)/')
+                  r'|(^|/)(testdata|fixtures|runs|vendor)/|^(config/crd/bases|internal/crdapply/crd|deploy/helm/crds)/')
 HDR = re.compile(r'(생성일|수정일)')
 PAREN = re.compile(r'(생성일|수정일): ?20\d\d-\d\d-\d\d ?\(')
 DATE = re.compile(r'\b20\d\d-\d\d-\d\d\b')
@@ -50,19 +53,23 @@ def four_checks(f, i, kind, text):
         add(f, i, '과거 서술', text)
 
 def tail_comment(line, marker):
-    # 전체 줄 주석이 아닌 줄의 꼬리 주석 본문을 돌려준다. marker 앞에 따옴표류가 하나라도
-    # 있거나 marker 앞이 공백이 아니면 None(문자열 리터럴·URL 오탐 회피, 블록 길이에는 안 넣음).
+    # 전체 줄 주석이 아닌 줄의 꼬리 주석 본문을 돌려준다. marker 앞이 공백이 아니면 None.
+    # marker 앞부분에서 "·'·백틱을 각각 세어 셋 다 짝수일 때만 꼬리 주석으로 본다(문자열
+    # 리터럴 안에 있으면 그 중 하나가 홀수다). 블록 길이 계산에는 안 넣는다.
     idx = line.find(marker)
     if idx <= 0 or line[idx - 1] not in ' \t':
         return None
-    if re.search(r'["\'`]', line[:idx]):
-        return None
+    pre = line[:idx]
+    for q in ('"', "'", '`'):
+        if len(re.findall(r'(?<!\\)' + re.escape(q), pre)) % 2:
+            return None
     return line[idx + len(marker):]
 
 def header_extent(lines, cm):
-    # 파일 1·2번째 줄에서 시작하는 주석 run 안에서 생성일|수정일 줄을 찾아 머리말이 끝나는
-    # 줄 번호(1-based)를 돌려준다 — 그 줄 바로 다음이 ==== 닫는 줄이면 그 줄까지 포함한다.
-    # 못 찾으면 0(머리말 면제 없음) — 면제는 이 줄까지만, 그 뒤로 이어지는 주석은 새 블록이다.
+    # 파일 1·2번째 줄에서 시작하는 주석 run 안에서 생성일|수정일 줄을 찾고, 그 뒤로도 같은
+    # run 이 이어지는 동안 닫는 ==== 줄이 나올 때까지(그 줄 포함) 머리말로 본다 — 생성일
+    # 줄의 설명이 다음 줄로 이어져도(연속행) 닫는 줄 전까지는 머리말이다. 그 run 안에 닫는
+    # 줄이 없으면 생성일 줄까지만. 생성일 줄 자체가 없으면 0(머리말 면제 없음).
     hstart = 0
     if lines and cm.match(lines[0]):
         hstart = 1
@@ -71,13 +78,23 @@ def header_extent(lines, cm):
     if hstart == 0:
         return 0
     i = hstart
+    hdr_line = 0
     while i <= len(lines) and cm.match(lines[i - 1]):
-        if HDR.search(lines[i - 1]):
-            nxt = i + 1
-            if nxt <= len(lines) and cm.match(lines[nxt - 1]) and CLOSER.match(lines[nxt - 1]):
-                return nxt
+        if hdr_line == 0 and HDR.search(lines[i - 1]):
+            hdr_line = i
+        if hdr_line and CLOSER.match(lines[i - 1]):
             return i
         i += 1
+    return hdr_line
+
+def frontmatter_extent(lines):
+    # Markdown 파일의 첫 줄이 정확히 --- 면 그 뒤의 닫는 --- 줄(포함)까지를 YAML frontmatter
+    # 로 보고 그 줄 번호(1-based)를 돌려준다. 첫 줄이 --- 가 아니거나 닫는 줄이 없으면 0.
+    if not lines or lines[0].rstrip() != '---':
+        return 0
+    for i in range(2, len(lines) + 1):
+        if lines[i - 1].rstrip() == '---':
+            return i
     return 0
 
 for f in files:
@@ -92,7 +109,7 @@ for f in files:
         kind, cm = 'md', None
     elif f.startswith('deploy/helm/templates/') or f.endswith('.tpl'):
         kind, cm = 'tpl', None
-    elif f.endswith(('.sh', '.yaml', '.yml', '.py', '.mk', '.toml')) or base.startswith(('Dockerfile', 'Makefile')):
+    elif f.endswith(('.sh', '.yaml', '.yml', '.py', '.mk')) or base.startswith(('Dockerfile', 'Makefile')):
         kind, cm = 'hash', re.compile(r'^\s*#(?!!)')
     else:
         continue
@@ -101,6 +118,13 @@ for f in files:
     except (OSError, UnicodeDecodeError):
         continue
     hdr_end = header_extent(lines, cm) if cm is not None else 0
+    if hdr_end:
+        hstart = 1 if cm.match(lines[0]) else 2
+        borders = sum(1 for j in range(hstart, hdr_end + 1) if CLOSER.match(lines[j - 1]))
+        hdr_len = (hdr_end - hstart + 1) - borders
+        if hdr_len > MAXBLOCK:
+            add(f, hstart, '긴 머리말 %d줄' % hdr_len, lines[hstart - 1])
+    fm_end = frontmatter_extent(lines) if kind == 'md' else 0
     run = start = 0
     inblock = False
     in_fence = False
@@ -111,7 +135,7 @@ for f in files:
             is_c = cm.match(line) is not None
         else:
             is_c = True
-        if is_c and not (kind == 'md' and in_fence):
+        if is_c and not (kind == 'md' and (in_fence or i <= fm_end)):
             four_checks(f, i, kind, line)
         elif cm is not None and not is_c:
             tail = tail_comment(line, '//' if kind == 'go' else '#')
@@ -159,7 +183,8 @@ scan() {
 }
 
 # self_test: 규칙마다 한 경우씩(전체 줄 하나 + 꼬리 주석 하나), 통과 경우 하나, 접두 필터 하나,
-# git 아님 하나, 머리말 면제 경계(머리말 뒤 이어지는 설명 블록) 하나.
+# git 아님 하나, 머리말 면제 경계(설명 블록 하나 + 연속행 하나) 둘, 꼬리 주석 따옴표 짝(위반+통과) 둘,
+# Markdown frontmatter 제외 하나, 긴 머리말(연속행 포함 위반 하나 + 7줄 위반 하나) 둘.
 self_test() {
   local tmp rc out
   tmp="$(mktemp -d)"
@@ -204,6 +229,22 @@ self_test() {
   # 11) 머리말 4줄 뒤 바로 7줄 설명이 이어지는 파일 → 머리말 면제는 머리말까지만, 7줄 블록은 위반
   printf '// ====\n// x.go: 설명\n// 생성일: 2026-01-01 | 수정일: 2026-01-02\n// ====\n// 1\n// 2\n// 3\n// 4\n// 5\n// 6\n// 7\npackage a\n' > "$tmp/repo/a/x.go"
   git -C "$tmp/repo" add -A; expect 11 1 '[긴 블록 7줄]' "$tmp/repo" a
+  # 12) 생성일 줄이 연속행으로 이어지고 그 뒤에 닫는 줄이 있는 머리말 → 연속행도 머리말로
+  #     한 번에 세어진다(별도 [긴 블록] 이 아니라 [긴 머리말 8줄] 하나로, 테두리 둘 제외)
+  printf '// ====\n// x.go: 설명\n// 생성일: 2026-01-01 | 수정일: 2026-01-02 — 이어지는 설명이다\n// 둘째 줄\n// 셋째 줄\n// 넷째 줄\n// 다섯째 줄\n// 여섯째 줄\n// 일곱째 줄\n// ====\npackage a\n' > "$tmp/repo/a/x.go"
+  git -C "$tmp/repo" add -A; expect 12 1 '[긴 머리말 8줄]' "$tmp/repo" a
+  # 13) 꼬리 주석 앞부분의 따옴표가 짝(두 개)이면 문자열 밖이므로 검사한다 → 식별자
+  printf 'package a\n\nvar x = "a" // D-9\n' > "$tmp/repo/a/x.go"
+  git -C "$tmp/repo" add -A; expect 13 1 '[식별자]' "$tmp/repo" a
+  # 14) marker 가 문자열 리터럴 안(앞부분 따옴표가 홀수)이면 꼬리 주석으로 안 본다 → 통과
+  printf 'package a\n\nvar x = "// D-9"\n' > "$tmp/repo/a/x.go"
+  git -C "$tmp/repo" add -A; expect 14 0 '주석 정리 검사 통과' "$tmp/repo" a
+  # 15) 첫 줄이 --- 인 Markdown frontmatter 의 날짜는 메타데이터라 제외, 본문은 깨끗 → 통과
+  printf -- '---\ntitle: 문서\ndate: 2026-01-01\n---\n# 제목\n\n본문은 깨끗하다.\n' > "$tmp/repo/b/r.md"
+  git -C "$tmp/repo" add -A; expect 15 0 '주석 정리 검사 통과' "$tmp/repo" b
+  # 16) 머리말 본문이 테두리 제외 7줄이면 위반(면제 범위는 그대로, 길이만 따로 본다)
+  printf '// ====\n// x.go: 설명\n// 생성일: 2026-01-01 | 수정일: 2026-01-02\n// 1\n// 2\n// 3\n// 4\n// 5\n// ====\npackage a\n' > "$tmp/repo/a/x.go"
+  git -C "$tmp/repo" add -A; expect 16 1 '[긴 머리말 7줄]' "$tmp/repo" a
   echo "self-test ok"
 }
 

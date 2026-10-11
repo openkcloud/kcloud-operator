@@ -1,10 +1,8 @@
 // ============================================================
 // acpp_sharing.go: ACPP 공유(sharing) 경로 — apply → DP 재시작 → verify → rollback
 // 상세: 파티션 경로(runNvidiaTarget)와 같은 규율(저널 선영속 → mutation, 실패시 원복)을 따르되
-//
-//	하드웨어는 건드리지 않는다(device-plugin 설정/배선만 변경).
-//
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 하드웨어는 건드리지 않는다(device-plugin 설정/배선만 변경).
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -26,17 +24,12 @@ import (
 	"kcloud-operator/internal/partition/nvidia"
 )
 
-// runSharing 은 base(공유 전 기대 allocatable)에 spec.sharing 을 적용한다.
-// base 는 파티션 경로가 계산한 값이다: exclusive=장치 수, MIG=프로파일별 GI 수 + 남은 full-GPU.
-// time-sliced replica 는 독립 장치가 아니므로 기대 allocatable 은 backend 가 계산하고(가정 금지),
-// 검증은 verifier 가 폴링한다(DP 재시작 직후 단발 확인은 조기 false 를 낸다).
-//
-// 적용 범위 = device-plugin DaemonSet 전체(클러스터 전역)다. ConfigMap 도 DS 도 단일 전역 객체이므로
-// nodeSelector 가 노드 하나를 가리켜도 모든 nvidia 노드의 광고가 바뀐다(검증은 대상 노드만 관측).
-// 노드별 config(--config-file-src + 노드 라벨)는 후속 과제다.
-//
-// MIG 저널(MigPhase)은 건드리지 않는다 — 공유는 하드웨어를 바꾸지 않으므로 MIG phase 는 계속 Ready 가
-// 사실이고, 여기서 중간 phase 를 쓰면 그 창에서 크래시한 뒤 파티션 상태머신이 소유를 잃는다.
+// runSharing 은 base(공유 전 기대 allocatable)에 spec.sharing 을 적용한다. base 는 파티션 경로가
+// 계산한 값(exclusive=장치 수, MIG=프로파일별 GI 수 + 남은 full-GPU)이고, replica 수는 backend 가
+// 계산하며 검증은 폴링한다(DP 재시작 직후 단발 확인은 조기 false 를 낸다). 적용 범위는
+// device-plugin DaemonSet 전체(클러스터 전역)다 — ConfigMap·DS 가 단일 전역 객체라 nodeSelector 가
+// 한 노드를 가리켜도 모든 nvidia 노드의 광고가 바뀐다(검증은 대상 노드만 본다). MIG 저널(MigPhase)
+// 은 건드리지 않는다 — 공유는 하드웨어를 안 바꾸므로 phase 는 계속 Ready 가 사실이다.
 func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy,
 	backend partition.Backend,
@@ -64,15 +57,15 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 		return r.rejectSharing(acpp, backend, t, rejected)
 	}
 
-	// 같은 generation 의 rollback 은 terminal 이다(D-9, MIG GI apply 의 MigPhaseRolledBack 게이트와
-	// 대칭). verify 미수렴은 에러가 아니라 결과로 돌아오므로(liveVerifier: 180s 초과 → converged=false,
+	// 같은 generation 의 rollback 은 terminal 이다(MIG GI apply 의 MigPhaseRolledBack 게이트와 대칭).
+	// verify 미수렴은 에러가 아니라 결과로 돌아오므로(liveVerifier: 180s 초과 → converged=false,
 	// err=nil) rollback 종점의 runErr 이 nil 이라 rate-limited 재시도도 걸리지 않는다. 그 상태로
 	// 재진입하면 매 pass 마다 ConfigMap apply → device-plugin 재시작 → verify → rollback 을 무한
 	// 반복한다. 입력(spec)이 그대로면 결과도 그대로이므로 여기서 끝내고 spec 변경을 기다린다.
 	if rec := getApplyRecord(acpp, t.NodeName); rec.SharingRolledBackGeneration != 0 && rec.SharingRolledBackGeneration == acpp.Generation {
-		// D-13 인접 누수: 여기는 terminal 이라 정책이 살아 있는 한 다른 정리 경로가 오지 않는다.
-		// rollback 은 ConfigMap·배선을 이미 걷었으므로 daemon 도 남을 이유가 없다(참조 카운트가
-		// 다른 정책의 사용을 보호한다). 이 정리에 실패하면 requeue 로 다시 시도한다.
+		// 여기는 terminal 이라 정책이 살아 있는 한 다른 정리 경로가 오지 않는다 — rollback 은
+		// ConfigMap·배선을 이미 걷었으므로 daemon 도 남을 이유가 없다(참조 카운트가 다른 정책의
+		// 사용을 보호한다). 이 정리에 실패하면 requeue 로 다시 시도한다.
 		if err := r.ensureMpsControlDaemon(t.Ctx, npuv1alpha1.SharingModeExclusive, acpp.Name, t.NodeName); err != nil {
 			return ts, err
 		}
@@ -124,10 +117,10 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 		return ts, err
 	}
 
-	// sharing config 를 daemon 보다 먼저 쓴다(D-12) — mps-control-daemon 은 이 ConfigMap 을
-	// 마운트해 기동하므로, 없으면 pod 이 ContainerCreating 에 갇혀 아래 준비 게이트를 영원히 못
-	// 넘는다. 배선(ApplySharing 의 DS 단계)은 반대로 daemon 이 뜬 뒤여야 한다 — DP 가 먼저 뜨면
-	// 파이프에 붙지 못한다. 그래서 apply 가 config/배선 두 단계로 갈라져 있다.
+	// sharing config 를 daemon 보다 먼저 쓴다 — mps-control-daemon 은 이 ConfigMap 을 마운트해
+	// 기동하므로, 없으면 pod 이 ContainerCreating 에 갇혀 아래 준비 게이트를 영원히 못 넘는다.
+	// 배선(ApplySharing 의 DS 단계)은 반대로 daemon 이 뜬 뒤여야 한다 — DP 가 먼저 뜨면 파이프에
+	// 붙지 못한다. 그래서 apply 가 config/배선 두 단계로 갈라져 있다.
 	ts.Phase = npuv1alpha1.ACPPPhaseApplying
 	var state *partition.SharingRollbackState
 	applyFailed := func(err error) (npuv1alpha1.TargetStatus, error) {
@@ -181,11 +174,11 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 			log.Error(err, "sharing rollback: device-plugin restart failed")
 		}
 		r.restoreSharingRecord(t, acpp, prevMode, prevReplicas)
-		// D-9: 저널을 원복 값으로 되돌린 다음, 이 generation 이 이미 rollback 을 겪었다고 마킹한다
+		// 저널을 원복 값으로 되돌린 다음, 이 generation 이 이미 rollback 을 겪었다고 마킹한다
 		// (restoreSharingRecord 가 방금 되돌린 rec 를 다시 읽어야 하므로 여기서 재조회한다). patch
 		// 실패를 error 로 전파하지 않는다 — 이 마킹이 실패해도 다음 reconcile 이 같은 verify-fail 을
 		// 다시 겪으며 다시 마킹을 시도하므로 자가치유된다. 반대로 error 로 전파하면 그 자체가 무한
-		// requeue 사유가 되어, D-9 를 막으려다 다른 형태의 반복을 만든다.
+		// requeue 사유가 되어, 이 마킹을 막으려다 다른 형태의 반복을 만든다.
 		if mrec := getApplyRecord(acpp, t.NodeName); mrec.SharingRolledBackGeneration != acpp.Generation {
 			mrec.NodeName = t.NodeName
 			mrec.SharingRolledBackGeneration = acpp.Generation
@@ -193,9 +186,9 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 				log.Error(perr, "sharing: failed to journal rolled-back generation (D-9 gate)")
 			}
 		}
-		// 배선을 걷었으면 daemon 도 회수한다(D-13 인접 누수). 여기서 안 걷으면 Restored 종점은
-		// 10분 requeue 라 그 동안 daemon 이 kube-system 에 남는다(라이브 6분+ 관측). 실패해도 종점을
-		// 바꾸지 않는다 — 다음 pass 의 D-9 게이트가 같은 정리를 다시 시도한다.
+		// 배선을 걷었으면 daemon 도 회수한다 — 여기서 안 걷으면 Restored 종점은 10분 requeue 라 그
+		// 동안 daemon 이 kube-system 에 남는다. 실패해도 종점을 바꾸지 않는다 — 다음 pass 가 같은
+		// 정리를 다시 시도한다.
 		if derr := r.ensureMpsControlDaemon(t.Ctx, npuv1alpha1.SharingModeExclusive, acpp.Name, t.NodeName); derr != nil {
 			log.Error(derr, "sharing rollback: mps control daemon cleanup failed")
 		}
@@ -213,7 +206,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 	return sharingReady(ts, acpp, expected, layout.Mode, layout.Replicas, true), nil
 }
 
-// runSharingOnly 는 layout 없는(순수 공유) 정책의 전체 경로다(라이브 결함 D-3, §5.1).
+// runSharingOnly 는 layout 없는(순수 공유) 정책의 전체 경로다(spec §5.1).
 // 파티션 apply 경로(runNvidiaTarget: owner-lock·cordon·MIG mode enable·GI)는 타지 않는다 —
 // 공유는 device-plugin 설정만 바꾸므로 cordon 이 필요 없다(DP 재시작만 필요). backend Validate 도
 // 부르지 않는다: 검증할 파티션 레이아웃이 없고, NVIDIA Validate 는 빈 layout 을 fail-closed 로
@@ -264,15 +257,11 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharingOnly(
 }
 
 // sharingOnlyBase 는 순수 공유 정책의 기준 allocatable 이다 — 노드가 광고 중인 full-GPU 수만
-// 배수 대상으로 삼는다. mig-* 조각 리소스는 파티션 정책(같은 노드의 다른 ACPP) 소유이므로 여기서
-// 배수하면 남의 광고를 바꾼다.
-//
-// base 불변식(C-1): 공유가 이미 적용된 뒤의 라이브 allocatable 은 물리 수가 아니라 배수된
-// 광고량이다 — 그대로 base 로 쓰면 replicas 편집/크래시 재진입마다 expected 가 배수의 배수로
-// 부풀어 verify 실패 → rollback(자기 자신의 직전 설정 복원) → 재진입 무한 flap 이 된다.
-// partitioned-shared 경로가 expectedAllocatable(rec)로 지키는 불변식과 같게, 첫 적용 때 물리 수를
-// 저널(BaselineGPUCount — MIG 경로 전용 필드였으나 sharing-only 는 MIG 경로에 진입하지 않아 충돌
-// 없음)에 선영속하고, 공유가 활성인 재진입은 라이브 대신 저널을 읽는다.
+// 배수 대상으로 삼는다(mig-* 조각은 다른 ACPP 소유라 배수하면 남의 광고를 바꾼다). 공유가 이미
+// 적용된 뒤의 라이브 allocatable 은 물리 수가 아니라 배수된 광고량이므로, 그대로 base 로 쓰면
+// replicas 편집·크래시 재진입마다 expected 가 배수의 배수로 부풀어 verify 실패 → rollback →
+// 무한 flap 이 된다. 첫 적용 때 물리 수를 저널(BaselineGPUCount — MIG 경로와 공유하지만 두 경로는
+// 상호배타적이라 충돌 없음)에 선영속하고, 공유가 활성인 재진입은 저널을 읽는다.
 func (r *AcceleratorPartitionPolicyReconciler) sharingOnlyBase(ctx context.Context, acpp *npuv1alpha1.AcceleratorPartitionPolicy, nodeName string) (map[string]int32, error) {
 	rec := getApplyRecord(acpp, nodeName)
 	if rec.SharingMode != "" && rec.BaselineGPUCount > 0 {
@@ -351,18 +340,12 @@ func (r *AcceleratorPartitionPolicyReconciler) disableSharing(
 	return ts, nil
 }
 
-// rejectSharing 은 거절 종점을 확정하기 전에, 이미 적용돼 있는 공유 배선을 걷는다(D-8 리뷰 C-1).
-//
-// 거절은 mutation 이전 판정이지만, "이전 빌드/이전 spec 이 적용해 둔 배선" 은 그 판정이 만든 것이
-// 아니어서 아무도 청소하지 않는다: spec 이 여전히 공유를 요청하므로 disableSharing(exclusive 전환)도
-// 삭제 finalizer 도 불리지 않고, ApplySharing 실패 원복 경로에는 애초에 도달하지 않는다. 그 결과
-// 전역 device-plugin 은 **거절된** 요청의 설정 때문에 계속 기동 실패하고(D-8 이면 validateFlags),
-// 라이브에서 관측된 간헐 회귀(allocatable 0↔4)가 회복 시도 없는 영구 0 으로 고정된다.
-//
-// 청소 주체는 disableSharing 을 그대로 재사용한다 — 필요한 3단계(RollbackSharing(zero-state) →
-// DP 재시작 → 저널 해제 + control daemon 회수)가 이미 그 함수이고, 저널이 적용을 가리키지 않으면
-// 멱등 no-op 이다. 그래서 mps 로 좁히지 않았다: 어떤 사유로 거절되든 "정책이 약속하지 않는 전역
-// 설정" 이 남아 있으면 안 된다는 규칙은 같다(timeSliced 도 같은 전역 ConfigMap 을 쓴다).
+// rejectSharing 은 거절 종점을 확정하기 전에 이미 적용돼 있는 공유 배선을 걷는다. 거절은
+// mutation 이전 판정이라, 이전 spec 이 적용해 둔 배선은 그 판정이 만든 게 아니어서 아무도
+// 청소하지 않는다 — spec 이 여전히 공유를 요청해 disableSharing(exclusive 전환)도 삭제 finalizer
+// 도 불리지 않고, ApplySharing 실패 원복 경로에도 도달하지 않는다. 그대로 두면 전역
+// device-plugin 이 거절된 요청의 설정으로 계속 기동 실패하고, 그 결과(allocatable 0↔4 왕복)가
+// 회복 시도 없는 영구 0 으로 고정된다. 청소는 disableSharing 을 그대로 재사용한다(멱등 no-op).
 func (r *AcceleratorPartitionPolicyReconciler) rejectSharing(
 	acpp *npuv1alpha1.AcceleratorPartitionPolicy,
 	backend partition.Backend,
@@ -393,32 +376,14 @@ func (r *AcceleratorPartitionPolicyReconciler) precheckSharing(ctx context.Conte
 			npuv1alpha1.ReasonSharingUnsupported, err.Error(), acpp.Generation)
 		return nil, ts, false, nil
 	}
-	// 장치별 MPS capability 게이트(review 최종 ②). ValidateSharing 은 replica 개수만 보므로, 이것이
-	// 없으면 Discover 가 "이 장치는 MPS 불가" 라고 이미 판정해 status 에 적어 둔 장치에 대해서도
-	// 적용 경로가 그대로 배수를 요청한다. 그 결과는 둘 중 하나이고 둘 다 나쁘다: DP 가 거부하면
-	// 사용자에게 "shared allocatable did not converge" 만 가고 진짜 이유는 어디에도 안 나오며,
-	// DP 가 배수를 광고해 버리면 같은 CR 의 multiProcess.supported: false 와 정면으로 모순되는
-	// Ready + Verified 가 찍힌다. 추상 사용자 API(intent/mode.go)는 이 게이트를 이미 갖고 있었다.
-	//
-	// mps 에만 건다. timeSliced 로 넓히면 비-MIG 장치가 deviceStatusFor 를 건너뛰어 TimeSlicing 이
-	// zero-value 로 남는 것(의도적 범위 제한, backend.go 참조) 때문에 A2 의 time-slicing 이 막힌다.
-	//
-	// 도달성 주의(D-8): 아래 장치 단위 판정은 현재 배포에서 **실행되지 않는다** — 바로 위의 D-8 가드가
-	// 항상 먼저 거절하기 때문이다(렌더러가 mixed 를 무조건 붙인다). 의도된 도달 불가이며 삭제 대상이
-	// 아니다: 노드별 device-plugin config 분리가 들어오면 즉시 다시 유일한 게이트가 되고, 지금 지우면
-	// D-5 라이브 검증 결과가 코드에서 사라진다. 유일한 커버리지는 mixed 아닌 DP 픽스처가 지킨다.
-	//
-	// 검사 대상은 "이 노드의 같은 벤더 전체 장치" 가 아니라 "다른 정책이 소유하지 않은 장치" 다
-	// (라이브 결함 D-5, §6.3): ts.Devices 는 Discover 가 채운 노드 전체 목록이라, MIG 가 켜진
-	// 형제 장치를 다른 ACPP 가 이미 소유·관리 중인 노드(worker1 = MIG A30 + 비-MIG A2)에서는 A2 만
-	// 겨냥한 MPS 정책도 A30 때문에 통째로 거부됐다 — 배선(ensureMpsControlDaemon)에 한 번도 도달하지
-	// 못했다. 자기 자신이 소유한 장치는 제외 대상이 아니다(파티션+MPS 조합은 여전히 이 게이트가 막는다).
-	//
-	// 한계(이번 스코프 밖): CRD 에 장치 셀렉터가 없어(nodeSelector=호스트, vendor=벤더) "미소유
-	// 장치가 여럿이고 그중 일부만 MPS 지원" 은 여전히 표현할 수 없다 — 그 경우는 fail-closed 로
-	// 거절된다. 셀렉터가 생기면 이 판정은 그 집합으로 좁혀야 한다.
+	// 장치별 MPS capability 게이트 — 없으면 Discover 가 "MPS 불가" 로 적어 둔 장치에도 적용이 배수를
+	// 요청해 DP 거부 시 이유가 안 보이거나 multiProcess.supported:false 와 모순되는 Ready+Verified
+	// 가 찍힌다. mps 에만 건다. 아래 장치 단위 판정은 mixed-strategy 가드가 먼저 거절해 지금은
+	// 미실행이지만, 노드별 DP 분리가 들어오면 다시 유일한 게이트가 되므로 지우지 않는다 — "같은
+	// 벤더 전체" 가 아니라 "다른 정책이 소유하지 않은 장치" 만 봐야 한다. 장치 셀렉터가 CRD 에
+	// 없어 미소유 장치 중 일부만 MPS 지원하면 지금은 fail-closed 거절하고, 셀렉터가 생기면 좁혀야 한다.
 	if layout.Mode == npuv1alpha1.SharingModeMPS {
-		// D-8(라이브 §6d.4) — 장치 단위보다 먼저 프로세스 단위 배타를 본다.
+		// spec §6d.4 — 장치 단위보다 먼저 프로세스 단위 배타를 본다.
 		blocked, berr := r.mpsBlockedByMigStrategy(ctx, ts.NodeName)
 		if berr != nil {
 			return nil, ts, false, berr
@@ -460,7 +425,7 @@ func (r *AcceleratorPartitionPolicyReconciler) precheckSharing(ctx context.Conte
 			// 이 정책이 다룰 장치가 하나도 없다 — 통과시키면 남의 장치에 대해 배수를 광고한다.
 			// devicesOwnedByOtherPolicies 는 map[string]bool(PCI→소유여부)만 반환해 소유 정책명까지는
 			// 여기서 알 수 없다 — 반환 타입을 map[string]string(PCI→정책명)으로 바꾸면 호출부 3곳에
-			// 영향을 주는 더 큰 diff 라 이번엔 문구 안내만 덧붙인다(review-d5 M-1, review-i1 M-2 후속 과제).
+			// 영향을 주는 더 큰 diff 라 문구 안내만 덧붙인다.
 			ts.Phase = npuv1alpha1.ACPPPhaseFailed
 			setCond(&ts, npuv1alpha1.ACPPCondValidated, metav1.ConditionFalse,
 				npuv1alpha1.ReasonSharingUnsupported,
@@ -508,12 +473,10 @@ func (r *AcceleratorPartitionPolicyReconciler) devicesOwnedByOtherPolicies(ctx c
 }
 
 // mpsBlockedByMigStrategy 는 "이 노드에서 지금 MPS 를 켜면 device-plugin 이 기동조차 못 하는가"
-// 를 판정한다. MPS 근본해결(노드별 mixed/flat DaemonSet 분리) 이후에는 노드의
-// nvidia.MigActiveNodeLabel 하나만 보면 된다 — 그 라벨이 true 인 노드는 mixed DS(항상
-// --mig-strategy=mixed)가 맡으므로 업스트림이 거부하고, 없는 노드는 flat DS(그 플래그를
-// 렌더하지 않음)가 맡으므로 MPS 가 통과한다. DS 를 직접 열어 Args 를 파싱하던 이전 판정(D-8
-// 1차 수정)은 클러스터 전역 단일 DS 를 전제해 다른 노드의 MIG 사용까지 이 노드를 막았다 —
-// 노드별 분리 이후에는 그 전제가 사라졌다.
+// 를 판정한다. 노드의 nvidia.MigActiveNodeLabel 하나만 보면 된다 — 그 라벨이 true 인 노드는
+// mixed DS(항상 --mig-strategy=mixed)가 맡으므로 업스트림이 거부하고, 없는 노드는 flat
+// DS(그 플래그를 렌더하지 않음)가 맡으므로 MPS 가 통과한다. 노드별로 DS 가 분리돼 있어야
+// 하는 전제이며, 클러스터 전역 단일 DS 라면 다른 노드의 MIG 사용이 이 판정에 섞여 들어온다.
 func (r *AcceleratorPartitionPolicyReconciler) mpsBlockedByMigStrategy(ctx context.Context, node string) (bool, error) {
 	var n corev1.Node
 	if err := r.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
@@ -545,22 +508,12 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreSharingRecord(t partition.
 	}
 }
 
-// sharingReady 는 공유 적용 성공 종점(Ready + 광고 배수 반영 + 격리 등급 재기록)을 찍는다.
-//
-// 등급 재기록이 핵심이다: Discover 가 채운 IsolationCapability 는 "장치가 무엇을 할 수 있는가" 이고,
-// 여기서 반영하는 것은 "지금 무엇이 적용돼 있는가" 다. MIG 로 하드웨어 분리된 장치라도 그 위에
-// 시분할 replica 를 얹은 순간 replica 사이에는 compute/memory 격리가 없다 — 그 상태에서
-// `advertisedResources: 16` + `isolation.compute: hardware` 를 함께 보고하면 status 만 읽는
-// 소비자에게는 "하드웨어 격리된 장치 16개" 로 읽힌다(실제로는 4조각을 4중 시분할).
-// 다만 늘 none 으로 내리는 것은 아니다 — 아래 분기가 모드마다 다른 등급을 적는다.
-// fault 축은 건드리지 않는다 — 공유가 바꾸는 것이 아니다.
-// transitioned 는 이 호출이 실제 mutation(적용) 사건인지를 caller 가 판정해 넘긴 값이다.
-// ts.Phase 나 acpp.Status.Targets 같은 간접 신호로 여기서 다시 추정하지 않는다 — 두 신호 모두
-// "이 노드가 Ready 다" 는 사실만 담고 있어 "무엇이 방금 바뀌었는지" 를 구분하지 못한다(예: MIG
-// 파티션은 이미 Ready 였고 spec.sharing 만 이번에 처음 추가된 경우, 두 신호 모두 진입 시점에
-// 이미 Ready 를 가리켜 첫 적용을 재확인으로 오판한다). 진짜 판정은 runSharing 의 두 호출부가
-// 이미 저널(rec.SharingMode/SharingReplicas 대 layout.Mode/Replicas)로 확정해 두고 있으므로,
-// 그 값을 그대로 전달받는다.
+// sharingReady 는 공유 적용 성공 종점(Ready + 광고 배수 반영 + 격리 등급 재기록)을 찍는다. 등급
+// 재기록이 핵심이다 — Discover 의 IsolationCapability 는 장치 능력이고 여기서는 지금 적용된 상태
+// 를 반영한다. MIG 로 나뉜 장치도 그 위에 시분할을 얹으면 replica 간 격리가 없어지므로, hardware
+// 등급을 그대로 두면 소비자가 조각을 독립 장치처럼 읽는다(fault 축은 공유가 바꾸지 않는다).
+// transitioned 는 caller 가 이미 저널 비교로 판정해 넘긴 값이다 — ts.Phase 같은 간접 신호는 "지금
+// Ready" 만 담아 방금 바뀌었는지 구분 못하므로 여기서 다시 추정하지 않는다.
 func sharingReady(ts npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorPartitionPolicy, expected map[string]int32, mode string, replicas int32, transitioned bool) npuv1alpha1.TargetStatus {
 	ts.Advertisement.AdvertisedResources = expected
 	if mode == npuv1alpha1.SharingModeMPS {
@@ -571,18 +524,11 @@ func sharingReady(ts npuv1alpha1.TargetStatus, acpp *npuv1alpha1.AcceleratorPart
 		ts.Advertisement.Reason = fmt.Sprintf(
 			"%s x%d — replicas share one device; no isolation between replicas", mode, replicas)
 	}
-	// 모드마다 다른 등급을 적는다. MPS 는 제어 데몬이 프로세스별 상한을 실제로 강제하므로
-	// (2026-08-11 실측) 연산·메모리를 none 으로 내리면 실측된 강제를 없다고 보고하게 된다.
-	// 축마다 근거가 따로 있다.
-	//   연산: 솔로 클라이언트가 A30 전체 9370.7 GFLOPS 의 26.2% 만 냈다. 경쟁자가 없는데도
-	//     카드의 1/4 인 것이 상한의 직접 증거이며, 데몬 질의
-	//     get_default_active_thread_percentage 가 replicas 4 와 일치하는 25.0 을 돌려준다.
-	//     4-tenant 동시 실행의 ratio 1.0014 는 테넌트 사이 간섭비이지 상한의 유무가 아니다 —
-	//     모두가 25% 에 묶여 있으니 서로 간섭하지 않아 1 에 가깝다.
-	//   메모리: 5888/23808 MiB 로 카드의 1/4.
-	// 대역폭은 ratio 0.4540 으로 실제로 새지만 IsolationCapability 에 축이 없어 광고 사유
-	// 문구로만 밝힌다. 시분할은 두 축 모두 강제가 관측되지 않았다.
-	// 빈 축은 그대로 둔다 — 근거 없는 등급을 적지 않는다는 규율이 우선한다.
+	// 모드마다 다른 등급을 적는다 — MPS 는 제어 데몬이 프로세스별 연산·메모리 상한을 실제로
+	// 강제함이 실측으로 확인된다(솔로 클라이언트가 카드 성능의 1/4만 내고, 메모리도 1/4로 묶임).
+	// 대역폭은 실제로 격리되지 않지만 IsolationCapability 에 그 축이 없어 광고 사유 문구로만
+	// 밝힌다. 시분할은 두 축 모두 강제가 관측되지 않아 none 이다. 빈 축은 그대로 둔다 — 근거
+	// 없는 등급을 적지 않는다는 규율이 우선한다.
 	grade := npuv1alpha1.IsolationNone
 	if mode == npuv1alpha1.SharingModeMPS {
 		grade = npuv1alpha1.IsolationProcess

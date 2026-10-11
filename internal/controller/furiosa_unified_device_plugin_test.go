@@ -3,7 +3,7 @@
 // 상세: ensureFuriosaUnifiedDevicePlugin() 의 단일 DS 렌더(공통 PCI nodeSelector·기본 이미지·
 //       RNGD_PARTITION_POLICY env·config 마운트)와 Unified 토글 전환/롤백 시 반대편 DS 정리를
 //       fake client 로 검증 (envtest 불필요)
-// 생성일: 2026-07-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-20 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -313,7 +313,7 @@ func TestFuriosaUnified_KcloudNamespace(t *testing.T) {
 
 // TestFuriosaUnified_ConfigMapFollowsDSNamespace 는 Warboy config ConfigMap 이 통합 DS 와
 // 같은 네임스페이스(kcloud)에 생성되는지 검증한다. 파드는 자기 네임스페이스의 ConfigMap 만
-// 마운트할 수 있어, 어긋나면 ContainerCreating 에 고정된다(라이브에서 실제로 발생).
+// 마운트할 수 있어, 어긋나면 ContainerCreating 에 고정된다.
 func TestFuriosaUnified_ConfigMapFollowsDSNamespace(t *testing.T) {
 	t.Setenv("OPERATOR_NAMESPACE", "kcloud")
 
@@ -441,7 +441,7 @@ func TestFuriosaPerModelDS_VendorNamespaceAndLegacyRemoved(t *testing.T) {
 			t.Setenv("OPERATOR_NAMESPACE", "kcloud")
 			var objs []client.Object
 			for _, ref := range tc.legacy {
-				// kcloud 가 만든 옛 DS 는 owner annotation 을 갖는다(2026-04-17 이후 항상 stamp).
+				// kcloud 가 만든 옛 DS 는 owner annotation 을 갖는다.
 				// 개명 정리는 owner 일치만 지우므로, 옛 DS 에 이 policy 의 소유 표시를 달아 둔다.
 				objs = append(objs, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{
 					Name: ref.Name, Namespace: ref.Namespace,

@@ -145,14 +145,12 @@ func Validate(spec npuv1alpha1.AcceleratorDescriptorSpec) field.ErrorList {
 // cIdentRE 는 DRA 속성·capacity 이름의 식별자 토막 규칙이다.
 var cIdentRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// validateDeclarations 는 descriptor 가 선언한 속성·capacity 를 본다. 생성 DRA 런타임도 기동 때
-// 같은 검사를 하지만(generic-dra-driver 의 validateDeclarations) 거기서 걸리면 드라이버 파드가
-// CrashLoop 에 앉아, 운영자가 보는 자리가 status.refusals 에서 파드 로그로 옮겨간다. deviceNodes
-// 경로를 런타임도 보는데 여기서 먼저 막는 것과 같은 이유다.
-//
-// 조건은 런타임과 같은 것을 쓴다 — 벌리면 런타임이 받아 주는 선언을 operator 가 거절해 사이트가
-// 막힌다. 상한 수(세 맵의 개수 합)는 CRD MaxProperties 가 이미 런타임 예산 아래로 묶으므로 여기서
-// 다시 세지 않는다.
+// validateDeclarations 는 descriptor 가 선언한 속성·capacity 를 본다. 생성 DRA 런타임도
+// 기동 때 같은 검사(generic-dra-driver 의 validateDeclarations)를 하지만, 거기서 걸리면
+// 드라이버 파드가 CrashLoop 에 앉아 운영자가 보는 자리가 status.refusals 에서 파드 로그로
+// 옮겨간다 — 여기서 먼저 막는 이유다. 조건은 런타임과 같아야 한다 — 벌리면 런타임이 받는
+// 선언을 operator 가 거절해 사이트가 막힌다. 상한 수(세 맵 합)는 CRD MaxProperties 가 이미
+// 런타임 예산 아래로 묶어 여기서 다시 세지 않는다.
 func validateDeclarations(p *field.Path, spec npuv1alpha1.AcceleratorDescriptorSpec) field.ErrorList {
 	var errs field.ErrorList
 	for _, m := range []struct {

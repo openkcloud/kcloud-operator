@@ -1,4 +1,4 @@
-<!-- README.md: k8s-worker3 tt-kmd 2.8.0 → 2.11.0 라이브 업그레이드 실행·복구 절차 | 생성일: 2026-09-21 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
+<!-- README.md: k8s-worker3 tt-kmd 2.8.0 → 2.11.0 라이브 업그레이드 실행·복구 절차 | 생성일: 2026-09-21 | 수정일: 2026-10-11 -->
 
 # Tenstorrent tt-kmd 2.11.0 라이브 업그레이드 (k8s-worker3)
 
@@ -6,7 +6,7 @@
 
 `.91` k8s-worker3-tenstorrent 는 그동안 tt-kmd 2.8.0 이 현재=목표 버전으로 고정돼 있어
 상태기계의 실제 업그레이드 전이(install Job → 검증 → Idle 수렴, 실패 시 자동 롤백)를 실제
-하드웨어로 켠 적이 없다. `test/live/tt-install-job/README.md`(2026-09-20)와
+하드웨어로 켠 적이 없다. `test/live/tt-install-job/README.md` 와
 `test/live/tt-upgrade-transition`(kind 재현)이 같은 누락을 기록했다. 이 디렉터리는 그 누락을
 실제 드라이버 교체로 메운다 — 버전을 2.8.0 → 2.11.0 으로 올려 상태기계 전이를 하드웨어에서
 관측한다.
@@ -75,7 +75,7 @@ bash test/live/tt-kmd-upgrade/run.sh
    NDR 이 `driverLoaded=false` 면 self-heal 분기가 2.8.0 이미지로 install Job 을 자동으로 실행한다.
 3. **NDR 이 2.11.0 로드 상태로 Failed 에 앉으면**, `allowDowngrade=true`·`autoUpgrade=true` 를
    잠시 켜 2.8.0 다운그레이드 Job 을 돌리거나, 2.11.0 을 유지한 채 **AWAITING USER** 로 기록한다.
-   둘 중 무엇을 택했는지 ledger 에 Ruling 으로 남긴다.
+   둘 중 무엇을 택했는지 기록해 둔다.
 4. **rmmod 가 계속 실패(refcount)** 하면 device-plugin 파드를 삭제하고 재시도한다. 그래도 안 되면
    `kubectl cordon k8s-worker3` 뒤 노드를 재부팅하고(승인 범위 — k8s-worker3 한정) self-heal 을
    기다린다. 재부팅은 복구 절차의 마지막 수단이며 k8s-worker3 에만 쓴다. **node5 는 절대 바꾸지 않는다.**

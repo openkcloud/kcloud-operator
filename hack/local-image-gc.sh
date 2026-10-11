@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # local-image-gc.sh: 빌드 호스트의 로컬 docker 이미지를 저장소별 최신 N개만 남기고 정리
-# 상세: 대상은 $DEV_REGISTRY/(kcloud/|nvidia-driver-ds|npu-operator|furiosa-driver-ds)
-#       저장소의 로컬 태그다. 라이브 파드(kubectl get pods -A, containers·initContainers
-#       모두)와 DriverInstallPolicy(spec.driver.image 및 spec.driver.kernelImages 맵의 값)가
-#       참조하는 태그는 --keep 과 무관하게 항상 남긴다. 라이브 참조 조회가 실패하면 무엇이
-#       사용 중인지 알 수 없으므로 삭제 없이
-#       중단한다(안전 우선). docker 자체가 동작하지 않으면(daemon 없음 등) 이미지 목록 조회와
-#       prune 을 건너뛴다(exec 로 넘기는 build-host-disk-check.sh 가 docker: unavailable 로
-#       보고한다). --dry-run 이 아니면 docker rmi 뒤 docker builder prune -a -f ·
-#       docker image prune -f 를 실행한다. 마지막 단계는 --dry-run 여부와 무관하게 항상
-#       build-host-disk-check.sh 를 exec 로 불러, 이 스크립트의 종료 코드가 곧 그 시점의
-#       디스크 판정이 되게 한다.
-# 용법: local-image-gc.sh [--keep N(기본 3)] [--dry-run]
-# 생성일: 2026-09-23 | 수정일: 2026-09-23
+# 상세: $DEV_REGISTRY 의 빌드 저장소별 최신 N개 태그만 남기고 나머지를 지운다. 안전·건너뜀
+#       조건, 마지막 단계의 종료 코드 승계는 본문 주석과 -h 출력 참고.
+# 생성일: 2026-09-23 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

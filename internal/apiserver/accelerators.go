@@ -1,9 +1,8 @@
 // ============================================================
 // accelerators.go: 가속기 인벤토리 조회 엔드포인트(/accelerators, /nodes/{node}/accelerators)
-// 상세: 읽기 전용. Reader 로 노드·ACPP·NDR·ResourceClaim 을 직접 읽어 BuildInventory 로 접은 뒤
-//       페이지네이션 봉투로 낸다. UID 경로는 "/" 를 포함하는 합성 ID 를 받기 위해 {uid...}
-//       와일드카드를 쓴다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09 (attachDRAAllocation 용 ResourceClaim 조회 추가)
+// 상세: 읽기 전용. Reader 로 노드·ACPP·NDR·ResourceClaim 을 읽어 BuildInventory 로 접어
+//       페이지네이션 봉투로 낸다.
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -88,7 +87,7 @@ func (s *Server) handleAccelerators(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAcceleratorByUID(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	if uid == "" {
-		// 후행 슬래시(review M-1)는 {uid...} 를 uid="" 로 매칭시킨다 — 이걸 그냥 두면 UID 가
+		// 후행 슬래시는 {uid...} 를 uid="" 로 매칭시킨다 — 이걸 그냥 두면 UID 가
 		// 없는 Pending 행(zero value)이 조회돼 버린다. 빈 UID 는 애초에 조회 대상이 아니다.
 		writeError(w, http.StatusNotFound, "accelerator uid is required")
 		return

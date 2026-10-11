@@ -5,15 +5,9 @@
 {{- if and .Values.api.enabled $csaOn }}
 # ============================================================
 # console-rbac.yaml: 관리 콘솔(/ui/) 접속용 ServiceAccount + ClusterRole
-# 상세: 콘솔은 브라우저가 화면 안에서 사용자 Bearer 토큰으로 /api/v1/* 를 부르는 구조라
-#       (internal/apiserver/ui.go), 사람이 토큰을 하나 들고 있어야 한다. 그 토큰으로
-#       operator SA 를 쓰면 콘솔이 필요로 하지 않는 권한(드라이버 DS 생성, Pod 축출 등)까지
-#       브라우저에 들어간다 — 콘솔 라우트가 SubjectAccessReview 로 실제 요구하는 verb 만
-#       담은 SA 를 따로 둔다.
-#       viewer 는 조회 라우트만, operator 는 정책 생성·삭제와 드라이버 제어까지 포함한다.
-#       바인딩 대상은 api.console.serviceAccount.role 로 고른다(기본 viewer).
-# 생성일: 2026-09-03 | 수정일: 2026-10-10 (viewer ClusterRole 에 resourceslices·deviceclasses
-#         list 권한 추가)
+# 상세: 콘솔은 브라우저가 사용자 Bearer 토큰으로 /api/v1/* 를 직접 부르므로, operator SA 대신
+#       실제 요구 verb 만 담은 전용 SA 를 쓴다(role: viewer=조회만, operator=정책·드라이버 제어도).
+# 생성일: 2026-09-03 | 수정일: 2026-10-11
 # ============================================================
 {{- $fullname := include "kcloud-operator.fullname" . -}}
 {{- $sa := printf "%s-console" $fullname }}

@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_status_test.go: ACPP status 4축 분리 검증
 // 상세: partitionCapability/layout/operations/advertisement 축이 서로 섞이지 않는지 확인.
-// 생성일: 2026-07-23 | 수정일: 2026-07-23
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 

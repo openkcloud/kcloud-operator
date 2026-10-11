@@ -3,7 +3,7 @@
 // 상세: preview 는 아무것도 쓰지 않으며 거절도 200 이다. 거절 시 사용자가 고칠 축이
 //       반드시 실려야 한다. 판정 자체는 intent 패키지의 테스트가 덮으므로 여기서는
 //       "같은 함수를 부르고 결과를 손대지 않는다" 만 확인한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -113,8 +113,8 @@ func TestPreview_WritesNothing(t *testing.T) {
 	}
 }
 
-// review: 이 라우트가 실제로 읽는 리소스(ACPP·NDR·AcceleratorClass) 중 어느 하나라도
-// 권한이 없으면 403 이어야 한다("읽는 리소스는 전부 인가한다" 규칙).
+// 이 라우트가 실제로 읽는 리소스(ACPP·NDR·AcceleratorClass) 중 어느 하나라도 권한이
+// 없으면 403 이어야 한다("읽는 리소스는 전부 인가한다" 규칙).
 func TestPreview_ForbiddenWithoutAuthz(t *testing.T) {
 	for _, resource := range []string{"acceleratorpartitionpolicies", "nodedevicereports", "acceleratorclasses"} {
 		opts := okAuth()

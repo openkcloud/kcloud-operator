@@ -41,7 +41,7 @@ func TestParseObservation_FailClosed(t *testing.T) {
 		t.Errorf("Disabled must be clean geometry=disabled, got %+v", got)
 	}
 
-	// 모델 B(§17.1): Enabled + GI 없음 → geometry ""(안전 baseline), 에러 아님.
+	// 모델 B: Enabled + GI 없음 → geometry ""(안전 baseline), 에러 아님.
 	got = parseObservation(obsTestPCI, "Enabled, Enabled", "No GPU instances found.", "")
 	if got.Err != "" || got.Geometry != "" || got.ModeCurrent != modeEnabled {
 		t.Errorf("Enabled+no-GI must be clean geometry=\"\" (enabled-no-GI), got %+v", got)
@@ -97,7 +97,7 @@ func TestParseDelimitedMessage(t *testing.T) {
 // TestObserveJobNameSeparatesStreams 는 같은 노드를 보는 두 관측 루프가 서로 다른 Job 이름을
 // 쓰는지 고정한다. 이름이 같으면 Observe 의 "시작할 때 기존 Job 삭제" 규율이 상대의 Job 을
 // 지워, 진 쪽은 fail-closed 관측만 받고 NodeDeviceReport 의 geometry 가 영영 갱신되지 않는다
-// (2026-08-05 라이브: ACPP 가 VerifyingAllocatableResources 에서 무한 정체).
+// (ACPP 가 VerifyingAllocatableResources 에서 무한 정체한다).
 func TestObserveJobNameSeparatesStreams(t *testing.T) {
 	apply := observeJobName(StreamApply, "worker1")
 	standing := observeJobName(StreamStanding, "worker1")

@@ -1,68 +1,8 @@
-// ============================================================
 // vendorcap.go: 벤더 능력 뷰(명세서 층 + 성적표 층) — CLI·REST 공유
-// 상세: 명세서(internal/vendorcap)에 evidence·ACPP 를 조인해 벤더×능력 Verification 을 유도한다.
-//
-//	순수 함수(Derive)와 수집 함수(CollectWith)를 나눠 규칙은 클러스터 없이 시험하고,
-//	수집은 client.Reader 하나로 CLI/REST 가 함께 쓴다.
-//
-// 조인 규칙(spec §5.3, review round 1·2 반영):
-//
-//	| 입력                                                              | 결과                                    |
-//	|-------------------------------------------------------------------|-----------------------------------------|
-//	| 노드 evidence, fresh(ev,node)==true, Level=AllocationVerified      | DRA-owned(product 별 advertise 키)면    |
-//	|                                                                     | dra, 아니면 devicePlugin Verified       |
-//	| 노드 evidence, fresh, Level ∈ {FunctionallyVerified,               | discovery·driver Verified               |
-//	|   AllocationVerified}                                              |                                          |
-//	| ACPP(벤더 일치) target Verified=True, layout 있음                  | partition Verified(reason 무관 — sharing|
-//	|                                                                     | 은 partition Ready 이후에만 얹혀서다)   |
-//	| ACPP target Verified=True, reason=ReasonSharingVerified,           | 그 sharing 능력(timeSlicing/multiProcess)|
-//	|   sharing 있음                                                     | 도 Verified(partition 과 별개로 함께)   |
-//	| ACPP target Degraded=True                                         | 그 ACPP 가 요청한 능력 전부(layout 있으면|
-//	|                                                                     | partition, sharing 있으면 그 능력)      |
-//	|                                                                     | Degraded(Verified 보다 우선) — 광고     |
-//	|                                                                     | 붕괴 감시는 파티션·공유를 구분 않는다   |
-//	| 레지스트리 Unsupported/Unknown                                     | NotApplicable(위 규칙 무시)             |
-//	| 그 외                                                              | Required(=Unverified)                   |
-//
-// evidence 의 (vendor,product) 귀속은 evidence 자신의 Spec.Vendor 를 최우선으로 믿는다
-// (review round 2 finding A) — 한 노드에 여러 벤더 present 라벨이 같이 실릴 수 있어서다(예
-// k8s-worker1 은 nvidia.present 와 furiosa.present 를 동시에 갖는다: Warboy 위에 GPU 도 꽂힌
-// 노드). Spec.Vendor 가 비어 있을 때만 노드 라벨 테이블로 떨어진다(evidenceVendorProduct).
-// product 는 항상 라벨 기반이다(furiosaProduct) — Spec.Vendor 에는 product 축이 없다.
-//
-// 노드 라벨 테이블(review round 2 — driver_daemonset_controller.go:354,
-// npuclusterpolicy_controller.go:673 이 kcloud.ai/furiosa.present 를 Warboy 노드 라벨로 쓰는
-// 것과 실측 kubectl 라벨 교차 확인):
-//
-//	nvidia      ← kcloud.ai/nvidia.present
-//	furiosa     ← kcloud.ai/furiosa.present 또는 furiosa-family.present 또는 rngd.present 중
-//	              하나. product 는 rngd.present 면 "rngd", furiosa.present 면 "warboy"
-//	              (furiosa.present 자체가 Warboy 노드 라벨이라 확정된다), 그 외
-//	              (furiosa-family.present 만 있음)면 ""(=이 벤더의 모든 product 에 적용 —
-//	              product 라벨이 전혀 없을 때만 남는 한계). "kcloud.ai/warboy.present" 는
-//	              detector 가 쓰지 않는다(node-device-detector/label.go vendorKey 확인,
-//	              2026-09-28) — Warboy 는 furiosa.present 하나로 잡힌다.
-//	rebellions  ← kcloud.ai/rebellions.present
-//	tenstorrent ← kcloud.ai/tenstorrent.present
-//	kcloud.ai/gpu.present 은 벤더 신호가 아니다(여러 벤더가 함께 쓰는 범용 라벨).
-//
-// DRA-owned 라벨 조회는 product 별 advertise 키를 쓴다(review round 2 finding C —
-// internal/controller/npuclusterpolicy_advertise.go:37-44 advertiseVendors 에 furiosa(Warboy)와
-// rngd(RNGD)가 따로 있다). product="rngd"→DRAOwnedNodeLabel("rngd"),
-// product="warboy"→DRAOwnedNodeLabel("furiosa"), product=""(모름)면 둘 중 아무거나.
-//
-// 집계 키는 (vendor, product, capability) 다. product="" 로 기록한 신호는 그 벤더의 모든
-// product 행에 적용된다 — 조회 시 (vendor,product,cap) 와 (vendor,"",cap) 를 OR 로 본다.
-// ACPP 는 product 개념이 없어 항상 "" 로 기록한다.
-//
-// ACPPCondVerified/ACPPCondDegraded 실제 위치: AcceleratorPartitionPolicyStatus 최상위가
-// 아니라 Status.Targets[].Conditions(노드별) 다 — controller 의 setCond(ts *TargetStatus, ...)
-// 가 그 자리에만 쓴다(acceleratorpartitionpolicy_controller.go:1401). 한 ACPP 의 여러 노드 중
-// 하나라도 Degraded 면 그 벤더 능력은 Degraded, 그 외 하나라도 조건에 맞게 Verified 면
-// Verified — evidence 루프와 같은 "여러 소스를 같은 버킷에 합산, 조회 시 Degraded 우선" 방식.
-//
-// 생성일: 2026-09-19 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
-// ============================================================
+// 상세: 명세서(internal/vendorcap)에 evidence·ACPP 를 조인해 벤더×능력 Verification 을
+// 유도한다. 조인 규칙은 spec §5.3 이 정본이다. 순수 함수(Derive)는 클러스터 없이
+// 시험하고, 수집 함수(CollectWith)는 client.Reader 로 CLI/REST 가 함께 쓴다.
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 package npuctl
 
 import (
@@ -104,12 +44,12 @@ type VendorCapabilityRow struct {
 	Source    string `json:"source,omitempty"`
 }
 
-// furiosaProduct 는 노드 라벨만으로 Furiosa product 를 정한다(review round 2 finding A/D —
-// furiosa.present 자체가 Warboy 노드 라벨이다: driver_daemonset_controller.go:354,
-// npuclusterpolicy_controller.go:673). rngd.present 가 있으면 "rngd", furiosa.present 가
-// 있으면 "warboy", 그 둘 다 없이 furiosa-family.present 만 있으면 ""(product 미상 — 모든
-// product 에 적용). "kcloud.ai/warboy.present" 는 어떤 소비자도 쓰지 않으므로(2026-09-28
-// 확인, node-device-detector 소스 대조) 보지 않는다.
+// furiosaProduct 는 노드 라벨만으로 Furiosa product 를 정한다 — furiosa.present 자체가
+// Warboy 노드 라벨이다(api/v1alpha1.PresentNodeLabel 이 이 라벨 문자열의 단일 출처이며
+// furiosa(Warboy)·rngd 를 별도 키로 쓴다고 명시한다). rngd.present 가 있으면 "rngd",
+// furiosa.present 가 있으면 "warboy", 그 둘 다 없이 furiosa-family.present 만 있으면
+// ""(product 미상 — 모든 product 에 적용). "kcloud.ai/warboy.present" 는
+// node-device-detector 가 쓰지 않는 라벨이라 보지 않는다.
 func furiosaProduct(n corev1.Node) string {
 	switch {
 	case n.Labels[v1alpha1.PresentNodeLabel(VendorRngd)] == labelValueTrue:
@@ -124,6 +64,7 @@ func furiosaProduct(n corev1.Node) string {
 // Spec.Vendor 가 비어 있을 때만 쓰는 폴백이다(evidenceVendorProduct). 한 노드에 여러 벤더
 // present 라벨이 같이 실리면(예 k8s-worker1 의 nvidia+furiosa) 먼저 매치되는 벤더로
 // 떨어지는 모호함이 있다 — 그래서 evidence 는 이 폴백보다 Spec.Vendor 를 우선한다.
+// kcloud.ai/gpu.present 는 여러 벤더가 함께 쓰는 범용 라벨이라 판정에 쓰지 않는다.
 func nodeVendorProduct(n corev1.Node) (vendor, product string) {
 	has := func(v string) bool { return n.Labels[v1alpha1.PresentNodeLabel(v)] == labelValueTrue }
 	familyOnly := n.Labels[v1alpha1.FuriosaFamilyPresentLabel] == labelValueTrue
@@ -140,9 +81,9 @@ func nodeVendorProduct(n corev1.Node) (vendor, product string) {
 	return "", ""
 }
 
-// evidenceVendorProduct 는 이 evidence 가 말하는 (vendor,product) 다(review round 2
-// finding A). AcceleratorEvidenceSpec.Vendor 를 컨트롤러가 채워 두면 그 값을 그대로 믿고,
-// 비어 있을 때만 노드 라벨 폴백(nodeVendorProduct)으로 떨어진다. product 는 항상 라벨
+// evidenceVendorProduct 는 이 evidence 가 말하는 (vendor,product) 다.
+// AcceleratorEvidenceSpec.Vendor 를 컨트롤러가 채워 두면 그 값을 그대로 믿고, 비어
+// 있을 때만 노드 라벨 폴백(nodeVendorProduct)으로 떨어진다. product 는 항상 라벨
 // 기반이다(furiosaProduct) — Spec.Vendor 에는 product 축이 없다.
 func evidenceVendorProduct(ev *v1alpha1.AcceleratorEvidence, n corev1.Node) (vendor, product string) {
 	if ev.Spec.Vendor == "" {
@@ -155,11 +96,11 @@ func evidenceVendorProduct(ev *v1alpha1.AcceleratorEvidence, n corev1.Node) (ven
 	return vendor, product
 }
 
-// nodeDRAOwned 는 (vendor,product) 의 DRA-owned 광고 라벨을 본다(review round 2 finding C).
-// furiosa 는 product 에 따라 advertise 벤더 키가 다르다 — advertiseVendors
-// (npuclusterpolicy_advertise.go:37-44) 에 furiosa(Warboy)·rngd(RNGD) 가 따로 있고,
-// reconcileDRAOwnedLabels 는 Warboy 노드엔 kcloud.ai/furiosa.dra-owned, RNGD 노드엔
-// kcloud.ai/rngd.dra-owned 를 붙인다. product 를 모르면(") 둘 중 아무거나로 판정한다.
+// nodeDRAOwned 는 (vendor,product) 의 DRA-owned 광고 라벨을 본다. furiosa 는 product 에
+// 따라 advertise 벤더 키가 다르다 — internal/controller/npuclusterpolicy_advertise.go 의
+// advertiseVendors 에 furiosa(Warboy)·rngd(RNGD) 가 따로 있어, Warboy 노드엔
+// kcloud.ai/furiosa.dra-owned, RNGD 노드엔 kcloud.ai/rngd.dra-owned 가 붙는다. product 를
+// 모르면("") 둘 중 아무거나로 판정한다.
 func nodeDRAOwned(n corev1.Node, vendor, product string) bool {
 	if vendor != VendorFuriosa {
 		return n.Labels[v1alpha1.DRAOwnedNodeLabel(vendor)] == labelValueTrue
@@ -232,7 +173,7 @@ func DeriveVendorCapabilities(
 	return buildCapabilityRows(verified, degraded)
 }
 
-// applyEvidence 는 evidence 로 devicePlugin/dra/discovery/driver 를 채운다(조인 규칙표 상단 2행).
+// applyEvidence 는 evidence 로 devicePlugin/dra/discovery/driver 를 채운다(spec §5.3).
 func applyEvidence(
 	evs []v1alpha1.AcceleratorEvidence, nodeByName map[string]corev1.Node,
 	fresh func(*v1alpha1.AcceleratorEvidence, corev1.Node) bool, verified map[vk]bool,
@@ -265,15 +206,12 @@ func applyEvidence(
 	}
 }
 
-// applyACPP 는 한 ACPP 가 요청한 partition/sharing 능력을 그 target 조건에 따라 채운다(조인
-// 규칙표 중간 3행). Degraded 는 advertisement drift 감시라 파티션·공유를 구분하지 않고 이
-// ACPP 가 요청한 능력 전부에 적용한다. Verified=True 면 layout 이 있는 한 partition 은 항상
-// 검증된 것으로 본다(review round 2 finding B) — 컨트롤러는 partition 이 Ready 인 뒤에만
-// sharing 을 얹으므로(acceleratorpartitionpolicy_controller.go:355-365), reason 이
-// ReasonSharingVerified 라도 partition 검증을 함의한다. reason 이 ReasonSharingVerified 일
-// 때만 그 sharing 능력도 함께 Verified 로 본다 — 같은 Verified 조건이 SetStatusCondition 으로
-// 자리를 덮어써(acpp_sharing.go:579-581) reason 하나로만 남기 때문에, "sharing 이 검증됐다"
-// 는 "partition 도 검증됐다" 를 반드시 포함하지만 그 역은 아니다.
+// applyACPP 는 한 ACPP 가 요청한 partition/sharing 능력을 target 조건에 따라 채운다.
+// Degraded 는 광고 붕괴 감시라 파티션·공유를 구분하지 않고 요청된 능력 전부에 적용한다.
+// Verified=True·layout 있음은 항상 partition Verified 다 — 컨트롤러는 partition 이 Ready
+// 인 뒤에만 sharing 을 얹으므로, reason=ReasonSharingVerified 도 partition 검증을
+// 함의한다. 그 reason 일 때만 sharing 능력도 Verified 로 본다(SetStatusCondition 이
+// 자리를 덮어써 reason 하나만 남는다) — "sharing 검증"은 "partition 검증"을 포함한다.
 func applyACPP(p v1alpha1.AcceleratorPartitionPolicy, verified, degraded map[vk]bool) {
 	vendor := p.Spec.Vendor
 	hasLayout := len(p.Spec.Layout) > 0
@@ -281,7 +219,10 @@ func applyACPP(p v1alpha1.AcceleratorPartitionPolicy, verified, degraded map[vk]
 	if !hasLayout && !hasSharing {
 		return
 	}
-	// 조건은 오브젝트 최상위가 아니라 노드별 target 에 실린다.
+	// 조건은 오브젝트 최상위가 아니라 노드별 target 의 Conditions 에 실린다(controller 의
+	// setCond, acceleratorpartitionpolicy_controller.go:1401). 여러 target 중 하나라도
+	// Degraded 면 그 능력은 Degraded, 그 외 하나라도 Verified 조건에 맞으면 Verified 다
+	// (buildCapabilityRows 가 조회 시 Degraded 를 우선한다).
 	for _, ts := range p.Status.Targets {
 		if condTrue(ts.Conditions, v1alpha1.ACPPCondDegraded) {
 			if hasLayout {
@@ -320,7 +261,7 @@ func acppSharingCapability(s *v1alpha1.SharingSpec) (vendorcap.Capability, bool)
 }
 
 // buildCapabilityRows 는 명세서 층(vendorcap.Keys/Capabilities/Lookup) 위에 verified/degraded
-// 집계를 얹어 정렬된 행을 만든다(조인 규칙표 하단 2행: Unsupported/Unknown·그 외).
+// 집계를 얹어 정렬된 행을 만든다(spec §5.3: Unsupported/Unknown·그 외).
 func buildCapabilityRows(verified, degraded map[vk]bool) []VendorCapabilityRow {
 	var rows []VendorCapabilityRow
 	for _, k := range vendorcap.Keys() {
@@ -387,7 +328,7 @@ func CollectVendorCapabilitiesWith(ctx context.Context, r client.Reader) ([]Vend
 		return nil, fmt.Errorf("list acceleratorverificationpolicies: %w", err)
 	}
 	// NDR 은 Spec.NodeName·ObjectMeta.Name 어느 쪽으로 조회해도 찾도록 두 키 모두에 등록한다
-	// (review round 1 finding (b) — 관례상 둘은 같은 값이지만 어긋난 데이터가 와도 안전하게).
+	// — 관례상 둘은 같은 값이지만, 어긋난 데이터가 와도 안전하게 찾는다.
 	ndrByNode := map[string]*v1alpha1.NodeDeviceReport{}
 	for i := range ndrs.Items {
 		n := &ndrs.Items[i]
@@ -404,9 +345,9 @@ func CollectVendorCapabilitiesWith(ctx context.Context, r client.Reader) ([]Vend
 		if ndr == nil {
 			ndr = &v1alpha1.NodeDeviceReport{}
 		}
-		// evidenceVendorProduct 로 vendor 를 정한다(review round 2 finding A 와 같은 이유 —
-		// 다중 벤더 노드에서 라벨 순서만으로 고르면 엉뚱한 벤더 장치의 driver/firmware 버전과
-		// 비교하게 된다). product 는 이 지문 계산엔 쓰지 않는다.
+		// evidenceVendorProduct 로 vendor 를 정한다 — 다중 벤더 노드에서 라벨 순서만으로
+		// 고르면 엉뚱한 벤더 장치의 driver/firmware 버전과 비교하게 된다. product 는 이
+		// 지문 계산엔 쓰지 않는다.
 		vendor, _ := evidenceVendorProduct(ev, n)
 		// Resolve + Compute + CheckFreshness 는 ACPP monitorDrift
 		// (acceleratorpartitionpolicy_controller.go:808-815)와 같은 호출이다 — 감시축에서
@@ -421,9 +362,8 @@ func CollectVendorCapabilitiesWith(ctx context.Context, r client.Reader) ([]Vend
 
 // withoutGeneration 은 감시축에서 Generation 을 뺀다 — 위 Compute 호출에 evidence 자신의
 // generation(ev.Status.Fingerprint.Generation)을 그대로 넣으므로 cur.Generation 은 항상 old 와
-// 같아져 애초에 이 축으로는 무효화가 트리거될 수 없다. 그 사실을 감시 목록에서 빼서 의도를
-// 명시한다(review round 1 finding (a)). monitorDrift 는 ACPP 의 generation 을 넣으므로 이
-// 제외가 없고, 그 점이 두 호출의 유일한 차이다.
+// 같아져 이 축으로는 무효화가 트리거될 수 없다. 그 사실을 감시 목록에서 빼서 의도를 명시한다.
+// monitorDrift 는 ACPP 의 generation 을 넣으므로 이 제외가 없다 — 두 호출의 유일한 차이다.
 func withoutGeneration(fields []string) []string {
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {

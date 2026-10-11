@@ -1,11 +1,8 @@
 // ============================================================
 // profiles.go: 노드 비의존 레이아웃 검증 — webhook·backend 공유 함수
-// 상세: 형식·단일성·개수 경계만 판정한다. 프로파일이 그 제품에서 실제로 지원되는지는
-//
-//	노드 관측(nvidia-smi mig -lgip)이 있어야 알 수 있어 여기서는 단정하지 않는다
-//	(internal/partition/nvidia/backend.go 의 Validate 참조).
-//
-// 생성일: 2026-08-24 | 수정일: 2026-10-09 (MIG 정규식 판정을 IsNvidiaMIGProfile 로 일원화)
+// 상세: 형식·단일성·개수 경계만 판정한다. 프로파일 지원 여부는 노드 관측(mig -lgip)이 있어야
+// 알 수 있어 단정하지 않는다(nvidia/backend.go 의 Validate 참조).
+// 생성일: 2026-08-24 | 수정일: 2026-10-11
 // ============================================================
 package partition
 
@@ -25,12 +22,11 @@ var nvidiaProfileRe = regexp.MustCompile(`^\d+g\.\d+gb$`)
 func IsNvidiaMIGProfile(profile string) bool { return nvidiaProfileRe.MatchString(profile) }
 
 // ValidateLayoutShape 는 노드를 보지 않고 판정할 수 있는 것만 본다 — 형식·단일성·개수 경계다.
-// 프로파일이 그 제품에서 실제로 지원되는지는 노드에서 관측해야 알 수 있고(nvidia/backend.go 의
-// supported 표는 `nvidia-smi mig -lgip` 로 채운다), MIG mode 가 꺼져 있으면 그 표가 아예
-// 비어 판정을 미룬다. 그래서 여기서는 단정하지 않는다.
+// 프로파일이 그 제품에서 실제로 지원되는지는 노드 관측(nvidia-smi mig -lgip)이 있어야 알 수
+// 있어 여기서는 단정하지 않는다(nvidia/backend.go 의 supported 표가 그 역할이다).
 //
-// 빈 레이아웃은 통과시킨다 — sharing 만 있는 정책(순수 공유)이 정상이고, 레이아웃과 sharing 이
-// 둘 다 비었는지는 ACPP 전체를 봐야 알 수 있어 webhook 쪽(admission 레이어)이 판정한다.
+// 빈 레이아웃은 통과시킨다 — sharing 만 있는 정책이 정상이고, 레이아웃·sharing 이 둘 다
+// 비었는지는 webhook(admission 레이어)이 ACPP 전체를 보고 판정한다.
 func ValidateLayoutShape(vendor string, layout []Layout) error {
 	if len(layout) == 0 {
 		return nil
@@ -58,12 +54,11 @@ var migProfiles = map[string][]string{
 }
 
 // KnownMIGProfiles 는 확실히 아는 제품의 MIG 프로파일 목록이다. 표에 없는 제품은 두 번째
-// 반환값이 false 이고, 호출부는 그때 판정하지 않는다(fail-open). 표가 낡아 정상 요청을 막는
-// 쪽이, 잘못된 요청 하나를 통과시키는 쪽보다 나쁘다 — 하드웨어가 최종 판정자다.
+// 반환값이 false 이고, 호출부는 판정하지 않는다(fail-open) — 표가 낡아 정상 요청을 막는 쪽이
+// 잘못된 요청 하나를 통과시키는 쪽보다 나쁘다.
 //
 // product 는 detector 가 내는 슬러그(`a30`, `a100-pcie-40gb`)라 `-` 경계 접두어로 조회한다 —
-// internal/upgrade.DeviceModelMatches 가 쓰는 것과 같은 관례이자 그 함수 자체다(정본, 순환
-// import 없음 확인됨).
+// internal/upgrade.DeviceModelMatches 와 같은 관례이자 그 함수 자체다(순환 import 없음).
 func KnownMIGProfiles(product string) ([]string, bool) {
 	// generic 은 detector 가 제품을 판정하지 못했다는 표시다 — 표의 어떤 항목과도 같지 않다.
 	// upgrade.DeviceModelMatches 는 원 도메인(업그레이드 정책 매칭)에서 generic 을 와일드카드로

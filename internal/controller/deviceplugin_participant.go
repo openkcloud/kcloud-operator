@@ -4,7 +4,7 @@
 //
 //	건드리지 않는다 — 광고 설정을 바꾸는 것은 다른 작업 종류의 몫이다.
 //
-// 생성일: 2026-08-04
+// 생성일: 2026-08-04 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -16,8 +16,8 @@ import (
 	"kcloud-operator/internal/verification"
 )
 
-// devicePluginParticipant 는 기존 restartNvidiaDevicePlugin 을 작업 본체로 감싼다.
-// 새 경로를 만들지 않는 이유는 그 함수가 이미 라이브에서 검증된 절차이기 때문이다.
+// devicePluginParticipant 는 새 경로를 만들지 않고 기존 restartNvidiaDevicePlugin 절차를 작업
+// 본체로 감싼다.
 type devicePluginParticipant struct {
 	r *AcceleratorPartitionPolicyReconciler
 }
@@ -46,8 +46,8 @@ func (p *devicePluginParticipant) Rollback(context.Context,
 //
 // 소유자가 정책이 아니면(예: health 가 만든 재시작) **검증하지 않는다.** 정책이 없으면 장치 관측을
 // 띄우는 주체도 없어 검증이 구조적으로 실패하고, 그러면 이 작업은 항상 RolledBack 으로 끝나
-// 복구 실패로 세어져 세 번이면 멀쩡한 노드가 격리된다 — 라이브에서 그대로 재현됐다(2026-08-04,
-// HL-5). 판정은 verifyRequestFor 한 곳에 모아 두 경로가 갈라지지 않게 한다.
+// 복구 실패로 세어져 세 번이면 멀쩡한 노드가 격리된다. 판정은 verifyRequestFor 한 곳에 모아
+// 두 경로가 갈라지지 않게 한다.
 func (p *devicePluginParticipant) VerifyRequest(ctx context.Context,
 	op *npuv1alpha1.AcceleratorOperation) (verification.Request, bool, error) {
 	return p.r.verifyRequestFor(ctx, op)

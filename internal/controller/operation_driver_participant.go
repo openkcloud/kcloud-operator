@@ -1,11 +1,9 @@
 // ============================================================
 // operation_driver_participant.go: 드라이버 업그레이드 상태머신 어댑터
 // 상세: UpgradeStateMachine 은 cordon·drain·설치·재부팅·검증·보상을 이미 완결적으로 수행한다.
-//
-//	이 파일은 그것을 한 번 전진시키고 결과 상태를 조정자 사건으로 옮기는 얇은 층이다 —
-//	상태머신을 복제하면 두 경로가 갈라지고, 갈라진 순간 직렬화가 무의미해진다.
-//
-// 생성일: 2026-08-01
+// 이 파일은 그것을 한 번 전진시키고 결과 상태를 조정자 사건으로 옮기는 얇은 층이다 — 상태머신을
+// 복제하면 두 경로가 갈라지고, 갈라진 순간 직렬화가 무의미해진다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -117,13 +115,10 @@ func (p *driverParticipant) VerifyRequest(context.Context, *npuv1alpha1.Accelera
 
 // advance 는 소유 DriverUpgradeState 를 읽어 상태머신을 한 번 전진시키고 갱신된 status 를 준다.
 //
-// TransitionState 는 실 Reconcile 과 마찬가지로 state 를 **메모리에서만** 전이시킨다 — 영속은
-// 호출자 몫이다(driver_upgrade_controller.go 의 Reconcile 이 TransitionState 직후
-// r.Status().Update 를 부르는 것과 같은 이유). 여기서 빠뜨리면 이 pass 가 cordon·drain·설치
-// 같은 실 부수효과를 일으키고도 클러스터에는 아무것도 남기지 않아, 다음 pass 가 같은 시작
-// 상태를 또 읽어 같은 부수효과를 무한 반복한다 — 사건은 매번 새로 계산되지만 실제 진행은 전혀
-// 없다. 실 Reconcile 과 동일하게 상태머신 오류 여부와 무관하게 먼저 영속한다(부분 전이도
-// 크래시 이후 재개의 근거가 돼야 한다).
+// TransitionState 는 state 를 메모리에서만 전이시킨다 — 영속은 호출자 몫이다(Reconcile 이
+// TransitionState 직후 Status().Update 를 부르는 것과 같은 이유). 빠뜨리면 이 pass 의
+// cordon·drain·설치 같은 부수효과가 클러스터에 남지 않아 다음 pass 가 같은 상태를 또 읽어
+// 무한 반복한다. 상태머신 오류 여부와 무관하게 먼저 영속한다(부분 전이도 재개의 근거다).
 func (p *driverParticipant) advance(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) (*npuv1alpha1.DriverUpgradeStateStatus, error) {
 	var state npuv1alpha1.DriverUpgradeState
 	if err := p.r.Get(ctx, types.NamespacedName{Name: op.Spec.Owner.Name}, &state); err != nil {

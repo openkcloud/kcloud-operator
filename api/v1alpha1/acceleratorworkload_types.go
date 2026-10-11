@@ -1,9 +1,9 @@
 // ============================================================
 // acceleratorworkload_types.go: AcceleratorWorkload CRD 타입 (추상 사용자 API)
 // 상세: R&D v1.0 §10.6/§11. 사용자는 장치가 아니라 의도(exclusive|shared|partitioned|
-// partitioned-shared)를 쓰고, operator 가 클러스터가 실제로 광고 중인 벤더 리소스로 번역한다.
-// 지원되지 않는 조합은 조용히 대체하지 않고 축을 지목해 거절한다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// partitioned-shared)를 쓰고, operator 가 벤더 리소스로 번역한다. 지원되지 않는 조합은 축을
+// 지목해 거절한다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 
@@ -63,13 +63,13 @@ const (
 	AWReasonReplicasTooFew = "ReplicasTooFew"
 	AWReasonDRANotEnabled  = "DRANotEnabled"
 	// AWReasonDRAMappingMissing: 클러스터는 DRA 를 서빙하지만 이 AcceleratorClass 가
-	// 그 벤더의 DeviceClass 를 선언하지 않았다. 고칠 곳은 클러스터가 아니라 클래스다.
+	// 그 벤더의 DeviceClass 를 선언하지 않는다. 고칠 곳은 클러스터가 아니라 클래스다.
 	AWReasonDRAMappingMissing = "DRAMappingMissing"
 	// AWReasonDRADriverMissing: 클래스가 가리키는 DeviceClass 가 실재하지 않는다.
 	// 벤더 DRA 드라이버가 설치되지 않았다는 뜻이다.
 	AWReasonDRADriverMissing = "DRADriverMissing"
 	// AWReasonDRAUnsupportedRequest: 클러스터도 드라이버도 멀쩡하지만 DRA 경로가 그 요청의
-	// 축(공유·분할·requirements)을 아직 구현하지 않았다. 클러스터 탓이 아니므로
+	// 축(공유·분할·requirements)을 아직 구현하지 않는다. 클러스터 탓이 아니므로
 	// BackendUnsupported/CapabilityUnverified 와 구분한다 — 고치는 방법은 allocationAPI 를
 	// devicePlugin 으로 돌리는 것이지 장치나 드라이버를 손보는 것이 아니다.
 	AWReasonDRAUnsupportedRequest = "DRAUnsupportedRequest"

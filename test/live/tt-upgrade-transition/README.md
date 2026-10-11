@@ -1,4 +1,4 @@
-<!-- README.md: TT Job-모드 업그레이드 전이 kind 재현 사용법과 결과 | 생성일: 2026-09-20 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
+<!-- README.md: TT Job-모드 업그레이드 전이 kind 재현 사용법과 결과 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 
 # Tenstorrent Job-모드 업그레이드 전이 — kind 재현
 
@@ -6,11 +6,11 @@
 
 `.91` k8s-worker3-tenstorrent 는 tt-kmd 2.8.0 이 현재=목표 버전으로 고정돼 있어, 상태기계의
 업그레이드 전이(`Upgrading→Validating→Uncordoning` 성공 경로, `Validating→Rollback→Failed`
-실패 경로)를 실제 하드웨어로 켤 방법이 없다. 이 제약은 이번 작업에서 새로 발견한 것이 아니라
-`test/live/tt-install-job/README.md`(2026-09-20)가 이미 같은 결론을 남겼다 —
+실패 경로)를 실제 하드웨어로 켤 방법이 없다. 이 제약은 새로 발견한 것이 아니라
+`test/live/tt-install-job/README.md` 가 이미 같은 결론을 남겼다 —
 "상태기계의 업그레이드 전이 경로 자체는 미검증이다... 실제 업그레이드 전이를 라이브로 보려면
-버전을 실제로 바꿔야 하는데, 이번 태스크의 안전 조건(버전 2.8.0 고정)과 상충해 범위 밖이다"
-(2026-09-20 Round 3 실측도 동일하게
+버전을 실제로 바꿔야 하는데, 이 fixture 의 안전 조건(버전 2.8.0 고정)과 상충해 범위 밖이다"
+(실측도 동일하게
 "state-machine upgrade transition BLOCKED_BY_CONSTRAINT (version pinned)" 로 기록).
 
 이 디렉터리는 그 갭을 메운다. 실제 tt-kmd 드라이버는 건드리지 않되, `test/lab/kind/setup.sh`
@@ -49,17 +49,16 @@ install Job 생성, validator 체인, 롤백 소진, 자기치유 가드)을 재
 
 **판정 분기 A(새 버전 존재)의 전제가 실제로 참이다.** 이 작업의 판정 분기는 "새 tt-kmd 버전이
 실행 시점에 존재하면 A(라이브 업그레이드), 없으면 B(kind 재현)" 인데, GitHub tt-kmd 릴리스를
-읽기전용으로 조회한 결과(2026-09-20, `api.github.com/repos/tenstorrent/tt-kmd/releases/latest`)
-**`ttkmd-2.11.0`(정식 릴리스, draft/prerelease 아님)이 2026-08-14T18:31:59Z 에 이미 나와 있다**
-— 오늘로부터 5주 이상 전이다. `.91` 의 baked 값(2.8.0)보다 최신이므로, 코드가 정의한 분기
-조건만 보면 A 의 전제가 성립한다.
+읽기전용으로 조회한 결과(`api.github.com/repos/tenstorrent/tt-kmd/releases/latest`)
+**`ttkmd-2.11.0`(정식 릴리스, draft/prerelease 아님)이 이미 나와 있다** — `.91` 의 baked
+값(2.8.0)보다 최신이므로, 코드가 정의한 분기 조건만 보면 A 의 전제가 성립한다.
 
 그럼에도 이 작업은 B(kind 재현)로 진행했다 — 이 작업의 지시가 "`.91` 을 절대 건드리지 않는다"
 로 명시적으로 못박혀 있고, 이미지 재빌드 + 라이브 업그레이드/롤백 실행은 그 경계를 넘는 별도
 작업이기 때문이다. 그래서 "새 버전이 없다"가 아니라 **"새 버전은 있지만 이 작업 권한 밖"**
 이 정확한 상태다.
 
-> 아래 인용은 2026-09-20 시점의 값이다. 2026-09-21 에 2.11.0 업그레이드를 마쳤고 현재 목록은
+> 위 인용은 스냅샷 시점의 값이다. 2.11.0 업그레이드를 마쳤고 현재 목록은
 > `["2.8.0", "2.11.0"]` 이다(`deploy/helm/values.yaml`).
 
 아래는 그 후속(A 분기) 작업을 실제로 착수할 때 밟아야 할 절차다 — 이 작업
@@ -161,7 +160,7 @@ install Job YAML·JSON 요약이 남는다. 주요 조정 가능 변수: `GOOD_V
 `BAD_VERSION`(기본 `1.0.0`), `T_CONVERGE`/`T_FAILED`(기본 240s). 재실행해도 안전하다 —
 `demo()` 시작에서 NDR/DUS/DIP 를 매번 새로 적용한다.
 
-## 결과 (2026-09-20 실측, kind v0.30.0 / kindest/node:v1.34.0, operator `make run` out-of-cluster)
+## 결과 (kind v0.30.0 / kindest/node:v1.34.0, operator `make run` out-of-cluster)
 
 두 시나리오 모두 실제로 실행해 `verdict: PASS`, `fails: 0` 을 확인했다(`summary-*.json`).
 아래 시각은 `success-transitions.log`/`rollback-transitions.log`(이 스크립트가 매 poll 마다
@@ -207,8 +206,6 @@ UpgradeRequired 진입(13:39:53)부터 Failed 도달(13:43:09)까지 3분 16초(
 
 ## Evidence
 
-- 2026-09-20 전이 성공 레코드
-- 2026-09-20 롤백 레코드
 - 스크립트 자체 출력: `$OUT/success-transitions.log`, `$OUT/rollback-transitions.log`,
   `$OUT/success-events.txt`, `$OUT/rollback-events.txt`, `$OUT/success-install-job.yaml`,
   `$OUT/summary-*.json`.

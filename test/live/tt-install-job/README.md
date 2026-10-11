@@ -1,4 +1,4 @@
-<!-- README.md: Tenstorrent install-Job 멱등 경로 라이브 검증 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
+<!-- README.md: Tenstorrent install-Job 멱등 경로 라이브 검증 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 # Tenstorrent install-Job 멱등 경로 라이브 검증
 
 ## 왜
@@ -21,7 +21,7 @@
 
 ## 구성
 
-- `dip-tenstorrent-blackhole.yaml` — 2026-09-20 라이브 DIP `tenstorrent-blackhole-ds` spec 스냅샷
+- `dip-tenstorrent-blackhole.yaml` — 라이브 DIP `tenstorrent-blackhole-ds` spec 스냅샷
   (기록용 fixture-of-record, run.sh 가 적용하는 대상이 아니다 — run.sh 는 실제 라이브 DIP 를 직접
   조회한다). 라이브와 이 파일이 벌어지면 아래 조건(버전 일치·trackOnly:false)이 더 이상 성립하지
   않을 수 있으니 재실행 전 `kubectl get dip tenstorrent-blackhole-ds -o yaml` 로 대조할 것.
@@ -40,7 +40,7 @@
 
 `run.sh` 는 DUS 가 `Idle` 이고 `currentVersion==desiredVersion` 인지는 스스로 재확인해 어긋나면
 `BLOCKED_BY_CONSTRAINT` 로 적용 자체를 하지 않는다. 그러나 아래 둘은 클러스터 전역 조회라 스크립트
-밖에서 호출자가 직접 확인해야 한다(2026-09-20 실측 당시 확인 방법):
+밖에서 호출자가 직접 확인해야 한다:
 
 - **TT 워크로드 파드 없음** — `kubectl get pods -A -o json` 을 훑어 어떤 컨테이너의
   `resources.limits`/`requests` 에도 `tenstorrent` 문자열을 포함한 리소스 키가 없어야 한다(있으면
@@ -80,7 +80,7 @@ DUS/노드 전후 스냅샷, 렌더된 Job YAML, `kubectl apply` 결과, Job 로
 
 - **상태기계의 업그레이드 전이 경로 자체는 미검증이다.** 이 fixture 는 `RenderInstallJob` 함수만
   재사용하고 `handleUpgradingJob`/`handleValidatingJob`(Job 생성→검증→전이)을 우회한다. 실제 업그레이드
-  전이를 라이브로 보려면 버전을 실제로 바꿔야 하는데, 이번 태스크의 안전 조건(버전 2.8.0 고정)과
+  전이를 라이브로 보려면 버전을 실제로 바꿔야 하는데, 이 fixture 의 안전 조건(버전 2.8.0 고정)과
   상충해 범위 밖이다(`BLOCKED_BY_CONSTRAINT`).
 - **재부팅 폴백 없음** — `entrypoint.sh` 의 `unload_old`(90-93행)는 `rmmod` 가 10회 재시도 후에도
   실패하면(참조 카운트>0) 그대로 `return 1` 로 Job 을 실패시킨다. 재부팅 후 재시도하는 별도 경로가
@@ -101,5 +101,4 @@ DUS/노드 전후 스냅샷, 렌더된 Job YAML, `kubectl apply` 결과, Job 로
 루트(별도 git 저장소가 아닌 untracked) `tester/manifests/driver-upgrade/manifests/`
 `07_driverinstallpolicy-tenstorrent-trackonly.yaml` 은 `trackOnly: true`, 이미지 태그
 `0.1.1` 을 선언한다 — 라이브(`trackOnly: false`, `tenstorrent-driver-ds:2.8.0-v1`)와 맞지 않는
-stale 상태다. 참조하지 말 것. 이 디렉터리의 `dip-tenstorrent-blackhole.yaml` 이 2026-09-20 시점의
-실제 스냅샷이다.
+stale 상태다. 참조하지 말 것. 이 디렉터리의 `dip-tenstorrent-blackhole.yaml` 이 실제 스냅샷이다.

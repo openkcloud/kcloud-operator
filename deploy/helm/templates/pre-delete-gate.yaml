@@ -1,13 +1,8 @@
 {{/*
 pre-delete-gate.yaml: helm uninstall 을 게이트하는 pre-delete Job.
-상세: operator 이미지의 uninstall-gate 서브명령이 가속기를 쓰는 Pod 를 찾는다.
-      하나라도 있으면 Job 이 실패하고 helm 이 삭제 전체를 멈춘다 — 이 시점에는
-      아직 아무 리소스도 지워지지 않았다.
-      없으면 npu.ai CR 을 순서대로 지우고(operator finalizer 가 DaemonSet 을 정리),
-      남은 DaemonSet 을 이름과 라벨로 정리한다. operator Deployment 는 이 Job 이
-      끝난 뒤에 helm 이 지우므로, Job 이 도는 동안 finalizer 처리 주체가 살아 있다.
-      실패한 Job 은 로그 확인을 위해 남긴다 — 삭제 정책이 성공한 Job 만 걷는다.
-생성일: 2026-09-10 | 수정일: 2026-09-10
+상세: uninstall-gate 서브명령이 가속기 사용 중인 Pod 를 찾으면 Job 을 실패시켜 helm 삭제를
+      막는다(아직 아무것도 지워지지 않은 상태). 없으면 CR·DaemonSet 을 정리한다.
+생성일: 2026-09-10 | 수정일: 2026-10-11
 */}}
 {{- if .Values.uninstall.gate.enabled }}
 ---

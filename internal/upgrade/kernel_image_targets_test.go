@@ -1,17 +1,8 @@
 // ============================================================
 // kernel_image_targets_test.go: 커널 이미지 발행 대상 목록과 조립 규약이 같은지 고정한다
-// 상세: deploy/kernel-image-targets.yaml 이 "어느 커널의 이미지를 구울지" 를 선언하고
-//
-//	hack/image-tag-check.sh 가 그 목록의 태그를 레지스트리에 묻는다. 그 목록에서 bash 가
-//	만드는 태그와 operator 가 런타임에 resolveDriverImage 로 조립하는 태그가 어긋나면,
-//	굽는 태그와 당기는 태그가 달라 사전 컴파일 경로가 통째로 헛돈다. 두 자리가 규약을
-//	따로 적고 있으므로 여기서 대조한다 — bash 는 목록·values 에서 문자열을 만들고 Go 는
-//	같은 입력으로 만든 정책을 조립 함수에 넣는다.
-//	빈 목록 가드와 묶음 어긋남 검사도 여기서 고정한다. 두 검사 모두 hack/ 의 bash 안에
-//	있고 그 안의 *_test.sh 는 어떤 러너도 부르지 않는다 — go test 가 부르는 자리에 둔다.
-//
-// 생성일: 2026-10-05 | 수정일: 2026-10-05 (조립의 밑 이미지를 차트 렌더와 대조,
-// --bundle-name 모드 시험 추가)
+// 상세: deploy/kernel-image-targets.yaml(발행 대상)의 태그 규약과 operator 의
+//       resolveDriverImage 조립 결과, 차트 렌더, 묶음 선언이 서로 어긋나지 않는지 대조한다.
+// 생성일: 2026-10-05 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -342,10 +333,9 @@ func renderedDriverImages(t *testing.T) map[string]bool {
 
 // 조립의 밑이 되는 이미지를 차트 렌더와 대조한다. 위 대조는 values.yaml 에서
 // "<registry>/<repository>:<tag>" 를 직접 만드는데, 런타임이 실제로 받는 것은 차트가
-// kcloud-operator.image 헬퍼로 렌더한 문자열이다. 헬퍼가 경로 토막을 더하면(이 차트가
-// kcloud/ 구간으로 겪은 결함과 같은 모양) bash·Go 두 공식은 그대로 일치해 위 시험은 초록인데
-// 굽는 경로와 당기는 경로가 갈린다. 어긋나도 image-tag-check 는 404 로 보고하고, 미발행이
-// 지금의 정답 상태라 그 404 가 구별되지 않는다 — 그래서 여기서 본다.
+// kcloud-operator.image 헬퍼로 렌더한 문자열이다. 헬퍼가 경로 토막을 더하면 bash·Go 두 공식은
+// 그대로 일치해 위 시험은 초록인데 굽는 경로와 당기는 경로가 갈린다. 어긋나도 image-tag-check
+// 는 404 로 보고하고, 미발행이 정답 상태라 그 404 가 구별되지 않는다 — 그래서 여기서 본다.
 func TestKernelImageBaseImageMatchesChartRender(t *testing.T) {
 	var targets kernelImageTargets
 	readYAML(t, "deploy/kernel-image-targets.yaml", &targets)

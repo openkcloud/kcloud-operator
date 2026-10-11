@@ -1,11 +1,9 @@
 // ============================================================
 // hostcmdjob.go: 호스트 PID1 네임스페이스에서 명령 하나를 실행하는 privileged one-shot Job 렌더러
-// 상세: 재부팅 Job(rebootjob.go)과 같은 뼈대이되 명령·이름을 받는다. DeviceReset 작업이
-//
-//	descriptor 의 resetCommand 를 실행할 때 쓴다. backoffLimit 0 — 리셋 명령을 자동으로
-//	다시 돌리지 않는다(장치를 두 번 리셋하지 않는다). 성공·실패는 Job status 로 판정한다.
-//
-// 생성일: 2026-09-30
+// 상세: 재부팅 Job(rebootjob.go)과 같은 뼈대이되 명령·이름을 받는다. DeviceReset 이 descriptor 의
+// resetCommand 를 실행할 때 쓴다. backoffLimit 0 — 리셋 명령을 자동으로 다시 돌리지 않는다.
+// 성공·실패는 Job status 로 판정한다.
+// 생성일: 2026-09-30 | 수정일: 2026-10-11
 // ============================================================
 package driverjob
 

@@ -1,10 +1,8 @@
 // ============================================================
 // verifier_test.go: Verifier 배선 테스트
-// 상세: 노드·NDR·정책을 읽어 판정하고 evidence 를 남기는 이음매를 확인한다. 지문 계산·판정·
-//
-//	TTL 이 각각 맞아도 이음매가 틀리면 evidence 가 거짓을 말하므로 여기서 함께 본다.
-//
-// 생성일: 2026-07-31 | 수정일: 2026-09-21
+// 상세: 노드·NDR·정책을 읽어 판정하고 evidence 를 남기는 이음매를 확인한다. 지문 계산·판정·TTL 이
+// 각각 맞아도 이음매가 틀리면 evidence 가 거짓을 말하므로 여기서 함께 본다.
+// 생성일: 2026-07-31 | 수정일: 2026-10-11
 // ============================================================
 package verification
 
@@ -388,7 +386,7 @@ func TestVerifyThenFreshnessSeam(t *testing.T) {
 
 // TestReportGeometryKeepsDevicesWithoutPCI 는 PCI 를 채우지 않는 벤더(Furiosa detector)의 보고서도
 // "장치가 있다" 로 읽히는지 고정한다. PCI 없는 항목을 버리면 evalNodeDeviceReport 가 멀쩡한
-// 보고서를 "보고서 없음" 으로 판정해 근거가 영영 등급을 못 받는다(2026-08-04 라이브).
+// 보고서를 "보고서 없음" 으로 판정해 근거가 영영 등급을 못 받는다.
 func TestReportGeometryKeepsDevicesWithoutPCI(t *testing.T) {
 	ndr := &v1alpha1.NodeDeviceReport{Status: v1alpha1.NodeDeviceReportStatus{
 		Devices: []v1alpha1.DeviceEntry{{Vendor: "furiosa", Model: "rngd", Count: 1}},
@@ -401,7 +399,7 @@ func TestReportGeometryKeepsDevicesWithoutPCI(t *testing.T) {
 
 // TestReportGeometryScopesToTargets 는 정책이 건드리지 않은 장치를 보고서 대조에서 빼는지 본다.
 // 빼지 않으면 같은 노드의 비대상 GPU(A2)가 정책의 기대 geometry 로 판정돼 절대 통과할 수 없다
-// (2026-08-04 라이브: "report geometry \"\" != expected \"1g.6gb x4\"" 가 A2 에서도 났다).
+// (실제로 "report geometry \"\" != expected \"1g.6gb x4\"" 가 A2 에서도 났다).
 func TestReportGeometryScopesToTargets(t *testing.T) {
 	ndr := &v1alpha1.NodeDeviceReport{Status: v1alpha1.NodeDeviceReportStatus{
 		Devices: []v1alpha1.DeviceEntry{
@@ -542,7 +540,7 @@ func TestVerifyReprobesWhenProbeResourceDiffers(t *testing.T) {
 // TestVerifyReuseWindowDoesNotSlide 는 재사용이 창을 밀지 못하는지 본다: 실제 probe 시각 기준
 // TTL 안의 재사용은 probe 를 다시 안 띄우되(20분 시점) 창 자체는 실제 probe 시각에 고정돼,
 // 실제 probe 시각+40분(TTL 30분 밖)에는 다시 probe 한다. 재사용창을 evidence ExpiresAt 으로
-// 잡으면 매 재조정이 ExpiresAt 을 갱신해 창이 무한히 밀려 실 probe 가 영영 안 돈다(C1 회귀).
+// 잡으면 매 재조정이 ExpiresAt 을 갱신해 창이 무한히 밀려 실 probe 가 영영 안 돈다.
 func TestVerifyReuseWindowDoesNotSlide(t *testing.T) {
 	geom := nvidia.GeometrySummary("1g.6gb", 4)
 	p := &fakeProber{allocated: true}
@@ -574,7 +572,7 @@ func TestVerifyReuseWindowDoesNotSlide(t *testing.T) {
 
 // TestVerifyReuseKeepsProbedAtAndDoesNotGrowMessage 는 재사용이 (a) 직전 probe 시각(ProbedAt)을
 // 바꾸지 않고 이어싣는지, (b) 재사용 표시를 한 번만 붙여 message 가 pass 마다 자라지 않는지 본다.
-// ProbedAt 이 재사용마다 갱신되면 창이 밀리고(C1), message 가 중첩되면 etcd 객체가 무한 성장한다.
+// ProbedAt 이 재사용마다 갱신되면 창이 밀리고, message 가 중첩되면 etcd 객체가 무한 성장한다.
 func TestVerifyReuseKeepsProbedAtAndDoesNotGrowMessage(t *testing.T) {
 	geom := nvidia.GeometrySummary("1g.6gb", 4)
 	p := &fakeProber{allocated: true}
@@ -682,7 +680,7 @@ func TestVerifyWritesWhenChecksChange(t *testing.T) {
 
 func TestVerifyMatchesReportByProductForDescriptorRequests(t *testing.T) {
 	// rngd descriptor 는 vendor="rngd" 로 부르지만 NDR 은 vendor=furiosa/model=rngd 로 보고한다 —
-	// 벤더 키 대조는 빈 보고서가 되고(R-B15), 제품 키 대조는 장치를 찾는다. 벤더 플러그인이 꺼져
+	// 벤더 키 대조는 빈 보고서가 되고, 제품 키 대조는 장치를 찾는다. 벤더 플러그인이 꺼져
 	// validation 이 실패해도 descriptor 요청은 그것을 적용하지 않는다.
 	node, ndr := seedNodeAndReport(t, "", map[string]int64{"furiosa.ai/rngd": 1})
 	ndr.Status.Devices = []v1alpha1.DeviceEntry{{Vendor: "furiosa", Model: "rngd", PCIeAddress: testPCI, DriverVersion: "2026.1.0"}}

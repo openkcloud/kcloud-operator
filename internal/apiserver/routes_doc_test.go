@@ -1,14 +1,7 @@
 // ============================================================
 // routes_doc_test.go: /api 라우트 개수를 server.go 에서 세어 문서 표기와 고정
-// 상세: 라우트가 추가·삭제될 때마다 문서(rest_api.md·status.md·03-objective-mapping.md)를
-//       손으로 맞춰야 하는데, 잊어도 아무 데서도 실패하지 않아 문서가 코드보다 뒤처진 채
-//       방치된다(2026-09-20 시점 코드는 18개인데 문서 여럿은 17로 남아 있었다). server.go 를
-//       정본으로 삼아 상수와 문서 숫자를 대조한다.
-// 범위: rest_api.md 의 openapi.json 설명·mock 모드 문장도 2026-09-21 동기 이후 코드 수와
-//       대조한다(스펙이 다시 갈라지면 tester 의 TestSpecMatchesServerRoutes 가 먼저
-//       실패한다).
-// 범위: ../../../docs 저장소가 없는 환경(CI)에서는 문서 대조를 건너뛰고 코드 상수만 지킨다
-//       (make capmatrix-check 와 같은 로컬 전용 검사).
+// 상세: 라우트 수가 바뀌면 문서(rest_api.md·status.md·03-objective-mapping.md)도 같이
+//       갱신해야 한다는 계약을 지킨다.
 // 생성일: 2026-09-21
 // ============================================================
 
@@ -30,7 +23,8 @@ const wantAPIRoutes = 20
 var apiRoutePattern = regexp.MustCompile(`mux\.HandleFunc\("(GET|POST|DELETE|PUT|PATCH) /api/`)
 
 // TestAPIRouteCount 는 server.go 의 라우트 등록 수를 상수와 대조하고, docs 저장소가 옆에
-// 있으면 문서 표기와도 대조한다.
+// 있으면 문서 표기와도 대조한다. 라우트 개수만 보며, openapi 스펙의 필드 구조가 어긋나는
+// 것은 tester 저장소의 TestSpecMatchesServerRoutes 가 본다.
 func TestAPIRouteCount(t *testing.T) {
 	raw, err := os.ReadFile("server.go")
 	if err != nil {

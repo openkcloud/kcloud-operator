@@ -1,4 +1,4 @@
-<!-- README.md: rngd-1 Furiosa RNGD 사전 컴파일 이미지 같은 버전 왕복 실행·복구 절차 | 생성일: 2026-09-24 -->
+<!-- README.md: rngd-1 Furiosa RNGD 사전 컴파일 이미지 같은 버전 왕복 실행·복구 절차 | 생성일: 2026-09-24 | 수정일: 2026-10-11 -->
 
 # Furiosa RNGD 사전 컴파일 이미지 라이브 왕복 (rngd-1)
 
@@ -17,7 +17,7 @@
 driverLoaded·driverVersion·`furiosa-smi info`)를 확인한 뒤, DIP 를 기준선으로 되돌린다. 왕복은
 승인된 작업이다.
 
-## TT 하네스와 다른 점 (라이브 조사로 확정)
+## TT 하네스와 다른 점
 
 이 노드의 실제 상태 때문에 `test/live/tt-kmd-precompiled` 와 세 가지가 다르다.
 
@@ -87,13 +87,13 @@ DRY_RUN=1 bash "$S" restore
 # 1) 실제 실행 — 순서대로
 bash "$S" preflight
 bash "$S" transition
-# 전이 성공 후, 되돌리기 전에 §3.6 증거를 수집한다:
+# 전이 성공 후, 되돌리기 전에 증거를 수집한다:
 bash test/collect/evidence.sh --node rngd-1.cluster.local --vendor furiosa \
   --command "kubectl --context kubernetes-admin@cluster.local -n kcloud get jobs \
     -l npu.ai/vendor=furiosa,npu.ai/node=rngd-1.cluster.local \
     -o jsonpath={.items[0].spec.template.spec.containers[0].image}" \
   --expected "2026.3.1-rngd-k6.8.0-138-generic-v1" \
-  -o <docs 절대경로>/development/evidence/2026-09-24-furiosa-prebuilt-roundtrip
+  -o <docs 절대경로>/development/evidence/<날짜>-furiosa-prebuilt-roundtrip
 bash "$S" restore
 ```
 

@@ -4,7 +4,7 @@
 //
 //	이 파일의 존재 이유다 — 복제하면 두 경로가 갈라지고, 갈라진 순간 직렬화가 무의미해진다.
 //
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -65,13 +65,10 @@ const acppOwnerKind = "AcceleratorPartitionPolicy"
 // 때문이다. 이 둘은 spec 이 바뀐 순간 달라진다.
 func (r *AcceleratorPartitionPolicyReconciler) verifyRequestFor(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) (verification.Request, bool, error) {
 	var acpp npuv1alpha1.AcceleratorPartitionPolicy
-	// 소유자가 정책이 아닌 작업(예: health 가 만든 재검증)은 **검증 대상이 아니다.**
-	//
-	// 한 번은 "노드 기준으로라도 검증하자" 로 고쳤다가 라이브에서 되돌렸다(2026-08-04): 정책이
-	// 없으면 장치 관측을 띄우는 주체도 없어 DeviceObservation 이 언제나 "관측 전무" 로 실패하고,
-	// 그래서 health 가 만든 재검증은 **항상** RolledBack 으로 끝난다. 그 종점은 복구 실패로 세어져
-	// 세 번이면 멀쩡한 노드가 격리된다. 실제 재검증은 정책 경로(ACPP reconcile)가 하고, 이 작업의
-	// 성공은 "재검증을 요청했다" 까지를 뜻한다.
+	// 소유자가 정책이 아닌 작업(예: health 가 만든 재검증)은 **검증 대상이 아니다.** 정책이 없으면
+	// 장치 관측을 띄우는 주체도 없어 DeviceObservation 이 언제나 "관측 전무" 로 실패하고, health 가
+	// 만든 재검증은 **항상** RolledBack 으로 끝나 세 번이면 멀쩡한 노드가 격리된다. 실제 재검증은
+	// 정책 경로(ACPP reconcile)가 하고, 이 작업의 성공은 "재검증을 요청했다" 까지를 뜻한다.
 	if op.Spec.Owner.Kind != "" && op.Spec.Owner.Kind != acppOwnerKind {
 		return verification.Request{}, false, nil
 	}
@@ -147,15 +144,11 @@ func (r *AcceleratorPartitionPolicyReconciler) observeDevicesForNode(ctx context
 	return devs, nil
 }
 
-// publishMigObservationTo 는 관측 결과를 보고서에 기록한다. 관측에 성공한 PCI 항목만,
-// 값이 실제로 바뀔 때만 쓴다(불필요한 write 는 watch 이벤트를 만들어 핫루프가 된다).
-//
-// 남의 객체(detector 소유)에 쓰는 것이라 규칙을 좁게 둔다: **관측에 성공한 PCI 항목만** 쓰고,
-// 값이 이미 같으면 쓰지 않는다(불필요한 write 는 watch 이벤트를 만들고 그 이벤트가 같은 객체를
-// 재큐잉해 핫루프가 된다). detector 쪽은 자기가 관측 못 했을 때 이 값을 덮지 않도록 되어 있다.
-//
-// 자유 함수로 두는 이유는 호출자가 둘(정책 경로·정책 무관 관측 경로)이기 때문이다 — 메서드로
-// 각자 구현하면 규칙이 갈라지고, 갈라진 순간 한쪽만 고치고 고쳤다고 믿게 된다.
+// publishMigObservationTo 는 관측 결과를 보고서에 기록한다. 남의 객체(detector 소유)에 쓰는
+// 것이라 규칙을 좁게 둔다: 관측에 성공한 PCI 항목만 쓰고, 값이 이미 같으면 쓰지 않는다(불필요한
+// write 는 watch 이벤트를 만들고 그 이벤트가 같은 객체를 재큐잉해 핫루프가 된다). detector 쪽은
+// 자기가 관측 못 했을 때 이 값을 덮지 않는다. 자유 함수로 두는 이유는 호출자가 둘(정책 경로·
+// 정책 무관 관측 경로)이기 때문이다 — 메서드로 각자 구현하면 규칙이 갈라진다.
 func publishMigObservationTo(ctx context.Context, c client.Client,
 	node string, obs []nvidia.Observation) error {
 	byPCI := make(map[string]nvidia.Observation, len(obs))
@@ -194,7 +187,7 @@ func publishMigObservationTo(ctx context.Context, c client.Client,
 		return nil
 	}
 	// base 이후로 안 바뀐 필드(예: detector 가 쓴 빈 consumers 목록)는 patch 에 실리지 않는다 —
-	// 전체 교체(Update)였다면 그 "쥔 컨테이너 없음" 사실이 지워져 "모름"으로 퇴행했다(images 리뷰 m-4).
+	// 전체 교체(Update)라면 그 "쥔 컨테이너 없음" 사실이 지워져 "모름"으로 퇴행한다.
 	return c.Status().Patch(ctx, &ndr, client.MergeFrom(base))
 }
 
@@ -279,16 +272,11 @@ func (p *acppParticipant) Apply(ctx context.Context, op *npuv1alpha1.Accelerator
 	return operation.Outcome{Message: "in progress: " + ts.Phase, RequeueAfter: participantRequeue}, nil
 }
 
-// Rollback 은 기존 경로가 이미 수행하는 보상을 한 번 더 돌려 **종착을 확인**한다.
-// 새 보상 로직을 만들지 않는다 — runTarget 이 apply/verify 실패 시 backend.Rollback 을 이미
-// 돌리고 복원 종점으로 착지하기 때문이다. 이 계층이 더하는 것은 그 종착을 사건으로 옮기는 것과,
-// RNGD 경로의 애매한 종착(아래) 을 조건까지 읽어 정확히 가르는 것이다.
-//
-// RNGD 경로(runTarget 의 furiosa 분기)는 복원 성공·실패를 **똑같이 `ACPPPhaseFailed`** 로
-// 남긴다 — 실제 성패는 `ACPPCondRolledBack` condition 하나에만 있다(Status=True 면 복원 성공,
-// False 면 복원 자체가 실패했다는 뜻). phase 만 보고 판정하면 복원이 실패한 경우도
-// `EventCompensated` 로 잘못 보고해, 실제로는 되돌아가지 않은 장치를 되돌아간 것으로 커밋한다.
-// NVIDIA 공유 경로는 이미 phase 만으로 구분된다(Restored=성공, RollbackFailed=실패)이므로 이
+// Rollback 은 기존 경로가 이미 수행하는 보상을 한 번 더 돌려 **종착을 확인**한다. 새 보상
+// 로직을 만들지 않는다 — runTarget 이 apply/verify 실패 시 backend.Rollback 을 이미 돌리고
+// 복원 종점으로 착지하기 때문이다. 이 계층이 더하는 것은 그 종착을 사건으로 옮기는 것과, RNGD
+// 경로의 애매한 종착(아래 ACPPPhaseFailed 분기 참고)을 조건까지 읽어 정확히 가르는 것이다.
+// NVIDIA 공유 경로는 이미 phase 만으로 구분되므로(Restored=성공, RollbackFailed=실패) 이
 // 처리를 거치지 않는다.
 func (p *acppParticipant) Rollback(ctx context.Context, op *npuv1alpha1.AcceleratorOperation) (operation.Outcome, error) {
 	ts, acpp, err := p.runOnce(ctx, op)

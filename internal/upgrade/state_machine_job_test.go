@@ -1,11 +1,8 @@
 // ============================================================
 // state_machine_job_test.go: Job 모드 상태 핸들러 단위 테스트
-// 상세: fake client 기반. handleIdle 초기설치 분기, handleUpgradingJob(생성),
-//       handleValidatingJob(Job Complete+NDR→Uncordoning / 미완료→requeue /
-//       실패→Rollback), handleRollbackJob(재-Job / 이전버전 부재→Failed),
-//       daemonset 무영향(isJobMode) 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11 (kcloud-operator-upgrade 접두 제외 고정 픽스처 추가; 계획서 항목 토큰 제거;
-// 가드 시험 주석에 현재 쓰기 경로 이름 보강; manager 를 과거 이름이라 한 주석 정정)
+// 상세: fake client 기반. handleIdle 초기설치, handleUpgradingJob/handleValidatingJob/
+//       handleRollbackJob 전이, daemonset 무영향(isJobMode)을 검증한다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 
 package upgrade
@@ -166,7 +163,7 @@ func TestHandleIdleJob_DriverNotLoaded_TriggersReinstall(t *testing.T) {
 }
 
 // TrackOnly 정책은 driverLoaded=false self-heal 엣지에서도 install Job 을 트리거하지
-// 않아야 한다(#15 TT 버전관리 편입 — DriverSpec.TrackOnly 계약: 설치 경로 없음).
+// 않아야 한다 — DriverSpec.TrackOnly 계약: 설치 경로 없음.
 func TestHandleIdleJob_TrackOnly_NeverTriggersInstall(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, verNew, verNew)
 	dip := makeJobDIP(verNew, imgNew, false, true)
@@ -269,7 +266,7 @@ func TestHandleIdleDaemonset_NoInitialInstallBranch(t *testing.T) {
 
 func TestHandleUpgradingJob_CreatesJob(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verNew)
-	// handleIdle 이 Upgrading 진입 전에 PreviousVersion 을 세팅한다(Q2 캡처의 소스).
+	// handleIdle 이 Upgrading 진입 전에 PreviousVersion 을 세팅한다(캡처의 소스).
 	dus.Status.PreviousVersion = verOld
 	dip := makeJobDIP(verNew, imgNew, true, true)
 	sm := newUpgradeSMWithRecorder(dus, dip)
@@ -292,7 +289,7 @@ func TestHandleUpgradingJob_CreatesJob(t *testing.T) {
 	if jobContainerImage(&job) != imgNew {
 		t.Errorf("job image=%q, want %q", jobContainerImage(&job), imgNew)
 	}
-	// Q2: rollback 대상 이미지 캡처 (PreviousVersion=verOld + variant -v16)
+	// rollback 대상 이미지 캡처 (PreviousVersion=verOld + variant -v16)
 	if dus.Status.PreviousImage != imgOld {
 		t.Errorf("PreviousImage 캡처 실패: got %q, want %q", dus.Status.PreviousImage, imgOld)
 	}
@@ -429,7 +426,7 @@ func TestHandleRollbackJob_CreatesRollbackJob(t *testing.T) {
 
 	// 정책은 allowDowngrade 를 켜지 않았다(makeJobDIP 는 이 필드를 건드리지 않는다). 그래도
 	// 롤백 Job 은 다운그레이드를 허용받아야 한다 — 아니면 installer 자신의 가드가 설치를
-	// 거부해 롤백이 무동작이 된다(2026-08-10 라이브).
+	// 거부해 롤백이 무동작이 된다.
 	//
 	// **이 단언이 호출부를 지킨다.** 렌더러 쪽 시험(driverjob/rollbackjob_test.go)만으로는
 	// 이 자리를 RenderInstallJob 으로 되돌려도 아무도 실패하지 않는다.
@@ -445,16 +442,12 @@ func TestHandleRollbackJob_CreatesRollbackJob(t *testing.T) {
 }
 
 // ── install Job 신원(이미지+목표 버전) ────────────
-//
-// apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을 설치한다 — 목표 버전은 이미지
-// 태그가 아니라 DRIVER_VERSION env 로 들어간다. 그래서 이미지만으로 Job 을 식별하면 지난
-// 사이클이 남긴 완료된 Job 을 이번 사이클의 Job 으로 착각한다.
-// 라이브 실측(2026-08-07 `.91` k8s-worker1): 595.84 사이클이 끝난 12초 뒤 580.173.02
-// 사이클이 시작했고, 앞 사이클의 완료된 Job 이 TTL 안에 살아 있어 재사용됐다. 580 설치는
-// 한 번도 생성되지 않은 채 validator 가 앞 Job 의 결과(595.84)를 10분간 채점했고 검증
-// 예산 만료 → 불필요한 rollback → 불필요한 재부팅으로 이어졌다.
+// apt/script 인스톨러는 같은 이미지가 모든 드라이버 버전을 설치한다 — 목표 버전은 이미지 태그가
+// 아니라 DRIVER_VERSION env 로 들어간다. 그래서 이미지만으로 Job 을 식별하면 지난 사이클이 남긴
+// 완료된 Job 을 이번 사이클의 Job 으로 착각해, 새 설치 없이 앞 Job 의 결과로 검증이 끝나고
+// 검증 예산 만료→불필요한 rollback→불필요한 재부팅으로 이어진다.
 
-// makeAptJobDIP 는 apt 인스톨러 정책이다 — 모든 버전이 같은 이미지를 쓴다(라이브 구성).
+// makeAptJobDIP 는 apt 인스톨러 정책이다 — 모든 버전이 같은 이미지를 쓴다.
 func makeAptJobDIP(version, image string) *v1alpha1.DriverInstallPolicy {
 	dip := makeJobDIP(version, image, true, true)
 	dip.Spec.Driver.Installer = v1alpha1.DriverInstallerAPT
@@ -582,7 +575,7 @@ func TestReconstructPrevImage(t *testing.T) {
 
 // TestRestartStaleDevicePluginPods 는 install Job 완료 시각 이전에 기동한 device-plugin
 // Pod 만 삭제(재스캔 유도)하고, 완료 이후 기동 Pod 와 비-plugin Pod 는 보존함을 고정한다.
-// device-plugin 재스캔 레이스(업그레이드 후 allocatable=0) 회귀 방지(#26).
+// device-plugin 재스캔 레이스(업그레이드 후 allocatable=0) 회귀를 방지한다.
 func TestRestartStaleDevicePluginPods(t *testing.T) {
 	since := metav1.NewTime(metav1.Now().Time)
 	mkPod := func(name string, isDP bool, offset time.Duration) *corev1.Pod {
@@ -619,9 +612,8 @@ func TestRestartStaleDevicePluginPods(t *testing.T) {
 }
 
 // TestHandleRollbackJob_AptInstallerKeepsImage 는 apt 인스톨러에서 rollback Job 이 정책 이미지를
-// 그대로 쓰는 것을 고정한다. 버전으로 태그를 갈아 끼우면 레지스트리에 없는 이미지가 되고
-// (실측: nvidia-driver-ds:580.173.02-v179 not found) Job 이 ImagePullBackOff 로 앉아
-// 노드가 cordon 상태로 고착된다.
+// 그대로 쓰는 것을 고정한다. 버전으로 태그를 갈아 끼우면 레지스트리에 없는 이미지가 되어
+// Job 이 ImagePullBackOff 로 앉고 노드가 cordon 상태로 고착된다.
 func TestHandleRollbackJob_AptInstallerKeepsImage(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verOld, verNew)
 	dus.Status.PreviousVersion = verOld
@@ -646,8 +638,8 @@ func TestHandleRollbackJob_AptInstallerKeepsImage(t *testing.T) {
 }
 
 // TestHandleValidatingJob_RunningJobDoesNotConsumeBudget 는 install Job 이 아직 돌고 있는 동안
-// 검증 예산이 만료되어 롤백으로 밀려나지 않는 것을 고정한다. 라이브 실측: apt 로 313MB 를
-// 받는 도중 10분 예산이 끝나 설치가 중단되고, 이어진 롤백이 없는 이미지를 집어 노드가 굳었다.
+// 검증 예산이 만료되어 롤백으로 밀려나지 않는 것을 고정한다. 진행 중인 설치를 예산 만료로
+// 중단시키면, 이어진 롤백이 없는 이미지를 집어 노드가 굳는 결과로 이어진다.
 func TestHandleValidatingJob_RunningJobDoesNotConsumeBudget(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, verOld, verNew)
 	dus.Status.LastTransitionTime = metav1.NewTime(time.Now().Add(-30 * time.Minute))
@@ -714,10 +706,9 @@ func TestHandleValidatingJob_TimeoutFailedMessageHasRecovery(t *testing.T) {
 	}
 }
 
-// detector 가 PCI 식별자로 제품명을 싣기 시작하면 장치 쪽 model 만 "generic" 에서 "a30" 으로
-// 바뀐다 — DriverUpgradeState.spec.model 은 생성 시점 값이라 갱신되지 않는다. 두 값이 갈린
-// 조합이 기존 픽스처에 없어서(양쪽 다 "generic") 이 불일치가 시험에 잡히지 않았고, 라이브에서
-// 재부팅 게이트와 자가복구 게이트가 모든 장치를 걸러 조용히 죽었다. 양방향을 다 고정한다.
+// detector 가 PCI 식별자로 제품명을 실으면 장치 쪽 model 만 "generic" 에서 "a30" 으로 구체화된다
+// — DriverUpgradeState.spec.model 은 생성 시점 값이라 갱신되지 않는다. 두 값이 갈리는 조합을
+// 놓치면 재부팅 게이트와 자가복구 게이트가 모든 장치를 걸러 조용히 멈춘다. 양방향을 다 고정한다.
 func TestDeviceModelMatchesTreatsGenericAsWildcard(t *testing.T) {
 	for _, tc := range []struct {
 		name, deviceModel, specModel string
@@ -730,7 +721,7 @@ func TestDeviceModelMatchesTreatsGenericAsWildcard(t *testing.T) {
 		{"둘 다 판정됐고 다르다", "a2", "a30", false},
 		{"spec 이 비면 벤더 전체", "a30", "", true},
 		{"대소문자 무시", "A30", "a30", true},
-		// 표준 PCI DB 계층이 붙으면 장치 이름만 구체화된다(실측 10de:20f1 → a100-pcie-40gb).
+		// 표준 PCI DB 계층이 붙으면 장치 이름만 구체화된다(10de:20f1 → a100-pcie-40gb).
 		// 제품군 이름으로 쓴 spec 이 안 걸리면 정책이 nil 이 되어 아무 일도 안 일어난다.
 		{"장치가 구체화됨 — spec 은 제품군", "a100-pcie-40gb", "a100", true},
 		{"기록이 구체적 — 장치가 제품군", "a100", "a100-pcie-40gb", true},
@@ -1009,8 +1000,6 @@ func TestHandleIdleRefreshesResolvedImage(t *testing.T) {
 // 이미지가 버전에 종속됨을 고정한다. 커널 이미지(태그 <version>-k<kernel>-vN)는 태그에 박힌
 // 버전 모듈만 담아 DRIVER_VERSION 으로 다른 버전을 설치하지 못한다. 되돌릴 버전이 다르면
 // 재구성 불가("")로 돌려 호출부가 기본 이미지로 되돌아가게 하고, 같으면 그대로 쓴다.
-// 라이브 회귀: 580.126.09-k5.15.0-171-generic-v1 이미지 + DRIVER_VERSION 580.178.04 로
-// 설치기 정합성 가드(동봉 모듈≠DRIVER_VERSION)가 거부하고 노드가 CrashLoopBackOff 로 굳었다.
 func TestReconstructPrevImage_AptKernelImageVersionLock(t *testing.T) {
 	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16" // 박힌 버전 = 590.48.01
 
@@ -1029,7 +1018,7 @@ func TestReconstructPrevImage_AptKernelImageVersionLock(t *testing.T) {
 // TestHandleUpgradingJob_AptKernelImageNotCaptured 는 apt 인스톨러에서 preflight 이 고른 사전
 // 컴파일 커널 이미지가 이전 버전 이미지(PreviousImage)로 캡처되지 않음을 고정한다. 커널 이미지는
 // 새 버전 모듈만 담아 이전 버전 설치에 쓸 수 없다 — 캡처되면 되돌리기 Job 이 그 이미지에 이전
-// 버전 DRIVER_VERSION 을 실어 설치기가 거부하고 노드가 굳는다(라이브 회귀). 캡처는 비워 두고
+// 버전 DRIVER_VERSION 을 실어 설치기가 거부하고 노드가 굳는다. 캡처는 비워 두고
 // 되돌리기는 기본 이미지 재구성 경로로 가야 한다. 설치(forward) Job 은 커널 이미지를 그대로 쓴다.
 func TestHandleUpgradingJob_AptKernelImageNotCaptured(t *testing.T) {
 	const kernelImg = "reg/nv:590.48.01-k5.15.0-190-generic-v16" // 박힌 버전 = verNew
@@ -1210,10 +1199,10 @@ func TestAssembledKernelImagePassesExistingGuards(t *testing.T) {
 
 // TestCaptureJobPreviousImage_UsesPolicyImageNotResolved 는 롤백 대상 이미지를 커널 이미지가 아니라
 // 정책의 설치 이미지에서 만드는지 본다. 커널 이미지의 빌드 개정과 일반 설치 이미지의 개정은 서로
-// 다른 수이므로, 커널 이미지에서 접미사를 떼면 레지스트리에 없는 태그가 나오고 rollback Job 이
-// ImagePullBackOff 로 앉아 노드가 cordon 에 고착된다(reconstructPrevImage 주석이 라이브 실측으로
-// 기록한 실패). 조립 경로와 맵 경로 둘 다 본다 — 맵 경로는 사이트가 개정을 설치 이미지와 같게
-// 적으면 두 입력의 결과가 우연히 같아져 결함이 가려진다. 그 우연까지 케이스로 적어 둔다.
+// 다른 수이므로, 커널 이미지에서 접미사를 떼면 레지스트리에 없는 태그가 나와 rollback Job 이
+// ImagePullBackOff 로 앉고 노드가 cordon 에 고착된다. 조립 경로와 맵 경로 둘 다 본다 — 맵 경로는
+// 사이트가 개정을 설치 이미지와 같게 적으면 두 입력의 결과가 우연히 같아져 결함이 가려진다.
+// 그 우연까지 케이스로 적어 둔다.
 func TestCaptureJobPreviousImage_UsesPolicyImageNotResolved(t *testing.T) {
 	const kernel = "5.15.0-190-generic"
 	// tenstorrent 차트 기본값. imageVersionBaked 라 롤백은 이전 버전 태그 재구성 경로다.
@@ -1326,12 +1315,11 @@ func TestResolveDriverImage_NoKernelImagesStaysSilent(t *testing.T) {
 }
 
 // TestForeignSpecManagers 는 제3 관리자가 spec 필드를 쥔 경우만 골라내는지 본다. 제외 대상 셋:
-// helm 자신(라이브 .91 은 Apply, 세방향 병합 경로는 Update — 둘 다 이름으로 제외), 제품 내부
-// 관리자(CLI `kubectl-npu`, operator 바이너리 `manager` — 업그레이드 쓰기 경로는 이제
-// `kcloud-operator-upgrade` 이고, 두 이름은 라이브 managedFields 에 아직 남아 제외 목록에
-// 둔다), metadata 만 쥔 관리자(kubectl-label).
-// 반대로 SSA 로 소유하는 ArgoCD·Flux·`helm --server-side` 는 Operation=Apply 라, operation 한정이
-// 남아 있으면 전부 빠진다 — 다음 helm upgrade 를 실제로 멈추는 쪽이 이들이다.
+// helm 자신(Apply·Update 둘 다 이름으로 제외), 제품 내부 관리자(CLI `kubectl-npu`, operator
+// 바이너리 `manager`, 업그레이드 쓰기 경로 `kcloud-operator-upgrade`), metadata 만 쥔 관리자
+// (kubectl-label). `kubectl-npu`·`manager` 는 FieldManager 명시 전 User-Agent 로 유도된 과거
+// 이름이라 라이브 managedFields 에서 사라지면 제외 목록에서도 빼야 한다. 반대로 SSA 로 소유하는
+// ArgoCD·Flux·`helm --server-side` 는 Operation=Apply 라, operation 한정이 남으면 전부 빠진다.
 func TestForeignSpecManagers(t *testing.T) {
 	const specFields = `{"f:spec":{"f:driver":{"f:kernelImages":{}}}}`
 	mf := []metav1.ManagedFieldsEntry{

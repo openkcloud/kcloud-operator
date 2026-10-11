@@ -1,11 +1,9 @@
 // ============================================================
 // operation_driver_delegate_test.go: 드라이버 위임 모드 envtest
-// 상세: 스위치가 꺼진 기본 상태의 회귀 0, 켰을 때의 작업 생성, 그리고 같은 노드의 파티션 작업과
-//
-//	동시에 적용되지 않는지를 본다(이 단계의 완료 기준 첫 줄). 직렬화를 이루는 두 기제(자원
-//	키 충돌 판정, 노드 Lease)를 각각 격리해서도 확인한다.
-//
-// 생성일: 2026-08-01
+// 상세: 스위치가 꺼진 기본 상태의 회귀 0, 켰을 때의 작업 생성, 그리고 같은 노드의 파티션
+// 작업과 동시에 적용되지 않는지를 본다. 직렬화를 이루는 두 기제(자원 키 충돌 판정, 노드
+// Lease)를 각각 격리해서도 확인한다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -102,12 +100,9 @@ func cleanupNodeLease(node string) {
 }
 
 var _ = Describe("driver delegate mode", func() {
-	// 증명: 스위치가 꺼져 있으면 드라이버 작업이 만들어지지 않는다(기본 동작 보존).
-	//
-	// 브리핑 원문은 DUS 를 시드만 하고 아무 reconcile 도 부르지 않아, delegateModeEnabled 를
-	// 강제로 true 로 바꿔도 통과했다(실측 확인) — 이 위임 분기는 Reconcile 안에만 있으므로
-	// 실제로 Reconcile 을 태우지 않으면 스위치 자체를 시험한 게 아니다. 전체 Reconcile 을 불러
-	// 진짜 분기를 태운다.
+	// 증명: 스위치가 꺼져 있으면 드라이버 작업이 만들어지지 않는다(기본 동작 보존). 이 위임
+	// 분기는 Reconcile 안에만 있으므로, 상태만 시드하고 Reconcile 을 부르지 않으면 스위치
+	// 자체를 시험한 게 아니다 — 전체 Reconcile 을 불러 진짜 분기를 태운다.
 	// 깨는 뮤테이션: delegateModeEnabled 를 기본 true 로 바꾸면 작업이 생겨 실패한다.
 	It("creates no operation while the switch is off", func() {
 		dip := nvidiaDriverPolicy("drv-off-dip")
@@ -165,8 +160,8 @@ var _ = Describe("driver delegate mode", func() {
 		})
 	})
 
-	// 증명: 같은 노드의 드라이버 작업과 파티션 작업이 동시에 적용 단계에 들어가지 않는다.
-	//       이 단계 완료 기준의 첫 줄이며, 충돌표가 가장 위험하다고 지목한 쌍이다.
+	// 증명: 같은 노드의 드라이버 작업과 파티션 작업이 동시에 적용 단계에 들어가지 않는다 —
+	// 자원 키 충돌 판정에서 가장 위험한 쌍이다.
 	// 깨는 뮤테이션: ResourceKeysForDriver 에서 노드 잠금 키를 빼면 둘 다 적용에 들어가 실패한다.
 	It("serializes a driver upgrade against a partition change on the same node", func() {
 		node := "drv-conflict-node"

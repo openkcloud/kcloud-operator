@@ -1,13 +1,8 @@
 # ============================================================
 # pod-smoke-desc.yaml: descriptor 경로 확정 스모크 — 컴파일 실패 원인 덤프 + 사전 컴파일 적재·추론
-# 상세: descriptor-smoke.yaml(deviceNodes [/dev/rbln0, /dev/rsd0])이 광고하는 rebellions/atom
-#       으로 CDI 라이브러리·도구를 그대로 갖춘 채 compile_from_torch 를 시도한다. 실패하면
-#       "/debug_*" 최상위 디렉터리를 찾아 파일 목록·텍스트 파일 마지막 60줄을 DEBUGDUMP| 로
-#       남긴다(판정 Q-11). 컴파일 성공·실패와 무관하게 node5 사전 컴파일 모델
-#       (/home/kcloud/rbln-ts-cache/linear64.rbln, hostPath /models)을 RBLNCompiledModel 로
-#       적재해 create_runtime → 추론 1회까지 확정한다. 기존 pod-smoke-desc 실행 결과(추가 4)를
-#       덮어쓰는 이 라운드 전용 변경이다.
-# 생성일: 2026-09-29
+# 상세: descriptor-smoke.yaml 이 광고하는 자원으로 compile_from_torch 를 시도해 실패 시
+#       /debug_* 덤프를 남기고, 성공·실패와 무관하게 사전 컴파일 모델로 추론까지 확정한다.
+# 생성일: 2026-09-29 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: v1
 kind: Pod

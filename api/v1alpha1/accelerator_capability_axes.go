@@ -2,7 +2,7 @@
 // accelerator_capability_axes.go: 가속기 capability 3축 타입 (sharing / isolation / allocationAPI)
 // 상세: R&D v1.0 §10.1 AcceleratorCapability 의 축을 별도 CRD 없이 ACPP status 에 흡수한다.
 // 정직성 원칙(§19.3) — 미실측은 Supported=false + Verification=Required 로 남긴다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 

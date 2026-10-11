@@ -46,14 +46,10 @@ fi
 BDF="$(awk '{print $1; exit}' "$OUT_DIR/tt-bdf.txt")"
 
 # 판정 줄 — 파일만 읽는다(라이브 접속 없음). 값을 못 찾으면 unknown, 지어내지 않는다.
-#
-# sel_target: SEL Critical Interrupt 레코드의 Event Data(RAW) 는 이 BMC 에서 3바이트
-#   'a1ae00'(=바이트1 0xA1, 바이트2 0xAE, 바이트3 0x00). IPMI 규격상 바이트1 0xA1 은
-#   상위 두 니블이 '바이트2·3 은 OEM 코드'(비트[7:4]=1010), 하위 니블이 오프셋 1 이다.
-#   이 BMC(Sensor ID 'PCIe Fatal Error', Entity 49.1 PCI Express Bus)는 바이트2 를
-#   PCI 버스 번호로 싣는다 — 그 값(0xae)을 tenstorrent 장치 버스와 루트 포트 버스에
-#   대조한다. 해석은 BMC 벤더 의존이므로 조사 문서에 가정으로 적는다. 문자열 설명
-#   ('root' 나 BDF 문자열)은 이 레코드 원문에 없어 옛 grep 은 맞지 않았다.
+# sel_target: SEL Critical Interrupt 레코드의 Event Data(RAW) 3바이트 중 바이트2 를 이
+#   BMC(Sensor ID 'PCIe Fatal Error', Entity 49.1 PCI Express Bus)가 PCI 버스 번호로
+#   싣는다 — 그 값을 tenstorrent 장치 버스·루트 포트 버스와 대조한다. 해석은 BMC 벤더
+#   의존이다. 레코드 원문에 'root'·BDF 같은 문자열 설명이 없어 바이트 값으로 판정한다.
 sel_target=unknown
 raw="$(grep -m1 -iE 'Event Data \(RAW\)' "$OUT_DIR/sel-detail.txt" 2>/dev/null | grep -oiE '[0-9a-f]{6}' | head -1 | tr 'A-F' 'a-f')"
 sel_byte2="$(printf '%s' "$raw" | cut -c3-4)"
@@ -69,8 +65,8 @@ fi
 
 # aer_owner: _OSC 협상 결과. 'OS now controls [...]' 목록에 AER 가 들면 os,
 #   'platform does not support [...AER...]' 이거나 'APEI firmware first mode' 면 firmware.
-#   (브리프 원본 grep 'firmware-first'(하이픈)·'OS now controls.*AER' 는 이 노드 원문
-#    'firmware first'(공백)·AER 부재 목록과 맞지 않아 고쳤다.)
+#   정규식은 공백 형태 'firmware first' 를 쓴다 — 이 노드 dmesg 원문이 하이픈 없이
+#   그렇게 찍힌다.
 aer_owner=unknown
 grep -qiE 'OS now controls \[[^]]*AER' "$OUT_DIR/dmesg-aer.txt" 2>/dev/null && aer_owner=os
 grep -qiE '[Ff]irmware.first|platform does not support \[[^]]*AER' "$OUT_DIR/dmesg-aer.txt" 2>/dev/null && aer_owner=firmware

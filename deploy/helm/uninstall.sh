@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # uninstall.sh: kcloud-operator 수동 제거 래퍼 (게이트를 끈 환경용)
-# 상세: 현재 차트는 `helm uninstall` 한 번이면 됩니다. pre-delete hook Job
-#       (uninstall-gate)이 사용 중인 Pod 를 확인하고 CR·DaemonSet 을 정리하며,
-#       post-delete Job 이 npu.ai CRD 를 지웁니다. 절차는 README.md 의 "Uninstalling"
-#       절에 있습니다.
-#       이 스크립트는 `uninstall.gate.enabled=false` 로 게이트를 끈 환경, 또는 hook Job
-#       이 스케줄되지 않아 손으로 같은 순서를 밟아야 하는 경우의 대체 경로입니다.
-#       ⚠ 이 스크립트에는 사용 중 검사가 없습니다. 가속기를 쓰는 Pod 가 있어도 지웁니다.
-#       순서: CR 삭제(finalizer 처리) → orphan driver DS 정리
-#             → helm uninstall → 고착 CR finalizer strip → (선택) CRD 삭제
-#       레거시(npu-op-*) + 신규(kcloud-*) 양쪽 리소스를 모두 처리합니다.
-# 사용법:
-#   bash uninstall.sh              # 일반 제거 (CRD 유지)
-#   bash uninstall.sh --purge-crds # CRD 까지 완전 삭제
-# 생성일: 2026-06-02 | 수정일: 2026-09-10
+# 상세: 게이트(uninstall.gate.enabled)를 끈 환경이나 pre/post-delete hook Job 이
+#       스케줄되지 않아 같은 절차를 손으로 밟아야 하는 경우의 대체 경로다(정상 경로는
+#       `helm uninstall` 한 번, README.md "Uninstalling" 참고). 순서는 본문 [1/4]~[4/4]
+#       주석대로다. 레거시(npu-op-*)·신규(kcloud-*) 리소스를 모두 처리한다.
+# 생성일: 2026-06-02 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -40,6 +31,7 @@ echo "========================================================"
 echo " kcloud-operator 수동 제거: RELEASE=${RELEASE}  NS=${NAMESPACE}"
 echo "========================================================"
 
+# ⚠ 사용 중 검사 없음 — 가속기를 쓰는 Pod 가 있어도 그대로 지운다.
 # ── [1/4] CR 먼저 삭제 ───────────────────────────────────────
 # ⚠️ 순서 중요: operator 가 finalizer(npu.ai/cleanup)를 처리해야
 #   device-plugin/detector DS 가 정리됩니다.

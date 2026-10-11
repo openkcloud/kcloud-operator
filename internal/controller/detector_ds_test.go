@@ -1,14 +1,10 @@
 // ============================================================
-// detector_ds_test.go: node-manager DaemonSet 에 PodResources 읽기 사이드카가
-// 붙는지 고정한다.
-// 상세: kubelet pod-resources 소켓은 root 소유(drwxr-x--- root:root, 소켓은
-//
-//	srwxr-xr-x root:root)라 detector(비특권 nonroot)가 직접 읽지 못한다(2026-10-05
-//	노드 측정). 분리한 사이드카 컨테이너가 uid 0 으로 소켓을 읽어 메모리 emptyDir 에
-//	쓰고, detector 는 그 emptyDir 만 읽기 전용으로 받는다. detector 본체의 비특권
-//	보안 컨텍스트와 호스트 소켓 비접근을 여기서 함께 고정한다.
-//
-// 생성일: 2026-10-06
+// detector_ds_test.go: node-manager DaemonSet 에 PodResources 읽기 사이드카가 붙는지 고정
+// 상세: kubelet pod-resources 소켓은 root 소유(디렉터리 drwxr-x---, 소켓 srwxr-xr-x 모두
+// root:root)라 detector(비특권 nonroot)가 직접 읽지 못한다. 분리한 사이드카 컨테이너가 uid 0
+// 으로 소켓을 읽어 메모리 emptyDir 에 쓰고, detector 는 그 emptyDir 만 읽기 전용으로 받는다.
+// detector 본체의 비특권 보안 컨텍스트와 호스트 소켓 비접근도 함께 고정한다.
+// 생성일: 2026-10-06 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -58,7 +54,7 @@ func TestRenderDetectorDS_PodResourcesSidecar(t *testing.T) {
 		t.Fatalf("사이드카는 같은 이미지에 /podresources-writer 실행·--podresources-writer 인자: image=%q command=%v args=%v",
 			sidecar.Image, sidecar.Command, sidecar.Args)
 	}
-	// writer 모드는 NODE_NAME 을 읽지 않는다 — env 를 아예 주지 않는다(images 리뷰 m-2).
+	// writer 모드는 NODE_NAME 을 읽지 않는다 — env 를 아예 주지 않는다.
 	if len(sidecar.Env) != 0 {
 		t.Fatalf("사이드카는 env 가 없어야 한다: %+v", sidecar.Env)
 	}

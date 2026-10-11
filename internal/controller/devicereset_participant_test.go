@@ -1,7 +1,7 @@
 // ============================================================
 // devicereset_participant_test.go: DeviceReset participant 의 게이트·Job 생성·결과 판정 시험
 // 상세: fake client 로 descriptor 부재·등급 Unsupported·파드 점유 거절과 Job 생성→성공 보고를 본다.
-// 생성일: 2026-09-30
+// 생성일: 2026-09-30 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -95,7 +95,7 @@ func deviceResetClient(objs ...client.Object) client.Client {
 }
 
 func TestDeviceResetParticipant_RefusesWithoutDescriptorCommand(t *testing.T) {
-	// 노드 관측은 있으나 그 제품의 descriptor 가 리셋 명령을 선언하지 않았다.
+	// 노드 관측은 있으나 그 제품의 descriptor 에 리셋 명령이 없다.
 	c := deviceResetClient(resetNDR("n1", nvidiaCard("a30")))
 	p := NewDeviceResetParticipant(c, "host-exec:test")
 	out, err := p.Apply(context.Background(), deviceResetOp("op1", "n1", "nvidia"))

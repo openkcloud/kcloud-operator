@@ -3,7 +3,7 @@
 // 상세: nodeExclusion 판정(control-plane/master → 배제, 벤더 excludeNodeSelector →
 //       policy 배제, control-plane 이 policy 보다 강함)과 reconcileNodeExclusionLabels
 //       의 부여·회수(배제가 풀리면 라벨을 지운다)를 확인한다.
-// 생성일: 2026-08-12 | 수정일: 2026-08-12
+// 생성일: 2026-08-12 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -151,9 +151,9 @@ func requirementExcludes(reqs []corev1.NodeSelectorRequirement, nodeLabels map[s
 }
 
 // TestExclusionConditions_LabelAndRenderPathsAgree 는 조건이 둘이고 노드가 하나만 맞을 때
-// 라벨 경로와 렌더 경로가 같은 판정을 내는지 본다. 셀렉터를 통째로 AND 평가하던 라벨
-// 경로는 이 입력을 미배제로 봤고 렌더는 배제해서, allocatable 이 0 인데 세 화면 전부
-// "배제 아님" 을 보고했다. 갈라짐 회귀를 한 시험에서 막는다.
+// 라벨 경로와 렌더 경로가 같은 판정을 내는지 본다. 셀렉터를 통째로 AND 로 평가하면 이 입력을
+// 미배제로 보고 렌더는 배제로 봐서, allocatable 이 0 인데 화면은 "배제 아님" 을 보고하는
+// 식으로 두 경로가 갈라진다. 그 회귀를 한 시험에서 막는다.
 func TestExclusionConditions_LabelAndRenderPathsAgree(t *testing.T) {
 	sel := &metav1.LabelSelector{MatchLabels: map[string]string{"a": "1", "b": "2"}}
 	nodeLabels := map[string]string{"a": "1", "b": "3"} // a 만 맞는다

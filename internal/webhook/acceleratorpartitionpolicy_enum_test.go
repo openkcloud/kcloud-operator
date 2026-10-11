@@ -1,13 +1,8 @@
 // ============================================================
 // acceleratorpartitionpolicy_enum_test.go: ACPP vendor enum·rebellions 파티션 레지스트리 회귀 가드
-// 상세: CRD YAML 의 spec.vendor enum 이 4값(furiosa/nvidia/rebellions/tenstorrent)에서
-//
-//	벗어나지 않는지, webhook 거절 경로가 의존하는 vendorcap.LookupVendor("rebellions",
-//	CapPartition) 선언이 Unsupported·정해진 Reason/Source 를 유지하는지 고정한다. 거절
-//	메시지 문자열 자체의 시험은 acceleratorpartitionpolicy_test.go 에 이미 있다
-//	(TestValidateACPPRejectsUnsupportedPartitionVendorWithReason, R3-3) — 중복하지 않는다.
-//
-// 생성일: 2026-09-20
+// 상세: CRD YAML 의 spec.vendor enum 4값과, webhook 이 의존하는 vendorcap.LookupVendor("rebellions",
+// CapPartition)의 Unsupported 선언이 유지되는지 고정한다(거절 메시지 문자열은 별도 시험이 본다).
+// 생성일: 2026-09-20 | 수정일: 2026-10-11
 // ============================================================
 package webhook
 

@@ -4,7 +4,7 @@
 //       아무도 지우지 않는다. 맨 Delete 는 객체를 Terminating 으로 영영 남긴다 —
 //       deleteACPPAndWait(acceleratorpartitionpolicy_controller_test.go)와 같은 규율로
 //       테스트가 finalizer 를 직접 떼고 NotFound 까지 기다린다.
-// 생성일: 2026-09-21
+// 생성일: 2026-09-21 | 수정일: 2026-10-11
 // ============================================================
 
 package controller

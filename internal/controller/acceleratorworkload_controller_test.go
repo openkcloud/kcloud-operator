@@ -2,7 +2,7 @@
 // acceleratorworkload_controller_test.go: AcceleratorWorkload 컨트롤러 테스트
 // 상세: 번역 성공 시 Deployment 렌더(리소스 limit + nodeAffinity), 거절 시 status Condition,
 // 재조정 멱등성(API server 기본값 주입 후에도 재기록 없음), 남의 Deployment 미탈취.
-// 생성일: 2026-07-30 | 수정일: 2026-08-05
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -276,7 +276,7 @@ func TestAcceleratorWorkloadRedecidesWhenCapabilityDisappears(t *testing.T) {
 	}
 }
 
-// driver upgrade quiesce(A6.1)가 scale=0 으로 내린 워크로드를 되살리지 않는다. rmmod 창 안에서
+// driver upgrade quiesce 가 scale=0 으로 내린 워크로드를 되살리지 않는다. rmmod 창 안에서
 // GPU 를 쥔 Pod 을 다시 띄우면 드라이버 교체가 깨진다. 라벨도 통째로 갈아엎지 않는다 —
 // quiesce 대상 선정이 그 라벨로 이뤄지므로 지우면 다시는 quiesce 되지 않는다.
 func TestAcceleratorWorkloadRespectsQuiesce(t *testing.T) {

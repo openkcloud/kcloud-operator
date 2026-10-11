@@ -1,4 +1,4 @@
-<!-- README.md: kcloud-operator K8s 리소스 설치량(footprint) 측정 도구 안내 | 생성일: 2026-09-20 | 수정일: 2026-09-21 -->
+<!-- README.md: kcloud-operator K8s 리소스 설치량(footprint) 측정 도구 안내 | 생성일: 2026-09-20 | 수정일: 2026-10-11 -->
 
 # 리소스 설치량(footprint) 측정
 
@@ -109,8 +109,7 @@ Prometheus 서버로 10분 창(30초 스텝)의 `rate(container_cpu_usage_second
   이 대상의 정적 값은 `null` 이다.
 - 벤더 오퍼레이터 차트는 이 클러스터에 설치돼 있지 않아 정적 렌더만 가능하고 라이브
   값은 없다. kind 클러스터에 장치 없이 설치했을 때 상주 파드가 공정하게 세어지는지는
-  벤더별로 다르다 — 판정과 근거는
-  2026-09-20 벤더 대조 실측 참고.
+  벤더별로 다르다.
 - `rbln-system` 네임스페이스가 없으면 RBLN 구성요소의 라이브 관측이 불가능하다.
 - 라이브 사용량 중앙값은 Prometheus 나 metrics-server(`kubectl top`)가 있어야 나온다.
   둘 다 없으면 사용량 값은 `null` 로 기록하고 한계 절에 남긴다.

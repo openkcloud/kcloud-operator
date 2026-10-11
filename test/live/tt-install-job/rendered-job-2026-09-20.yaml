@@ -1,11 +1,8 @@
 # ============================================================
-# rendered-job-2026-09-20.yaml: install Job 렌더 실측 출력(상태기계 우회)
-# 상세: go run ./test/live/tt-install-job/render 가 라이브 DIP tenstorrent-blackhole-ds 를
-#       읽어 internal/driverjob.RenderInstallJob(policy, k8s-worker3, 2.8.0-v1, 2.8.0) 로 뽑고
-#       이름에 -manual 접미를 붙인 결과다. run.sh 가 이 YAML 을 그대로 kubectl apply 로
-#       흘려보낸다. 노드 DKMS 버전과 target 이 같아 entrypoint 는 SKIP_INSTALL 분기만 탄다(멱등).
-#       2026-09-20 설치 Job 실측이 이 파일을 전체 YAML 근거로 가리킨다.
-# 생성일: 2026-09-20
+# install Job 렌더 실측 출력(상태기계 우회)
+# 상세: go run ./test/live/tt-install-job/render 가 라이브 DIP tenstorrent-blackhole-ds 를 읽어
+#       RenderInstallJob(policy, k8s-worker3, 2.8.0-v1, 2.8.0) 로 뽑고 -manual 접미를 붙인 결과다.
+# 생성일: 2026-09-20 | 수정일: 2026-10-11
 # ============================================================
 apiVersion: batch/v1
 kind: Job

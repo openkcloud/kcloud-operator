@@ -1,16 +1,10 @@
 # deployment.yaml: NPU Operator Controller Manager Deployment
-# 생성일: 2026-03-25 | 수정일: 2026-10-11 (반대 라인 operator 태그 거절; 계획서 항목 토큰 제거)
+# 생성일: 2026-03-25 | 수정일: 2026-10-11
 {{/*
-operator 이미지 태그가 이 차트와 같은 릴리스 라인인지 render 단계에서 본다.
--k8s1.28 접미는 K8s 1.26~1.30 라인 릴리스이고, 그 라인의 차트는 release/k8s-1.28
-브랜치의 0.6.x 다. 섞으면 pre-upgrade Job 이 구 라인 operator 로 1.31+ CRD 를 덮어쓴다.
-Chart.yaml 의 kubeVersion 은 클러스터 버전만 보므로 --set image.tag 로 라인을 섞는 이
-경로를 막지 못한다. 그래서 이 자리가 필요하다.
-
-접미 문자열이 internal/crdapply/apply.go 의 k8s128Suffix 와 두 곳에 있다. 차트는 render
-단계에서 Go 상수를 읽을 수 없고, 두 검사가 성립하는 시점도 다르다 — 차트는 설치·업그레이드
-입력을 보고, 바이너리는 이미 돌아가는 클러스터의 CRD 표식을 본다. 발행된 구 이미지에는
-바이너리 쪽 검사가 없으므로 그 조합에서는 이 자리가 유일한 방어다.
+operator 이미지 태그가 이 차트와 같은 릴리스 라인인지 render 단계에서 검사한다. -k8s1.28
+접미는 K8s 1.26~1.30 릴리스 라인(차트는 release/k8s-1.28 브랜치)이다 — 섞으면 구 라인
+operator 가 1.31+ CRD 를 덮어쓴다. 같은 접미 검사가 internal/crdapply/apply.go(k8s128Suffix)
+에도 있지만, 그쪽은 이미 도는 클러스터만 보므로 발행된 구 이미지 조합엔 이 검사가 유일한 방어다.
 */}}
 {{- if hasSuffix "-k8s1.28" (.Values.image.tag | toString) }}
 {{- fail (printf "image.tag %q 는 K8s 1.26~1.30 라인(-k8s1.28 접미) operator 릴리스다. 이 차트 %s 는 K8s 1.31+ 전용이라 두 라인을 섞으면 구 라인 operator 가 CRD 를 덮어쓴다. 1.26~1.30 클러스터는 release/k8s-1.28 브랜치의 chart 0.6.x 를 쓰고, 이 차트에는 접미 없는 태그를 준다." .Values.image.tag .Chart.Version) }}
@@ -82,7 +76,7 @@ spec:
         {{- end }}
         env:
         # OPERATOR_NAMESPACE: operator 관리 워크로드(driver DS / install Job / toolkit DS)를
-        # 배치할 네임스페이스. release namespace 를 Downward API 로 주입한다(#16). device-plugin 은
+        # 배치할 네임스페이스. release namespace 를 Downward API 로 주입한다. device-plugin 은
         # 이 값과 무관하게 kube-system 고정. 미설정 시 코드 기본값 kube-system(회귀 0).
         - name: OPERATOR_NAMESPACE
           valueFrom:
@@ -153,8 +147,7 @@ spec:
         # KCLOUD_OPERATION_COORDINATOR: 위임 모드 스위치. "delegate" 만 유효하고, 이 env 가 아예
         # 주입되지 않으면 꺼진 것으로 읽힌다.
         # .Values.operationCoordinator 존재를 먼저 확인하는 이유: --reuse-values 로 이 키가 없던
-        # 이전 릴리스를 업그레이드하면 이 맵 자체가 nil 이라 .mode 접근이 렌더링 실패로 죽는다
-        # (이 저장소에서 이미 겪은 함정과 같은 종류 — 방어 가드를 templates 에 남긴다).
+        # 이전 릴리스를 업그레이드하면 이 맵 자체가 nil 이라 .mode 접근이 렌더링 실패로 죽는다.
         - name: KCLOUD_OPERATION_COORDINATOR
           value: "delegate"
         {{- end }}

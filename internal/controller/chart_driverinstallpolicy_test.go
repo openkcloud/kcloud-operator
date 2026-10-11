@@ -1,10 +1,8 @@
 // ============================================================
 // chart_driverinstallpolicy_test.go: DriverInstallPolicy 차트 렌더의 기본값을 고정한다.
 // 상세: tenstorrent DIP 의 driver.kernelImages 렌더(기본 빈 맵·사이트 값 반영)와, nvidia DIP 의
-// driver.version 기본값이 우분투 아카이브에 실재하는 버전인지를 고정한다. DKMS 경로가 이
-// 기본값으로 설치하므로 아카이브에 없는 버전이면 다른 클러스터가 설치에 실패한다. helm 을
-// os/exec 로 부른다.
-// 생성일: 2026-09-22 | 수정일: 2026-09-26
+// driver.version 기본값이 우분투 아카이브에 실재하는 버전인지를 본다. helm 을 os/exec 로 부른다.
+// 생성일: 2026-09-22 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

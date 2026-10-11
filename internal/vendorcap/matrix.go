@@ -3,7 +3,7 @@
 // 상세: 정적 문서는 명세서 층(Declared)과 검증 열(Support.Assurance())만 싣는다. 검증
 //       열은 이 저장소 안 근거(단위/클러스터 시험·하드웨어 evidence)를 반영하고,
 //       라이브 성적표(kubectl npu capabilities)의 Verified 열과는 별개다.
-// 생성일: 2026-09-19 | 수정일: 2026-09-28
+// 생성일: 2026-09-19 | 수정일: 2026-10-11
 // ============================================================
 
 package vendorcap
@@ -36,9 +36,9 @@ func RenderMatrix() string {
 	for _, k := range Keys() {
 		for _, c := range Capabilities() {
 			s := registry[k][c]
-			// 사유와 근거가 둘 다 있으면 둘 다 싣는다("사유 (근거)"). 사유만 보이던
-			// 때는 Unsupported 행(예 furiosa/warboy timeSlicing)의 evidence 경로가
-			// 매트릭스에서 사라져, 문서만 읽는 사람이 근거를 추적할 수 없었다.
+			// 사유와 근거가 둘 다 있으면 둘 다 싣는다("사유 (근거)"). 사유만 보이면 Unsupported
+			// 행(예 furiosa/warboy timeSlicing)의 evidence 경로가 매트릭스에서 사라져, 문서만
+			// 읽는 사람이 근거를 추적할 수 없다.
 			note := s.Reason
 			switch {
 			case note == "":

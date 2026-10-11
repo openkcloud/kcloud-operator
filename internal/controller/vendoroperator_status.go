@@ -1,12 +1,10 @@
 // ============================================================
 // vendoroperator_status.go: 벤더 operator CR 의 상태를 읽어 NPUClusterPolicy 조건으로 보고한다(보고만, 개입 없음)
-// 상세: 감지(vendoroperator_detect.go)는 CRD 존재만 본다. 여기서는 그 벤더의 ClusterPolicy 류 CR
+// 상세: 감지(vendoroperator_detect.go)는 CRD 존재만 본다. 여기서는 그 벤더의 ClusterPolicy 류
 //
-//	하나를 읽어 Ready 인지 적는다. 자동 전환·차단은 하지 않는다 — 공존 원칙(delegated)은
-//	사람이 정한다. 호출은 managed 여부와 무관하게 present(감지됨) 면 한다 — delegated(비관리)
-//	상태에서 벤더 operator 가 실제로 Ready 인지가 가장 쓸모 있는 신호이기 때문이다.
+//	CR 을 읽어 Ready 를 보고만 한다(개입 없음) — present 면 managed 여부와 무관하게 호출한다.
 //
-// 생성일: 2026-10-09 | 수정일: 2026-10-09 (blocked 필드 주석 정리, 로직 변경 없음)
+// 생성일: 2026-10-09 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

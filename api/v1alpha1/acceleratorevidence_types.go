@@ -1,9 +1,7 @@
 // ============================================================
 // acceleratorevidence_types.go: AcceleratorEvidence CRD 타입 (검증 근거의 1급 모델)
 // 상세: R&D base v0.1 §8.3/§8.5/§8.6. 노드당 하나 — "무엇을 관측했고(level), 어느 환경에서
-//
-//	나왔으며(fingerprint), 언제까지 유효한지(expiresAt)" 를 정책과 분리해 남긴다.
-//
+// 나왔으며(fingerprint), 언제까지 유효한지(expiresAt)" 를 정책과 분리해 남긴다.
 // 생성일: 2026-07-31
 // ============================================================
 package v1alpha1
@@ -18,7 +16,7 @@ const (
 	EvidenceLevelObserved = "Observed"
 	// EvidenceLevelFunctionallyVerified: 위에 더해 노드가 기대한 자원을 광고하고 있다.
 	EvidenceLevelFunctionallyVerified = "FunctionallyVerified"
-	// EvidenceLevelAllocationVerified: 위에 더해 테스트 Pod 가 실제로 그 자원을 할당받았다.
+	// EvidenceLevelAllocationVerified: 위에 더해 테스트 Pod 가 그 자원을 실제로 할당받는다.
 	EvidenceLevelAllocationVerified = "AllocationVerified"
 )
 
@@ -58,10 +56,9 @@ type EvidenceCheck struct {
 	Passed bool   `json:"passed"`
 	// +optional
 	Message string `json:"message,omitempty"`
-	// ProbedAt 은 이 AllocationProbe 를 실제로 실행한 시각이다. 재사용 창(ProbedAt+TTL) 판정의
-	// 기준이라, evidence 갱신마다 새로 쓰이는 ObservedAt/ExpiresAt 과 달리 실제 probe 시각에
-	// 고정된다 — 재사용 pass 는 직전 값을 그대로 이어실어 창이 재조정마다 밀리는 것을 막는다.
-	// AllocationProbe check 에만 실린다.
+	// ProbedAt 은 이 AllocationProbe 를 실제로 실행한 시각이다(AllocationProbe check 에만
+	// 실린다). ObservedAt/ExpiresAt 과 달리 매 갱신에 새로 쓰지 않고 실제 probe 시각에 고정해,
+	// 재사용 pass 가 재조정마다 창을 밀리게 하지 않는다.
 	// +optional
 	ProbedAt *metav1.Time `json:"probedAt,omitempty"`
 }

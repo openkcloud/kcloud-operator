@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: Rebellions ATOM descriptor SW 시분할 라이브 데모(node5) — 유휴 재실측 판정의 공유 경로 확인
-# 상세: NPUClusterPolicy 의 rebellions 를 끄면 소유 device-plugin(kube-system/rbln-device-plugin)이
-#       회수된다. 그 뒤 AcceleratorDescriptor 하나(descriptor.yaml, sharing timeSliced replicas 2,
-#       deviceNodes /dev/rbln0)를 적용하면 생성된 device-plugin(kcloud-generated-<desc>-dp)이
-#       rebellions/atom 을 2개로 광고한다. 소비자 파드 2개가 각각 1개를 받아 같은 /dev/rbln0 을
-#       python3 로 열고 OPEN_OK 를 찍는다 — 둘이 동시에 Running 이면 격리 없는 SW 시분할이 확인된다.
-#       끝에 파드·descriptor 를 지우고 rebellions 를 다시 켜 원래 device-plugin·광고를 복원한다
-#       (실패·중단 시에도 trap 으로 복원). 자체 descriptor·소비자 파드·NPUClusterPolicy 의
-#       rebellions.enabled 필드만 변경한다. node5 는 검증 노드다(atomplus-vllm 중지 상태에서 실행).
-#       레지스트리 rebellions timeSlicing 이 Software 여야 컨트롤러(sharingRefusal)가 광고를 켠다 —
-#       Unknown 인 채로 돌면 descriptor.status.refusals 에 sharing 거절이 남고 광고가 뜨지 않는다.
-#       DRY_RUN=1 이면 명령만 출력.
-# 생성일: 2026-09-22
+# 상세: NPUClusterPolicy 를 끄고 descriptor 적용→소비자 2개 적용→판정→복원 순서로 돈다(trap 으로
+#       실패·중단 시에도 복원). 자체 descriptor·소비자 파드·NCP 의 rebellions.enabled 필드만 변경한다.
+# 생성일: 2026-09-22 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

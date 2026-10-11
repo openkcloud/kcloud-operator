@@ -1,7 +1,7 @@
 // ============================================================
 // operation_driver_participant_test.go: 드라이버 작업 본체 envtest
 // 상세: 드라이버 상태머신의 상태를 조정자 사건으로 옮기는 매핑과, 상태머신에 실제로 닿는지를 본다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -21,7 +21,7 @@ import (
 // driverParticipantFixture 는 아래 두 plain-Go 테스트 전용 DIP+DUS 픽스처다. 이 파일의
 // 다른 곳에서 쓰는 makeDIP/makeDUS(driver_upgrade_controller_test.go)를 그대로 쓰지 않는
 // 이유는, 그 헬퍼들의 vendor/model 인자가 파일 전체에서 사실상 상수 값으로만 불려
-// unparam 정적 분석이 오탐하기 때문이다(둘 중 하나를 바꿔도 다른 인자로 옮겨갈 뿐이었다).
+// unparam 정적 분석이 오탐하기 때문이다(둘 중 하나를 바꿔도 다른 인자로 옮겨갈 뿐이다).
 func driverParticipantFixture(dusName, state, current, desired string) (*npuv1alpha1.DriverInstallPolicy, *npuv1alpha1.DriverUpgradeState) {
 	dip := &npuv1alpha1.DriverInstallPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "dip-1"},
@@ -38,14 +38,11 @@ func driverParticipantFixture(dusName, state, current, desired string) (*npuv1al
 	return dip, dus
 }
 
-// 증명: Apply 한 번이 상태머신의 전이를 **클러스터에** 남긴다. TransitionState 는
-// driver_upgrade_controller.go 의 실 Reconcile 과 마찬가지로 state 를 메모리에서만
-// 전이시킨다 — 영속은 호출자 책임이다. 브리핑 원본 advance() 는 이 영속 호출이 빠져 있었다
-// (실측·재현함): 그 상태로는 Apply 를 몇 번을 불러도 재조회한 DriverUpgradeState.Status.State
-// 가 절대 안 바뀐다 — cordon·drain·설치 같은 실 부수효과만 매 pass 마다 같은 시작 상태에서
-// 반복되고 진행은 전혀 기록되지 않는다. driverOutcomeFor 매핑 테스트(Ginkgo, 위)는 순수 함수만
-// 보므로 이 결함을 전혀 보지 못한다 — 이 테스트가 유일하게 advance()/TransitionState 연결을
-// 실제로 구동한다.
+// 증명: Apply 한 번이 상태머신의 전이를 **클러스터에** 남긴다. TransitionState 는 실 Reconcile 과
+// 마찬가지로 state 를 메모리에서만 전이시킨다 — 영속은 호출자 책임이다. 이 호출이 빠지면 Apply
+// 를 몇 번을 불러도 재조회한 DriverUpgradeState.Status.State 가 절대 안 바뀐다 — cordon·drain·
+// 설치 같은 부수효과만 매 pass 반복되고 진행은 기록되지 않는다. driverOutcomeFor 매핑 시험(위)은
+// 순수 함수만 보므로 이 결함을 못 본다 — 이 시험이 advance()/TransitionState 연결을 실제로 구동한다.
 // 깨는 뮤테이션: advance() 에서 p.r.Status().Update 호출을 빼면 실패한다.
 func TestApplyPersistsStateMachineProgress(t *testing.T) {
 	dip, dus := driverParticipantFixture("dus-1", npuv1alpha1.UpgradeStateRequired, "1.9.8", "2.0.0")
@@ -70,8 +67,7 @@ func TestApplyPersistsStateMachineProgress(t *testing.T) {
 }
 
 // 증명: owner UID 가 실제 DriverUpgradeState 와 다르면(같은 이름으로 재생성된 다른 객체)
-// 실행을 거부한다 — 커밋 메시지가 주장하는 동작이지만 브리핑이 준 테스트 어디에도 이걸
-// 확인하는 것이 없었다(실측으로 확인함). 옛 operation 이 새 사이클을 건드리면 안 된다.
+// 실행을 거부한다 — 옛 operation 이 새 사이클을 건드리면 안 된다.
 // 깨는 뮤테이션: UID 비교를 빼면 실패한다.
 func TestApplyRejectsOwnerUIDMismatch(t *testing.T) {
 	dip, dus := driverParticipantFixture("dus-1", npuv1alpha1.UpgradeStateRequired, "1.9.8", "2.0.0")

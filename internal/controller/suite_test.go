@@ -14,14 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// ============================================================
 // suite_test.go: internal/controller envtest 스위트 부트스트랩
-// 상세: envtest 로 API 서버를 띄워 CRD 를 적재하고, 패키지 전체가 공유하는
-//       client·config·컨텍스트를 준비한다(BeforeSuite/AfterSuite). 서버 버전을 실측해
-//       ENVTEST_K8S_VERSION 과 다른 자산이 조용히 쓰이는 것을 막는다.
-//       개별 컨트롤러 시험은 같은 패키지의 *_test.go 에 있다.
-// 생성일: 2025-07-04 | 수정일: 2026-10-09 (파일 머리 주석 추가)
-// ============================================================
+// 상세: envtest 로 API 서버를 띄워 CRD 를 적재하고, 패키지 전체가 공유하는 client·config·
+// 컨텍스트를 준비한다(BeforeSuite/AfterSuite). 서버 버전을 실측해 ENVTEST_K8S_VERSION 과
+// 다른 자산이 조용히 쓰이는 것을 막는다. 개별 컨트롤러 시험은 같은 패키지의 *_test.go 에 있다.
+// 생성일: 2025-07-04 | 수정일: 2026-10-11
 
 package controller
 
@@ -132,11 +129,8 @@ var _ = AfterSuite(func() {
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by
 // controller-runtime. When running tests directly (e.g., via an IDE) without using
-// Makefile targets, the 'BinaryAssetsDirectory' must be explicitly configured.
-//
-// This function streamlines the process by finding the required binaries, similar to
-// setting the 'KUBEBUILDER_ASSETS' environment variable. To ensure the binaries are
-// properly set up, run 'make setup-envtest' beforehand.
+// Makefile targets, the 'BinaryAssetsDirectory' must be explicitly configured — run
+// 'make setup-envtest' beforehand to set them up.
 func getFirstFoundEnvTestBinaryDir() string {
 	basePath := filepath.Join("..", "..", "bin", "k8s")
 	entries, err := os.ReadDir(basePath)

@@ -1,34 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: k8s-worker1 NVIDIA 잔재 패키지 셋 제거 실측 하네스
-# 상세: 계획 O(Ruling R-O18)가 제거를 보류했던 세 패키지
-#       (nvidia-firmware-580-580.178.04·nvidia-firmware-595-595.91.07·
-#       nvidia-kernel-source-580, 전부 실행 중 드라이버 580.126.09 와 무관한 잔재)를
-#       사용자 결정에 따라 실제로 제거한다. 안전 게이트(nvidia.com/gpu 요구 파드 0,
-#       uid 중복 제거) → 사전 상태 기록(dpkg·모듈 버전·nvidia-smi·dkms·NDR·health·
-#       DUS·allocatable) → `apt-get -s remove` 시뮬레이션이 정확히 이 세 이름만
-#       내는지 확인(실행 중 버전 세트 패키지가 하나라도 섞이면 중단) → 실제 제거 →
-#       사후 dpkg 비교 → 최대 POSTCHECK_TIMEOUT초(기본 300) 폴링으로 로드된 모듈
-#       버전·nvidia-smi 장치 수·NodeDeviceReport driverLoaded·AcceleratorHealth·
-#       DriverUpgradeState·allocatable 이 그대로인지 확인한다. 하나라도 시간 안에
-#       맞지 않으면 마지막 관측값을 기록하고 멈춘다 — 재부팅·재설치는 이 스크립트가
-#       스스로 하지 않는다(컨트롤러 승인 뒤 별도 판단).
-#       DRY_RUN=1 이면 안전 게이트·사전 상태·시뮬레이션까지는 실제로 돌고, 제거
-#       명령만 출력한다(사후 확인은 제거를 안 했으므로 생략). 노드는 항상
-#       `kubectl get node k8s-worker1 -o jsonpath=...` 로 클러스터에 실재하는
-#       노드에서만 IP 를 구한다 — 그 밖의 어떤 주소(배포 노드 포함)에도 접촉할
-#       경로가 없다.
-#       PHASE 로 단계를 하나씩 부를 수 있다. quiesce/unquiesce(cordon 만, 파드
-#       삭제 없음)는 all 에 넣지 않는다 — 이 세 패키지 제거는 장치 상태를 바꾸지
-#       않으므로 기본은 cordon 하지 않는다. trap cleanup EXIT 는 이
-#       실행이 quiesce 로 cordon 했을 때만 uncordon 한다.
-#
-# 사용법:
-#   [DRY_RUN=1] [PHASE=] [RUN_ID=] [POSTCHECK_TIMEOUT=] run.sh
-#   PHASE: verdict(RUN_DIR= 필요, 클러스터 미접속) | safety-gate | precheck |
-#          simulate | remove | postcheck | wait-postchecks | quiesce | unquiesce |
-#          all(기본, quiesce/unquiesce 제외 순서대로 실행)
-# 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거)
+# 상세: 실행 중 드라이버(580.126.09)와 무관한 세 패키지를 안전 게이트·시뮬레이션 검증 뒤
+#       제거하고, 모듈·헬스·allocatable 이 그대로인지 폴링으로 확인한다(PHASE 목록은 case
+#       문 참고).
+# 용법: [DRY_RUN=1] [PHASE=] [RUN_ID=] [POSTCHECK_TIMEOUT=] run.sh
+# 생성일: 2026-09-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C

@@ -2,7 +2,7 @@
 // dra_driver_test.go: DRA 드라이버 렌더러와 배포 게이트 시험
 // 상세: 벤더 chart 를 그대로 쓰지 않고 우리 라벨·이미지로 옮기는 것이 렌더러의
 // 존재 이유다. 그 치환이 실제로 일어나는지를 고정한다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-08-07 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -80,7 +80,7 @@ func TestRenderFuriosaDRADriver_DefaultImage(t *testing.T) {
 }
 
 // 이 이미지에는 ENTRYPOINT 가 없다. command 를 주지 않으면 args 가 CMD 를 밀어내
-// 바이너리가 사라지고 컨테이너가 exec 실패로 죽는다(2026-08-07 실측).
+// 바이너리가 사라지고 컨테이너가 exec 실패로 죽는다.
 func TestRenderFuriosaDRADriver_SetsCommand(t *testing.T) {
 	ds := findDS(renderFuriosaDRADriver(furiosaDRAPolicy()))
 	c := ds.Spec.Template.Spec.Containers[0]
@@ -282,8 +282,8 @@ func TestRenderFuriosaDRADriver_NoWildcardNamespaceRole(t *testing.T) {
 }
 
 // NVIDIA 는 "깔되 광고 안 함" 상태가 없다. chart 가 gpus.enabled=false 면 DaemonSet 도
-// DeviceClass 도 내지 않는다(2026-08-07 실측: RBAC 껍데기뿐). 그 상태로 깔면
-// 사용자는 깔렸다고 믿는데 아무것도 발행되지 않는다.
+// DeviceClass 도 내지 않고 RBAC 껍데기만 남는다. 그 상태로 깔면 사용자는 깔렸다고
+// 믿는데 아무것도 발행되지 않는다.
 func TestNvidiaDRABlockReason_RequiresDRAAdvertise(t *testing.T) {
 	p := &npuv1alpha1.NPUClusterPolicy{}
 	p.Spec.Nvidia.Enabled = true
@@ -489,8 +489,8 @@ func TestEnsureDRADriver_NvidiaDeploysWhenAllowed(t *testing.T) {
 	}
 }
 
-// control-plane 노드에도 벤더 라벨이 붙어 있을 수 있다(실측: k8s-master 에
-// nvidia.present). 장치가 없는 노드에 올리면 벤더 prestart 가 init 에서 멈춘다.
+// control-plane 노드에도 벤더 라벨이 붙어 있을 수 있다. 장치가 없는 노드에 올리면
+// 벤더 prestart 가 init 에서 멈춘다.
 func TestEnsureDRADriver_ExcludesControlPlane(t *testing.T) {
 	p := nvidiaDRAPolicy()
 	r := newDRAReconciler(p)
@@ -519,9 +519,9 @@ func TestEnsureDRADriver_ExcludesControlPlane(t *testing.T) {
 	}
 }
 
-// CDI 활성화는 "파일에 썼다" 가 아니라 "containerd 가 실제로 켰다" 로 판정해야 한다.
-// 같은 plugin 테이블을 다시 선언하는 drop-in 이 있으면 base 에 쓴 값이 덮인다
-// (2026-08-10 k8s-worker1 실측: conf.d/99-nvidia.toml 때문에 enable_cdi 가 false).
+// CDI 활성화는 "파일에 썼다" 가 아니라 "containerd 가 실제로 켰다" 로 판정해야 한다. 같은
+// plugin 테이블을 다시 선언하는 drop-in(예: conf.d 의 다른 파일)이 있으면 base 에 쓴 값이
+// 덮여 enable_cdi 가 false 로 남을 수 있다.
 func TestRenderCDIInitContainer_UsesEffectiveConfigAndDropIn(t *testing.T) {
 	c := renderCDIInitContainer()
 	script := strings.Join(c.Command, " ")
@@ -1131,8 +1131,8 @@ func TestDualAdvertiseCondition_DistinguishesFuriosaAndRngd(t *testing.T) {
 }
 
 // TestDualAdvertiseCondition_EventOnlyOnTransition 는 DualAdvertise 경고가 False→True
-// 전이(최초 포함)에서만 나가고, 같은 True 상태가 반복되는 reconcile 에서는 다시 나가지 않는
-// 것을 단정한다 — 리뷰 Minor: 전이 판정 코드는 있었지만 이를 직접 겨냥한 시험이 없었다.
+// 전이(최초 포함)에서만 나가고, 같은 True 상태가 반복되는 reconcile 에서는 다시 나가지
+// 않는 것을 단정한다.
 func TestDualAdvertiseCondition_EventOnlyOnTransition(t *testing.T) {
 	p := &npuv1alpha1.NPUClusterPolicy{}
 	node := &corev1.Node{
@@ -1314,15 +1314,15 @@ func TestRenderTenstorrentDRADriver_HasFabricManager(t *testing.T) {
 	if fm == nil {
 		t.Fatal("fabric-manager 컨테이너가 없다")
 	}
-	// 등호 표기(--host-id=0)는 벤더 바이너리가 Unknown argument 로 거부한다(라이브 기록
-	// §3.2). 공백으로 분리된 두 원소여야 하고, 한 원소로 합치면 파드가 기동에 실패한다.
+	// 등호 표기(--host-id=0)는 벤더 바이너리가 Unknown argument 로 거부한다. 공백으로
+	// 분리된 두 원소여야 하고, 한 원소로 합치면 파드가 기동에 실패한다.
 	if len(fm.Args) != 2 || fm.Args[0] != "--host-id" || fm.Args[1] != "0" {
 		t.Errorf("fabric-manager args=%q, want [\"--host-id\" \"0\"] — "+
 			"등호 표기나 한 원소로 합친 형태는 벤더 바이너리가 거부한다", fm.Args)
 	}
 
 	// 벤더 이미지는 ENTRYPOINT 가 없고 Cmd 만 있다. Args 를 주면 Cmd 가 덮이므로 Command 를
-	// 명시하지 않으면 kubelet 이 첫 인자를 실행 파일로 exec 해 StartError 로 죽는다(라이브 확인).
+	// 명시하지 않으면 kubelet 이 첫 인자를 실행 파일로 exec 해 StartError 로 죽는다.
 	// 두 컨테이너 모두 벤더 바이너리를 Command 로 명시해야 한다.
 	if len(fm.Command) != 1 || fm.Command[0] != "tt-fabric-manager-agent" {
 		t.Errorf("fabric-manager command=%q, want [\"tt-fabric-manager-agent\"] — "+
@@ -1337,7 +1337,7 @@ func TestRenderTenstorrentDRADriver_HasFabricManager(t *testing.T) {
 			"Command 미지정 시 --device-profile 을 exec 해 StartError", plugin.Command)
 	}
 	// tt-dra-driver-kubeletplugin 은 --node-name(=$NODE_NAME)이 필수다. downward API 로
-	// 노드명을 주입하지 않으면 "Required flag node-name not set" 로 크래시한다(라이브 확인).
+	// 노드명을 주입하지 않으면 "Required flag node-name not set" 로 크래시한다.
 	var hasNodeName bool
 	for _, e := range plugin.Env {
 		if e.Name == "NODE_NAME" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil &&
@@ -1350,8 +1350,8 @@ func TestRenderTenstorrentDRADriver_HasFabricManager(t *testing.T) {
 	}
 
 	// 볼륨이 가리키는 ConfigMap 이름과 실제 렌더된 ConfigMap 이름이 어긋나면 FM 이 설정
-	// 파일을 못 찾아 기동을 거부하고(라이브 기록 §3.2) DaemonSet 이 CrashLoop 한다.
-	// 라이브 검증이 파킹이라 이 어긋남이 드러날 자리가 여기밖에 없다.
+	// 파일을 못 찾아 기동을 거부하고 DaemonSet 이 CrashLoop 한다. Tenstorrent 라이브
+	// 검증이 보류돼 있어 이 어긋남이 드러날 자리는 이 시험뿐이다.
 	var ref string
 	for _, v := range ds.Spec.Template.Spec.Volumes {
 		if v.Name == "fm-config" && v.ConfigMap != nil {
@@ -1384,8 +1384,8 @@ func TestRenderTenstorrentDRADriver_NoFallbackDiscovery(t *testing.T) {
 
 // TestRenderTenstorrentDRADriver_FabricManagerImageOverride 는 FM 이미지 덮어쓰기
 // 경로를 고정한다. 이 경로가 조용히 깨지면 사설 레지스트리를 쓰는 배포에서만 드러나고
-// 그 환경이 원인 추적이 가장 어렵다. 이 시험이 없던 동안 dra_driver.go 의 덮어쓰기
-// 블록을 통째로 지워도 패키지 전체가 초록이었다.
+// 그 환경이 원인 추적이 가장 어렵다. 이 시험이 없으면 dra_driver.go 의 덮어쓰기 블록을
+// 통째로 지워도 패키지 전체가 초록으로 남는다.
 func TestRenderTenstorrentDRADriver_FabricManagerImageOverride(t *testing.T) {
 	// fmContainer 는 렌더 결과에서 fabric-manager 컨테이너를 이름으로 집어 온다.
 	// 목록 위치가 아니라 이름으로 고르는 이유는 컨테이너 순서가 계약이 아니기 때문이다.

@@ -2,7 +2,7 @@
 // accelerators_test.go: /accelerators 3종 엔드포인트 핸들러 테스트
 // 상세: fake reader 로 200/404/필터/페이지네이션을 본다. 인증·인가는 미들웨어 시험에서 이미
 //       덮었으므로 여기서는 okAuth 로 통과시키고 응답 형태만 검증한다.
-// 생성일: 2026-07-30 | 수정일: 2026-10-09 (주석의 작업 항목 토큰 제거)
+// 생성일: 2026-07-30 | 수정일: 2026-10-11
 // ============================================================
 
 package apiserver
@@ -189,7 +189,7 @@ func TestNodeAccelerators_OKAndUnknownNode404(t *testing.T) {
 	}
 }
 
-// review I-1: acceleratorpartitionpolicies 만 허용되고 nodedevicereports 는 거부되면 403 이어야
+// acceleratorpartitionpolicies 만 허용되고 nodedevicereports 는 거부되면 403 이어야
 // 한다 — 미관리 노드(NDR 단독 출처) 행을 ACPP 권한만으로 볼 수 있으면 안 된다.
 func TestAccelerators_DeniedWithoutNDRAuthz(t *testing.T) {
 	opts := authnOpts{
@@ -202,7 +202,7 @@ func TestAccelerators_DeniedWithoutNDRAuthz(t *testing.T) {
 	}
 }
 
-// review M-1: 후행 슬래시는 uid="" 로 {uid...} 를 매칭시킨다 — Pending 행(zero-value UID)이
+// 후행 슬래시는 uid="" 로 {uid...} 를 매칭시킨다 — Pending 행(zero-value UID)이
 // 조회되지 않고 404 여야 한다.
 func TestAcceleratorByUID_EmptyUID404(t *testing.T) {
 	s, _ := newServer(t, okAuth(), invObjects()...)

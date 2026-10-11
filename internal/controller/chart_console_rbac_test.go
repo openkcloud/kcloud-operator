@@ -1,14 +1,8 @@
 // ============================================================
 // chart_console_rbac_test.go: 콘솔용 extraServiceAccounts 묶음이 SA·바인딩으로 렌더되는지 고정한다.
-//
-// 상세: console-rbac.yaml 은 기본 콘솔 SA(api.console.serviceAccount) 하나만 만든다.
-//
-//	외부 화면(파트너 UI 등)이 자기 SA 로 콘솔 라우트를 부르려면 그 SA 를 operator 가
-//	대신 만들어 줘야 한다 — api.console.extraServiceAccounts 항목마다 SA 와 viewer
-//	바인딩을, role=operator 면 operator 바인딩까지 함께 렌더하는지 본다. 알 수 없는
-//	role 은 렌더 자체가 실패해야 한다(배포 뒤에야 권한 누락으로 드러나면 늦다).
-//
-// 생성일: 2026-10-06
+// 상세: console-rbac.yaml 은 기본 콘솔 SA 외에, extraServiceAccounts 항목마다 SA 와 viewer
+// 바인딩을(role=operator 면 operator 바인딩까지) 렌더한다. 알 수 없는 role 은 렌더 자체가 실패해야 한다.
+// 생성일: 2026-10-06 | 수정일: 2026-10-11
 // ============================================================
 package controller
 

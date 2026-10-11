@@ -3,36 +3,31 @@
 # 상세: 모든 이미지를 단일 사설 미러에서 당기도록 지정하는 방법.
 #       사용:  helm install/upgrade <release> kcloud-operator/deploy/helm -f values-airgap.example.yaml
 #       <your-registry> 부분을 실제 미러 host:port (예: registry.internal:5000) 로 교체한다.
-# 생성일: 2026-06-02 | 수정일: 2026-10-03 (생성 backend·dcgm-exporter 미러 경로 주석)
+# 생성일: 2026-06-02 | 수정일: 2026-10-11
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (1) kcloud 가 빌드하는 이미지: global.registry 한 줄로 일괄 prefix.
-#     operator / node-manager / host-exec / furiosa-exporter / 드라이버 설치기 3종 /
-#     Furiosa 통합 device-plugin / Tenstorrent device-plugin 이 모두
-#     <your-registry>/<repo>:<tag> 로 조립된다.
-#     generatedBackend 두 이미지(generic-device-plugin·generic-dra-driver)도 이 줄로
-#     조립된다 — operator Deployment 의 --generated-dp-image·--generated-dra-image 인자가
-#     그 값을 받는다. 아래에 따로 적지 않는다(적으면 차트 기본값이 올라갈 때 구 태그로 덮는다).
+# (1) kcloud 가 빌드하는 이미지: global.registry 한 줄로 일괄 prefix한다. operator·node-manager·
+#     host-exec·furiosa-exporter·드라이버 설치기 3종·Furiosa 통합/Tenstorrent device-plugin 과
+#     generatedBackend 두 이미지(generic-device-plugin·generic-dra-driver)가 모두
+#     <your-registry>/<repo>:<tag> 로 조립된다. 아래에 따로 적지 않는다(적으면 구 태그로 덮는다).
 # ─────────────────────────────────────────────────────────────────────────────
 global:
   registry: "<your-registry>"   # 예: registry.internal:5000/kcloud
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # (2) 벤더(3rd-party) 이미지: global.vendorRegistry 한 줄로 일괄 prefix.
-  #     미러에 upstream 의 org 경로를 그대로 살려 올려 둔다:
+  # (2) 벤더(3rd-party) 이미지: global.vendorRegistry 한 줄로 일괄 prefix한다. 미러에 upstream 의
+  #     org 경로를 그대로 살려 올려 둔다:
   #       <your-registry>/nvidia/k8s-device-plugin:v0.19.3
   #       <your-registry>/bitnamilegacy/kubectl:1.28
-  #       <your-registry>/dra-driver-nvidia/dra-driver-nvidia-gpu:v0.4.0
   #       <your-registry>/furiosaai/furiosa-device-plugin:2026.1.1
-  #       <your-registry>/furiosaai/furiosa-dra-driver:2026.1.1
   #       <your-registry>/rebellions/k8s-device-plugin:v0.3.6
+
+  #     DRA 관련 다섯 개는 해당 기능을 켤 때만 필요하다(Tenstorrent 는 Fabric Manager agent 이미지도 함께 필요):
+  #       <your-registry>/dra-driver-nvidia/dra-driver-nvidia-gpu:v0.4.0
+  #       <your-registry>/furiosaai/furiosa-dra-driver:2026.1.1
   #       <your-registry>/rebellions/k8s-dra-driver-npu:v0.2.0
   #       <your-registry>/tenstorrent/tt-dra-driver:0.0.48
   #       <your-registry>/tenstorrent/tt-fabric-manager:latest
-  #     DRA 관련 다섯 개는 해당 기능을 켤 때만 필요하다. Tenstorrent 는 드라이버가 같은 파드의
-  #     Fabric Manager agent 에 장치 발견을 맡기므로 이미지가 둘이고, 둘 다 있어야 기동한다.
-  # ───────────────────────────────────────────────────────────────────────────
   vendorRegistry: "<your-registry>"   # 위와 같은 미러여도 되고 달라도 된다
 
 # ─────────────────────────────────────────────────────────────────────────────

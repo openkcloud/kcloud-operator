@@ -1,11 +1,9 @@
 // ============================================================
 // generated_backend_test.go: 생성된 backend 배포물 렌더 시험
 // 상세: 설정이 ConfigMap 으로 들어가고 DaemonSet 이 그것을 읽는지, 그리고 노드 선택과
-//
-//	control-plane 배제가 붙는지 고정한다. 배제를 빠뜨려 장치 없는 노드에서 벤더
-//	prestart 가 고착된 적이 있다(2026-08-07).
-//
-// 생성일: 2026-08-11 | 수정일: 2026-10-04
+// control-plane 배제가 붙는지 고정한다. 배제를 빠뜨리면 장치 없는 노드에서 벤더 prestart 가
+// 고착된다.
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 // ============================================================
 package controller
 
@@ -90,7 +88,7 @@ func TestRenderGeneratedDevicePluginNamesAreScoped(t *testing.T) {
 }
 
 // kubelet 소켓·plugin 디렉터리는 root 소유 0755 다. nonroot 로 뜨면 소켓을 열지 못하고
-// 컨테이너가 죽는다 - 2026-08-11 라이브에서 실제로 `bind: permission denied` 를 봤다.
+// 컨테이너가 죽는다 — 증상은 `bind: permission denied` 다.
 // privileged 만으로는 UID 가 바뀌지 않으므로 두 backend 모두 UID 0 을 명시해야 한다.
 func TestRenderGeneratedRunsAsRoot(t *testing.T) {
 	_, dpDS := renderGeneratedDevicePlugin(testDescriptor(), []byte("{}"), "img", "kcloud")

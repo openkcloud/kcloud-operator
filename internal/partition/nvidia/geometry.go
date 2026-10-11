@@ -1,10 +1,8 @@
 // ============================================================
 // geometry.go: MIG 목표 → typed CommandStep 시퀀스(모델 B — GI 생성만, mode 전환 없음)
-// 상세: 균일 단일 프로파일. PCI 선택자 + profile name. MIG mode Enabled 는 외부 사전조건(§17).
-//
-//	operator 는 -mig 를 만지지 않고 GI 만 생성/제거한다.
-//
-// 생성일: 2026-07-24 | 수정일: 2026-07-27
+// 상세: 균일 단일 프로파일. PCI 선택자 + profile name. MIG mode Enabled 는 외부 사전조건이라
+// operator 는 -mig 를 만지지 않고 GI 만 생성/제거한다.
+// 생성일: 2026-07-24 | 수정일: 2026-10-11
 // ============================================================
 package nvidia
 
@@ -29,7 +27,7 @@ func q(sel string, field string) []string {
 	return []string{"nvidia-smi", "-i", sel, "--query-gpu=" + field, "--format=csv,noheader"}
 }
 
-// BuildApplySteps 는 모델 B 시퀀스를 만든다(§17.1): MIG mode Enabled 는 사전조건이므로
+// BuildApplySteps 는 모델 B 시퀀스를 만든다: MIG mode Enabled 는 사전조건이므로
 // preflight 로 current==Enabled 를 assert 만 하고(-mig 전환 없음), 기존 GI/CI 제거 후 GI 를 생성한다.
 func BuildApplySteps(specs []GeometrySpec) []CommandStep {
 	steps := make([]CommandStep, 0, len(specs)*6) // spec 당 6 스텝
@@ -50,14 +48,12 @@ func BuildApplySteps(specs []GeometrySpec) []CommandStep {
 	return steps
 }
 
-// BuildDisableSteps 는 모델 B rollback 시퀀스를 만든다(§17.1): mode 는 끄지 않고 GI/CI 만 제거한 뒤
+// BuildDisableSteps 는 모델 B rollback 시퀀스를 만든다: mode 는 끄지 않고 GI/CI 만 제거한 뒤
 // mode 가 정상 판독되는지 확인한다.
-//
-// 사후 확인이 Enabled 만 받으면 안 된다. RestoreMode 삭제는 mode 를 먼저 끄고(재부팅) 나서 이
-// 되돌리기를 부르므로, 그 경로에서는 mode 가 Disabled 인 것이 정상이다 — Enabled 만 받으면
-// "이미 다 되돌아간" 노드에서 job 이 실패하고 finalizer 가 영원히 안 빠진다(라이브 실측
-// 2026-08-04: 정책이 7분 넘게 Terminating, 노드는 cordon 된 채 방치). 이 확인의 목적은 "조각이
-// 사라졌다" 이지 "mode 가 켜져 있다" 가 아니므로 두 값을 모두 받는다(판독 불가는 여전히 실패).
+// 사후 확인은 Enabled 만 받으면 안 된다 — RestoreMode 삭제 경로는 mode 를 먼저 끄고(재부팅) 나서
+// 이 함수를 부르므로 그 경로에서는 Disabled 가 정상이다. Enabled 만 받으면 이미 되돌아간 노드에서
+// job 이 실패해 finalizer 가 영원히 안 빠진다(7분 넘게 Terminating, 노드는 cordon 된 채 방치된다).
+// 확인 목적은 "조각이 사라졌다" 이지 "mode 가 켜져 있다" 가 아니므로 두 값 다 받는다(판독 불가는 여전히 실패).
 func BuildDisableSteps(selectors []string) []CommandStep {
 	steps := make([]CommandStep, 0, len(selectors)*3) // selector 당 3 스텝
 	for _, sel := range selectors {

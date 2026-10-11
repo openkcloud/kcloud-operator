@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_types_test.go: AcceleratorPartitionPolicy spec 필드 단위 테스트
 // 상세: Layout profile/countPerDevice 필드가 올바르게 설정되는지 확인.
-// 생성일: 2026-07-23 | 수정일: 2026-07-23
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package v1alpha1
 

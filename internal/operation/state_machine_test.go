@@ -1,10 +1,7 @@
 // ============================================================
 // state_machine_test.go: operation 상태 전이표 테스트
-// 상세: operation 상태머신 다이어그램과 1:1 대응한다. 다이어그램을 바꾸면
-//
-//	이 테스트도 바꿔야 한다.
-//
-// 생성일: 2026-08-01
+// 상세: operation 상태머신 다이어그램과 1:1 대응한다. 다이어그램을 바꾸면 이 테스트도 바꿔야 한다.
+// 생성일: 2026-08-01 | 수정일: 2026-10-11
 // ============================================================
 package operation
 
@@ -102,7 +99,7 @@ func TestUndefinedTransitionIsRejected(t *testing.T) {
 	}
 }
 
-// 증명: Go 상수 목록과 CRD enum 이 갈라지지 않았다.
+// 증명: Go 상수 목록과 CRD enum 이 갈라지지 않는다.
 // 깨는 뮤테이션: phase 상수를 추가하고 kubebuilder enum 마커를 안 고치면 실패한다.
 func TestCRDEnumMatchesPhaseConstants(t *testing.T) {
 	raw, err := os.ReadFile("../../config/crd/bases/npu.ai_acceleratoroperations.yaml")

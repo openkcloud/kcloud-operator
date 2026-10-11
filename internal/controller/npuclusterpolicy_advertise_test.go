@@ -2,7 +2,7 @@
 // npuclusterpolicy_advertise_test.go: 광고 주체 선택 스위치(advertiseBy) 동작 검증
 // 상세: dra 로 선언한 벤더의 대상 노드에 라벨이 붙고 되돌리면 떨어지는 것, 그 라벨이 있는
 //       노드에서 벤더 device-plugin DaemonSet 이 물러나는 것을 단정한다.
-// 생성일: 2026-08-06
+// 생성일: 2026-08-06 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -88,8 +88,8 @@ func TestReconcileDRAOwnedLabels_AppliesToVendorNodes(t *testing.T) {
 	}
 }
 
-// TestReconcileDRAOwnedLabels_Rebellions 는 Rebellions 도 다른 벤더와 같은 전환 경로를 타는 것을
-// 단정한다 — RebellionsSpec 에 AdvertiseSpec 이 inline 되기 전에는 이 축이 없었다.
+// TestReconcileDRAOwnedLabels_Rebellions 는 Rebellions 도 다른 벤더와 같은 전환 경로를
+// 타는 것을 단정한다.
 func TestReconcileDRAOwnedLabels_Rebellions(t *testing.T) {
 	policy := &npuv1alpha1.NPUClusterPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "kcloud"},
@@ -257,8 +257,7 @@ func TestReconcileDRAOwnedLabels_ClearsRetiredWhenDRADisabled(t *testing.T) {
 // 내려도 그 벤더의 DRA DaemonSet 이 아직 클러스터에 있으면 retired 라벨을 지우지 않고,
 // DaemonSet 이 실제로 사라진 뒤에야 지우는 것을 단정한다. 라벨을 DaemonSet 삭제보다
 // 먼저 지우면 그 순간 노드가 다시 스케줄 후보가 되어, DaemonSet 컨트롤러가 새 파드를
-// 잠깐 올렸다가 뒤이은 DaemonSet 삭제와 함께 사라지는 경합이 생긴다(라이브 관측,
-// 2026-09-28 dp-dra-residue after-dp→restored 구간, k8s-worker3).
+// 잠깐 올렸다가 뒤이은 DaemonSet 삭제와 함께 사라지는 경합이 생긴다.
 func TestReconcileDRARetiredLabel_ClearsOnlyAfterDaemonSetGone(t *testing.T) {
 	retiredKey := npuv1alpha1.DRARetiredNodeLabel("nvidia")
 	newPolicy := func() *npuv1alpha1.NPUClusterPolicy {
@@ -463,8 +462,8 @@ func TestReconcileDRAOwnedLabels_AppliesWhenIdleAndPublished(t *testing.T) {
 
 // TestRefuseAdvertiseSwitch_RequiresOwnVendorDriverSlice 는 노드에 다른 벤더(nvidia)의
 // 드라이버가 낸 ResourceSlice 만 있을 때는 그 벤더(tenstorrent)로 전환을 거절하는 것을
-// 단정한다. 이전에는 "ResourceSlice 가 노드에 하나라도 있는가"만 봐서, 다른 벤더가 이미
-// 발행 중인 노드로도 전환을 승인하는 잠재 결함이 있었다.
+// 단정한다. ResourceSlice 유무만 보고 승인하면 다른 벤더가 이미 발행 중인 노드에도
+// 전환이 열린다.
 func TestRefuseAdvertiseSwitch_RequiresOwnVendorDriverSlice(t *testing.T) {
 	policy := &npuv1alpha1.NPUClusterPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "kcloud"},

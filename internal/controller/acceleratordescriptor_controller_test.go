@@ -1,6 +1,6 @@
 // ============================================================
 // acceleratordescriptor_controller_test.go: descriptor status 수렴 검증
-// 생성일: 2026-09-15 | 수정일: 2026-09-18
+// 생성일: 2026-09-15 | 수정일: 2026-10-11
 // ============================================================
 
 package controller
@@ -131,13 +131,12 @@ var _ = Describe("AcceleratorDescriptor 컨트롤러", func() {
 	})
 
 	It("여러 노드의 카드를 노드명 순으로 정렬해 status 에 싣는다", func() {
-		// envtest apiserver 의 List() 는 NDR 을 metadata.name(etcd key) 순으로 돌려준다.
-		// 이름과 노드명이 같은 방향으로 어긋나면(예: "n1"/"n2") 정렬 없는 map 삽입 순서가
-		// 이미 정렬된 것과 같아져 sort.Strings 를 지워도 우연히 통과한다(실측 ~75%). 그래서
-		// NDR 이름과 노드명을 반대 방향으로 둔다: "aa-ndr"(먼저 나옴)의 노드는 "znode",
-		// "zz-ndr"(나중 나옴)의 노드는 "anode" — 정렬 없는 삽입 순서는 [znode, anode] 로
-		// 기대값([anode, znode])과 반대가 되어, sort.Strings(nodes) 가 실제로 뒤집어야만
-		// 첫 Reconcile 부터 통과한다.
+		// envtest apiserver 의 List() 는 NDR 을 metadata.name(etcd key) 순으로 돌려준다. 이름과
+		// 노드명이 같은 방향으로 어긋나면(예: "n1"/"n2") 정렬 없는 map 삽입 순서가 이미 정렬된
+		// 것과 같아져 sort.Strings 를 지워도 우연히 통과한다. 그래서 NDR 이름과 노드명을 반대
+		// 방향으로 둔다: "aa-ndr"(먼저 나옴)의 노드는 "znode", "zz-ndr"(나중 나옴)의 노드는
+		// "anode" — 정렬 없는 삽입 순서는 [znode, anode] 로 기대값([anode, znode])과 반대가 되어,
+		// sort.Strings(nodes) 가 실제로 뒤집어야만 첫 Reconcile 부터 통과한다.
 		aaNdr := &npuv1alpha1.NodeDeviceReport{
 			ObjectMeta: metav1.ObjectMeta{Name: "aa-ndr"},
 			Spec:       npuv1alpha1.NodeDeviceReportSpec{NodeName: "znode"},
@@ -352,9 +351,9 @@ func TestDescriptorProbeGatedByPolicy(t *testing.T) {
 		t.Fatalf("prober 호출 인자 불일치: %+v", got)
 	}
 
-	// probe 가 통과(exit=0)하면 evidence 는 등급을 받아야 한다. Request 에 관측 geometry 가 없으면
+	// probe 가 통과(exit=0)하면 evidence 는 등급을 받아야 한다 — Request 에 관측 geometry 가 없으면
 	// DeviceObservation 이 "no device observation available" 로 실패해 Level 이 매 재조정마다
-	// 빈 문자열로 남는다 — descriptor 경로 evidence 가 구조적으로 등급을 못 받는 결함이었다.
+	// 빈 문자열로 남는 구조적 결함이 된다(descriptor 경로 evidence 전체에 영향).
 	if err := aaClient.Get(ctx, types.NamespacedName{Name: node}, &ev); err != nil {
 		t.Fatalf("AcceleratorEvidence(%s) 재조회 실패: %v", node, err)
 	}
