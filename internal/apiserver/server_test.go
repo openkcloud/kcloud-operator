@@ -2,7 +2,8 @@
 // server_test.go: 관리 REST API 핸들러 단위 테스트
 // 상세: fake clientset(TokenReview/SAR reactor) + fake controller-runtime client(npuctl)로
 //       인증(401)/인가(403)/patch 매핑/오입력 거부(400)를 검증한다(라이브 불필요).
-// 생성일: 2026-07-20 | 수정일: 2026-10-11 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정; 라우트별 SAR 개수 고정 표 추가, TokenReview 시험의 SAR 단언 제거)
+// 생성일: 2026-07-20 | 수정일: 2026-10-11 (DRA 읽기 게이트 가드 시험 추가, SAR 개수 6 으로 수정; 라우트별 SAR 개수 고정 표 추가, TokenReview 시험의 SAR 단언 제거;
+// 세션 전용 식별자 제거)
 // ============================================================
 
 package apiserver
@@ -234,7 +235,7 @@ func TestNodeAuthzGateOnNodeDerivedRoutes(t *testing.T) {
 }
 
 // TestCapabilitiesDoesNotRequireHealthList: capabilities 는 건강 판정(acceleratorhealths)을
-// 읽지 않으므로 그 권한이 없어도 403 이면 안 된다 — addendum 이 분리한 capGates/invGates 를
+// 읽지 않으므로 그 권한이 없어도 403 이면 안 된다 — server.go 가 분리한 capGates/invGates 를
 // 다시 합치는 회귀가 들어오면 이 시험이 막는다. accelerators 는 반대로 그 권한을 요구한다.
 func TestCapabilitiesDoesNotRequireHealthList(t *testing.T) {
 	opts := authnOpts{

@@ -1,15 +1,18 @@
-<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거) -->
+<!-- README.md: 벤더 장치 리셋 실측 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거; CapReset 서술 시점 명시) -->
 # 벤더 장치 리셋 실측
 
 ## 왜
 
-`internal/vendorcap/registry.go` 의 `CapReset` 은 nvidia·tenstorrent 를 `Native`(벤더가 리셋
-명령을 문서화)로 선언하지만 확인 수준은 `none` 이었다(2026-09-26 리셋 수단 조사
-— 문서만 읽었고 어느 노드에서도 실행하지 않았다는 조사). 이 하네스는 실제 노드에서 리셋
-명령을 실행해 그 확인 수준을 `hardware` 로 올릴 근거(또는 올리지 못하는 이유)를 남긴다.
+`internal/vendorcap/registry.go` 의 `CapReset` 은 2026-09-26 리셋 수단 조사 시점에는
+nvidia·tenstorrent 를 둘 다 `Native`(벤더가 리셋 명령을 문서화)로 선언했고 확인 수준은
+`none` 이었다(문서만 읽었고 어느 노드에서도 실행하지 않았다는 조사). 이 하네스는 실제
+노드에서 리셋 명령을 실행해 그 확인 수준을 `hardware` 로 올릴 근거(또는 올리지 못하는
+이유)를 남긴다.
 
-대상은 계획 L 이 `CapReset` 에 수단이 있다고 판정한 두 벤더뿐이다 — furiosa(warboy·rngd)·
-rebellions 는 공개 인터페이스에 리셋 수단이 없다고 판정했으므로 이 하네스가 다루지 않는다.
+대상은 벤더가 장치 리셋 명령을 노출하는 두 벤더뿐이다 — nvidia(`nvidia-smi -r`)·tenstorrent(`tt-smi -r`).
+furiosa(warboy·rngd)·rebellions 는 공개 인터페이스에 리셋 수단 자체가 없어 다루지 않는다.
+`internal/vendorcap` 레지스트리의 `CapReset` 등급은 이 하네스 실측의 결과다 — tenstorrent 는
+2026-10-02 에 Unsupported 로 확정됐고 그 항목의 근거가 이 하네스다.
 
 | 벤더 | 노드 | 대상 장치 | 리셋 명령 |
 |---|---|---|---|
@@ -24,15 +27,14 @@ rebellions 는 공개 인터페이스에 리셋 수단이 없다고 판정했으
    `do_reset`(PHASE=reset)·`quiesce`·`reboot_recover`·`precheck`·`main`·`workload_check`
    여섯이다.
    `unquiesce` 는 게이트를 걸지 않는다 — 되돌리기(uncordon)를 "장치를 쓰는 파드가
-   생겼다"는 이유로 막으면 cordon 이 안 풀린 채 남기 때문이다(수정 라운드 1, Important 4).
+   생겼다"는 이유로 막으면 cordon 이 안 풀린 채 남기 때문이다.
 2. device-plugin DaemonSet 파드(`kube-system/nvidia-device-plugin-flat`,
    `kcloud/kcloud-tt-device-plugin`)는 확장 자원을 요구하지 않지만 장치를 열고 있을 수
    있다. `reset` 이 "장치 사용 중"으로 실패하면 그때만 `PHASE=quiesce`(cordon + 그
    device-plugin 파드 삭제)를 판단해서 쓴다 — 미리 하지 않는다. **허용된 조치는 이
    cordon + 해당 DS 파드 삭제뿐이다.** 그 밖의 조치(프로세스 kill, 커스텀 taint,
    operator 상태 라벨 재사용 등)는 이 하네스에 없고, 다시 쓰려면 컨트롤러 승인이
-   먼저 필요하다 — 실제로 있었던 세 건과 그 영향은 `task-3-report.md` "승인 범위 밖
-   수동 조치" 절 참고.
+   먼저 필요하다 — 실제로 세 건 있었다.
    **한계**: DaemonSet 파드는 `node.kubernetes.io/unschedulable` 기본 toleration이 있어
    cordon 만으로는 재스케줄을 막지 못한다. `quiesce` 의 실제 효과는 파드 삭제가 만드는
    짧은 창뿐이다 — 이 창 안에 리셋이 끝나지 않으면 재시도가 필요할 수 있다.
@@ -43,8 +45,8 @@ rebellions 는 공개 인터페이스에 리셋 수단이 없다고 판정했으
    어떤 호스트에도 접촉하지 않는다(시범서비스 배포 노드 포함) — 이 하네스가 접속하는
    노드는 `kubectl get node <NODE> -o jsonpath=...` 로 클러스터에 실재하는 노드에서만
    IP 를 구하므로 그 목록 밖의 주소로 향할 경로 자체가 없다.
-5. `PHASE=bmc-sel`(ipmitool 설치+BMC SEL 조회)은 **k8s-worker3 에서만** 허용한다(계획 O
-   후속 addendum §1) — `NODE` 가 그 밖이면(예: `VENDOR=nvidia` 로 호출) 아무것도
+5. `PHASE=bmc-sel`(ipmitool 설치+BMC SEL 조회)은 **k8s-worker3 에서만** 허용한다 —
+   `NODE` 가 그 밖이면(예: `VENDOR=nvidia` 로 호출) 아무것도
    하지 않고 거절한다. 실행하는 ipmitool 명령은 `sel elist`·`sel info`·`mc info`·
    `chassis status` 읽기 4종뿐이다 — `power`·`chassis power`·`sel clear` 같은 쓰기 명령은
    없다. BMC 는 그 노드 안의 `/dev/ipmi0` 로만 접근한다 — 네트워크로 BMC 에 접속하지
@@ -57,7 +59,7 @@ rebellions 는 공개 인터페이스에 리셋 수단이 없다고 판정했으
    개수와 같아질 때까지 최대 `RECOVER_TIMEOUT`초 폴링, 기본 300).
 3. `NodeDeviceReport` 가 리셋 전과 같은 장치 수를 보이고 `AcceleratorHealth` 가
    `Healthy` 로 돌아온다(`wait-advertise` 가 최대 `ADVERTISE_TIMEOUT`초 폴링, 기본 300 —
-   addendum 의 5분 상한).
+   5분 상한).
 4. `DriverUpgradeState` 가 대기 내내 `Idle` 그대로다 — 폴링 중 한 번이라도 `Idle` 이
    아니면 `wait-advertise` 가 실패로 끝낸다.
 
@@ -85,7 +87,7 @@ PHASE=quiesce      VENDOR=nvidia bash test/live/device-reset/run.sh   # reset �
 PHASE=unquiesce    VENDOR=nvidia bash test/live/device-reset/run.sh
 PHASE=reboot-recover VENDOR=nvidia bash test/live/device-reset/run.sh # 장치가 안 돌아올 때만
 
-# BMC SEL(k8s-worker3 전용, 계획 O 후속) — SEL_STAGE=before|after(기본 before).
+# BMC SEL(k8s-worker3 전용) — SEL_STAGE=before|after(기본 before).
 # 같은 RUN_ID 로 before 뒤 after 를 부르면 sel-delta.txt(신규 SEL 항목)까지 만든다.
 SEL_STAGE=before RUN_ID=<고정> VENDOR=tenstorrent PHASE=bmc-sel bash test/live/device-reset/run.sh
 SEL_STAGE=after  RUN_ID=<위와 같은 값> VENDOR=tenstorrent PHASE=bmc-sel bash test/live/device-reset/run.sh
@@ -94,7 +96,7 @@ SEL_STAGE=after  RUN_ID=<위와 같은 값> VENDOR=tenstorrent PHASE=bmc-sel bas
 RUN_DIR=test/live/device-reset/runs/<RUN_ID>-<vendor> PHASE=verdict bash test/live/device-reset/run.sh
 # -> RESET_VERDICT: <PASS|FAIL> rc=<n|missing> devices=<same|changed|missing> node=<ready|rebooted|unknown>
 # -> RESET_REPRO: rc=<n|ssh-lost|missing> node=<ready|rebooted|unknown> sel_new=<n|missing> last_kernel_line=<yes|no|missing>
-#    (계획 O 후속 전용 — sel-delta.txt·dmesg-live.log·reset-start-utc.txt 가 없으면 missing, 지어내지 않는다)
+#    (sel-delta.txt·dmesg-live.log·reset-start-utc.txt 가 없으면 missing, 지어내지 않는다)
 
 # 시험 훅 — FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap
 # cleanup 의 동작(라이브 없이)을 확인할 수 있다. DRY_RUN=1 과 함께 쓴다.

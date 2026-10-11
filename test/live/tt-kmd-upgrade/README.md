@@ -1,4 +1,4 @@
-<!-- README.md: k8s-worker3 tt-kmd 2.8.0 → 2.11.0 라이브 업그레이드 실행·복구 절차 | 생성일: 2026-09-21 -->
+<!-- README.md: k8s-worker3 tt-kmd 2.8.0 → 2.11.0 라이브 업그레이드 실행·복구 절차 | 생성일: 2026-09-21 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
 
 # Tenstorrent tt-kmd 2.11.0 라이브 업그레이드 (k8s-worker3)
 
@@ -100,6 +100,6 @@ bash test/live/tt-kmd-upgrade/run.sh
   user values 에 영구히 남는다(라이브 `helm get values` 로 확인). 이후 차트 기본값을 올려도 이 네
   값을 직접 reset 하기 전까지는 `.91` 에 반영되지 않는다. 정리는 `helm get values -o yaml` 을 저장해
   `driverInstallPolicies.tenstorrent` 블록을 지운 파일로 `helm upgrade --reset-values -f <파일>` 을
-  한 번 실행하는 것이다(2026-09 계획 F 기록).
+  한 번 실행하는 것이다.
 - 전제 확인의 파드 검사는 `containers` 만 센다. `initContainers` 로 tenstorrent 자원을 요청하는
   파드가 있으면 이 검사가 놓친다.

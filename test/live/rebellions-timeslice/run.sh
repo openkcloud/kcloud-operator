@@ -20,12 +20,12 @@
 #       3개(solo, corun-a, corun-b)를 node5 에 스케줄해 같은 측정을 한다 — 이미지는 images
 #       저장소 rbln-workload(호스트와 같은 Ubuntu 22.04 계열, glibc 2.35)라 네이티브 초기화가
 #       된다. 파드 안 compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
-#       (task-2-report.md "추가 5 실행"), precompile_host 가 호스트에서 미리 컴파일한 모델을
+#       precompile_host 가 호스트에서 미리 컴파일한 모델을
 #       파드가 RBLN_COMPILED_PATH 로 적재만 한다. 장치 경합은 두 모드 모두 /dev/rbln0+KMD
 #       수준에서 같다. 두 모드 모두 서비스 복원은 preflight 가 기록한 시작값
 #       (ORIG_SERVICE_STATE)으로만 한다 — node5 의 이 서비스는 다른 계정이 운영하므로 우리가
 #       멈춘 것만 다시 켠다(자세한 내용은 README).
-# 생성일: 2026-09-25 | 수정일: 2026-09-29
+# 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 줄폭 재접음)
 # ============================================================
 set -euo pipefail
 
@@ -153,7 +153,7 @@ ncp_ds_present() { kubeget -n "$NCP_DS_NS" get ds "$NCP_DS" >/dev/null 2>&1; }
 ncp_ds_absent()  { ! ncp_ds_present; }
 ncp_ds_up() { local v; v="$(alloc_vendor)"; [ -n "$v" ] && [ "$v" != "0" ]; }
 # ncp_vendor_receded — RESOURCE_VENDOR allocatable 이 0 이거나 키가 없으면 참. 키가 사라지길
-# 기다리면 값이 0 에서 멈춰 매번 타임아웃 예산을 다 쓴다(task-2-report.md 라운드 4 교훈).
+# 기다리면 값이 0 에서 멈춰 매번 타임아웃 예산을 다 쓴다.
 ncp_vendor_receded() { local v; v="$(alloc_vendor)"; [ -z "$v" ] || [ "$v" = "0" ]; }
 
 poll() {
@@ -335,8 +335,8 @@ rbln_live_pid_count() {
 }
 
 # precompile_host — node5 에 사전 컴파일 모델(CACHE_PATH)을 만든다(이미 있으면 재사용). 파드 안
-# compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로(task-2-report.md "추가 5
-# 실행"), 컴파일은 호스트에서 한 번 하고 파드는 RBLN_COMPILED_PATH 로 적재만 한다.
+# compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
+# 컴파일은 호스트에서 한 번 하고 파드는 RBLN_COMPILED_PATH 로 적재만 한다.
 # 이 함수는 measure_pods 의 DRY_RUN 조기 반환 뒤에서만 호출되므로 자체 DRY_RUN 분기가 없다.
 precompile_host() {
   log "### precompile(host): $CACHE_PATH 준비"

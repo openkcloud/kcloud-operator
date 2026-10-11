@@ -2,7 +2,7 @@
 // mode_test.go: 추상 모드 지원 판정 테스트
 // 상세: 정직성 원칙이 코드로 지켜지는지 — 미검증 공유 거절, 시분할 노드에 exclusive 거절,
 // 미적용 profile 거절. 조용한 강등이 일어나면 이 테스트가 깨진다.
-// 생성일: 2026-07-29 | 수정일: 2026-07-30
+// 생성일: 2026-07-29 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 사실 손실 복구)
 // ============================================================
 package intent
 
@@ -18,7 +18,8 @@ func nvidiaMapping() v1alpha1.AcceleratorMapping {
 }
 
 // rngdMapping 은 Product 를 명시한다 — furiosa 는 product 없이는 rngd/warboy 를 가릴 수 없다
-// (internal/intent/resources.go 의 ResourceFor 계약, task-5-brief.md 원안은 Product 를 빠뜨렸다).
+// (internal/intent/resources.go 의 ResourceFor 계약). 설계 원안이 그 필드를 빠뜨려 이 단언을
+// 남겼으니 중복으로 보고 지우지 말 것.
 func rngdMapping() v1alpha1.AcceleratorMapping {
 	return v1alpha1.AcceleratorMapping{Vendor: "furiosa", Product: "rngd", NativeProfile: "2core.12gb"}
 }

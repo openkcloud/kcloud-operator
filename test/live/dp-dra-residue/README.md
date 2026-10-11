@@ -1,4 +1,4 @@
-<!-- README.md: device-plugin↔DRA 전환 잔재 스냅샷 도구 사용법 | 생성일: 2026-09-28 | 수정일: 2026-09-28 (run.sh 사용법·partial 상태 추가) -->
+<!-- README.md: device-plugin↔DRA 전환 잔재 스냅샷 도구 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-11 (run.sh 사용법·partial 상태 추가; 식별자 제거) -->
 # device-plugin ↔ DRA 전환 잔재 스냅샷
 
 ## 왜
@@ -78,7 +78,7 @@ node·SSH 대상이 없을 때도(`absent(...)`, `skipped(no-ip)`) 도구는 종
 `snapshot.sh`는 한 시점을 읽기만 한다. `run.sh`는 그 위에서 실제로
 `NPUClusterPolicy.spec.<vendor>.advertiseBy`를 `devicePlugin → dra → devicePlugin`으로
 왕복시키며 안전 게이트·전환·정착 대기·스냅샷을 하나로 묶는다(대상은 지금 `rngd`·
-`tenstorrent` 둘 — addendum 이 정한 후보). `kubectl get`/`patch`, `kubectl-npu` CLI,
+`tenstorrent` 둘). `kubectl get`/`patch`, `kubectl-npu` CLI,
 `snapshot.sh`(ssh 읽기) 외의 쓰기는 하지 않고, 지우는 코드는 담지 않는다 — 잔재의 해로움
 판정은 `diff_snapshots`가 낸 표를 보고 사람이 한다.
 

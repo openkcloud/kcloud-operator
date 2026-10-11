@@ -13,8 +13,8 @@
 #       따라 갈리므로 all 에 넣지 않고 별도 PHASE 로 둔다.
 #       devicePlugin 복귀 뒤에는 dra-owned 회수(wait_settle) 다음 kcloud.ai/<vendor>.
 #       dra-retired=true 라벨 부여를 최대 120초 기다리고(wait_retired_label), SETTLE_AFTER_RETIRE
-#       초(기본 60)를 더 기다린 뒤에야 after-dp 스냅샷을 찍는다(addendum 라이브 확인
-#       절 Ruling F-1). switch devicePlugin 부터 after-dp 스냅샷까지는 DualAdvertisement
+#       초(기본 60)를 더 기다린 뒤에야 after-dp 스냅샷을 찍는다. switch devicePlugin
+#       부터 after-dp 스냅샷까지는 DualAdvertisement
 #       컨디션을 5초 간격 백그라운드로 dual-condition-poll.log 에 남긴다(start_dual_poll/
 #       stop_dual_poll). 스냅샷마다 그 시점의 DualAdvertisement 컨디션도
 #       dual-advertisement-condition.json 으로 같이 남아 summarize 의 dual=/retired= 두
@@ -39,8 +39,9 @@
 #   폴링 백그라운드 프로세스부터 정리) advertiseBy·dra.enabled 를 이 실행 시작 시점 값으로
 #   되돌린다. FORCE_FAIL_AT=<set_dra_enabled(true)|...> 는 그 지점에서 강제로 실패시켜
 #   DRY_RUN 으로 cleanup 을 시연하는 시험 훅이다.
-# 생성일: 2026-09-28 | 수정일: 2026-10-10 (라이브 확인: SETTLE_AFTER_RETIRE·
-#       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가; 계획서 항목 토큰 제거)
+# 생성일: 2026-09-28 | 수정일: 2026-10-11 (라이브 확인: SETTLE_AFTER_RETIRE·
+#       wait_retired_label·dual-condition 백그라운드 폴링·스냅샷별 DualAdvertisement 기록 추가; 계획서 항목 토큰 제거;
+#       세션 전용 식별자 제거; 인용 삭제로 사라진 "첫 실행에 없던 절차" 사실 복원)
 # ============================================================
 set -euo pipefail
 
@@ -53,8 +54,8 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SNAPSHOT="${SCRIPT_DIR}/snapshot.sh"
 KUBECTL_NPU="${REPO_DIR}/cmd/kubectl-npu/kubectl-npu"
 
-# 기본값은 이 태스크가 착수 시점에 고른 대상(tenstorrent/k8s-worker3, task-2-report.md 근거
-# 참고) — 다른 후보(rngd/rngd-1.cluster.local)로 다시 돌리려면 환경변수로 덮는다.
+# 기본값은 이 태스크가 착수 시점에 고른 대상(tenstorrent/k8s-worker3) — 다른 후보
+# (rngd/rngd-1.cluster.local)로 다시 돌리려면 환경변수로 덮는다.
 VENDOR="${VENDOR:-tenstorrent}"
 NODE="${NODE:-k8s-worker3}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -81,7 +82,7 @@ fi
 # 남기지 않는다(그 주소를 코드에 적는 것 자체가 피하려는 언급이 된다).
 
 # vendor_json_path <vendor> — spec 안에서 이 벤더의 advertiseBy/dra 블록 jq 경로.
-# addendum 이 정한 두 후보(rngd, tenstorrent)만 다룬다 — 나머지 벤더는 이번 실측 대상이
+# 두 후보(rngd, tenstorrent)만 다룬다 — 나머지 벤더는 이번 실측 대상이
 # 아니다(furiosa 는 rngd 와 스펙 구조가 달라 별도 분기가 필요해 추가하지 않는다).
 vendor_json_path() {
   case "$1" in
@@ -94,7 +95,7 @@ vendor_json_path() {
 # NPUClusterPolicy 는 이 클러스터에 하나뿐이라는 전제는 pkg/npuctl/allocation.go 의 관례
 # (다중 정책은 이론상 가능이나 첫 항목만 본다)와 같다. 조회는 그 값이 실제로 필요한 함수(쓰기
 # 함수 전부)에서만 부른다 — summarize·diff 는 스냅샷 파일만 읽으므로 이 함수를 부르지 않고,
-# 그래서 클러스터에 접속하지 않는다(수정 라운드 1, Important 1). 첫 호출 때 이 실행 시작
+# 그래서 클러스터에 접속하지 않는다. 첫 호출 때 이 실행 시작
 # 시점의 advertiseBy·dra.enabled 도 함께 잡아 둔다 — cleanup(F절)이 실패 시 되돌릴 값이다.
 NCP_NAME="" NCP_NS="" START_ADVERTISE="" START_DRA_ENABLED=""
 resolve_ncp() {
@@ -124,7 +125,7 @@ dra_patch_body() {
 }
 
 # maybe_force_fail <이름표> — FORCE_FAIL_AT 시험 훅. DRY_RUN 으로 cleanup(종료 처리기)이
-# 실제로 되돌리기를 시도하는지 확인할 때만 쓴다(F절, 계획 O 완료 판정 7).
+# 실제로 되돌리기를 시도하는지 확인할 때만 쓴다.
 maybe_force_fail() {
   if [ "${FORCE_FAIL_AT:-}" = "$1" ]; then
     echo "FORCE_FAIL_AT=$1 — 시험 훅으로 강제 실패" >&2
@@ -210,7 +211,7 @@ safety_gate() {
   local resource count
   # resolve_ncp 를 파이프/명령치환(subshell) 안이 아니라 여기서 직접 부른다 — subshell 안에서
   # 부르면 NCP_NAME/NCP_NS 갱신이 그 subshell 을 못 벗어나 set_dra_enabled 등 부모 스코프의
-  # 직접 참조가 빈 값을 본다(수정 라운드 1에서 DRY_RUN 로그로 발견).
+  # 직접 참조가 빈 값을 본다.
   resolve_ncp
   resource="$(resource_name)"
   count="$(pod_count_using_resource "$NODE" "$resource")"
@@ -242,7 +243,7 @@ set_dra_enabled() {
 }
 
 # switch_advertise <to> — kubectl-npu CLI 로 advertiseBy 를 바꾸고 즉시 실제 spec 값으로
-# 교차 확인한다. CLI 의 성공 출력줄만 믿지 않는다(addendum §3, 이 CLI 의 첫 라이브 사용).
+# 교차 확인한다. CLI 의 성공 출력줄만 믿지 않는다(이 CLI 의 첫 라이브 사용).
 switch_advertise() {
   local to="$1" path actual
   safety_gate
@@ -338,8 +339,8 @@ dual_advertisement_condition() {
 
 # wait_retired_label <timeout초> — kcloud.ai/<vendor>.dra-retired=true 라벨이 노드에 붙을
 # 때까지 5초 간격으로 기다리고, 붙은 시각(UTC)을 로그에 남긴다. switch devicePlugin 뒤
-# wait_settle(dra-owned 회수 확인) 다음에 부른다 — 두 라벨은 별도 patch 라(addendum,
-# reconcileDRARetiredLabel) 같은 reconcile 에 함께 바뀌어도 순서상 뒤따라올 수 있어 따로 본다.
+# wait_settle(dra-owned 회수 확인) 다음에 부른다 — 두 라벨은 별도 patch 라(reconcileDRARetiredLabel)
+# 같은 reconcile 에 함께 바뀌어도 순서상 뒤따라올 수 있어 따로 본다.
 wait_retired_label() {
   local timeout="$1" key="kcloud.ai/${VENDOR}.dra-retired" elapsed=0 val
   if [ "$DRY_RUN" = "1" ]; then
@@ -429,7 +430,7 @@ diff_snapshots() {
 
 # summarize_snapshot <label> — 스냅샷 디렉터리의 파일만 읽어(클러스터 미접속) 기계가 낸 값
 # 한 줄을 표준출력에 낸다. evidence.sh 의 --expected 를 사람이 손으로 조립하지 않고 이 줄을
-# 그대로 복사해 쓰기 위한 것이다(수정 라운드 1, Important 1).
+# 그대로 복사해 쓰기 위한 것이다.
 summarize_snapshot() {
   local label="$1" dir="$OUT_DIR/$1" vpath rname alloc rs_count dc_count adv dra_en dual retired retired_key
   vpath="$(vendor_json_path "$VENDOR")"
@@ -451,7 +452,7 @@ summarize_snapshot() {
 }
 
 # pick_test_image — 이 노드에 이미 떠 있는 kube-system 표준 파드 중 셸(sh)과 ls 가 둘 다
-# 있는 이미지를 exec 로 확인해 고른다 — 새 이미지를 pull 하지 않는다(브리프 addendum C-2).
+# 있는 이미지를 exec 로 확인해 고른다 — 새 이미지를 pull 하지 않는다.
 # ls 까지 확인하는 이유: kube-proxy 는 sh 는 있으나 ls 가 없어(라이브 실측, "sh: ls: not
 # found") 장치 목록 확인 명령 자체가 실패했다 — sh 만 확인하면 이 실패를 못 잡는다.
 pick_test_image() {
@@ -509,8 +510,8 @@ cleanup_test_resource() {
   kubectl delete -n "$ns" "$@" --ignore-not-found --wait=true
 }
 
-# workload_dra — DRA ResourceClaim 으로 장치를 실제로 파드에 주입해 보인다(브리프 addendum
-# C, 첫 실행에 없던 절차). 확인 뒤 만든 자원을 지우고 안전 게이트가 0 으로 돌아왔는지 본다.
+# workload_dra — DRA ResourceClaim 으로 장치를 실제로 파드에 주입해 보인다(첫 라이브 실행에는
+# 없던 절차). 확인 뒤 만든 자원을 지우고 안전 게이트가 0 으로 돌아왔는지 본다.
 workload_dra() {
   local ns="default" claim="dp-dra-residue-${RUN_ID_LC}-claim" pod="dp-dra-residue-${RUN_ID_LC}-dra" image
   if [ "$DRY_RUN" = "1" ]; then

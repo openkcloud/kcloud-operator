@@ -1,4 +1,4 @@
-<!-- README.md: TT Job-모드 업그레이드 전이 kind 재현 사용법과 결과 | 생성일: 2026-09-20 -->
+<!-- README.md: TT Job-모드 업그레이드 전이 kind 재현 사용법과 결과 | 생성일: 2026-09-20 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
 
 # Tenstorrent Job-모드 업그레이드 전이 — kind 재현
 
@@ -207,8 +207,8 @@ UpgradeRequired 진입(13:39:53)부터 Failed 도달(13:43:09)까지 3분 16초(
 
 ## Evidence
 
-- 2026-09-20 계획 C T2 전이 성공 레코드
-- 2026-09-20 계획 C T2 롤백 레코드
+- 2026-09-20 전이 성공 레코드
+- 2026-09-20 롤백 레코드
 - 스크립트 자체 출력: `$OUT/success-transitions.log`, `$OUT/rollback-transitions.log`,
   `$OUT/success-events.txt`, `$OUT/rollback-events.txt`, `$OUT/success-install-job.yaml`,
   `$OUT/summary-*.json`.

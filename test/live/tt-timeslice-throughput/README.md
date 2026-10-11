@@ -1,4 +1,4 @@
-<!-- README.md: Tenstorrent 시분할 실 워크로드 처리량 하네스 | 생성일: 2026-09-22 | 수정일: 2026-09-23 -->
+<!-- README.md: Tenstorrent 시분할 실 워크로드 처리량 하네스 | 생성일: 2026-09-22 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
 
 # Tenstorrent 시분할 실 워크로드 처리량 하네스
 
@@ -95,8 +95,8 @@ ttnn 이 설치된 venv(`/opt/venv`)의 site-packages 에 넣는다 — venv 에
 되도록 venv python3 로 시스템 pip 을 빌려(PYTHONPATH) 설치한다.
 
 베이스 태그는 `BASE_IMAGE` build-arg 로 고른다. **카드 펌웨어(플래시 번들)와 맞는 tt-metal 런타임을
-써야 초기화가 성공한다** — 런타임이 펌웨어보다 크게 오래되면 Blackhole 초기화 중 abort 한다(계획 G
-의 v0.58.0-rc4 가 그랬다). 카드 펌웨어는 `tt-smi -s` 의 `FLASH_BUNDLE_VERSION` 으로 확인하고, 그에
+써야 초기화가 성공한다** — 런타임이 펌웨어보다 크게 오래되면 Blackhole 초기화 중 abort 한다
+(v0.58.0-rc4 가 그랬다). 카드 펌웨어는 `tt-smi -s` 의 `FLASH_BUNDLE_VERSION` 으로 확인하고, 그에
 맞는 최신 태그는 GHCR `ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64` 에서
 고른다. 2026-09-23 기준 번들 19.6.0.0(TT-KMD 2.11.0) 에는 v0.79.0 이 맞았다(조사 기록:
 2026-09-23 tt-metal 호환성 조사).

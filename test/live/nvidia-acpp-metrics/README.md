@@ -1,4 +1,5 @@
-<!-- README.md: NVIDIA ACPP 시분할 적용·해제로 kcloud_acpp_apply_total 라이브 표본을 남기는 하네스 사용법 | 생성일: 2026-09-23 | 수정일: 2026-09-24 -->
+<!-- README.md: NVIDIA ACPP 시분할 적용·해제로 kcloud_acpp_apply_total 라이브 표본을 남기는
+     하네스 사용법 | 생성일: 2026-09-23 | 수정일: 2026-10-11 (세션 전용 식별자 제거) -->
 
 # NVIDIA ACPP 지표 표본 하네스 (k8s-worker1)
 
@@ -9,7 +10,7 @@
 `sharingReady`(→ready)와 `runSharingOnly`/`runSharing`의 exclusive 분기(→disabled)에 있다(단위
 테스트로는 확인됐으나 라이브 표본은 없다). 이 하네스는 NVIDIA A30 를 가진 k8s-worker1 에
 layout 없는 순수 공유(sharing-only) `AcceleratorPartitionPolicy` 를 적용·해제해 `ready`·`disabled`
-두 result 를 실제로 한 번씩 찍고, 계획 G 가 쓴 스크레이프 방식(`kubectl port-forward` + `curl`)으로
+두 result 를 실제로 한 번씩 찍고, 스크레이프 방식(`kubectl port-forward` + `curl`)으로
 그 증가를 라이브 확인한다.
 
 ## 승인

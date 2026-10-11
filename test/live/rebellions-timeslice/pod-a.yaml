@@ -10,13 +10,12 @@
 #
 #       이미지는 images 저장소 rbln-workload(ubuntu22.04-v1)다. 마운트는 dist-packages
 #       둘에 더해 벤더 CDI 요건의 라이브러리 셋·도구 둘을 읽기 전용으로 더한다(node5 의
-#       /etc/cdi/rbln.yaml 과 같은 목록, task-2-report.md "추가 3·4 실행"으로 확정). 파드 안
-#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로(task-2-report.md
-#       "추가 5 실행"), RBLN_COMPILED_PATH 로 호스트 사전 컴파일 모델을 적재만 한다 — run.sh 의
+#       /etc/cdi/rbln.yaml 과 같은 목록으로 라이브 확인). 파드 안
+#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
+#       RBLN_COMPILED_PATH 로 호스트 사전 컴파일 모델을 적재만 한다 — run.sh 의
 #       precompile_host 가 같은 이름의 파일을 node5 에 미리 만들어 둔다. RBLN_NPU_NAME 은
-#       rebel.get_npu_name() 자동탐지가 실패할 때의 폴백이다(실제로는 자동탐지가 성공한다,
-#       task-2-report.md "추가 4 실행").
-# 생성일: 2026-09-25 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+#       rebel.get_npu_name() 자동탐지가 실패할 때의 폴백이다(실제로는 자동탐지가 성공한다).
+# 생성일: 2026-09-25 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 작업공간 경로 인용 제거; 뉘앙스·줄폭 복구)
 # ============================================================
 apiVersion: v1
 kind: Pod

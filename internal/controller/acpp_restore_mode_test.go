@@ -1,7 +1,7 @@
 // ============================================================
 // acpp_restore_mode_test.go: 삭제 시 MIG 모드 복원 envtest
 // 상세: 기본값에서는 아무것도 바뀌지 않고, 복원 정책에서만 모드 해제와 재부팅이 일어난다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11 (작업공간 경로 인용 제거)
 // ============================================================
 package controller
 
@@ -53,7 +53,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 		// 이미지를 실제로 설정한다 — 미설정이면 RequestReboot 이 "이미지 없음" 으로 먼저 실패해
 		// Job 이 안 생기고, 그러면 아래 rebootJobFor 부재 확인이 정책 분기 때문이 아니라 그
 		// 우연 때문에 통과해 버린다(실측 확인: 브리핑 원본은 이 설정이 없었고, steps 변수도
-		// 선언만 되고 검증되지 않았다 — 뮤테이션으로 실제 확인함, task-6-report.md 참고).
+		// 선언만 되고 검증되지 않았다 — 뮤테이션으로 실제 확인함).
 		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1")
 		// 총 실행 step 수가 아니라 -mig 0 명령 수만 센다 — 기존 삭제 경로도 GI 회수용 명령을
 		// 같은 executor 로 실행하므로(hardwareChanged 분기의 b.Rollback), 총합으로 재면 그
@@ -142,7 +142,7 @@ var _ = Describe("deletion restores MIG mode", func() {
 	// assertMigEmptyAndBaseline 이 이미 자신의 기준(o.Err != "")으로 관측 오류를 먼저 거절해서,
 	// handleNvidiaDeletion 경유로는 이 함수의 ModeObservable 게이트에 절대 도달하지 못한다
 	// (실측 확인: 이 함수를 통째로 부르는 버전은 ModeObservable 을 통째로 지우는 뮤테이션에도
-	// 통과했다 — task-6-report.md 참고). 그래서 이 함수 자신의 fail-closed 규율을 직접 확인한다.
+	// 통과했다). 그래서 이 함수 자신의 fail-closed 규율을 직접 확인한다.
 	It("refuses to touch the mode when observation is unreliable", func() {
 		wipeACPPs()
 		DeferCleanup(wipeACPPs)

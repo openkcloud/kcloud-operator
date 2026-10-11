@@ -20,7 +20,7 @@
 #       경로가 없다.
 #       PHASE 로 단계를 하나씩 부를 수 있다. quiesce/unquiesce(cordon 만, 파드
 #       삭제 없음)는 all 에 넣지 않는다 — 이 세 패키지 제거는 장치 상태를 바꾸지
-#       않으므로 기본은 cordon 하지 않는다(addendum). trap cleanup EXIT 는 이
+#       않으므로 기본은 cordon 하지 않는다. trap cleanup EXIT 는 이
 #       실행이 quiesce 로 cordon 했을 때만 uncordon 한다.
 #
 # 사용법:
@@ -28,7 +28,7 @@
 #   PHASE: verdict(RUN_DIR= 필요, 클러스터 미접속) | safety-gate | precheck |
 #          simulate | remove | postcheck | wait-postchecks | quiesce | unquiesce |
 #          all(기본, quiesce/unquiesce 제외 순서대로 실행)
-# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+# 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -42,7 +42,7 @@ fi
 
 PHASE="${PHASE:-all}"
 
-# 안전 관련 상수 — 정확히 이 세 이름만 제거한다(addendum). env 로 덮지 않는다:
+# 안전 관련 상수 — 정확히 이 세 이름만 제거한다. env 로 덮지 않는다:
 # 이 목록 자체가 게이트의 기준이라 실행 시점에 바꿀 수 있으면 게이트의 의미가 없다.
 PACKAGES=(nvidia-firmware-580-580.178.04 nvidia-firmware-595-595.91.07 nvidia-kernel-source-580)
 # 실행 중 버전과 짝이 맞는 패키지 — 시뮬레이션 결과에 이 중 하나라도 섞이면 중단(2차 방어).
@@ -61,7 +61,7 @@ log() { printf '[%s] %s\n' "$(date -u +%T)" "$*" >&2; }
 # verdict <run-dir> — 그 실행 디렉터리의 기계 파일만 읽어 판정 한 줄을 낸다.
 # 클러스터·노드에 접속하지 않는다(device-reset/run.sh 의 PHASE=verdict 와 같은 원칙).
 # 파일이 없으면 missing 으로 낸다 — 지어내지 않는다. nvidia_smi 는 ok|fail 두 값만
-# 쓰는 닫힌 표현이라(addendum 기계 줄 포맷) 증거 없음도 fail 로 낸다(ok 를 증명 못하면 ok 가 아니다).
+# 쓰는 닫힌 표현이라 증거 없음도 fail 로 낸다(ok 를 증명 못하면 ok 가 아니다).
 verdict() {
   local dir="$1" removed=0 p running nvidia_smi smi_count gpu dus
   if [ -f "$dir/post-dpkg.txt" ]; then
@@ -179,8 +179,8 @@ dus_state() {
 allocatable_gpu() {
   kubectl get node "$NODE" -o json 2>/dev/null | jq -r --arg r "$RESOURCE" '.status.allocatable[$r] // "미수집"'
 }
-# device_plugin_ready — 보조 증거용(브리프가 언급하는 유지 확인 대상이지만 addendum 의
-# 5분 게이트 여섯 조건에는 없다) — 판정에는 쓰지 않고 evidence 에만 남긴다.
+# device_plugin_ready — 보조 증거용(5분 게이트 여섯 조건에는 없다) — 판정에는 쓰지
+# 않고 evidence 에만 남긴다.
 device_plugin_ready() {
   local ready total
   ready="$(kubectl get pod -n kube-system -l app.kubernetes.io/name=nvidia-device-plugin-flat \
@@ -287,10 +287,10 @@ postcheck() {
   log "postcheck 완료 — PRE/POST 비교는 evidence.txt 참고"
 }
 
-# wait_postchecks — 최대 POSTCHECK_TIMEOUT초(기본 300, addendum 5분 상한) 10초 간격
+# wait_postchecks — 최대 POSTCHECK_TIMEOUT초(기본 300, 5분 상한) 10초 간격
 # 폴링. 여섯 조건(모듈 버전·nvidia-smi 장치 수·NDR driverLoaded·health·DUS·allocatable)이
 # 전부 맞을 때까지 기다리고, 통과 여부와 무관하게 마지막 관측값을 final-*.txt 에 남긴다
-# — verdict 가 그 파일만 읽는다. 실패해도 재부팅·재설치를 스스로 하지 않는다(addendum).
+# — verdict 가 그 파일만 읽는다. 실패해도 재부팅·재설치를 스스로 하지 않는다.
 wait_postchecks() {
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY_RUN: wait_postchecks 생략(제거를 안 했으므로 기다릴 것이 없다)" | evid "WAIT-POSTCHECKS(DRY_RUN)"
@@ -328,7 +328,7 @@ wait_postchecks() {
   return 1
 }
 
-# quiesce/unquiesce — 선택 조치(addendum). cordon 만 하고 파드는 지우지 않는다 — 패키지
+# quiesce/unquiesce — 선택 조치. cordon 만 하고 파드는 지우지 않는다 — 패키지
 # 제거가 device-plugin 의 NVML 핸들과 무관하기 때문이다. all 에는 없다.
 quiesce() {
   safety_gate

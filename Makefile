@@ -165,6 +165,11 @@ doc-cite-check: ## 주석·values·워크플로가 가리키는 docs/*.md 경로
 	bash hack/doc-cite-check.sh --self-test
 	bash hack/doc-cite-check.sh
 
+.PHONY: workspace-cite-check
+workspace-cite-check: ## 추적 파일이 가리키는 .superpowers 작업공간 경로 거부(스크립트 자가시험 먼저)
+	bash hack/workspace-cite-check.sh --self-test
+	bash hack/workspace-cite-check.sh
+
 .PHONY: conformance
 conformance: ## Verify every registered vendor satisfies the onboarding contract (test/conformance + internal/controller).
 	go test ./test/conformance/... -v

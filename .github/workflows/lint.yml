@@ -8,7 +8,8 @@
 #       참고) v* 태그 push 순간엔 실제로 돈다. CHECK_REGISTRY=1 로 직접 켠다 —
 #       helm·PyYAML 이 footprint-check 단계에서 이미 설치돼 추가 설치가 없다. test.yml 은
 #       make test 만 돌려 이 검사를 포함하지 않는다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-05 (docs 경로 인용 실재 게이트 추가)
+# 생성일: 2025-07-04 | 수정일: 2026-10-11 (docs 경로 인용 실재 게이트 추가; docs-path-check·private-ip-check·lint-config·kubectl-npu 린트 추가;
+# 작업공간 인용 거부 게이트 추가)
 name: Lint
 
 on:
@@ -42,10 +43,35 @@ jobs:
       - name: Doc citation existence gate
         run: make doc-cite-check
 
+      # docs/ 는 공개 저장소에 없는 형제 경로다 — 코드·차트·스크립트가 그 경로를 가리키면
+      # 공개 빌드에서 깨진다.
+      - name: Sibling docs path gate
+        run: make docs-path-check
+
+      # 추적 파일에 사내 내부 주소·계정이 들어가면 공개 릴리스로 새어나간다.
+      - name: Private address gate
+        run: make private-ip-check
+
+      # .superpowers 작업공간은 .gitignore 로 막혀 커밋되지 않는다 — 추적 파일이 그
+      # 경로나 task-N 보고서 파일명을 인용하면 받는 사람은 열 수 없는 경로를 안내받는다.
+      - name: Workspace citation gate
+        run: make workspace-cite-check
+
+      - name: Linter config verify
+        run: make lint-config
+
       - name: Run linter
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.1.0
+
+      # cmd/kubectl-npu 는 별도 go.mod 라 위 단계가 내려가지 않는다 — make lint 가 로컬에서
+      # 도는 두 모듈 중 하나가 CI 린트를 전혀 받지 않고 있었다. version 은 위 단계와 같게.
+      - name: Run linter (kubectl-npu plugin module)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1.0
+          working-directory: cmd/kubectl-npu
 
       - name: Setup Helm
         uses: azure/setup-helm@v4

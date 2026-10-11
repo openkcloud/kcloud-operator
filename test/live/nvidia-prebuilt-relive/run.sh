@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# run.sh: 계획 K 라이브 재확인 — aa7a13b 포함 사전 컴파일 이미지로 k8s-worker1 빈 노드 전이
+# run.sh: 라이브 재확인 — aa7a13b 포함 사전 컴파일 이미지로 k8s-worker1 빈 노드 전이
 # 상세: ADR-002 "해소된 결합" 절이 라이브 미확인으로 남겨 둔 것을 닫는다 — images 저장소
 #       커밋 aa7a13b/a40b94e 가 사전 컴파일 정합성 가드에서 apt-cache madison 아카이브
 #       조회를 제거했는데, k8s-worker1 에 떠 있던 -v2 이미지는 그 제거 이전 빌드였다.
@@ -27,8 +27,9 @@
 #          quiesce | unquiesce | empty-node | reboot-recover | wait-empty | observe |
 #          all(기본, precheck→dip-patch→quiesce→empty-node→reboot-recover→wait-empty→
 #              observe→unquiesce 순서대로 실행. rollback-dip 은 제외)
-# 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거;
-#                                        reboot_recover 주석에 함정을 겪은 실행일 명시)
+# 생성일: 2026-09-28 | 수정일: 2026-10-11 (계획서 항목 토큰 제거;
+#                                        reboot_recover 주석에 함정을 겪은 실행일 명시;
+#                                        세션 전용 식별자 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -42,7 +43,7 @@ fi
 
 PHASE="${PHASE:-all}"
 
-# 안전 관련 상수 — 이 하네스가 다루는 노드·정책·자원은 고정이다(addendum 닫힌 목록).
+# 안전 관련 상수 — 이 하네스가 다루는 노드·정책·자원은 고정이다.
 NODE="k8s-worker1"
 RESOURCE="nvidia.com/gpu"
 DUS_NAME="${NODE}-nvidia"
@@ -56,7 +57,7 @@ REGISTRY_REPO="${REGISTRY_REPO:?REGISTRY_REPO 을 지정하십시오}"
 NEW_TAG="${IMAGE_TAG:-${REGISTRY_REPO}:${DRIVER_VERSION}-k${KERNEL}-${NEW_VARIANT}}"
 
 # PACKAGES — 9개, 순서 고정. entrypoint.sh 의 nvidia_prebuilt_cleanup_cmd 와
-# 2026-09-26 실행 기록(task-6-report.md Step 3)이 정확히 이 순서다: 모듈이
+# 2026-09-26 실행 기록이 정확히 이 순서다: 모듈이
 # nvidia-kernel-common 을, 그것이 nvidia-firmware 를 의존하므로 모듈이 앞, firmware 가
 # 맨 뒤. env 로 덮지 않는다 — 목록 자체가 이 절차의 근거다.
 PACKAGES=(
@@ -78,7 +79,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 
 log() { printf '[%s] %s\n' "$(date -u +%T)" "$*" >&2; }
 
-# verdict <run-dir> — 그 실행 디렉터리의 기계 파일만 읽어 addendum 이 정한 판정 한 줄을
+# verdict <run-dir> — 그 실행 디렉터리의 기계 파일만 읽어 판정 한 줄을
 # 낸다. 클러스터·노드에 접속하지 않는다(형제 하네스들과 같은 원칙). 파일이 없으면
 # missing 으로 낸다 — 지어내지 않는다.
 verdict() {

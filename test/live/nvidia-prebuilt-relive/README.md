@@ -1,5 +1,6 @@
-<!-- README.md: k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 하네스 사용법 | 생성일: 2026-09-28 | 수정일: 2026-10-10 (계획서 항목 토큰 제거; 끊긴 조사 복구) -->
-# k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 (계획 K 재확인)
+<!-- README.md: k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인 하네스 사용법 | 생성일: 2026-09-28 |
+     수정일: 2026-10-11 (계획서 항목 토큰 제거; 끊긴 조사 복구; 세션 전용 식별자 제거) -->
+# k8s-worker1 NVIDIA 사전 컴파일 라이브 재확인
 
 ## 왜
 
@@ -22,7 +23,7 @@ DIP 에 등록하고, 2026-09-26 실측 레코드가 실행한 것과 같은 9�
    패키지**(`PACKAGES` 배열, 순서·이름 고정), `sudo reboot`(`.91` 관리 노드 무승인).
    `autoremove`·`purge`·다른 패키지 제거·수동 dpkg/apt 재설치는 하지 않는다.
 3. 복구 수단(실패했을 때만): `PHASE=rollback-dip` 으로 DIP 를 이전 값(`-v2`)으로 되돌리고
-   operator 자기복구가 다시 돌 때까지 기다린다(30분). 그래도 안 되면 계획 J 의 수동 정리
+   operator 자기복구가 다시 돌 때까지 기다린다(30분). 그래도 안 되면 수동 정리
    절차(2026-09-25 실측)를 컨트롤러
    승인 하에 각 명령 전 보고하며 따른다 — 이 하네스가 스스로 하지 않는다.
 4. 노드 대상은 `kubectl get node k8s-worker1 -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}'`
@@ -133,7 +134,7 @@ RUN_DIR=test/live/nvidia-prebuilt-relive/runs/<RUN_ID>-nvidia PHASE=verdict bash
    기록·판정 기계 줄에는 없음)와 모듈 버전·srcversion 일치: 설치가 실제로 일어났고
    건너뛰지 않았다는 보강 증거.
 
-`RELIVE` 줄의 `madison`/`apt_install` 은 addendum 이 요구하는 형식대로 남기지만,
+`RELIVE` 줄의 `madison`/`apt_install` 은 위 RELIVE 줄 형식대로 남기지만,
 이 절차의 실제 판정 근거는 위 1~3 이다 — 보고서는 이 셋을 함께 적는다.
 
 ## 이 하네스가 하지 않는 것

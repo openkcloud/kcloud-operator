@@ -1,7 +1,7 @@
 // ============================================================
 // operation_reboot_test.go: 재부팅 작업 본체 envtest
 // 상세: 재부팅은 되돌릴 수 없다 — 상한·BootID 검증·중복 방지가 이 스펙의 전부다.
-// 생성일: 2026-08-01
+// 생성일: 2026-08-01 | 수정일: 2026-10-11 (가리킬 곳 없는 보고서 참조 제거)
 // ============================================================
 package controller
 
@@ -237,7 +237,7 @@ var _ = Describe("node reboot participant", func() {
 	// 를 다시 부르면(WaitingForReboot → Applying 전이 다음 pass), 노드 상태가 그대로라도
 	// BootObserved 를 다시 판정해 EventBootObserved 를 또 내면 안 된다. Applying 에는 그 전이가
 	// 없어(operation.Next 참고) "정의되지 않은 전이" 에러 루프가 된다 — 브리핑 코드를 그대로
-	// 옮기면 재현되는 결함이었다(보고서 참고). ApplyDone 으로 마감해야 한다.
+	// 옮기면 재현되는 결함이었다. ApplyDone 으로 마감해야 한다.
 	// 깨는 뮤테이션: StepRebootObserved 가드를 지우면 이 테스트가 EventBootObserved 를 받고 실패한다.
 	It("does not re-report boot observed once it is already journaled (reentrancy)", func() {
 		node := "reboot-part-d"

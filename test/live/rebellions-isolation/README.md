@@ -1,4 +1,4 @@
-<!-- README.md: Rebellions ATOM 격리 4축(연산·용량·대역폭·장애) 라이브 실측 하네스 | 생성일: 2026-09-28 -->
+<!-- README.md: Rebellions ATOM 격리 4축(연산·용량·대역폭·장애) 라이브 실측 하네스 | 생성일: 2026-09-28 | 수정일: 2026-10-11 (출력 경로를 중립 자리표시자로 교체) -->
 
 # Rebellions ATOM 격리 4축 실측 하네스
 
@@ -66,7 +66,7 @@ bash test/collect/evidence.sh --node node5 --vendor rebellions \
   --command "RUN_DIR=$(pwd)/test/live/rebellions-isolation/.run PHASE=verdict bash test/live/rebellions-isolation/run.sh" \
   --expected "ISOLATION: compute=<실측값> capacity=<실측값> bandwidth=<실측값> fault=<실측값>" \
   --id-suffix isolation \
-  -o ../docs/.superpowers/worklog/evidence/<날짜>-rebellions-isolation
+  -o <결과 디렉터리>/<날짜>-rebellions-isolation
 ```
 
 주요 env: `KUBECTL_CONTEXT`, `NODE_SSH`(기본 <노드 IP>), `DEV0`/`DEV1`(기본 0/1),

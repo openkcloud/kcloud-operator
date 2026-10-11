@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================
 # run.sh: 벤더 장치 리셋 명령을 실제 노드에서 실행해 판정하는 하네스
-# 상세: nvidia(k8s-worker1, nvidia-smi -r)·tenstorrent(k8s-worker3, tt-smi -r) 두 벤더만
-#       다룬다 — 계획 L 이 CapReset 에 수단이 있다고 판정한 벤더만 대상이다(furiosa·
-#       rebellions 는 Unsupported 라 이 하네스가 다루지 않는다). 안전 게이트(그 노드에서
-#       그 벤더 자원을 요구하는 파드 0개)를 모든 쓰기 앞에 두고, 리셋 전/후 장치 목록·
-#       dmesg·NodeDeviceReport·AcceleratorHealth·DriverUpgradeState 를 하나의 증거
-#       파일(evidence.txt)에 순서대로 남긴다. DRY_RUN=1 이면 안전 게이트·상태 조회 등
+# 상세: 벤더가 장치 리셋 명령을 노출하는 두 벤더만 다룬다 — nvidia(k8s-worker1,
+#       nvidia-smi -r)·tenstorrent(k8s-worker3, tt-smi -r). furiosa·rebellions 는 공개
+#       인터페이스에 리셋 수단 자체가 없어 대상이 아니다. `internal/vendorcap` 레지스트리의
+#       CapReset 등급은 이 하네스 실측의 결과다 — nvidia 는 Native, tenstorrent 는
+#       Unsupported(2026-10-02 확정, 그 항목의 TestRef 가 이 파일이다). 안전
+#       게이트(그 노드에서 그 벤더 자원을 요구하는 파드 0개)를 모든 쓰기 앞에 두고, 리셋
+#       전/후 장치 목록·dmesg·NodeDeviceReport·AcceleratorHealth·DriverUpgradeState 를
+#       하나의 증거 파일(evidence.txt)에 순서대로 남긴다. DRY_RUN=1 이면 안전 게이트·상태
+#       조회 등
 #       읽기 전용 확인은 끝까지 돌고, 클러스터·노드를 바꾸는 명령(리셋·cordon·파드 삭제·
 #       재부팅·시험 워크로드 파드)은 출력만 한다.
 #       PHASE 로 단계를 하나씩 부를 수 있다. quiesce/unquiesce(cordon+device-plugin 파드
 #       삭제)와 reboot-recover 는 all 에 넣지 않는다 — 리셋이 막히거나 장치가 안 돌아올
-#       때만 판단해서 쓰는 조치이기 때문이다(addendum §2).
-#       bmc-sel(계획 O 후속, k8s-worker3 전용)은 ipmitool 로 BMC SEL 을 읽는다 —
+#       때만 판단해서 쓰는 조치이기 때문이다.
+#       bmc-sel(k8s-worker3 전용)은 ipmitool 로 BMC SEL 을 읽는다 —
 #       SEL_STAGE=before|after(기본 before)로 리셋 전/후 sel-<stage>.txt 를 남기고,
 #       after 는 before 와 diff 해 sel-delta.txt 를 만든다. do_reset()은 실제 리셋
 #       직전에 원격 dmesg -w -T·journalctl -kf 를 백그라운드로 열어 dmesg-live.log·
@@ -28,7 +31,8 @@
 #   FORCE_FAIL_AT=<phase 이름> 을 주면 그 함수 진입 직후 강제로 실패해 trap cleanup 의
 #   동작을 라이브 없이 확인할 수 있다. DRY_RUN=1 과 함께 쓴다.
 # 생성일: 2026-09-28 | 수정일: 2026-10-11 (bmc-sel 추가, do_reset 에 실시간 커널 로그
-#       캡처 연결, verdict 에 RESET_REPRO 줄 추가; 계획서 항목 토큰 제거)
+#       캡처 연결, verdict 에 RESET_REPRO 줄 추가; 계획서 항목 토큰 제거; 세션 전용
+#       식별자 제거)
 # ============================================================
 set -euo pipefail
 export LC_ALL=C LANG=C
@@ -43,14 +47,14 @@ fi
 PHASE="${PHASE:-all}"
 
 # verdict <run-dir> — 그 실행 디렉터리에 남은 기계 파일만 읽어 판정 한 줄을 낸다.
-# 클러스터·노드에 접속하지 않는다 — VENDOR 조차 몰라도 된다(리뷰 Important 2, R-O12
-# 재발 수정). rc 는 reset-exit.txt(실제로 받은 종료 코드가 있을 때만) 또는
+# 클러스터·노드에 접속하지 않는다 — VENDOR 조차 몰라도 된다. rc 는
+# reset-exit.txt(실제로 받은 종료 코드가 있을 때만) 또는
 # reset-ssh-lost.txt(SSH/채널이 끊겨 종료 코드를 못 받았을 때 do_reset 이 남긴다) —
 # 후자를 rc=1 로 지어내면 실제 exit=1 과 구분이 안 된다. devices 는 pre/post-devices.txt 비교, node 는
 # pre/post-boot-id.txt 비교(precheck·postcheck 가 남긴다, 이 라운드부터). 세 파일이
 # 없으면 각각 missing/missing/unknown 으로 낸다 — 지어내지 않는다.
 #
-# RESET_REPRO 줄(계획 O 후속, addendum "판정 기계 줄")은 위 rc·node 계산을 그대로
+# RESET_REPRO 줄은 위 rc·node 계산을 그대로
 # 재사용해 sel_new(sel-delta.txt 의 diff '>' 줄 수 — before/after 둘 다 있어야 생긴다,
 # 없으면 missing)·last_kernel_line(dmesg-live.log 의 mtime 이 reset-start-utc.txt 의
 # 리셋 시각 이후인지 — 파일이 없으면 missing, 있는데 그 전이면 no)을 더한다. 이 둘도
@@ -113,12 +117,12 @@ fi
 
 VENDOR="${VENDOR:?VENDOR 필요(nvidia|tenstorrent)}"
 DRY_RUN="${DRY_RUN:-0}"
-RECOVER_TIMEOUT="${RECOVER_TIMEOUT:-300}"   # addendum §5: 장치 재열거 상한
-ADVERTISE_TIMEOUT="${ADVERTISE_TIMEOUT:-300}"  # addendum §5: kubectl npu health 상한 5분
+RECOVER_TIMEOUT="${RECOVER_TIMEOUT:-300}"   # 장치 재열거 상한
+ADVERTISE_TIMEOUT="${ADVERTISE_TIMEOUT:-300}"  # kubectl npu health 상한 5분
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 
 # vendor_conf — 벤더별 상수. 이 하네스가 다루는 벤더는 nvidia·tenstorrent 둘뿐이다
-# (계획 L 이 CapReset 수단 있음으로 판정한 전부) — 그 밖의 벤더는 지원하지 않는다.
+# (벤더가 리셋 명령을 노출하는 전부) — 그 밖의 벤더는 지원하지 않는다.
 case "$VENDOR" in
   nvidia)
     NODE="${NODE:-k8s-worker1}"
@@ -150,7 +154,7 @@ EVIDENCE="${OUT_DIR}/evidence.txt"
 log() { printf '[%s] %s\n' "$(date -u +%T)" "$*" >&2; }
 
 # force_fail_check <지점 이름> — FORCE_FAIL_AT 시험 훅. 일치하면 강제로 exit 1 해
-# trap cleanup 을 라이브 없이(DRY_RUN=1 과 함께) 확인할 수 있게 한다(계획 O 완료 판정 7).
+# trap cleanup 을 라이브 없이(DRY_RUN=1 과 함께) 확인할 수 있게 한다.
 force_fail_check() {
   if [ "${FORCE_FAIL_AT:-}" = "$1" ]; then
     echo "FORCE_FAIL_AT=$1 — 시험 훅으로 강제 실패" >&2
@@ -231,7 +235,7 @@ remote() {
 
 # device_list_cmd / device_count_cmd — 벤더별 장치 목록·개수 확인 원격 명령 문자열.
 # 개수는 온도·메모리처럼 계속 바뀌는 필드가 아니라 "장치 노드가 몇 개 보이는가"만 세어
-# 리셋 전후 비교를 안정적으로 만든다(addendum §5: 같은 장치 목록·같은 PCI 주소).
+# 리셋 전후 비교를 안정적으로 만든다(같은 장치 목록·같은 PCI 주소).
 device_list_cmd() {
   case "$VENDOR" in
     nvidia) echo "sudo /usr/bin/nvidia-smi -L; sudo /usr/bin/nvidia-smi --query-gpu=index,uuid,name,pci.bus_id,persistence_mode,temperature.gpu,memory.used,memory.total,driver_version --format=csv" ;;
@@ -252,7 +256,7 @@ reset_cmd() {
 }
 # device_check_cmd — workload_check 시험 파드 안에서 실행할 명령. 브리프 Step 4 "시험
 # 워크로드로 쓸 수 있는지 확인"은 파드가 Running 되는 것만으로는 부족하다 — 로그에 장치
-# 파일 자체가 보여야 한다(수정 라운드 1, Important 3).
+# 파일 자체가 보여야 한다.
 device_check_cmd() {
   case "$VENDOR" in
     nvidia) echo "ls -la /dev/nvidia* 2>&1" ;;
@@ -322,7 +326,7 @@ precheck() {
   count="$(remote "$(device_count_cmd)" | tr -d '[:space:]')"
   echo "$count" > "${OUT_DIR}/pre-device-count.txt"
   ndr_count > "${OUT_DIR}/pre-ndr-count.txt"
-  # boot_id: PHASE=verdict 의 node 판정 기준선(수정 라운드 1, R-O12) — postcheck 가 남기는
+  # boot_id: PHASE=verdict 의 node 판정 기준선 — postcheck 가 남기는
   # post-boot-id.txt 와 비교해 재부팅 여부를 기계적으로 가른다.
   remote 'cat /proc/sys/kernel/random/boot_id' > "${OUT_DIR}/pre-boot-id.txt"
   dmesg_n="$(remote "sudo dmesg | wc -l")"
@@ -330,9 +334,9 @@ precheck() {
   log "precheck 완료: 장치 개수=${count} dmesg 기준선=${dmesg_n}줄"
 }
 
-# start_live_capture/stop_live_capture — 계획 O 후속(addendum "실시간 커널 로그
-# 캡처"): do_reset() 가 실제 리셋 직전에 원격 dmesg -w -T·journalctl -kf 를 백그라운드
-# SSH 로 열어 로컬 파일에 흘려 둔다. 리셋 중 노드가 죽어 SSH 가 끊기면 이 두 파일의
+# start_live_capture/stop_live_capture — do_reset() 가 실제 리셋 직전에 원격 dmesg -w -T·
+# journalctl -kf 를 백그라운드 SSH 로 열어 로컬 파일에 흘려 둔다. 리셋 중 노드가 죽어
+# SSH 가 끊기면 이 두 파일의
 # 마지막 줄이 크래시 직전 커널 기록이다 — 원격 디스크 flush 에 기대지 않고 스트림
 # 자체를 로컬로 받는다. ServerAliveInterval/CountMax(합 4초)를 짧게 잡아 연결이
 # 끊겼을 때 로컬 ssh 클라이언트도 빨리 죽는다.
@@ -374,7 +378,7 @@ do_reset() {
     return 0
   fi
   start_live_capture
-  # reset-start-utc.txt: PHASE=verdict 의 last_kernel_line 판정 기준시(addendum) — 리셋
+  # reset-start-utc.txt: PHASE=verdict 의 last_kernel_line 판정 기준시 — 리셋
   # 명령을 실제로 보내기 직전 시각.
   date -u +%FT%TZ > "${OUT_DIR}/reset-start-utc.txt"
   local out ssh_rc rc
@@ -529,10 +533,10 @@ YAML
     return 0
   fi
   printf '%s\n' "$manifest" | kubectl apply -f - >&2
-  # 브리프 Step 4·addendum C: Pending 을 벗어남(5분 상한)을 관문으로 삼는다. 이
+  # Pending 을 벗어남(5분 상한)을 관문으로 삼는다. 이
   # 명령(ls)은 거의 즉시 끝나 kubectl wait --for=...=Running 의 watch 가 그 찰나를
-  # 놓치고 이미 Succeeded 로 넘어간 뒤일 수 있다(수정 라운드 1 라이브 1차 시도에서
-  # 실제로 관측 — phase=Succeeded 인데 wait 는 timeout 으로 실패해 로그를 못 건졌다).
+  # 놓치고 이미 Succeeded 로 넘어간 뒤일 수 있다(실제로 관측 — phase=Succeeded 인데 wait 는
+  # timeout 으로 실패해 로그를 못 건졌다).
   # Running·Succeeded·Failed 어느 쪽이든 "시작은 했다"로 보고, 로그는 지우기 전에
   # 반드시 먼저 받는다.
   local elapsed=0 phase=""
@@ -557,16 +561,16 @@ YAML
   return 1
 }
 
-# bmc_sel — 계획 O 후속: ipmitool 로 BMC SEL 을 읽는다. addendum §1 로 k8s-worker3
+# bmc_sel — ipmitool 로 BMC SEL 을 읽는다. k8s-worker3
 # 만 허용(닫힌 목록) — 다른 노드(예: VENDOR=nvidia 로 잘못 호출)면 그 자리에서 거절한다.
-# 실행하는 명령은 addendum §2 가 허용한 읽기 4종뿐이다: sel elist(sel-<stage>.txt 로
+# 실행하는 명령은 읽기 4종뿐이다: sel elist(sel-<stage>.txt 로
 # 저장 — before/after diff 대상은 이 출력만), sel info·mc info·chassis status(evidence.txt
 # 로만, 참고용). ipmitool power·chassis power·sel clear 같은 쓰기 명령은 없다.
 # SEL_STAGE=after 이고 sel-before.txt 가 이미 있으면 diff 로 sel-delta.txt 를 만든다.
 bmc_sel() {
   local stage="${SEL_STAGE:-before}"
   if [ "$NODE" != "k8s-worker3" ]; then
-    echo "PHASE=bmc-sel 은 k8s-worker3 에서만 허용한다(addendum §1) — NODE=${NODE}" >&2
+    echo "PHASE=bmc-sel 은 k8s-worker3 에서만 허용한다 — NODE=${NODE}" >&2
     return 1
   fi
   local installed
@@ -595,15 +599,14 @@ bmc_sel() {
   fi
 }
 
-# quiesce/unquiesce — addendum §2 의 좁은 조치: cordon(신규 비-DaemonSet 스케줄 차단) +
+# quiesce/unquiesce — 좁은 조치: cordon(신규 비-DaemonSet 스케줄 차단) +
 # 그 벤더 device-plugin DS 파드 삭제(장치를 다시 열기 전까지의 짧은 창을 만든다). reset 이
 # "장치 사용 중"으로 막힐 때만 판단해서 쓰는 조치라 all 에는 넣지 않는다. cordon 은
 # DaemonSet 파드의 기본 toleration(node.kubernetes.io/unschedulable) 때문에 그 자체로는
 # 재스케줄을 막지 못한다 — 실제 효과는 파드 삭제가 만드는 창뿐이다. 이 한계를 보고서에
 # 그대로 적는다. **허용 조치는 이 cordon + 해당 DS 파드 삭제뿐이다** — kill -9·커스텀
 # taint·operator 상태 라벨 재사용 등 이 함수 밖의 수동 조치는 컨트롤러 승인 없이 다시
-# 하지 않는다(수정 라운드 1, Important 1 — 실제로 있었던 세 조치는 task-3-report.md
-# "승인 범위 밖 수동 조치" 절 참고).
+# 하지 않는다 — 실제로 세 차례 시도됐고 전부 되돌렸다.
 quiesce() {
   safety_gate
   force_fail_check quiesce
@@ -624,7 +627,7 @@ quiesce() {
   printf 'cordon %s + 삭제된 파드(%s):\n%s\n' "$NODE" "${DP_LABELS[*]}" "$before" | evid "QUIESCE"
 }
 # unquiesce 는 quiesce 를 되돌리는 동작이라 safety_gate 를 걸지 않는다 — 되돌리기를
-# "장치를 쓰는 파드가 생겼다"는 이유로 막으면 cordon 이 풀리지 않고 남는다(수정 라운드 1, D).
+# "장치를 쓰는 파드가 생겼다"는 이유로 막으면 cordon 이 풀리지 않고 남는다.
 unquiesce() {
   force_fail_check unquiesce
   if [ "$DRY_RUN" = "1" ]; then

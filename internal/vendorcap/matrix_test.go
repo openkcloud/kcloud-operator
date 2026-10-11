@@ -1,7 +1,7 @@
 // ============================================================
 // matrix_test.go: 매트릭스 렌더가 golden 과 같은지
 // 상세: 레지스트리를 바꾸면 golden 도 같이 갱신해야 통과한다(문서와 코드의 동기 강제).
-// 생성일: 2026-09-19
+// 생성일: 2026-09-19 | 수정일: 2026-10-11 (세션 전용 식별자 제거)
 // ============================================================
 
 package vendorcap
@@ -59,7 +59,7 @@ func TestVerificationColumnShowsUnsupportedAssuranceButNotUnknown(t *testing.T) 
 	}
 
 	// rebellions/isolation 이 마지막 남은 Unknown 칸이었다(2026-09-28 4축 실측으로
-	// Unsupported/hardware 로 확정 — node5, test/live/rebellions-isolation). 계획 L 의
+	// Unsupported/hardware 로 확정 — node5, test/live/rebellions-isolation).
 	// 목표(Unknown 전량 제거)가 이 레지스트리에서 달성돼 Unknown 실물이 더 없다. 렌더
 	// 로직이 Unknown 을 Unsupported 와 다르게 보이는지는 여전히 지켜야 하므로, 기존 칸
 	// 하나를 이 테스트 동안만 합성 Unknown 값으로 바꿔 확인하고 끝나면 되돌린다.

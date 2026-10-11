@@ -4,7 +4,7 @@
 //
 //	저널 일치 재-reconcile 은 DP 를 다시 재시작하지 않음(멱등).
 //
-// 생성일: 2026-07-29 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-07-29 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 세션 전용 식별자 제거)
 // ============================================================
 package controller
 
@@ -386,7 +386,7 @@ func TestSharingReadyCountsOnlyWhenTransitioned(t *testing.T) {
 // TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount 는 리뷰가 지적한 실제 결함을 재현한다.
 // runSharingOnly(레이아웃 없는 순수 공유 정책)는 partition-Ready 지점을 거치지 않으므로 ts.Phase
 // 를 채우지 않은 채로 runSharing 을 부른다. 판정을 ts.Phase 로 추정했다면 이 재조정에서 "Phase 가
-// 비어 있으니 전이다" 로 오판해 매번 다시 센다 — 계획 J 라이브 표본에서 해제 단계에 준비 완료
+// 비어 있으니 전이다" 로 오판해 매번 다시 센다 — 라이브 표본에서 해제 단계에 준비 완료
 // 계수가 한 번 더 오른 것이 이 경로였다.
 func TestRunSharingReconfirmWithEmptyPhaseDoesNotRecount(t *testing.T) {
 	ctx := context.Background()

@@ -5,7 +5,7 @@
 #       한 테스트 명령의 실행 결과를 모아 §3.6 필드의 JSON/Markdown 짝을 만든다.
 #       측정값을 지어내지 않는다 — NDR 에 없는 필드는 "미수집" 으로 남긴다.
 #       --validate 는 schema.json 의 필수 키·verdict enum 으로 레코드를 검사한다.
-# 생성일: 2026-09-20 | 수정일: 2026-09-28(수정 라운드 1: doc_id/title 충돌 방지 --id-suffix 추가)
+# 생성일: 2026-09-20 | 수정일: 2026-10-11 (doc_id/title 충돌 방지 --id-suffix 추가; 세션 전용 식별자 제거)
 # ============================================================
 set -euo pipefail
 
@@ -317,7 +317,7 @@ commit_md="${BT}${commit}${BT}"
 command_md="${BT}${command_str}${BT}"
 expected_md="${BT}${expected}${BT}"
 # id_suffix 가 있으면 title/doc_id 에 덧붙여 같은 노드·벤더·날짜의 다른 측정 종류를
-# 구분한다(기본은 빈 문자열 — 기존 레코드와 동작이 같다, 수정 라운드 1 Important 2).
+# 구분한다(기본은 빈 문자열 — 기존 레코드와 동작이 같다).
 title_suffix=""
 doc_id_suffix=""
 if [ -n "$id_suffix" ]; then

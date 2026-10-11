@@ -1,4 +1,4 @@
-<!-- README.md: test/collect/ evidence 수집 스크립트 사용법 | 생성일: 2026-09-20 -->
+<!-- README.md: test/collect/ evidence 수집 스크립트 사용법 | 생성일: 2026-09-20 | 수정일: 2026-10-11 (출력 경로를 중립 자리표시자로 교체) -->
 
 # test/collect — §3.6 evidence 레코드 수집
 
@@ -91,7 +91,7 @@ cd kcloud-operator
 ./test/collect/evidence.sh --node k8s-worker3 --vendor tenstorrent \
   --command "bash test/live/tt-install-job/run.sh" \
   --expected '"verdict":"PASS"' --backend devicePlugin \
-  -o ../docs/.superpowers/worklog/evidence/<날짜>-tt-install-job
+  -o <결과 디렉터리>/<날짜>-tt-install-job
 ```
 
 `test/live/tt-install-job/run.sh` 는 현재 로드된 드라이버 버전과 DIP 선언 버전이 같을 때

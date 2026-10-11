@@ -1,4 +1,4 @@
-<!-- README.md: Rebellions 시분할 실 워크로드 동시 실행 하네스 | 생성일: 2026-09-25 | 수정일: 2026-09-29 -->
+<!-- README.md: Rebellions 시분할 실 워크로드 동시 실행 하네스 | 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 놓친 한 자리 추가 교체) -->
 
 # Rebellions 시분할 실 워크로드 동시 실행 하네스
 
@@ -91,7 +91,7 @@ PHASE=verdict OUT=/tmp/rebellions-timeslice-evidence bash test/live/rebellions-t
 bash test/collect/evidence.sh --node node5 --vendor rebellions \
   --command "bash test/live/rebellions-timeslice/run.sh" --expected "verdict=pass" \
   --mode sharing --backend devicePlugin --resource rebellions/atom \
-  -o docs/.superpowers/worklog/evidence/2026-09-25-rebellions-timeslice
+  -o <결과 디렉터리>/2026-09-25-rebellions-timeslice
 ```
 
 주요 env: `KUBECTL_CONTEXT`, `NODE_SSH`(기본값은 `kubectl get node $NODE` 의 InternalIP다.
@@ -138,12 +138,12 @@ bash test/collect/evidence.sh --node node5 --vendor rebellions \
 | dist-packages | 호스트 site-packages 둘 | `/host-local`·`/host-lib`(읽기 전용) | `import rebel` 에 필요 |
 | 사전 컴파일 캐시 | `/home/kcloud/rbln-ts-cache` | `/models`(읽기 전용) | 아래 "컴파일은 어디서" 참조 |
 
-근거는 `.superpowers/sdd/2026-09-29-plan-q-rebellions-timeslice-tester/task-2-report.md` 의
-"추가 3·4·5 실행"이다.
+근거는 2026-09-29 node5 라이브 실행이다 — 마운트 중 하나라도 빠지면 컨테이너 안 NPU 자동탐지·런타임
+초기화가 실패했다.
 
 컴파일은 파드 안이 아니라 호스트에서 한다. 이 CDI 마운트를 전부 갖춰도 파드 안
 `compile_from_torch` 는 벤더가 실패 원인을 봉인해 둔 채(암호화된 진단 파일) 항상
-실패한다(task-2-report.md "추가 5 실행").
+실패한다.
 그래서 기본 설계는 **호스트 사전 컴파일 + 파드 적재**다: `run.sh` 의 `precompile_host` 가
 측정 전에 ssh 로 node5 에서 `workload.py` 를 `PHASE=compile-only` 로 한 번 실행해
 `/home/kcloud/rbln-ts-cache/matmul-<MATMUL_DIM>-<RBLN_NPU_NAME>.rbln` 을 만들고(있으면
@@ -160,7 +160,7 @@ apply` 로 직접 쓸 때의 기본값이다. `MATMUL_DIM=1024 MEASURE_MODE=pods
 을 전제하므로 기본값을 바꾸면 데모 사본도 함께 고쳐야 한다.
 
 `RBLN_NPU_NAME` 은 `rebel.get_npu_name()` 자동탐지가 실패할 때만 쓰이는 폴백이며, 실제로는
-자동탐지가 성공한다(task-2-report.md "추가 4 실행").
+자동탐지가 성공한다.
 
 서비스 복원은 시작값 기준을 따른다. node5 의 `atomplus-vllm.service` 는 이 하네스가 아닌 다른
 계정이 운영한다. `preflight` 가 기록한 시작값(`active`/`inactive`)이 복원 기준이고, 시작값이

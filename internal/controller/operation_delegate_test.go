@@ -4,7 +4,7 @@
 //
 //	그리고 정책부터 근거까지 전 구간을 한 번에 통과시키는 이음매 시험.
 //
-// 생성일: 2026-08-01 | 수정일: 2026-10-10 (계획서 항목 토큰 제거)
+// 생성일: 2026-08-01 | 수정일: 2026-10-11 (계획서 항목 토큰 제거; 작업공간 경로 인용 제거; 줄폭 재접음; 가리킬 곳 없는 참조 제거)
 // ============================================================
 package controller
 
@@ -113,7 +113,7 @@ var _ = Describe("delegate mode", func() {
 	//       (이걸 빠뜨리면 gate 를 켜는 순간 클러스터의 모든 Ready 정책이 재적용된다 — 가장 큰 폭발 반경.)
 	// 깨는 뮤테이션: delegateToOperation 의 shouldReverify 가드를 지우면 트랜잭션이 생겨 실패한다.
 	//
-	// 픽스처 수정(브리핑 원안 이탈, 이유는 task-9-report.md): 브리핑 원안은 노드를 처음부터 목표
+	// 픽스처 수정(브리핑 원안 이탈): 브리핑 원안은 노드를 처음부터 목표
 	// geometry 로 시드해 "이미 수렴" 을 흉내내려 했지만, ApplyRecords 없이 시작하면 첫 reconcile
 	// 이 routeNvidiaNoDiff 의 ExistingMigConfiguration(Failed, terminal)에 걸려 Ready 에 못
 	// 도달한다(실측 확인: Eventually 가 20s 타임아웃, phase=Failed). "aop-off" 스펙과 같은 방식대로
@@ -180,7 +180,7 @@ var _ = Describe("delegate mode", func() {
 	// 깨는 뮤테이션: participant 등록에서 PartitionReconfigure 를 빼거나, gateReady 호출을
 	//       runOnce 에서 제거하면(근거 미생성) 실패한다.
 	//
-	// 픽스처 수정(브리핑 원안 이탈, 이유는 task-9-report.md): 브리핑 원안은 노드/NDR 을 처음부터
+	// 픽스처 수정(브리핑 원안 이탈): 브리핑 원안은 노드/NDR 을 처음부터
 	// 목표 geometry+광고를 가진 상태로 시드하고 ApplyRecords 는 비워 둔 채 바로 reconcile 한다.
 	// acpp_evidence_gate_test.go 의 "records evidence and reaches Ready" 케이스가 이미 문서화한
 	// 것과 똑같은 함정이다 — 그 상태에서 첫 reconcile 은 routeNvidiaNoDiff 가 "geometry 는 맞지만
@@ -214,8 +214,8 @@ var _ = Describe("delegate mode", func() {
 			}}
 			Expect(k8sClient.Status().Update(ctx, acpp)).To(Succeed())
 
-			// acppR 은 evidenceReconciler() 가 아니라 nvidiaReconciler() 다(브리핑 원안 이탈, 이유는
-			// task-9-report.md) — participant 의 runOnce 는 gateReady 를 통해 acppR.Verification 이
+			// acppR 은 evidenceReconciler() 가 아니라 nvidiaReconciler() 다(브리핑 원안 이탈) —
+			// participant 의 runOnce 는 gateReady 를 통해 acppR.Verification 이
 			// 있으면 자체적으로도 근거를 쓴다. 그러면 이 근거가 Coordinator 의 stepVerify(아래
 			// opR.Verification)에서 온 것인지, participant 내부의 낡은 ACPP-직접 게이트에서 온 것인지
 			// 이 스펙만으로는 구분할 수 없다(실측: 둘 중 하나만 없애도 스펙이 통과한다 — 뮤테이션이
@@ -267,12 +267,12 @@ var _ = Describe("delegate mode", func() {
 	// 증명: 같은 노드를 노리는 두 정책이 delegate 모드에서 동시에 적용되지 않는다.
 	//       (마스터의 Stage 2 완료 기준 첫 줄을 정책 수준에서 확인한다.)
 	//
-	// 뮤테이션 정정(브리핑 원안 이탈, 이유는 task-9-report.md): 브리핑은 "ResourceKeysForACPP 가
+	// 뮤테이션 정정(브리핑 원안 이탈): 브리핑은 "ResourceKeysForACPP 가
 	// 빈 슬라이스를 돌려주면 충돌이 안 잡혀 실패한다" 고 주장하지만 실측하면 그렇지 않다 —
 	// ResourceKeysForACPP 를 nil 로 고정해도 이 스펙은 통과한다. 두 operation 이 같은 노드를
 	// 노리므로 Admit(자원 키 충돌 판정)이 통과시켜도 stepAcquire 의 노드 Lease가 독립적으로
 	// 같은 노드에 대한 두 번째 획득을 막는다 — 이 픽스처(같은 노드)에서는 Lease 가 이미 충분한
-	// 방어선이라 ResourceKeys 단독으로는 이 스펙을 깰 수 없다(실측 확인, 아래 report 참조).
+	// 방어선이라 ResourceKeys 단독으로는 이 스펙을 깰 수 없다(실측 확인).
 	// ResourceKeys/Admit 고유 로직은 internal/operation/conflict_test.go 가 별도로 고정한다.
 	It("serializes two policies that claim the same device", func() {
 		withDelegateMode(func() {

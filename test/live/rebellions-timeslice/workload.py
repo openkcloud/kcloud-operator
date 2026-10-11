@@ -16,11 +16,11 @@
 #
 #       RBLN_COMPILED_PATH 가 있으면 compile_from_torch 를 건너뛰고 그 경로의 파일을
 #       RBLNCompiledModel 로 적재한다(compile_seconds=0·compiled_from="file") — 파드 안
-#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로(task-2-report.md
-#       "추가 5 실행"), 컴파일은 호스트에서 PHASE=compile-only 로 한 번 하고 파드는 적재만
+#       compile_from_torch 는 벤더가 실패 원인을 봉인해 둬 항상 실패하므로
+#       컴파일은 호스트에서 PHASE=compile-only 로 한 번 하고 파드는 적재만
 #       한다(같은 모델 정의를 두 곳에 두지 않으려 같은 파일에 둔다). RBLN_NPU_NAME 은
 #       rebel.get_npu_name() 자동탐지가 실패할 때의 폴백이다.
-# 생성일: 2026-09-25 | 수정일: 2026-09-29
+# 생성일: 2026-09-25 | 수정일: 2026-10-11 (작업공간 경로 인용 제거; 줄폭 재접음)
 # ============================================================
 import os
 import sys
@@ -85,7 +85,7 @@ try:
 
     if compiled_path:
         # 파드 적재 경로: 호스트가 사전 컴파일한 파일을 그대로 연다(파드 안 compile_from_torch
-        # 회피 — 벤더가 실패 원인을 봉인해 둬 고칠 수 없다, task-2-report.md "추가 5 실행").
+        # 회피 — 벤더가 실패 원인을 봉인해 둬 고칠 수 없다).
         compiled = rebel.RBLNCompiledModel(compiled_path)
         compiled_from = "file"
     else:

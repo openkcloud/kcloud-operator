@@ -5,7 +5,7 @@
 //	"job 0개면 실패" 가드를 한 곳에 둔다. 같은 질문의 답이 두 곳에 있으면 한쪽만 고치고
 //	고쳤다고 믿게 된다.
 //
-// 생성일: 2026-10-06
+// 생성일: 2026-10-06 | 수정일: 2026-10-11 (중첩 모듈 린트 단계의 working-directory 를 보려고 With 필드 추가)
 // ============================================================
 package controller
 
@@ -16,11 +16,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// workflowStep 은 워크플로 단계 중 시험이 보는 세 필드다.
+// workflowStep 은 워크플로 단계 중 시험이 보는 네 필드다. With 는 값 타입이 섞인다
+// (문자열·불·숫자) 그래서 map[string]string 이 아니라 interface{} 다 — 그렇지 않으면
+// fetch-depth: 0 같은 숫자 값이 있는 워크플로를 파싱할 때 다른 시험까지 실패한다.
 type workflowStep struct {
-	Name string `json:"name"`
-	Uses string `json:"uses"`
-	Run  string `json:"run"`
+	Name string                 `json:"name"`
+	Uses string                 `json:"uses"`
+	Run  string                 `json:"run"`
+	With map[string]interface{} `json:"with"`
 }
 
 // workflowSteps 는 워크플로 파일의 모든 job 의 단계를 한 목록으로 돌려준다. job 이 0개면
