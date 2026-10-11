@@ -25,7 +25,6 @@ const (
 const HealthStateHealthy = health.StateHealthy
 
 // ClusterStatus는 한 번의 조회로 얻는 노드×벤더 집약 상태입니다.
-// (.omc/plans/management-api.md §6 수용 기준)
 type ClusterStatus struct {
 	// Vendors는 NPUClusterPolicy.spec 기준 벤더별 enabled 여부 + 해당 벤더의 DriverInstallPolicy 목록입니다.
 	Vendors []VendorStatus `json:"vendors,omitempty"`

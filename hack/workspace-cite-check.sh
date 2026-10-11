@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# workspace-cite-check.sh: 추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를
+# workspace-cite-check.sh: 추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를
 #                           인용하는 것을 막는다
 # 상세: .superpowers/ 와 그 안의 task-N 보고서(접미 임의)는 .gitignore 로 막혀 커밋되지
 #       않는다. 디렉터리 접두가 붙어도 그 경로나 파일명을 인용하면 열 수 없는 경로를 안내받는다.
@@ -11,11 +11,11 @@ set -euo pipefail
 # 예외. 각 줄은 "경로 — 이유" 다.
 #   .gitignore                 — 작업공간을 무시하는 그 규칙 자체. 검사 대상이 아니라 검사의 전제다.
 #   hack/workspace-cite-check.sh — 자가시험 픽스처 문자열. 검사 대상이 아니라 시험 입력이다.
-ALLOW='^(\.gitignore|hack/workspace-cite-check\.sh)$'
+ALLOW='^(\.gitignore|deploy/helm/\.helmignore|hack/workspace-cite-check\.sh)$'
 
 # 패턴은 한 곳에만 정의한다. (\.\./)* 는 상위참조를 거친 인용도 잡고, 디렉터리 접두
 # 그룹은 몇 단계든 허용해 docs/.superpowers/… 처럼 디렉터리 뒤에 붙은 인용도 잡는다.
-PATTERN='(^|[^A-Za-z0-9._/-])(\.\./)*([A-Za-z0-9._-]+/)*(\.superpowers/|task-[0-9]+-[a-z0-9-]+\.md)'
+PATTERN='(^|[^A-Za-z0-9._/-])(\.\./)*([A-Za-z0-9._-]+/)*(\.superpowers/|\.omc/|task-[0-9]+-[a-z0-9-]+\.md)'
 
 # scan <루트>: 위반 유무를 판정. 종료 0=위반 없음, 1=위반 있음, 2=루트가 git 저장소가 아님.
 scan() (
@@ -31,7 +31,7 @@ scan() (
     | xargs grep -nHEI "$PATTERN" 2>/dev/null || true)
 
   if [ -n "$hits" ]; then
-    echo "추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를 인용한다."
+    echo "추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를 인용한다."
     echo ".gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다."
     echo
     echo "$hits"
@@ -41,7 +41,7 @@ scan() (
 )
 
 # self_test: scan() 자체를 임시 저장소에서 검증한다. PATTERN 을 좁히는 변경은 조용히 안
-# 잡게 되기 쉬우므로, 고친 뒤에도 이 여섯 경우가 전부 통과해야 한다.
+# 잡게 되기 쉬우므로, 고친 뒤에도 이 일곱 경우가 전부 통과해야 한다.
 self_test() {
   local tmp out rc expected
   tmp="$(mktemp -d)"
@@ -52,7 +52,7 @@ self_test() {
   # 1) bare task-N-report.md 인용 → 종료 1, 그 줄이 출력에 있다
   printf '// 참고: task-2-report.md 확인\n' > "$tmp/repo/internal/a.go"
   git -C "$tmp/repo" add internal/a.go
-  expected=$'추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/a.go:1:// 참고: task-2-report.md 확인'
+  expected=$'추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/a.go:1:// 참고: task-2-report.md 확인'
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
   [ "$rc" -eq 1 ] && [ "$out" = "$expected" ] || { echo "self-test 1: 종료 $rc 출력 '$out'" >&2; return 1; }
 
@@ -60,7 +60,7 @@ self_test() {
   rm "$tmp/repo/internal/a.go"
   printf '// 근거: .superpowers/sdd/x/task-1-brief.md 참고\n' > "$tmp/repo/internal/b.go"
   git -C "$tmp/repo" add -A
-  expected=$'추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/b.go:1:// 근거: .superpowers/sdd/x/task-1-brief.md 참고'
+  expected=$'추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/b.go:1:// 근거: .superpowers/sdd/x/task-1-brief.md 참고'
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
   [ "$rc" -eq 1 ] && [ "$out" = "$expected" ] || { echo "self-test 2: 종료 $rc 출력 '$out'" >&2; return 1; }
 
@@ -69,7 +69,7 @@ self_test() {
   rm "$tmp/repo/internal/b.go"
   printf '// 참고: docs/.superpowers/worklog/x.md 확인\n' > "$tmp/repo/internal/c.go"  # doc-cite-check: ignore
   git -C "$tmp/repo" add -A
-  expected=$'추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/c.go:1:// 참고: docs/.superpowers/worklog/x.md 확인'  # doc-cite-check: ignore
+  expected=$'추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/c.go:1:// 참고: docs/.superpowers/worklog/x.md 확인'  # doc-cite-check: ignore
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
   [ "$rc" -eq 1 ] && [ "$out" = "$expected" ] || { echo "self-test 3: 종료 $rc 출력 '$out'" >&2; return 1; }
 
@@ -77,10 +77,16 @@ self_test() {
   rm "$tmp/repo/internal/c.go"
   printf '// 참고: task-3-fix-1.md 확인\n' > "$tmp/repo/internal/d.go"
   git -C "$tmp/repo" add -A
-  expected=$'추적 파일이 .superpowers/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/d.go:1:// 참고: task-3-fix-1.md 확인'
+  expected=$'추적 파일이 .superpowers/·.omc/ 작업공간이나 task-N 보고서 경로를 인용한다.\n.gitignore 로 막힌 경로라 받는 사람은 열 수 없는 경로를 안내받는다.\n\ninternal/d.go:1:// 참고: task-3-fix-1.md 확인'
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
   [ "$rc" -eq 1 ] && [ "$out" = "$expected" ] || { echo "self-test 4: 종료 $rc 출력 '$out'" >&2; return 1; }
 
+  # 4b) .omc/ 작업공간 경로 인용 → 종료 1(OMC 상태 디렉터리도 공개 클론에 없다)
+  printf '// (.omc/plans/x.md §6 수용 기준)\n' > "$tmp/repo/internal/e.go"
+  git -C "$tmp/repo" add -A
+  rc=0; out="$(scan "$tmp/repo")" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"internal/e.go:1:"* ]] || { echo "self-test 4b: 종료 $rc 출력 '$out'" >&2; return 1; }
+  rm "$tmp/repo/internal/e.go"
   # 5) 위반 0건이면 통과
   rm "$tmp/repo/internal/d.go"; git -C "$tmp/repo" add -A
   rc=0; out="$(scan "$tmp/repo")" || rc=$?
