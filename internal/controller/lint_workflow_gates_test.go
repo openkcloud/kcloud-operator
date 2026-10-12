@@ -4,7 +4,7 @@
 //
 //	YAML 의 run 단계에서 `make <타깃>` 호출을 찾고, 단계가 사라지면 여기서 실패한다.
 //
-// 생성일: 2026-10-05 | 수정일: 2026-10-11
+// 생성일: 2026-10-05 | 수정일: 2026-10-13
 // ============================================================
 package controller
 
@@ -39,12 +39,13 @@ func TestLintWorkflowRunsDocCiteCheck(t *testing.T) {
 	}
 }
 
-// docs-path-check·private-ip-check·lint-config·workspace-cite-check·comment-check 는
-// make 타깃은 있어도 어느 워크플로가 부르지 않으면 한 번도 돌지 않은 채 초록이 된다
-// (git 훅도 부르지 않는다 — 사람이 손으로 돌릴 때만 돈다). 같은 표에 고정한다.
+// docs-path-check·private-ip-check·lint-config·workspace-cite-check·comment-check·
+// vendor-branch-check 는 make 타깃은 있어도 어느 워크플로가 부르지 않으면 한 번도 돌지 않은
+// 채 초록이 된다(git 훅도 부르지 않는다 — 사람이 손으로 돌릴 때만 돈다). 같은 표에 고정한다.
 func TestLintWorkflowRunsGateTargets(t *testing.T) {
 	const wfPath = "../../.github/workflows/lint.yml"
-	for _, target := range []string{"docs-path-check", "private-ip-check", "lint-config", "workspace-cite-check", "comment-check"} {
+	for _, target := range []string{"docs-path-check", "private-ip-check", "lint-config", "workspace-cite-check", "comment-check",
+		"vendor-branch-check"} {
 		t.Run(target, func(t *testing.T) {
 			if !workflowRunsMake(t, wfPath, target) {
 				t.Errorf("%s 에 `make %s` 단계가 없다 — 타깃은 있어도 CI 가 부르지 않으면 "+

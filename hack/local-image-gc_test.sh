@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 # local-image-gc_test.sh: initContainer·kernelImages 참조 조회·보호를 확인(가짜 kubectl/docker)
-# 생성일: 2026-09-23 | 수정일: 2026-09-23
+# 상세: 스크립트가 필수로 요구하는 DEV_REGISTRY 는 가짜 docker 의 저장소 접두와 같은 값으로 넘긴다.
+# 생성일: 2026-09-23 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -50,7 +51,7 @@ chmod +x "$tmp/kubectl"
 # 요청하는지는 로그(kubectl_log)에 남은 호출 인자 문자열로 따로 확인한다.
 # --keep 1: 저장소별 2개 태그 중 최신 1개만 keep-count 로 보존되므로, old·kernel-only 는
 # 라이브 참조가 없으면 삭제 후보가 되어야 한다.
-out="$(DOCKER=docker PATH="$tmp:$PATH" bash "$here/local-image-gc.sh" --keep 1 --dry-run)"
+out="$(DEV_REGISTRY=registry.test:5100 DOCKER=docker PATH="$tmp:$PATH" bash "$here/local-image-gc.sh" --keep 1 --dry-run)"
 candidates="$(echo "$out" | awk '/^삭제 후보/{f=1} f')"
 
 # (1) initContainer 전용 참조 보호.

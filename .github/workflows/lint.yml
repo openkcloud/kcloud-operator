@@ -1,6 +1,6 @@
 # lint.yml: push·PR 시 golangci-lint 와 주석·문서·설정 검증 게이트들을 돈다.
 # 상세: CRD embed 번들을 먼저 만들어야 golangci-lint 타입체크가 fresh clone 에서도 통과한다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-11
+# 생성일: 2025-07-04 | 수정일: 2026-10-13
 name: Lint
 
 on:
@@ -72,6 +72,15 @@ jobs:
 
       - name: Install jq and PyYAML
         run: sudo apt-get update -y && sudo apt-get install -y jq python3-yaml
+
+      # 컨트롤러 본문의 벤더 이름 줄 수가 상한을 넘으면 실패한다. 벤더별 switch 가 다시
+      # 흩어지는 것을 잡는다(새 벤더 속성은 vendorTable 에 더한다).
+      - name: Vendor branch count
+        run: make vendor-branch-check && bash hack/vendor-branch-count_test.sh
+
+      # hack 스크립트 자가시험. 일부가 helm·PyYAML 을 쓰므로 위 두 설치 단계 뒤에 둔다.
+      - name: hack self-tests
+        run: for t in hack/*_test.sh; do echo "== $t"; bash "$t" || exit 1; done
 
       # kcloud 차트 정적 렌더의 상주 operand(Deployment+DaemonSet+StatefulSet) 수가
       # baseline 을 넘으면 실패한다(test/footprint/baseline.json).

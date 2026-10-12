@@ -3,7 +3,7 @@
 // 상세: spec 에서 dra 로 선언된 벤더의 대상 노드에 dra-owned 라벨을 붙이고, 선언을 되돌리면
 //       회수한다. 그 라벨이 있는 노드에서는 벤더 device-plugin DaemonSet 이 물러난다
 //       (제외는 각 DaemonSet 렌더링에서 affinity 로 건다).
-// 생성일: 2026-08-06 | 수정일: 2026-10-11
+// 생성일: 2026-08-06 | 수정일: 2026-10-13
 // ============================================================
 
 package controller
@@ -33,20 +33,18 @@ const (
 	vendorTenstorrent = "tenstorrent"
 )
 
-// advertiseVendors 는 광고 주체 축을 갖는 벤더와 그 선언이다.
+// advertiseVendors 는 광고 주체 축을 갖는 벤더와 그 선언이다. 키는 vendorTable 의 다섯 벤더다.
 func advertiseVendors(p *npuv1alpha1.NPUClusterPolicy) map[string]npuv1alpha1.AdvertiseSpec {
 	// nil 정책은 빈 정책으로 본다 — 키 집합은 spec 값과 무관하게 다섯 벤더로 고정이라,
 	// 정책 객체가 없는 자리(삭제 경로·시험)에서 불려도 같은 키를 돌려준다.
 	if p == nil {
 		p = &npuv1alpha1.NPUClusterPolicy{}
 	}
-	return map[string]npuv1alpha1.AdvertiseSpec{
-		vendorNvidia:      p.Spec.Nvidia.AdvertiseSpec,
-		vendorFuriosa:     p.Spec.Furiosa.AdvertiseSpec,
-		vendorRngd:        p.Spec.Furiosa.Rngd.AdvertiseSpec,
-		vendorTenstorrent: p.Spec.Tenstorrent.AdvertiseSpec,
-		vendorRebellions:  p.Spec.Rebellions.AdvertiseSpec,
+	out := make(map[string]npuv1alpha1.AdvertiseSpec, len(vendorTable))
+	for v, a := range vendorTable {
+		out[v] = a.advertise(p)
 	}
+	return out
 }
 
 // vendorPresentLabel 은 그 벤더 장치가 이 노드에 있다는 자립 라벨이다(node-manager 부여).
@@ -55,42 +53,24 @@ func vendorPresentLabel(vendor string) string {
 }
 
 // vendorIsOperatorOwned 는 벤더 키를 배포 주체 여부로 매핑한다 — kcloud 가 배포하는 managed
-// 일 때만 참이다. delegated·external 은 kcloud 가 소유하지 않으므로 거짓이다. rngd 는 RngdSpec
-// 에 관리 모드가 없어 Furiosa 의 모드를 따른다. 배포·회수·광고 주체를 다루는 자리는 이 하나로
-// 물어, 모드 문자열을 벤더마다 흩어 비교하지 않는다.
+// 일 때만 참이다. delegated·external 은 kcloud 가 소유하지 않으므로 거짓이다(vendorTable 을
+// 읽는다). 배포·회수·광고 주체를 다루는 자리는 이 하나로 물어, 모드 문자열을 벤더마다 흩어
+// 비교하지 않는다.
 func vendorIsOperatorOwned(p *npuv1alpha1.NPUClusterPolicy, vendor string) bool {
-	switch vendor {
-	case vendorNvidia:
-		return p.Spec.Nvidia.IsOperatorOwned()
-	case vendorFuriosa, vendorRngd:
-		return p.Spec.Furiosa.IsOperatorOwned()
-	case vendorRebellions:
-		return p.Spec.Rebellions.IsOperatorOwned()
-	case vendorTenstorrent:
-		return p.Spec.Tenstorrent.IsOperatorOwned()
+	if a, ok := vendorTable[vendor]; ok {
+		return a.owned(p)
 	}
 	// 표에 없는 벤더는 delegated·external 로 볼 근거가 없으므로 owned 로 본다 — 배포·회수를
-	// 건너뛰지 않고 정상 경로가 처리한다(예: 렌더러 없는 벤더를 Blocked 로 거절). 이전
-	// vendorIsExternal 이 unknown 을 false(external 아님)로 둔 것과 같은 동작이다.
+	// 건너뛰지 않고 정상 경로가 처리한다(예: 렌더러 없는 벤더를 Blocked 로 거절).
 	return true
 }
 
 // vendorDRAEnabled 는 이 벤더의 spec.<vendor>.dra.enabled 값이다. dra-retired 라벨
 // 갱신에 쓴다 — dra.enabled 가 꺼지면 그 벤더의 DRA DaemonSet 자체가 배포되지 않으므로
-// retired 로 스케줄을 막아 둘 이유가 없다. advertiseVendors()·vendorIsOperatorOwned 와
-// 같은 다섯 갈래다(furiosa 서브벤더 rngd 는 spec.furiosa.rngd.dra 를 따로 본다).
+// retired 로 스케줄을 막아 둘 이유가 없다(vendorTable 을 읽는다).
 func vendorDRAEnabled(p *npuv1alpha1.NPUClusterPolicy, vendor string) bool {
-	switch vendor {
-	case vendorNvidia:
-		return p.Spec.Nvidia.DRA.IsEnabled()
-	case vendorFuriosa:
-		return p.Spec.Furiosa.DRA.IsEnabled()
-	case vendorRngd:
-		return p.Spec.Furiosa.Rngd.DRA.IsEnabled()
-	case vendorTenstorrent:
-		return p.Spec.Tenstorrent.DRA.IsEnabled()
-	case vendorRebellions:
-		return p.Spec.Rebellions.DRA.IsEnabled()
+	if a, ok := vendorTable[vendor]; ok {
+		return a.draEnabled(p)
 	}
 	return false
 }

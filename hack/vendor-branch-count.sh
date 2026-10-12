@@ -4,7 +4,7 @@
 # 상세: internal/driveradapter 로 옮기지 못한, 컨트롤러에 남은 벤더 이름 줄 수를 상한과
 #       비교한다(0 이 목표가 아니다). 세는 방식·상한의 근거는 아래 본문 주석 참고.
 # 용법: hack/vendor-branch-count.sh (MAX_BRANCHES 로 상한 조정)
-# 생성일: 2026-09-28 | 수정일: 2026-10-11
+# 생성일: 2026-09-28 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,12 +17,13 @@ cd "$(dirname "$0")/.."
 # 어댑터로 옮긴 것과 같은 규모(8줄)가 다시 흩어지면 잡는다.
 MAX_BRANCHES="${MAX_BRANCHES:-70}"
 
-# 세는 것은 실제 분기 수가 아니라 벤더 상수·"Spec.Vendor ==" 패턴이 나온 줄 수다 — 그
-# 패턴을 설명하는 주석과 상수 선언 줄도 함께 잡혀 출력값이 실제 분기보다 많다.
+# 세는 것은 실제 분기 수가 아니라 벤더 상수·"Spec.Vendor ==" 패턴이 나온 줄 수다. 줄 전체가
+# // 주석인 줄은 세지 않는다. 상수 선언 줄은 함께 잡혀 출력값이 실제 분기보다 많다.
 n="$(grep -rn 'vendorNvidia\|vendorFuriosa\|vendorRebellions\|vendorTenstorrent\|Spec.Vendor ==' \
-      internal/controller/*.go 2>/dev/null | grep -v '_test\.go:' | wc -l | tr -d ' ')"
+      internal/controller/*.go 2>/dev/null | grep -v '_test\.go:' \
+      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d ' ')"
 
-printf '컨트롤러 벤더 이름 일치 줄 %s (상한 %s) — 주석·상수 선언 포함, 실제 분기는 더 적음. 대부분 partition·spec 탐색·DRA 렌더·어휘 매핑·벤더 목록·verify-probe 등 다른 경계 소속, 목표 0 아님\n' \
+printf '컨트롤러 벤더 이름 일치 줄 %s (상한 %s) — 주석 줄 제외, 상수 선언 포함이라 실제 분기는 더 적음. 대부분 partition·spec 탐색·DRA 렌더·어휘 매핑·벤더 목록·verify-probe 등 다른 경계 소속, 목표 0 아님\n' \
   "$n" "$MAX_BRANCHES"
 
 # 범주별 정확한 줄 수는 적지 않는다 — 문서마다 같은 범주를 다른 수로 적어 하나로

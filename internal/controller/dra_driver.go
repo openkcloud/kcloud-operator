@@ -4,7 +4,7 @@
 // chart 의 affinity 가 NFD 와 벤더 탐지기 라벨 셋을 요구해 우리 클러스터에서는 어느
 // 노드에도 스케줄되지 않기 때문이다. 사설 미러 경로는 여기서 조립하지 않는다 — 레지스트리는
 // helm 이 조립해 완성된 경로를 spec 으로 내려준다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-11
+// 생성일: 2026-08-07 | 수정일: 2026-10-13
 // ============================================================
 
 package controller
@@ -29,7 +29,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	npuv1alpha1 "kcloud-operator/api/v1alpha1"
-	"kcloud-operator/internal/intent"
 )
 
 const (
@@ -536,79 +535,24 @@ func (r *NPUClusterPolicyReconciler) rebellionsDualAdvertiseNote(
 }
 
 // advertiseVendorDriverName 은 advertiseVendors() 의 다섯 벤더 키가 발행물에 쓰는
-// spec.driver 값이다. furiosa·rngd 는 칩 세대는 다르지만 DRA 드라이버는 하나뿐이라
-// (draVendors 참고 — Furiosa.Rngd.DRA 하나만 배포 대상이다) 같은 이름을 쓴다. 모르는
-// 벤더는 빈 문자열 — dualAdvertiseNodes 는 그러면 어떤 슬라이스와도 안 맞아 항상 0건이다.
+// spec.driver 값이다(vendorTable 을 읽는다). 모르는 벤더는 빈 문자열 — dualAdvertiseNodes 는
+// 그러면 어떤 슬라이스와도 안 맞아 항상 0건이다.
 func advertiseVendorDriverName(vendor string) string {
-	switch vendor {
-	case vendorNvidia:
-		return draDriverNameNvidia
-	case vendorFuriosa, vendorRngd:
-		return draDriverNameFuriosa
-	case vendorTenstorrent:
-		return draDriverNameTenstorrent
-	case vendorRebellions:
-		return draDriverNameRebellions
-	}
-	return ""
+	return vendorTable[vendor].driverName
 }
 
 // advertiseVendorDRADSName 은 advertiseVendors() 의 다섯 벤더 키가 배포 여부 확인에 쓰는
-// DRA DaemonSet 이름이다. advertiseVendorDriverName 과 같은 이유로 furiosa·rngd 는 같은
-// DaemonSet(draVendors 참고 — Furiosa.Rngd.DRA 하나만 배포 대상)을 가리킨다. 모르는 벤더는
-// 빈 문자열 — draDaemonSetExists 는 그러면 조회 없이 false 를 돌려준다.
+// DRA DaemonSet 이름이다(vendorTable 을 읽는다). 모르는 벤더는 빈 문자열 — draDaemonSetExists 는
+// 그러면 조회 없이 false 를 돌려준다.
 func advertiseVendorDRADSName(vendor string) string {
-	switch vendor {
-	case vendorNvidia:
-		return draDSNameNvidia
-	case vendorFuriosa, vendorRngd:
-		return draDSNameFuriosa
-	case vendorTenstorrent:
-		return draDSNameTenstorrent
-	case vendorRebellions:
-		return draDSNameRebellions
-	}
-	return ""
+	return vendorTable[vendor].dsName
 }
 
-// advertiseVendorResourceName 은 이 벤더가 device-plugin 으로 광고하는 전체 장치 리소스명이다.
-// tenstorrent·rebellions 는 spec 오버라이드를 실제 렌더러가 반영하므로 그 필드를 그대로
-// 읽는다. furiosa(warboy)·rngd 는 intent.WholeDeviceResource 카탈로그 값을 쓴다 — furiosa 는
-// 오버라이드 필드가 없고, rngd 는 CRD 필드가 있어도 공식 이미지가 무시해 실제 광고명과
-// 무관하기 때문이다(ensureFuriosaRngdDevicePlugin 참고). 모르는 벤더는 빈 문자열이며 ctx 는
-// 조회 실패 로깅에만 쓴다.
+// advertiseVendorResourceName 은 이 벤더가 device-plugin 으로 광고하는 전체 장치 리소스명이다
+// (vendorTable 을 읽는다). 모르는 벤더는 빈 문자열이다.
 func advertiseVendorResourceName(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, vendor string) string {
-	switch vendor {
-	case vendorNvidia:
-		return nvidiaGPUResource
-	case vendorFuriosa:
-		res, err := intent.WholeDeviceResource(vendorFuriosa, "warboy")
-		if err != nil {
-			logf.FromContext(ctx).Error(err, "furiosa(warboy) 리소스명 조회 실패", "vendor", vendor)
-		}
-		return res
-	case vendorRngd:
-		res, err := intent.WholeDeviceResource(vendorFuriosa, "rngd")
-		if err != nil {
-			logf.FromContext(ctx).Error(err, "furiosa(rngd) 리소스명 조회 실패", "vendor", vendor)
-		}
-		return res
-	case vendorTenstorrent:
-		name := policy.Spec.Tenstorrent.ResourceName
-		if name == "" {
-			name = ttResourceDefault
-		}
-		return name
-	case vendorRebellions:
-		name := policy.Spec.Rebellions.ResourceName
-		if name == "" {
-			name = rbllnsResourceNameDefault
-		}
-		prefix := policy.Spec.Rebellions.ResourcePrefix
-		if prefix == "" {
-			prefix = rbllnsResourcePrefixDfault
-		}
-		return prefix + "/" + name
+	if a, ok := vendorTable[vendor]; ok {
+		return a.resource(ctx, policy)
 	}
 	return ""
 }
