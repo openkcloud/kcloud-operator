@@ -4,7 +4,7 @@
 #       개정>" 태그를 조립해 당긴다. hack/kernel-image-targets.sh 가 이 목록에서 전체 이미지
 #       참조와 images 저장소 kernel-images 묶음을 유도한다(버전·variant·경로는
 #       deploy/helm/values.yaml 소관). 목록은 자동으로 늘지 않는다 — 수동 상한이다.
-# 생성일: 2026-10-05 | 수정일: 2026-10-11
+# 생성일: 2026-10-05 | 수정일: 2026-10-12
 # ============================================================
 
 # 대상 커널. 라이브 클러스터가 쓰는 세 커널이 출발점이다. 이 목록은 사전 컴파일 경로를
@@ -27,9 +27,9 @@ kernels:
 targets:
   nvidia:
     buildRevision: v1
-    # 공개 묶음에서 제외. 라이선스 때문에 공개 저장소에 NVIDIA 설치기 빌드 경로가 없어
-    # (images 저장소 images.yaml 의 nvidia-driver-ds 주석 참고) 그쪽 발행 워크플로로는
-    # 구울 수 없다. 내부 트리에서 굽고, release-bundle.yaml 에는 담지 않는다.
+    # 공개 묶음에서 제외. 사전 컴파일 이미지는 NVIDIA .deb 를 동봉해 재배포가 되므로 내부
+    # 트리에서만 굽고 release-bundle.yaml 에는 담지 않는다. 기본(DKMS) 설치기 이미지는
+    # NVIDIA 바이트가 없어 공개 발행 대상이다(images 저장소 images.yaml 의 nvidia-driver-ds 주석).
     publicBundle: false
   tenstorrent:
     buildRevision: v1

@@ -2,7 +2,7 @@
 # image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)·감사용. condition 은 pull 조건, digest 는 ghcr.io/openkcloud 발행본 것이다.
 #       벤더 이미지는 upstream 그대로이며 global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10 | 수정일: 2026-10-11
+# 생성일: 2026-09-10 | 수정일: 2026-10-12
 # ============================================================
 release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
@@ -19,8 +19,8 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: sha256:683f5ad08fe608b4d49e03ac43324e2f30c0e2844613777d01ccf926778202e5
     condition: NVIDIA 노드 MIG 관측 Job, 재부팅 Job
   - image: nvidia-driver-ds
-    tag: v5
-    digest: sha256:993b9001f8c716def073cbbe98250bc26302952c0a047f543b1f301e1658dd9b  # 발행 뒤 갱신
+    tag: v6
+    digest: sha256:64013660600c358f0b2e79d31f51370c61b50074ec2dab587e9a74fa28ab6728  # 발행 뒤 갱신
     condition: NVIDIA 노드 드라이버 설치 Job
   - image: furiosa-driver-ds
     tag: v3
