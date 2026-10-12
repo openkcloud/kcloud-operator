@@ -3,7 +3,7 @@
 //
 //	클라이언트 래퍼. NDR/DIP/DUS/NPUClusterPolicy(v1alpha1) + Node(core/v1) 조회에 사용.
 //
-// 생성일: 2026-07-16
+// 생성일: 2026-07-16 | 수정일: 2026-10-13
 package npuctl
 
 import (
@@ -60,7 +60,13 @@ func NewClientForConfig(cfg *rest.Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("k8s 클라이언트 생성 실패: %w", err)
 	}
-	return &Client{c: c}, nil
+	return &Client{c: withCLIFieldOwner(c)}, nil
+}
+
+// withCLIFieldOwner 는 CLI 쓰기의 managedFields 관리자 이름을 kubectl-npu 로 고정한다. 호출마다
+// FieldOwner 를 넘기는 쓰기(UpgradeVendor 의 kcloud-operator-upgrade)는 그 값이 우선한다.
+func withCLIFieldOwner(c client.Client) client.Client {
+	return client.WithFieldOwner(c, "kubectl-npu")
 }
 
 // NewFromClient는 이미 구성된 controller-runtime client.Client 로부터 Client를 생성합니다.

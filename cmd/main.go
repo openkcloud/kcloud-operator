@@ -36,9 +36,11 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -264,8 +266,17 @@ func main() {
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "35b22ec5.ai",
+		// operator 쓰기의 managedFields 관리자 이름을 바이너리 파일명(manager) 대신 kcloud-operator 로
+		// 고정한다. 호출마다 FieldOwner 를 넘기는 쓰기는 그 값이 우선한다.
+		NewClient: func(cfg *rest.Config, o client.Options) (client.Client, error) {
+			c, err := client.New(cfg, o)
+			if err != nil {
+				return nil, err
+			}
+			return client.WithFieldOwner(c, "kcloud-operator"), nil
+		},
+		LeaderElection:   enableLeaderElection,
+		LeaderElectionID: "35b22ec5.ai",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends, speeding up leader transitions — but requires the binary to
 		// end immediately when the Manager stops; if any cleanup runs after that, enabling
