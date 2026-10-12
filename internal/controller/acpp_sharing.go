@@ -2,7 +2,7 @@
 // acpp_sharing.go: ACPP 공유(sharing) 경로 — apply → DP 재시작 → verify → rollback
 // 상세: 파티션 경로(runNvidiaTarget)와 같은 규율(저널 선영속 → mutation, 실패시 원복)을 따르되
 // 하드웨어는 건드리지 않는다(device-plugin 설정/배선만 변경).
-// 생성일: 2026-07-29 | 수정일: 2026-10-11
+// 생성일: 2026-07-29 | 수정일: 2026-10-13
 // ============================================================
 package controller
 
@@ -183,7 +183,7 @@ func (r *AcceleratorPartitionPolicyReconciler) runSharing(
 			mrec.NodeName = t.NodeName
 			mrec.SharingRolledBackGeneration = acpp.Generation
 			if perr := r.patchApplyRecord(t.Ctx, acpp, mrec); perr != nil {
-				log.Error(perr, "sharing: failed to journal rolled-back generation (D-9 gate)")
+				log.Error(perr, "sharing: failed to journal rolled-back generation (same-generation retry gate)")
 			}
 		}
 		// 배선을 걷었으면 daemon 도 회수한다 — 여기서 안 걷으면 Restored 종점은 10분 requeue 라 그

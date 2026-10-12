@@ -2,7 +2,7 @@
 // acpp_migmode_test.go: MIG mode enable 오케스트레이션 테스트
 // 상세: Disabled 관측 → quiesce → enable → pending → reboot Job → 재관측 Enabled → done.
 // 실패 시 노드 schedulable 복원, 관측 불가 시 fail-closed, 크래시 저널 재진입 회귀까지 고정한다.
-// 생성일: 2026-07-29 | 수정일: 2026-10-11
+// 생성일: 2026-07-29 | 수정일: 2026-10-13
 // ============================================================
 package controller
 
@@ -824,7 +824,7 @@ var _ = Describe("syncMigActiveLabel", func() {
 	})
 })
 
-var _ = Describe("review-i1 M-1/M-3: reboot branch cordons before requesting a reboot", func() {
+var _ = Describe("reboot branch cordons before requesting a reboot", func() {
 	It("cordons the node and journals ownership before setting MigPhaseRebootRequested", func() {
 		GinkgoT().Setenv("HOST_EXEC_IMAGE", "harbor.local/kcloud/kcloud-host-exec:v1") // 재부팅 Job 이 쓰는 nsenter 이미지
 		sel := map[string]string{"kcloud.ai/reboot-cordon-test": "true"}

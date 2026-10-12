@@ -2,7 +2,7 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21 | 수정일: 2026-10-12
+// 생성일: 2026-04-21 | 수정일: 2026-10-13
 // ============================================================
 
 package controller
@@ -2049,7 +2049,7 @@ func TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget(t *testing.T)
 			got.Status.RebootAttempts)
 	}
 	if got.Status.DesiredVersion != prevVersion {
-		t.Errorf("DesiredVersion: got %q, want %q(PreviousVersion) — Bug#7 분기가 롤백을 DIP 로 되돌림",
+		t.Errorf("DesiredVersion: got %q, want %q(PreviousVersion) — 되돌림 분기가 롤백 중인 DesiredVersion 을 DIP 선언 버전으로 되돌렸다",
 			got.Status.DesiredVersion, prevVersion)
 	}
 	if got.Status.State != v1alpha1.UpgradeStateValidating {
