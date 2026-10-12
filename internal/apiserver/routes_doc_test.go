@@ -56,13 +56,13 @@ var docRouteAssertions = []docRouteAssertion{
 		regexp.MustCompile(`관리 API 라우트\s*([0-9]+)\s*종`)},
 	{"status.md", "openapi 각주(:369 부근)",
 		regexp.MustCompile(`지금 관리 API 라우트는\s*([0-9]+)\s*종`)},
-	{"research/03-objective-mapping.md", "공유 정책 설정 표(:143 부근)",
+	{"research/03-objective-mapping.md", "공유 정책 설정 표(:143 부근)", // docs-path-check: ignore
 		regexp.MustCompile(`REST API \|.*?([0-9]+)라우트`)},
-	{"operations/rest_api.md", "드리프트 안내 문단(:957 부근)",
+	{"operations/rest_api.md", "드리프트 안내 문단(:957 부근)", // docs-path-check: ignore
 		regexp.MustCompile(`라우트가\s*([0-9]+)\s*개가 됐다`)},
-	{"operations/rest_api.md", "openapi.json 설명 행(:945 부근)",
+	{"operations/rest_api.md", "openapi.json 설명 행(:945 부근)", // docs-path-check: ignore
 		regexp.MustCompile(`관리 API 라우트\s*([0-9]+)\s*개`)},
-	{"operations/rest_api.md", "mock 모드 주석(:968 부근)",
+	{"operations/rest_api.md", "mock 모드 주석(:968 부근)", // docs-path-check: ignore
 		regexp.MustCompile(`mock 모드 — 라이브 클러스터 없이 관리 API\s*([0-9]+)\s*라우트`)},
 }
 

@@ -120,6 +120,7 @@ capmatrix-check: ## Verify the compatibility matrix is up to date (로컬 전용
 
 .PHONY: private-ip-check
 private-ip-check: ## Verify no internal addresses or accounts are in tracked files.
+	bash hack/private-ip-check.sh --self-test
 	bash hack/private-ip-check.sh
 
 .PHONY: docs-path-check
