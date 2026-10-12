@@ -2,13 +2,14 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21 | 수정일: 2026-10-11
+// 생성일: 2026-04-21 | 수정일: 2026-10-12
 // ============================================================
 
 package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1769,7 +1770,7 @@ func TestSyncUpgradeStateDriftConfirmed(t *testing.T) {
 
 	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
-	r.syncUpgradeState(context.Background(), nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(context.Background(), nodeName, device, dip, "warboy", nil, "")
 
 	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
 		t.Errorf("DriverVersionDrift Warning 이벤트를 기대했으나 발행되지 않음")
@@ -1796,7 +1797,7 @@ func TestSyncUpgradeStateDriftWithinGrace(t *testing.T) {
 	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
 	ctx := context.Background()
-	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
 
 	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
 		t.Errorf("유예 시간 안인데 DriverVersionDrift 이벤트가 발행됨")
@@ -1829,7 +1830,7 @@ func TestSyncUpgradeStateDriftNoneResets(t *testing.T) {
 	dip := makeDIP("furiosa-warboy", "warboy", version)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: version}
 	ctx := context.Background()
-	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
 
 	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
 		t.Errorf("버전이 일치하는데 DriverVersionDrift 이벤트가 발행됨")
@@ -1867,7 +1868,7 @@ func TestSyncUpgradeStateDrift_UnverifiedVersionStillObserves(t *testing.T) {
 	dip := makeDIP("furiosa-warboy", "warboy", declaredVersion)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: observedVersion}
 	ctx := context.Background()
-	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
 
 	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
 		t.Errorf("주차 상태에서 DriverVersionDrift 경고가 발행되지 않음 — 호스트 밖 변경 감지가 꺼졌다")
@@ -1883,6 +1884,97 @@ func TestSyncUpgradeStateDrift_UnverifiedVersionStillObserves(t *testing.T) {
 	if got.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
 		t.Errorf("관측 갱신이 상태를 바꿈: got %q, want %q",
 			got.Status.State, v1alpha1.UpgradeStateUnverifiedVersion)
+	}
+}
+
+// TestSyncUpgradeState_HostSourceAdoptsLoadedVersion 은 versionSource=Host 에서 DUS 의 desired 와
+// 드리프트 기준이 정책 버전이 아니라 NDR 이 보고한 로드된 호스트 버전임을 고정한다. 정책 버전을
+// 기준으로 두면 desired 동기화가 호스트와 어긋난 값을 쓰고 유예가 지나면 DriverVersionDrift 경고가
+// 호스트가 정책과 다른 노드마다 반복된다.
+func TestSyncUpgradeState_HostSourceAdoptsLoadedVersion(t *testing.T) {
+	const (
+		nodeName   = "worker-host-source"
+		dusName    = "worker-host-source-furiosa"
+		dipVersion = "580.126.09"
+		hostLoaded = "580.178.04"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, hostLoaded, dipVersion)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", dipVersion)
+	dip.Spec.Driver.VersionSource = "Host"
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: hostLoaded, DriverLoaded: true}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, hostLoaded)
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("Host 모드인데 호스트 버전이 목표와 달라 DriverVersionDrift 경고가 발행됨")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DesiredVersion != hostLoaded {
+		t.Errorf("DesiredVersion: got %q, want %q(로드된 호스트 버전)", got.Status.DesiredVersion, hostLoaded)
+	}
+}
+
+// TestEnsureUpgradeStates_HostSourceMatchesStateMachineChoice 는 같은 벤더 NDR 항목이 둘이고
+// 로드되지 않은 쪽의 버전이 더 높을 때 DUS 목표가 항목 순서와 무관하게 상태 기계가 고르는 값
+// (모듈이 로드된 첫 장치의 버전)임을 고정한다. 목표를 항목마다 따로 구하면 한 reconcile pass 안에서
+// desired 가 정책 버전과 호스트 버전 사이를 오가고, 마지막 항목이 로드되지 않은 쪽이면 정책 버전이
+// 남아 상태 기계와 어긋난다.
+func TestEnsureUpgradeStates_HostSourceMatchesStateMachineChoice(t *testing.T) {
+	const (
+		nodeName   = "worker-host-two"
+		dusName    = "worker-host-two-furiosa"
+		model      = "warboy"
+		dipVersion = "580.126.09"
+		hostLoaded = "580.178.04"
+		unloaded   = "595.91.07"
+	)
+	loadedEntry := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: model, DriverVersion: hostLoaded, DriverLoaded: true}
+	unloadedEntry := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: model, DriverVersion: unloaded}
+	orders := map[string][]v1alpha1.DeviceEntry{
+		"unloaded-first": {unloadedEntry, loadedEntry},
+		"loaded-first":   {loadedEntry, unloadedEntry},
+	}
+	for name, devices := range orders {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existingDUS=%v", name, existing), func(t *testing.T) {
+				ndr := makeNDR(nodeName, model, "")
+				ndr.Status.Devices = devices
+				dip := makeDIP("furiosa-warboy", model, dipVersion)
+				dip.Spec.Driver.VersionSource = "Host"
+				objs := []client.Object{workerNode(nodeName), ndr, dip}
+				if existing {
+					objs = append(objs, makeDUS(dusName, nodeName, "furiosa", model,
+						v1alpha1.UpgradeStateIdle, hostLoaded, dipVersion))
+				}
+				r := newReconciler(objs...)
+				r.Recorder = record.NewFakeRecorder(8)
+				ctx := context.Background()
+				if err := r.ensureUpgradeStates(ctx); err != nil {
+					t.Fatalf("ensureUpgradeStates 오류: %v", err)
+				}
+				var got v1alpha1.DriverUpgradeState
+				if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+					t.Fatalf("DUS 조회 실패: %v", err)
+				}
+				want := upgrade.LoadedHostVersion(devices, "furiosa", model)
+				if want != hostLoaded {
+					t.Fatalf("상태 기계의 선택 = %q, %q 기대(시험 전제)", want, hostLoaded)
+				}
+				if got.Status.DesiredVersion != want {
+					t.Errorf("DesiredVersion = %q, 상태 기계의 선택 %q 기대", got.Status.DesiredVersion, want)
+				}
+			})
+		}
 	}
 }
 
@@ -1907,7 +1999,7 @@ func TestSyncUpgradeState_UnverifiedVersionKeepsRebootBudget(t *testing.T) {
 	dip := makeDIP("furiosa-warboy", "warboy", dipVersion)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: dusDesired}
 	ctx := context.Background()
-	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
 
 	var got v1alpha1.DriverUpgradeState
 	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
@@ -1946,7 +2038,7 @@ func TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget(t *testing.T)
 	dip := makeDIP("furiosa-warboy", "warboy", dipVersion)
 	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: prevVersion}
 	ctx := context.Background()
-	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil)
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
 
 	var got v1alpha1.DriverUpgradeState
 	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {

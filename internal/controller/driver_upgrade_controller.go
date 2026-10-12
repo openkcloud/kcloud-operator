@@ -3,7 +3,7 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-11
+// 생성일: 2026-04-13 | 수정일: 2026-10-12
 // ============================================================
 
 package controller
@@ -229,7 +229,10 @@ func (r *DriverUpgradeReconciler) ensureUpgradeStates(ctx context.Context) error
 				continue
 			}
 
-			r.syncUpgradeState(ctx, nodeName, device, policy, vendorModels[device.Vendor], observedModels[device.Vendor])
+			// 호스트 버전은 장치 하나가 아니라 NDR 전체에서 상태 기계와 같은 규칙으로 구한다.
+			loaded := upgrade.LoadedHostVersion(ndr.Status.Devices, device.Vendor, vendorModels[device.Vendor])
+			r.syncUpgradeState(ctx, nodeName, device, policy, vendorModels[device.Vendor],
+				observedModels[device.Vendor], loaded)
 		}
 	}
 	return nil
@@ -322,8 +325,10 @@ func timeOrZero(t *metav1.Time) time.Time {
 // syncUpgradeState 는 설치형(비-TrackOnly) 정책에 대해 device 하나의 DUS 를 생성/전이합니다.
 // 신규 생성(버전 비교로 초기 State), 정책 버전 변경, 버전 불일치→UpgradeRequired,
 // currentVersion 동기화를 처리합니다. 에러는 로깅 후 skip(기존 동작 보존).
+// loaded 는 versionSource=Host 의 목표가 되는 호스트 버전(upgrade.LoadedHostVersion)이다.
 func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName string,
-	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string, observed []string) {
+	device v1alpha1.DeviceEntry, policy *v1alpha1.DriverInstallPolicy, vendorModel string, observed []string,
+	loaded string) {
 	logger := logf.FromContext(ctx)
 	dusName := driverUpgradeStateName(nodeName, device.Vendor)
 
@@ -346,7 +351,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 			Status: v1alpha1.DriverUpgradeStateStatus{
 				State:              initialState,
 				CurrentVersion:     device.DriverVersion,
-				DesiredVersion:     policy.Spec.Driver.Version,
+				DesiredVersion:     upgrade.EffectiveDesiredVersion(policy, loaded),
 				LastTransitionTime: metav1.Now(),
 				ObservedModels:     observed,
 			},
@@ -365,16 +370,16 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	r.syncDUSModel(ctx, &existing, vendorModel)
 	r.syncDUSObservedModels(ctx, &existing, observed)
 
-	// 대역외 드라이버 변경 감지(감지 전용) — 정책 선언 버전과 NDR 실측이 어긋난 채 유예를 넘기면
-	// Warning 이벤트로만 알린다(자동 재설치·재부팅 없음, 호스트 임의 재부팅 방지). 기준은
-	// policy.Spec.Driver.Version — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 조건이
-	// Idle·UnverifiedVersion 둘인 이유: 화이트리스트 밖 버전은 UnverifiedVersion 에 주차하므로
-	// Idle 만 보면 자동 업그레이드를 끈 노드에서 감지가 영구히 꺼진다(그 상태는 Job·cordon 을
-	// 만들지 않는 보고 전용 종점이다). 억제 판정은 EvaluateVersionDrift 와 같은 술어를 쓴다.
+	// 대역외 드라이버 변경 감지(감지 전용) — 목표 버전과 NDR 실측이 어긋난 채 유예를 넘기면
+	// Warning 이벤트로만 알린다(자동 재설치·재부팅 없음). 기준은 EffectiveDesiredVersion(Host 모드는
+	// 로드된 호스트 버전) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태가 Idle·
+	// UnverifiedVersion 둘인 이유: 화이트리스트 밖 버전은 UnverifiedVersion 에 주차하므로 Idle 만
+	// 보면 자동 업그레이드를 끈 노드에서 감지가 영구히 꺼진다(그 상태는 Job·cordon 이 없는 보고
+	// 전용 종점이다). 억제 판정은 EvaluateVersionDrift 와 같은 술어를 쓴다.
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
-			DeclaredVersion: policy.Spec.Driver.Version,
+			DeclaredVersion: upgrade.EffectiveDesiredVersion(policy, loaded),
 			ObservedVersion: device.DriverVersion,
 			ObservedAt:      time.Now(),
 			Since:           timeOrZero(existing.Status.DriftFirstSeen),
@@ -408,7 +413,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	// 상태기계가 DesiredVersion 을 소유하고, 롤백은 그것을 PreviousVersion 으로 놓는다.
 	// 여기서 되돌리면 롤백을 깨고 매 롤백마다 재부팅 예산이 리셋돼 MaxReboots 상한이 무력화된다.
 	// Idle 새 사이클 리셋은 handleIdle 이 백업한다.
-	desiredVersion := policy.Spec.Driver.Version
+	desiredVersion := upgrade.EffectiveDesiredVersion(policy, loaded)
 	if desiredVersion != "" && existing.Status.DesiredVersion != desiredVersion &&
 		existing.Status.State == v1alpha1.UpgradeStateIdle {
 		oldDesired := existing.Status.DesiredVersion

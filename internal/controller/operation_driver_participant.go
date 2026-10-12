@@ -3,7 +3,7 @@
 // 상세: UpgradeStateMachine 은 cordon·drain·설치·재부팅·검증·보상을 이미 완결적으로 수행한다.
 // 이 파일은 그것을 한 번 전진시키고 결과 상태를 조정자 사건으로 옮기는 얇은 층이다 — 상태머신을
 // 복제하면 두 경로가 갈라지고, 갈라진 순간 직렬화가 무의미해진다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-11
+// 생성일: 2026-08-01 | 수정일: 2026-10-12
 // ============================================================
 package controller
 
@@ -59,7 +59,7 @@ func driverOutcomeFor(st *npuv1alpha1.DriverUpgradeStateStatus) operation.Outcom
 		}
 		// 아직 사이클이 시작되지 않았다 — 상태머신이 다음 pass 에 UpgradeRequired 로 옮긴다.
 		return operation.Outcome{Message: "driver cycle not started yet", RequeueAfter: participantRequeue}
-	case npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion:
+	case npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion, npuv1alpha1.UpgradeStateHostAhead:
 		return operation.Outcome{Event: operation.EventApplyFailed, Message: "driver state " + st.State + ": " + st.Message}
 	case npuv1alpha1.UpgradeStateRebootRequired, npuv1alpha1.UpgradeStateRebooting:
 		return operation.Outcome{Event: operation.EventRebootRequired, Message: "driver upgrade is rebooting the node"}
@@ -97,7 +97,7 @@ func (p *driverParticipant) Rollback(ctx context.Context, op *npuv1alpha1.Accele
 	case npuv1alpha1.UpgradeStateIdle:
 		// 이전 버전으로 되돌아가 사이클이 닫혔다.
 		return operation.Outcome{Event: operation.EventCompensated, Message: "driver restored to " + st.CurrentVersion}, nil
-	case npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion:
+	case npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion, npuv1alpha1.UpgradeStateHostAhead:
 		// 상태머신이 스스로 포기했다 — 되돌리기가 끝나지 않았다는 뜻이다.
 		return operation.Outcome{Event: operation.EventCompensationFailed, Message: "driver rollback ended in " + st.State}, nil
 	}

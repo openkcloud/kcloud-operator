@@ -2,7 +2,7 @@
 // validator.go: 드라이버 업그레이드 검증 단계 (Validator) 인터페이스 + 구현
 // 상세: 드라이버 업그레이드 검증을 단계별 책임(DriverModule/DevicePlugin/Workload)으로 나눈
 // 인터페이스다. Validator 는 검증 1회 시도(Run)만 하고, 재시도·Event/Metric 발행은 caller 몫이다.
-// 생성일: 2026-04-27 | 수정일: 2026-10-11
+// 생성일: 2026-04-27 | 수정일: 2026-10-13
 // ============================================================
 
 package validator
@@ -120,13 +120,13 @@ func (v *DriverModuleValidator) Run(
 			hostVer, desiredVersion, nodeName,
 		)
 		// needsReboot 이면 위 안내는 틀렸다. 목표 버전 모듈은 이미 디스크에 준비돼 있고 구 모듈이
-		// 사용 중이라 삽입만 못 한 상태(cross-major)라서 rmmod 로는 풀리지 않는다 — 그 지시를
-		// 따르는 사람은 시간만 버린다. 교체 주체는 노드 재부팅뿐이고,
+		// 사용 중이라 삽입만 못 한 상태(계열 전환·같은 계열 patch 교체)라서 rmmod 로는 풀리지
+		// 않는다 — 그 지시를 따르는 사람은 시간만 버린다. 교체 주체는 노드 재부팅뿐이고,
 		// 그 재부팅은 상태기계가 RebootRequired 로 진행한다.
 		if hostNeedsReboot {
 			msg = fmt.Sprintf(
 				"host kernel module=%s ≠ desired=%s — 목표 버전 모듈은 디스크에 준비됐고 구 모듈이 "+
-					"사용 중이라 삽입만 못 한 상태(cross-major). 노드 재부팅으로만 교체되며 rmmod 로는 "+
+					"사용 중이라 삽입만 못 한 상태(모듈 교체). 노드 재부팅으로만 교체되며 rmmod 로는 "+
 					"풀리지 않는다 — operator 가 재부팅을 진행하므로 수동 조치 불필요 (node=%s)",
 				hostVer, desiredVersion, nodeName,
 			)

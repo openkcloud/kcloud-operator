@@ -2,7 +2,7 @@
 // state_machine_job.go: driver Job 모드 상태 핸들러 (Mode=job)
 // 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 의 Mode=job 대체
 //       경로다. DS patch 를 install Job 생성/재생성으로, Pod Ready 관찰을 Job 완료+NDR 일치로 재정의한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-10-12
 // ============================================================
 
 package upgrade
@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -60,6 +61,54 @@ func (m *UpgradeStateMachine) driverNotLoaded(ctx context.Context, nodeName, ven
 		}
 	}
 	return false, nil
+}
+
+// LoadedHostVersion 은 vendor·model 과 맞고 모듈이 로드된 첫 장치의 드라이버 버전이다. 맞는 로드
+// 장치가 없으면 빈 문자열이다. 로드되지 않은 장치는 보지 않는다 — 그 노드는 self-heal 재설치가
+// 맡는다. 상태 기계와 컨트롤러가 같은 NDR 장치 목록에서 같은 값을 얻도록 이 함수 하나가 정한다.
+func LoadedHostVersion(devices []v1alpha1.DeviceEntry, vendor, model string) string {
+	for _, d := range devices {
+		if strings.EqualFold(d.Vendor, vendor) && DeviceModelMatches(d.Model, model) &&
+			d.DriverLoaded && d.DriverVersion != "" {
+			return d.DriverVersion
+		}
+	}
+	return ""
+}
+
+// loadedHostVersion 은 이 DUS 의 vendor·model 로 NDR 에서 구한 LoadedHostVersion 이다.
+// NDR 이 없으면 빈 문자열이다.
+func (m *UpgradeStateMachine) loadedHostVersion(ctx context.Context, state *v1alpha1.DriverUpgradeState) (string, error) {
+	var ndr v1alpha1.NodeDeviceReport
+	if err := m.Get(ctx, types.NamespacedName{Name: state.Spec.NodeName}, &ndr); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	return LoadedHostVersion(ndr.Status.Devices, state.Spec.Vendor, state.Spec.Model), nil
+}
+
+// hostDriverAhead 는 로드된 호스트 드라이버가 정책 버전보다 높고 다운그레이드가 막혀 있는지다.
+// 버전을 파싱할 수 없으면 판정하지 않는다(종전 동작). 비교는 점으로 나뉜 숫자 기준이며
+// Debian revision 은 무시한다 — 설치기의 다운그레이드 가드와 같은 결과다. versionSource=Host 는
+// 호스트 버전을 목표로 채택하므로 상위 판정이 없다.
+func (m *UpgradeStateMachine) hostDriverAhead(ctx context.Context, state *v1alpha1.DriverUpgradeState,
+	policy *v1alpha1.DriverInstallPolicy) (string, bool, error) {
+	if policy.Spec.Driver.AllowDowngrade || policy.Spec.Driver.Version == "" ||
+		strings.EqualFold(policy.Spec.Driver.VersionSource, versionSourceHost) {
+		return "", false, nil
+	}
+	want, err := utilversion.ParseGeneric(policy.Spec.Driver.Version)
+	if err != nil {
+		return "", false, nil
+	}
+	host, err := m.loadedHostVersion(ctx, state)
+	if err != nil || host == "" {
+		return "", false, err
+	}
+	got, err := utilversion.ParseGeneric(host)
+	if err != nil || !got.GreaterThan(want) {
+		return "", false, nil
+	}
+	return host, true, nil
 }
 
 // ─────────────────────────────────────────────

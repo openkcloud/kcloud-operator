@@ -2,7 +2,7 @@
 // state_machine.go: Driver Upgrade 상태 머신
 // 상세: 노드별 드라이버 업그레이드 상태 전이를 관리한다. Idle → UpgradeRequired → PreFlight →
 //       Cordoning → Draining → Upgrading → Validating → Uncordoning → Idle(실패 시 Rollback).
-// 생성일: 2026-04-13 | 수정일: 2026-10-11
+// 생성일: 2026-04-13 | 수정일: 2026-10-13
 // ============================================================
 
 package upgrade
@@ -184,15 +184,16 @@ func (m *UpgradeStateMachine) TransitionState(
 	case v1alpha1.UpgradeStateUpgrading:
 		return m.handleUpgrading(ctx, state, policy)
 	case v1alpha1.UpgradeStateValidating:
-		// install 성공 후 cross-major 로 모듈 교체에 재부팅이 필요하면(NDR.needsReboot), validator
-		// 체인 앞에서 RebootRequired 로 분기한다 — 재부팅 전엔 validator 가 구 버전을 보고 실패한다.
+		// install 성공 후 모듈 교체(계열 전환·같은 계열 patch 교체)로 재부팅이 필요하면
+		// (NDR.needsReboot), validator 체인 앞에서 RebootRequired 로 분기한다 — 재부팅 전엔
+		// validator 가 구 버전을 보고 실패한다.
 		// 마커가 없으면 이 분기를 타지 않는다. 마커가 있어도 NDR 반영은 detector 스캔주기(30s)만큼
 		// 지연되므로, rebootMarkerIsFresh 로 "이번 install Job 완료보다 나중 관측인가"를 확인해
 		// stale 마커로 인한 오판(MaxReboots 초과→Failed)을 막는다.
 		if need, nerr := m.nodeNeedsReboot(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model); nerr == nil &&
 			need && m.rebootMarkerIsFresh(ctx, state) {
 			return m.transitionTo(state, v1alpha1.UpgradeStateRebootRequired,
-				"cross-major: 커널 모듈 교체 위해 노드 재부팅 필요", 0)
+				"커널 모듈 교체 위해 노드 재부팅 필요(needsReboot)", 0)
 		}
 		return m.handleValidating(ctx, state, policy)
 	case v1alpha1.UpgradeStateRebootRequired:
@@ -205,18 +206,10 @@ func (m *UpgradeStateMachine) TransitionState(
 		return m.handleRollback(ctx, state, policy)
 	case v1alpha1.UpgradeStateFailed:
 		return m.handleFailed(ctx, state)
+	case v1alpha1.UpgradeStateHostAhead:
+		return m.handleHostAhead(ctx, state, policy)
 	case v1alpha1.UpgradeStateUnverifiedVersion:
-		// 터미널이지만 정책이 바뀌면 나간다 — desired 가 verifiedVersions 안으로 들어오거나(목록 추가·버전 되돌림)
-		// 목록이 비면 Idle 로 돌아가 정상 판정을 다시 받는다. 전에는 DUS 삭제·재생성만이 출구였고 그 재생성은
-		// currentVersion 이 비어 install Job 을 돌렸다.
-		desired := policy.Spec.Driver.Version
-		if len(policy.Spec.VerifiedVersions) == 0 || containsString(policy.Spec.VerifiedVersions, desired) {
-			return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
-				fmt.Sprintf("정책 버전 %s 가 verifiedVersions 안으로 들어와 Idle 복귀", desired), 0)
-		}
-		logger.Info("UnverifiedVersion 터미널 상태 — DIP.spec.verifiedVersions 수정 필요 (수동 조치)",
-			"node", state.Spec.NodeName, "desiredVersion", state.Status.DesiredVersion)
-		return true, 60 * time.Second, nil
+		return m.handleUnverifiedVersion(ctx, state, policy)
 	default:
 		logger.Info("알 수 없는 상태, Idle로 리셋", "state", state.Status.State)
 		return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "알 수 없는 상태 리셋", 60*time.Second)
@@ -227,13 +220,59 @@ func (m *UpgradeStateMachine) TransitionState(
 // 상태 핸들러
 // ─────────────────────────────────────────────
 
+// handleUnverifiedVersion 은 UnverifiedVersion 종점이다. 터미널이지만 정책이 바뀌면 나간다 —
+// desired 가 verifiedVersions 안으로 들어오거나(목록 추가·버전 되돌림) 목록이 비면 Idle 로
+// 돌아가 정상 판정을 다시 받는다.
+func (m *UpgradeStateMachine) handleUnverifiedVersion(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+	policy *v1alpha1.DriverInstallPolicy,
+) (bool, time.Duration, error) {
+	loaded, err := m.loadedHostVersion(ctx, state)
+	if err != nil {
+		return false, 0, err
+	}
+	desired := EffectiveDesiredVersion(policy, loaded)
+	if len(policy.Spec.VerifiedVersions) == 0 || containsString(policy.Spec.VerifiedVersions, desired) {
+		return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
+			fmt.Sprintf("목표 버전 %s 가 verifiedVersions 안으로 들어와 Idle 복귀", desired), 0)
+	}
+	logf.FromContext(ctx).Info("UnverifiedVersion 터미널 상태 — DIP.spec.verifiedVersions 수정 필요 (수동 조치)",
+		"node", state.Spec.NodeName, "desiredVersion", state.Status.DesiredVersion)
+	return true, 60 * time.Second, nil
+}
+
+// handleHostAhead 는 HostAhead 종점이다. 호스트가 더는 정책보다 높지 않으면(정책 상향·
+// allowDowngrade 켬·호스트 하향) Idle 로 돌아가 정상 판정을 다시 받는다.
+func (m *UpgradeStateMachine) handleHostAhead(
+	ctx context.Context,
+	state *v1alpha1.DriverUpgradeState,
+	policy *v1alpha1.DriverInstallPolicy,
+) (bool, time.Duration, error) {
+	host, ahead, err := m.hostDriverAhead(ctx, state, policy)
+	if err != nil {
+		return false, 0, err
+	}
+	if !ahead {
+		return m.transitionTo(state, v1alpha1.UpgradeStateIdle,
+			"호스트 드라이버가 더는 정책보다 높지 않아 Idle 복귀", 0)
+	}
+	logf.FromContext(ctx).Info("HostAhead 종점 — 정책 버전을 올리거나 versionSource=Host 로 바꿀 것",
+		"node", state.Spec.NodeName, "host", host, "policy", policy.Spec.Driver.Version)
+	return true, 60 * time.Second, nil
+}
+
 // handleIdle: 버전 불일치 감지 시 UpgradeRequired로 전이
 func (m *UpgradeStateMachine) handleIdle(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 	policy *v1alpha1.DriverInstallPolicy,
 ) (bool, time.Duration, error) {
-	desiredVersion := policy.Spec.Driver.Version
+	loaded, err := m.loadedHostVersion(ctx, state)
+	if err != nil {
+		return false, 0, err
+	}
+	desiredVersion := EffectiveDesiredVersion(policy, loaded)
 	currentVersion := state.Status.CurrentVersion
 
 	// Idle 에서도 선택 결과를 최신으로 유지한다. 호출부(driver_upgrade_controller.go 의
@@ -254,6 +293,18 @@ func (m *UpgradeStateMachine) handleIdle(
 				"TrackOnly: 버전 관측 전용(설치 경로 없음)", 60*time.Second)
 		}
 		return true, 60 * time.Second, nil
+	}
+
+	// 호스트가 정책보다 높고 다운그레이드가 막혀 있으면 사이클을 열지 않는다. 열면 설치기는
+	// 설치를 건너뛰고 검증은 정책 버전을 기다리다 실패해 cordon·롤백이 끝없이 반복된다.
+	if host, ahead, err := m.hostDriverAhead(ctx, state, policy); err != nil {
+		return false, 0, err
+	} else if ahead {
+		msg := fmt.Sprintf("호스트 드라이버 %s 가 정책 버전 %s 보다 높고 allowDowngrade=false — 설치·cordon 없이 멈춘다. "+
+			"정책 버전을 올리거나 versionSource=Host 로 바꿀 것", host, desiredVersion)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "HostDriverAhead", "%s", msg)
+		state.Status.DesiredVersion = desiredVersion
+		return m.transitionTo(state, v1alpha1.UpgradeStateHostAhead, msg, 0)
 	}
 
 	// Job 모드는 상주 DS 가 없어 driverLoaded=false(초기 미설치 / 재부팅·수동 rmmod
@@ -445,7 +496,7 @@ func (m *UpgradeStateMachine) handlePreFlight(
 	// activeDeadlineSeconds(= 이 TimeoutSeconds)까지 남아 그동안 장치 점유자로 집계된다.
 	// 거절하지 않고 경고만 낸다 — 기존 객체를 admission 에서 막으면 운영 중 정책이 갱신 불가가 된다.
 	// 예산 파싱은 handleValidating 이 이미 쓰는 parseDuration 을 재사용(새 헬퍼 미추가).
-	if wp := policy.Spec.WorkloadProbe; wp != nil && wp.Enabled && wp.TimeoutSeconds > 0 {
+	if wp := policy.Spec.WorkloadProbe; wp != nil && wp.Enabled {
 		var rawTimeout string
 		if policy.Spec.UpgradePolicy != nil {
 			rawTimeout = policy.Spec.UpgradePolicy.ValidationTimeout
@@ -457,11 +508,18 @@ func (m *UpgradeStateMachine) handlePreFlight(
 		if rawTimeout != "" {
 			budget = fmt.Sprintf("%s(upgradePolicy.validationTimeout=%q)", validationTimeout, rawTimeout)
 		}
-		if probeTimeout := time.Duration(wp.TimeoutSeconds) * time.Second; probeTimeout > validationTimeout {
+		// timeoutSeconds 가 비면 Timeout() 이 기본값(120s)을 돌려준다 — 실제로 쓰이는 그 값을
+		// 비교해야 기본 설정의 모순도 드러난다.
+		probeTimeout := (&validator.WorkloadValidator{Probe: *wp}).Timeout()
+		if probeTimeout > validationTimeout {
+			probeSrc := probeTimeout.String()
+			if wp.TimeoutSeconds == 0 {
+				probeSrc += "(timeoutSeconds 미설정 기본값)"
+			}
 			m.Recorder.Eventf(state, corev1.EventTypeWarning, "WorkloadProbeTimeoutExceedsBudget",
-				"workloadProbe.timeoutSeconds=%ds 가 검증 예산 %s 보다 길다 — "+
+				"workloadProbe 제한시간 %s 가 검증 예산 %s 보다 길다 — "+
 					"probe 결과가 쓰이지 않고 파드가 그 차이만큼 장치를 점유한다. 둘 중 하나를 고칠 것",
-				wp.TimeoutSeconds, budget)
+				probeSrc, budget)
 		}
 	}
 	allowlist := policy.Spec.KernelAllowlist
@@ -911,11 +969,12 @@ func (m *UpgradeStateMachine) handleFailed(
 	return false, 0, nil
 }
 
-// failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다. 만족의
-// 정의는 둘 다여야 한다: (a) 목표 버전이 현재 버전과 같다, (b) 그 벤더 장치의 드라이버가 실제로
-// 로드돼 있다. (b)를 함께 보는 이유: 버전 문자열만 보고 "만족"으로 읽으면 모듈이 빠진 노드도
-// Idle 로 보내 self-heal 이 설치를 걸고 같은 이유로 다시 실패하는 왕복이 생긴다. NDR 이 없어
-// (b)를 확인할 수 없으면 false 다 — 확인하지 못한 것을 만족으로 읽지 않는다.
+// failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다. 목표 버전이
+// NDR 의 로드된 모듈 버전과 같고, 그 장치가 로드돼 있고, node-agent 검증의 driverModule 단계가
+// 실패하지 않았을 때만 복구로 본다. currentVersion 은 이 사이클의 목표가 맞는지 거르는 데만
+// 쓴다. Failed 에서는 갱신되지 않으므로 실제 로드 상태는 NDR 에서 직접 읽는다. 버전 문자열만
+// 맞는 노드를 Idle 로 보내면 self-heal 이 설치를 걸고 같은 이유로 다시 실패하는 왕복이 생긴다.
+// NDR 이 없거나 이 벤더 장치가 없으면 확인하지 못한 것이므로 false 다.
 func (m *UpgradeStateMachine) failedStateRecovered(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
@@ -931,11 +990,36 @@ func (m *UpgradeStateMachine) failedStateRecovered(
 		}
 		return false, err
 	}
-	notLoaded, err := m.driverNotLoaded(ctx, state.Spec.NodeName, state.Spec.Vendor, state.Spec.Model)
-	if err != nil {
-		return false, err
+	matched := false
+	for _, d := range ndr.Status.Devices {
+		if !strings.EqualFold(d.Vendor, state.Spec.Vendor) || !DeviceModelMatches(d.Model, state.Spec.Model) {
+			continue
+		}
+		// CurrentVersion 은 Failed 에서 갱신되지 않으므로 NDR 의 로드 버전을 직접 본다.
+		if !d.DriverLoaded || d.DriverVersion != desired {
+			return false, nil
+		}
+		matched = true
 	}
-	return !notLoaded, nil
+	if !matched || driverModuleStepFailed(ndr.Status.Validation, state.Spec.Vendor) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// driverModuleStepFailed 는 node-agent 검증의 driverModule 단계가 실패했는지다. 단계 이름은
+// 단일 벤더 노드에서 "driverModule", 다중 벤더 노드에서 "<vendor>/driverModule" 이다.
+// 검증을 쓰지 않는 노드(Validation=nil)는 실패로 보지 않는다.
+func driverModuleStepFailed(v *v1alpha1.ValidationStatus, vendor string) bool {
+	if v == nil {
+		return false
+	}
+	for _, s := range v.Steps {
+		if (s.Name == "driverModule" || strings.EqualFold(s.Name, vendor+"/driverModule")) && !s.Passed && !s.NotApplicable {
+			return true
+		}
+	}
+	return false
 }
 
 // vendorStillAdvertised 는 노드가 그 벤더의 extended resource 를 아직 광고 중인지 본다. 반환값은
@@ -2296,6 +2380,20 @@ func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 	s.RebootAttempts = 0
 	s.RebootRequestedTime = metav1.Time{}
 	s.RebootBootID = ""
+}
+
+// versionSourceHost 는 spec.driver.versionSource 의 호스트 채택 값이다(CRD 열거값 Policy|Host).
+const versionSourceHost = "Host"
+
+// EffectiveDesiredVersion 은 이 노드에서 operator 가 목표로 삼을 드라이버 버전이다.
+// versionSource=Host 이고 모듈이 로드돼 있으면 호스트 버전을 채택한다 — 설치기가 호스트 버전을
+// 채택하고 설치를 건너뛰므로 정책 버전을 목표로 두면 검증이 끝내 실패한다. 로드된 버전이 없으면
+// 정책 버전이다.
+func EffectiveDesiredVersion(policy *v1alpha1.DriverInstallPolicy, loadedHost string) string {
+	if strings.EqualFold(policy.Spec.Driver.VersionSource, versionSourceHost) && loadedHost != "" {
+		return loadedHost
+	}
+	return policy.Spec.Driver.Version
 }
 
 func containsString(slice []string, s string) bool {

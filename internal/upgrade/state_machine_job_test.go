@@ -2,7 +2,7 @@
 // state_machine_job_test.go: Job 모드 상태 핸들러 단위 테스트
 // 상세: fake client 기반. handleIdle 초기설치, handleUpgradingJob/handleValidatingJob/
 //       handleRollbackJob 전이, daemonset 무영향(isJobMode)을 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-10-13
 // ============================================================
 
 package upgrade
@@ -159,6 +159,25 @@ func TestHandleIdleJob_DriverNotLoaded_TriggersReinstall(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateRequired {
 		t.Errorf("state=%q, want UpgradeRequired (driverLoaded=false self-heal)", dus.Status.State)
+	}
+}
+
+// Job 모드 self-heal(driverLoaded=false)도 허용 목록 밖 버전이면 설치하지 않고 UnverifiedVersion 으로 간다.
+// 장치가 로드되지 않았으므로 HostAhead 게이트는 관여하지 않는다.
+func TestHandleIdleJob_SelfHeal_UnverifiedVersion(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateIdle, verNew, verNew)
+	dip := makeJobDIP(verNew, imgNew, false, true)
+	dip.Spec.VerifiedVersions = []string{verOld}
+	sm := newUpgradeSMWithRecorder(dus, dip, makeNDRWithDriver(false, verNew))
+
+	if _, _, err := sm.handleIdle(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleIdle 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateUnverifiedVersion {
+		t.Fatalf("state=%q, want UnverifiedVersion (허용 목록 밖 버전은 self-heal 도 설치하지 않는다)", dus.Status.State)
+	}
+	if !hasEvent(drainEvents(sm), "UnverifiedVersion") {
+		t.Error("UnverifiedVersion 이벤트가 없다")
 	}
 }
 

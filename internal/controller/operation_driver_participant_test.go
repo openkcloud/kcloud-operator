@@ -1,7 +1,7 @@
 // ============================================================
 // operation_driver_participant_test.go: 드라이버 작업 본체 envtest
 // 상세: 드라이버 상태머신의 상태를 조정자 사건으로 옮기는 매핑과, 상태머신에 실제로 닿는지를 본다.
-// 생성일: 2026-08-01 | 수정일: 2026-10-11
+// 생성일: 2026-08-01 | 수정일: 2026-10-12
 // ============================================================
 package controller
 
@@ -127,10 +127,11 @@ var _ = Describe("driver participant outcome mapping", func() {
 		Expect(out.Event).To(Equal(operation.EventApplyDone))
 	})
 
-	// 증명: 두 터미널 실패 상태가 모두 실패 사건이 된다.
-	// 깨는 뮤테이션: UnverifiedVersion 을 빠뜨리면 그 상태가 진행 중으로 남아 20분 상한까지 매달린다.
-	It("maps both terminal failures to an apply failure", func() {
-		for _, st := range []string{npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion} {
+	// 증명: 세 터미널 상태가 모두 실패 사건이 된다.
+	// 깨는 뮤테이션: UnverifiedVersion·HostAhead 를 빠뜨리면 그 상태가 진행 중으로 남아 20분 상한까지 매달린다.
+	It("maps the terminal states to an apply failure", func() {
+		for _, st := range []string{npuv1alpha1.UpgradeStateFailed, npuv1alpha1.UpgradeStateUnverifiedVersion,
+			npuv1alpha1.UpgradeStateHostAhead} {
 			out := driverOutcomeFor(&npuv1alpha1.DriverUpgradeStateStatus{State: st})
 			Expect(out.Event).To(Equal(operation.EventApplyFailed), "state=%s", st)
 		}

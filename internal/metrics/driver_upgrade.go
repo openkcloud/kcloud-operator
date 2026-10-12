@@ -2,7 +2,7 @@
 // driver_upgrade.go: Driver Upgrade Controller Prometheus 메트릭
 // 상세: controller-runtime 메트릭 레지스트리를 사용하여 드라이버 업그레이드
 //       관련 메트릭(카운터, 히스토그램, 게이지)을 등록 및 제공
-// 생성일: 2026-04-13 | 수정일: 2026-09-15
+// 생성일: 2026-04-13 | 수정일: 2026-10-12
 // ============================================================
 
 package metrics
@@ -93,6 +93,7 @@ func SetUpgradeState(node, vendor, state string) {
 		npuv1alpha1.UpgradeStateRollback,
 		npuv1alpha1.UpgradeStateFailed,
 		npuv1alpha1.UpgradeStateUnverifiedVersion,
+		npuv1alpha1.UpgradeStateHostAhead,
 		npuv1alpha1.UpgradeStateRebootRequired,
 		npuv1alpha1.UpgradeStateRebooting,
 	}

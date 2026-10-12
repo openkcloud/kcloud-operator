@@ -1,7 +1,7 @@
 // ============================================================
 // driver_upgrade_test.go: 드라이버 업그레이드 지표의 기록 동작 고정
 // 상세: 상태 게이지가 한 시점에 하나만 1인지, 카운터가 라벨별로 누적되는지 검증
-// 생성일: 2026-09-15 | 수정일: 2026-09-15
+// 생성일: 2026-09-15 | 수정일: 2026-10-12
 // ============================================================
 
 package metrics
@@ -31,6 +31,7 @@ var allUpgradeStates = []string{
 	npuv1alpha1.UpgradeStateRollback,
 	npuv1alpha1.UpgradeStateFailed,
 	npuv1alpha1.UpgradeStateUnverifiedVersion,
+	npuv1alpha1.UpgradeStateHostAhead,
 	npuv1alpha1.UpgradeStateRebootRequired,
 	npuv1alpha1.UpgradeStateRebooting,
 }

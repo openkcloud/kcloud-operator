@@ -2,8 +2,8 @@
 // state_machine_failed_recovered_test.go: 노드가 이미 정책을 만족하는데 Failed 로 남은 상태의
 // 탈출 경로 단위 테스트
 // 상세: Failed 가 이미 정책을 만족한 노드를 Idle 로 내보내는 탈출 조건과 그 경계(버전 불일치·
-//       NDR 없음·cordon 소유권)를 고정한다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-11
+//       NDR 로드 버전·driverModule 검증·NDR 없음·cordon 소유권)를 고정한다.
+// 생성일: 2026-08-07 | 수정일: 2026-10-13
 // ============================================================
 
 package upgrade
@@ -190,5 +190,79 @@ func TestFailedStateRecovered_LeavesForeignCordon(t *testing.T) {
 	}
 	if !got.Spec.Unschedulable {
 		t.Error("Idle 로 탈출했는데 남의 cordon 이 풀렸다 — 파티션 적용 중이거나 정비 중인 노드에 파드가 들어간다")
+	}
+}
+
+// ── 시험 6: NDR 로드 버전·검증 결과를 읽는다 ─────────────────────────────
+// DUS currentVersion 은 Failed 에서 갱신되지 않는다. current=desired 여도 실제 로드된 모듈이
+// 다르거나 node-agent 검증이 실패했으면 복구가 아니다.
+
+// DUS current=desired 여도 NDR 로드 버전이 다르면 복구가 아니다.
+func TestHandleFailed_LoadedVersionDiffers_StaysFailed(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verOld, verOld)
+	sm := newUpgradeSMWithRecorder(dus, makeCordonTestDIP(), makeNDRWithDriver(true, verNew), makeUncordonedNode())
+	if _, _, err := sm.handleFailed(context.Background(), dus); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed {
+		t.Fatalf("state=%q, Failed 유지 기대", dus.Status.State)
+	}
+}
+
+// 로드 버전은 맞아도 node-agent 검증의 driverModule 단계가 kernel/userspace 불일치로 실패한 노드는 복구가 아니다.
+func TestHandleFailed_DriverModuleValidationFailed_StaysFailed(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verOld, verOld)
+	ndr := makeNDRWithDriver(true, verOld)
+	ndr.Status.Validation = &v1alpha1.ValidationStatus{Passed: false, Steps: []v1alpha1.ValidationStep{{
+		Name: "nvidia/driverModule", Passed: false,
+		Message: "kernel/userspace mismatch: kernel=580.126.09 userspace=580.178.04",
+	}}}
+	sm := newUpgradeSMWithRecorder(dus, makeCordonTestDIP(), ndr, makeUncordonedNode())
+	if _, _, err := sm.handleFailed(context.Background(), dus); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed {
+		t.Fatalf("state=%q, Failed 유지 기대", dus.Status.State)
+	}
+}
+
+// NDR 에 이 벤더 장치가 하나도 없으면 복구로 보지 않는다.
+func TestHandleFailed_NoMatchingDevice_StaysFailed(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verOld, verOld)
+	ndr := makeNDRWithDriver(true, verOld)
+	ndr.Status.Devices[0].Vendor = "furiosa"
+	sm := newUpgradeSMWithRecorder(dus, makeCordonTestDIP(), ndr, makeUncordonedNode())
+	if _, _, err := sm.handleFailed(context.Background(), dus); err != nil {
+		t.Fatal(err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed {
+		t.Fatalf("state=%q, Failed 유지 기대", dus.Status.State)
+	}
+}
+
+// driverModuleStepFailed 는 이 벤더의 driverModule 단계 실패만 실패로 읽는다.
+func TestDriverModuleStepFailed(t *testing.T) {
+	step := func(name string, passed, na bool) *v1alpha1.ValidationStatus {
+		return &v1alpha1.ValidationStatus{Steps: []v1alpha1.ValidationStep{{Name: name, Passed: passed, NotApplicable: na}}}
+	}
+	cases := []struct {
+		name string
+		v    *v1alpha1.ValidationStatus
+		want bool
+	}{
+		{"검증 없음", nil, false},
+		{"단일 벤더 이름 실패", step("driverModule", false, false), true},
+		{"벤더 접두 이름 실패(대소문자 무시)", step("NVIDIA/driverModule", false, false), true},
+		{"통과", step("nvidia/driverModule", true, false), false},
+		{"해당없음", step("nvidia/driverModule", false, true), false},
+		{"다른 벤더 접두 실패", step("furiosa/driverModule", false, false), false},
+		{"다른 단계 실패", step("nvidia/devicePlugin", false, false), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := driverModuleStepFailed(tc.v, "nvidia"); got != tc.want {
+				t.Errorf("driverModuleStepFailed=%v, want %v", got, tc.want)
+			}
+		})
 	}
 }

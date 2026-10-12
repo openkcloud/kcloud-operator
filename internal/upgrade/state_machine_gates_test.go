@@ -1,7 +1,7 @@
 // state_machine_gates_test.go: idle cooldown defer + kernel allowlist preflight 게이트 단위 테스트
 // 상세: 실제 트리거(cordon/drain/driver 변경) 없이 순수 state-machine 분기를 fake client 로
 // 검증한다(IdleCooldown·kernel allowlist·Idle 게이트 순서·WorkloadProbe 예산 경고).
-// 생성일: 2026-07-21 | 수정일: 2026-10-11
+// 생성일: 2026-07-21 | 수정일: 2026-10-13
 package upgrade
 
 import (
@@ -239,6 +239,33 @@ func TestHandlePreFlight_ProbeTimeoutWithinBudget_NoWarn(t *testing.T) {
 	}
 	if hasEvent(drainEvents(sm), "WorkloadProbeTimeoutExceedsBudget") {
 		t.Fatal("합당한 조합인데 경고가 떴다")
+	}
+}
+
+// timeoutSeconds 를 비우면 기본 120s 가 쓰인다 — 그 값이 검증 예산(1m)보다 길면 경고해야 하고,
+// 그 값이 정책에 적힌 것처럼 보이면 안 된다.
+func TestHandlePreFlight_ProbeTimeoutDefaultExceedsBudget(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: jNode},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "5.15.0-181-generic"}},
+	}
+	dip := makeDaemonsetDIP("580.159.03", true)
+	dip.Spec.UpgradePolicy.ValidationTimeout = "1m"
+	dip.Spec.WorkloadProbe = &v1alpha1.WorkloadProbeSpec{
+		Enabled: true, Image: "probe:v1", ResourceName: "nvidia.com/gpu", // TimeoutSeconds=0 → 120s
+	}
+	dus := makeJobDUS(v1alpha1.UpgradeStatePreFlight, "535.288.01", "580.159.03")
+	sm := newUpgradeSMWithRecorder(dus, dip, node)
+
+	if _, _, err := sm.handlePreFlight(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handlePreFlight: %v", err)
+	}
+	events := drainEvents(sm)
+	if !hasEvent(events, "WorkloadProbeTimeoutExceedsBudget") {
+		t.Fatal("기본 probe 제한시간(120s) > 예산(1m) 인데 경고가 없다")
+	}
+	if !hasEvent(events, "timeoutSeconds 미설정 기본값") {
+		t.Errorf("경고가 기본값을 정책값처럼 보인다 — 출처 표기가 없다: %v", events)
 	}
 }
 

@@ -2,7 +2,7 @@
 // state_machine_reboot_test.go: cross-major reboot 전이 단위 테스트
 // 상세: 재부팅 트리거/완료 판정(bootID 가드), 재부팅 예산, needs-reboot 마커의 신선도 판정을
 // 검증한다.
-// 생성일: 2026-07-20 | 수정일: 2026-10-11
+// 생성일: 2026-07-20 | 수정일: 2026-10-13
 // ============================================================
 package upgrade
 
@@ -258,6 +258,24 @@ func TestTransitionState_FirstValidation_TriggersReboot(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
 		t.Errorf("state=%q, want RebootRequired (첫 검증 needsReboot 트리거)", dus.Status.State)
+	}
+}
+
+// 재부팅 게이트는 NDR needsReboot 만 본다 — 같은 580 계열 patch 교체(580.126.09 → 580.178.04)도
+// 구 모듈이 사용 중이면 모듈 교체에 재부팅이 필요하므로 RebootRequired 로 간다.
+func TestTransitionState_SameMajor_Marker_TriggersReboot(t *testing.T) {
+	const from, to = "580.126.09", "580.178.04"
+	dus := makeJobDUS(v1alpha1.UpgradeStateValidating, from, to)
+	dip := makeJobDIP(to, imgNew, true, true)
+	ndr := rebootNDR(true)
+	ndr.Status.Devices[0].DriverVersion = from // 구 모듈이 아직 로드돼 있다
+	sm := newUpgradeSMWithRecorder(dus, dip, ndr, readyNode(true), makeInstallJob(true, false))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRebootRequired {
+		t.Errorf("state=%q, want RebootRequired (같은 계열 patch 교체의 needsReboot 트리거)", dus.Status.State)
 	}
 }
 

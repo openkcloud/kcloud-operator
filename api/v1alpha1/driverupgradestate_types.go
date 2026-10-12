@@ -1,6 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-11
+// 생성일: 2026-04-13 | 수정일: 2026-10-13
 
 package v1alpha1
 
@@ -34,11 +34,11 @@ func RollbackRequestAccepted(state string) bool {
 // 버전 드리프트를 판정해도 되는 상태인지다. 조정자(internal/controller)와 드리프트 검출기
 // (internal/verification)가 같은 술어를 써야 한쪽만 감지가 꺼지는 것을 막는다.
 // 사이클 중간은 상태 기계가 DesiredVersion·PreviousVersion 을 소유해 밖에서 덮으면 롤백이 깨지고,
-// 그 사이의 불일치는 설계상 정상이라 드리프트로 읽으면 오경보가 되므로 제외한다. Failed 는 복구
-// 판정이 currentVersion 을 근거로 쓰므로 제외한다 — 받아들이는 것은 Idle 과 UnverifiedVersion 뿐이다.
+// 그 사이의 불일치는 설계상 정상이라 드리프트로 읽으면 오경보가 되므로 제외한다. Failed 는 사이클 결과(currentVersion)를 보존해야 하므로 제외한다.
+// 복구 판정은 이 값으로 목표를 거르고 로드 상태는 NDR 에서 읽는다. 받아들이는 것은 Idle 과 두 보고 전용 종점(UnverifiedVersion·HostAhead)뿐이다.
 func VersionObservationAllowed(state string) bool {
 	switch state {
-	case UpgradeStateIdle, UpgradeStateUnverifiedVersion:
+	case UpgradeStateIdle, UpgradeStateUnverifiedVersion, UpgradeStateHostAhead:
 		return true
 	}
 	return false
@@ -63,6 +63,10 @@ const (
 	// driver version 이 지정된 경우 진입하는 terminal 상태입니다.
 	// DIP.spec.verifiedVersions 를 수정하거나 DUS 를 삭제·재생성하여 복구합니다.
 	UpgradeStateUnverifiedVersion = "UnverifiedVersion"
+	// UpgradeStateHostAhead 는 호스트에 로드된 드라이버가 정책 버전보다 높고 allowDowngrade 가
+	// 꺼져 있을 때 진입하는 보고 전용 종점이다. install Job·cordon 을 만들지 않는다. 정책 버전을
+	// 올리거나 allowDowngrade·versionSource=Host 로 바꾸면 Idle 로 돌아간다.
+	UpgradeStateHostAhead = "HostAhead"
 	// UpgradeStateRebootRequired 는 install 성공 후 cross-major 등으로 커널 모듈 교체에
 	// 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다.
 	UpgradeStateRebootRequired = "RebootRequired"
