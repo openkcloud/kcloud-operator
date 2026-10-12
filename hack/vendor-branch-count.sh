@@ -13,8 +13,8 @@ cd "$(dirname "$0")/.."
 # 옮길 수 있는 것만 internal/driveradapter 로 옮겼고, 이 검사는 나머지가 다시 늘지
 # 않는지를 지킨다(목표는 0 이 아니다 — partition·policy spec 탐색·벤더 DRA 렌더·
 # descriptor↔registry 매핑·벤더 목록 순회·verify-probe 등은 이미 각자의 경계다).
-# MAX_BRANCHES=70: 측정값 62(주석·선언 포함) + 여유 8 — 통상 한두 줄 추가는 안 걸리고
-# 어댑터로 옮긴 것과 같은 규모(8줄)가 다시 흩어지면 잡는다.
+# MAX_BRANCHES=70: 주석 줄을 빼고 센 현재 측정값 66 + 여유 4(상한 값 70 은 주석 줄을 함께 세던
+# 때와 같다) — 한두 줄 추가는 안 걸리고 어댑터로 옮긴 규모(8줄)가 다시 흩어지면 잡는다.
 MAX_BRANCHES="${MAX_BRANCHES:-70}"
 
 # 세는 것은 실제 분기 수가 아니라 벤더 상수·"Spec.Vendor ==" 패턴이 나온 줄 수다. 줄 전체가

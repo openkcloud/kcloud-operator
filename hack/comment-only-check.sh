@@ -5,7 +5,7 @@
 #       본문, YAML 은 적재한 데이터, 차트 템플릿은 {{/* */}} 와 # 전체 줄을 뗀 소스를 1차로
 #       보고 렌더 결과(인증서 필드 제외)를 보조로, CRD 는 description 을 뗀 데이터를 두
 #       판본에서 비교한다. 검사 대상은 현재 디렉터리의 git 루트다. --self-test 지원.
-# 생성일: 2026-10-11 | 수정일: 2026-10-11
+# 생성일: 2026-10-11 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
 
@@ -189,7 +189,7 @@ check() {
 }
 
 # self_test: Go·YAML·셸 픽스처(통과 1·위반 4) 에 템플릿 통과·템플릿 위반·알 수 없는 리비전·
-# CRD(통과+위반)·확장자 없는 셸(통과+위반)·HTML(통과+위반) 을 더해 열한 경우를 본다.
+# CRD(통과+위반)·확장자 없는 셸(통과+위반)·HTML(통과+위반) 을 더해 열일곱 경우를 본다.
 self_test() {
   local r rc out
   r="$(mktemp -d)"
@@ -284,6 +284,41 @@ self_test() {
   commit c11fail
   rc=0; out="$(run_check)" || rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"주석 밖 본문이 바뀜"* ]] || { echo "self-test 11b: 종료 $rc '$out'" >&2; return 1; }
+  # 12) 이어진 두 문장 사이에 새 전행 주석 → 통과(줄 간격 변화는 코드 변경이 아니다)
+  printf 'package p\n\nfunc F() int {\n\ta := 1\n\treturn a\n}\n' > "$r/b.go"; commit c12base
+  printf 'package p\n\nfunc F() int {\n\ta := 1\n\t// 설명\n\treturn a\n}\n' > "$r/b.go"; commit c12
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 12: 종료 $rc '$out'" >&2; return 1; }
+  # 13) 복합 리터럴 원소 앞 새 주석, 그리고 문장 사이 주석 블록 삭제 → 통과
+  printf 'package p\n\nvar V = []int{\n\t1,\n\t2,\n}\n' > "$r/c.go"; commit c13base
+  printf 'package p\n\nvar V = []int{\n\t1,\n\t// 둘째\n\t2,\n}\n' > "$r/c.go"; commit c13a
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 13a: 종료 $rc '$out'" >&2; return 1; }
+  printf 'package p\n\nfunc F() int {\n\ta := 1\n\treturn a\n}\n' > "$r/b.go"; commit c13b
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 13b: 종료 $rc '$out'" >&2; return 1; }
+  # 14) 빈 줄만 추가 → 실패(빈 줄 배치도 코드 변경으로 본다)
+  printf 'package p\n\nfunc F() int {\n\ta := 1\n\n\treturn a\n}\n' > "$r/b.go"; commit c14
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"Go 코드가 바뀜"* ]] || { echo "self-test 14: 종료 $rc '$out'" >&2; return 1; }
+  # 15) raw string 안의 // 줄은 주석이 아니다 → 바꾸면 실패
+  printf 'package p\n\nvar S = `a\n// x\nb`\n' > "$r/d.go"; commit c15base
+  printf 'package p\n\nvar S = `a\n// y\nb`\n' > "$r/d.go"; commit c15
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"Go 코드가 바뀜"* ]] || { echo "self-test 15: raw string 변경을 놓침 종료 $rc '$out'" >&2; return 1; }
+  # 16) //line 지시문 뒤라도 물리 줄로 판정한다 → 코드 줄을 주석 줄로 착각해 지우면 안 된다
+  printf 'package p\n//line a.go:5\n// note\nvar A = 1\nvar B = 2\n' > "$r/e.go"; commit c16base
+  printf 'package p\n//line a.go:5\n// note\nvar A = 1\nvar B = 3\n' > "$r/e.go"; commit c16
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"Go 코드가 바뀜"* ]] || { echo "self-test 16: //line 뒤 코드 변경을 놓침 종료 $rc '$out'" >&2; return 1; }
+  # 17) 코드로 끝나는 여러 줄 블록 주석(이어진 것 포함): 주석 글만 바꾸면 통과, 그 줄 코드를 바꾸면 실패
+  printf 'package p\n\n/* a\n b */ var X = 1\n\n/* c\n d */ /* e\n f */ var Y = 2\n' > "$r/f.go"; commit c17base
+  printf 'package p\n\n/* a\n 둘 */ var X = 1\n\n/* c\n 둘 */ /* e\n 셋 */ var Y = 2\n' > "$r/f.go"; commit c17a
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "self-test 17a: 종료 $rc '$out'" >&2; return 1; }
+  printf 'package p\n\n/* a\n 둘 */ var X = 1\n\n/* c\n 둘 */ /* e\n 셋 */ var Y = 3\n' > "$r/f.go"; commit c17b
+  rc=0; out="$(run_check)" || rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"Go 코드가 바뀜"* ]] || { echo "self-test 17b: 종료 $rc '$out'" >&2; return 1; }
   echo "self-test ok"
 }
 
