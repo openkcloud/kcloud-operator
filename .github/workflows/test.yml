@@ -1,7 +1,7 @@
-# test.yml: push·PR 시 make test(단위·envtest·차트 렌더)를 돈다.
+# test.yml: push·PR 시 make test(단위·envtest·차트 렌더)와 make notices-check 를 돈다.
 # 상세: helm 을 설치해야 차트 렌더 시험 넷이 t.Skip 으로 빠지지 않는다 — 선언만 두고
 #       helm 이 그것을 보는지 확인하지 않으면 kubeVersion 경계 시험이 늘 초록이 된다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-11
+# 생성일: 2025-07-04 | 수정일: 2026-10-13
 name: Tests
 
 on:
@@ -44,3 +44,8 @@ jobs:
         run: |
           go mod tidy
           make test
+
+      # THIRD_PARTY_NOTICES.txt 가 현재 링크되는 모듈과 같은지 본다. 스크립트는 모듈 캐시만 읽으므로
+      # 위 단계가 모듈을 내려받은 뒤에 돌아야 한다.
+      - name: Check third-party notices
+        run: make notices-check
