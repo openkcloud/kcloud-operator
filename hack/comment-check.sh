@@ -3,8 +3,8 @@
 # comment-check.sh: 주석·문서에 남은 이력 서술·세션 식별자·날짜·긴 주석 블록을 거부한다
 # 상세: 머리말 수정일의 괄호 설명, 머리말 밖의 날짜, 과거 서술 종결, 세션 식별자, 7줄 이상
 #       주석 블록을 위반으로 본다. 규칙은 아래 PY 한 곳에만 둔다. 인자: [ROOT] [PREFIX…].
-#       --self-test 는 임시 저장소에서 열여섯 경우로 자가 검증한다.
-# 생성일: 2026-10-11 | 수정일: 2026-10-11
+#       --self-test 는 임시 저장소에서 스무 경우로 자가 검증한다.
+# 생성일: 2026-10-11 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
 
@@ -36,7 +36,10 @@ MARKER = re.compile(r'^\s*//\s*(\+[A-Za-z]|go:|nolint|lint:|revive:)')
 FENCE = re.compile(r'^\s*`{3,}')
 CLOSER = re.compile(r'^\s*(//|#)\s*=+\s*$')
 MAXBLOCK = 6
-files = subprocess.run(['git', 'ls-files'], cwd=root, capture_output=True, text=True).stdout.split('\n')
+def ls(*opts):
+    return set(subprocess.run(['git', 'ls-files', *opts], cwd=root, capture_output=True, text=True).stdout.split('\n'))
+files = sorted(ls('--cached', '--others', '--exclude-standard') - ls('--deleted') - {''})
+hit = set()
 viol = []
 
 def add(f, i, kind, line):
@@ -98,9 +101,12 @@ def frontmatter_extent(lines):
     return 0
 
 for f in files:
-    if not f or allow.search(f) or skip.search(f):
-        continue
-    if prefixes and not any(f == p or f.startswith(p + '/') for p in prefixes):
+    if prefixes:
+        m = [p for p in prefixes if f == p or f.startswith(p + '/')]
+        if not m:
+            continue
+        hit.update(m)
+    if allow.search(f) or skip.search(f):
         continue
     base = os.path.basename(f)
     if f.endswith('.go'):
@@ -166,6 +172,10 @@ for f in files:
     if cm is not None and run > MAXBLOCK and start > hdr_end:
         add(f, start, '긴 블록 %d줄' % run, lines[start - 1])
 
+for p in prefixes:
+    if p not in hit:
+        sys.stderr.write('인자가 가리키는 파일이 없다: %s\n' % p)
+        sys.exit(2)
 if viol:
     print('주석·문서 정리 규칙 위반 %d건' % len(viol))
     print('\n'.join(viol))
@@ -174,7 +184,7 @@ print('주석 정리 검사 통과')
 EOF
 )
 
-# scan <루트> [접두…]: 종료 0=위반 없음, 1=위반 있음, 2=루트가 git 저장소가 아님.
+# scan <루트> [접두…]: 종료 0=위반 없음, 1=위반 있음, 2=루트가 git 저장소가 아니거나 인자가 가리키는 파일 없음.
 scan() {
   local root="$1"; shift
   ( cd "$root" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1 ) \
@@ -184,7 +194,8 @@ scan() {
 
 # self_test: 규칙마다 한 경우씩(전체 줄 하나 + 꼬리 주석 하나), 통과 경우 하나, 접두 필터 하나,
 # git 아님 하나, 머리말 면제 경계(설명 블록 하나 + 연속행 하나) 둘, 꼬리 주석 따옴표 짝(위반+통과) 둘,
-# Markdown frontmatter 제외 하나, 긴 머리말(연속행 포함 위반 하나 + 7줄 위반 하나) 둘.
+# Markdown frontmatter 제외 하나, 긴 머리말(연속행 포함 위반 하나 + 7줄 위반 하나) 둘,
+# 미추적 파일 인자 하나, 가리키는 파일이 없는 인자 하나, 빈 접두 하나, 삭제된 추적 파일 인자 하나.
 self_test() {
   local tmp rc out
   tmp="$(mktemp -d)"
@@ -245,6 +256,18 @@ self_test() {
   # 16) 머리말 본문이 테두리 제외 7줄이면 위반(면제 범위는 그대로, 길이만 따로 본다)
   printf '// ====\n// x.go: 설명\n// 생성일: 2026-01-01 | 수정일: 2026-01-02\n// 1\n// 2\n// 3\n// 4\n// 5\n// ====\npackage a\n' > "$tmp/repo/a/x.go"
   git -C "$tmp/repo" add -A; expect 16 1 '[긴 머리말 7줄]' "$tmp/repo" a
+  # 17) 미추적 새 파일을 인자로 넘기면 검사한다(커밋 전 확인이 거짓 통과가 되지 않게)
+  printf 'package a\n\n// D-9 참고\nvar Y = 1\n' > "$tmp/repo/a/new.go"
+  expect 17 1 '[식별자]' "$tmp/repo" a/new.go
+  rm -f "$tmp/repo/a/new.go"
+  # 18) 아무 파일도 가리키지 않는 인자는 종료 2(오타 난 경로가 통과로 보이지 않게)
+  expect 18 2 '가리키는 파일이 없다' "$tmp/repo" a/nope.go
+  # 19) 빈 접두는 어떤 파일도 가리키지 않으므로 종료 2(아무것도 안 보고 통과하지 않게)
+  expect 19 2 '가리키는 파일이 없다' "$tmp/repo" ''
+  # 20) 추적됐다가 디스크에서 지워진 파일을 접두로 주면 종료 2(열지 못해 건너뛴 채 통과하지 않게)
+  printf 'package a\n' > "$tmp/repo/a/g.go"
+  git -C "$tmp/repo" add a/g.go; rm -f "$tmp/repo/a/g.go"
+  expect 20 2 '가리키는 파일이 없다' "$tmp/repo" a/g.go
   echo "self-test ok"
 }
 
