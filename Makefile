@@ -167,11 +167,11 @@ workspace-cite-check: ## 추적 파일이 커밋되지 않는 계획 경로나 �
 	bash hack/workspace-cite-check.sh
 
 .PHONY: notices
-notices: ## 서드파티 고지문 THIRD_PARTY_NOTICES.txt 재생성(모듈 캐시를 읽는다)
+notices: embed-crds ## 서드파티 고지문 THIRD_PARTY_NOTICES.txt 재생성(모듈 캐시를 읽는다)
 	bash hack/third-party-notices.sh --write THIRD_PARTY_NOTICES.txt .:./cmd
 
 .PHONY: notices-check
-notices-check: ## 고지문이 현재 의존성과 같은지 확인
+notices-check: embed-crds ## 고지문이 현재 의존성과 같은지 확인
 	bash hack/third-party-notices.sh --check THIRD_PARTY_NOTICES.txt .:./cmd
 
 .PHONY: comment-check

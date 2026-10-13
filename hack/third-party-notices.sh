@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # third-party-notices.sh: Go 바이너리에 들어가는 서드파티 모듈의 라이선스 고지문을 만든다
-# 상세: 링크되는 패키지 디렉터리에서 모듈 루트까지 올라가며 LICENSE·COPYING·NOTICE 를 모두 싣는다.
-#       Apache-2.0 본문은 같은 글이면 한 번만 싣는다. 네트워크 없이 모듈 캐시를 읽는다.
+# 상세: 링크되는 패키지 디렉터리에서 모듈 루트까지 올라가며 LICENSE·COPYING·NOTICE 를 모두 싣고
+#       Go 툴체인 LICENSE 도 싣는다. Apache-2.0 본문은 같은 글이면 한 번만 싣는다.
+#       네트워크 없이 모듈 캐시를 읽는다.
 # 생성일: 2026-10-13 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
@@ -42,8 +43,13 @@ licfiles() { ls "$1" | grep -iE '^(LICENSE|LICENCE|COPYING|NOTICE)([-_.].*)?$' |
 
 render() {  # 표준 입력: modules 출력. Apache-2.0 본문은 목록 안 첫 Apache 파일을 한 번 싣는다.
   local path ver dir sub rel f name spdx cur="" hdr=0 s dup apache_file="" unknown=0 seen=()
-  echo "이 소프트웨어에 포함된 서드파티 구성 요소와 그 라이선스 고지다. 자동 생성 파일이며 hack/third-party-notices.sh 로 다시 만든다."
+  echo "이 소프트웨어에 포함된 서드파티 구성 요소와 그 라이선스 고지다. 자동 생성 파일이며 이 저장소의 고지문 재생성 명령(operator: make notices, images: hack/third-party-notices-images.sh)으로 다시 만든다."
   echo
+  # Go 바이너리에는 표준 라이브러리와 런타임이 정적으로 링크된다. 판 번호는 싣지 않는다 — 툴체인 판이 달라도 LICENSE 글이 같으면 결과가 같다.
+  f="$(go env GOROOT)/LICENSE"
+  [ -f "$f" ] || { echo "Go 툴체인 LICENSE 가 없다: $f" >&2; return 3; }
+  echo "== Go standard library and runtime — $(classify "$f")"
+  echo; cat "$f"; echo
   while read -r path ver dir sub; do
     if [ "$path $ver" != "$cur" ]; then
       [ -z "$cur" ] || echo
@@ -94,7 +100,7 @@ case "${1:-}" in
     if [ "$mode" = --write ]; then
       chmod 644 "$tmp"; mv "$tmp" "$f"
     else
-      diff -q "$tmp" "$f" >/dev/null || { echo "$f 가 현재 의존성과 다르다 — make notices 로 다시 만들 것" >&2; exit 1; }
+      diff -q "$tmp" "$f" >/dev/null || { echo "$f 가 현재 의존성과 다르다 — 이 저장소의 고지문 재생성 명령(operator: make notices, images: hack/third-party-notices-images.sh)으로 다시 만들 것" >&2; exit 1; }
     fi
     ;;
   ""|--*) usage ;;

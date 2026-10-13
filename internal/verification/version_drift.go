@@ -2,7 +2,7 @@
 // version_drift.go: 드라이버 버전 선언값과 실측값의 어긋남 감지 (감지 전용 — 되돌리지 않는다)
 // 상세: DUS 가 보고한 선언 버전과 NDR 실측 버전의 어긋남을 감지 전용으로 잡는다. 업그레이드
 // 사이클 중 불일치는 억제하고, 유예 시간을 넘겨야 확정한다 — 자동 재설치는 하지 않는다.
-// 생성일: 2026-09-17 | 수정일: 2026-10-11
+// 생성일: 2026-09-17 | 수정일: 2026-10-13
 // ============================================================
 package verification
 
@@ -31,7 +31,7 @@ const (
 
 // VersionDriftInput 은 판정에 필요한 값 전부다. 수집은 호출자가 한다.
 type VersionDriftInput struct {
-	// State 는 DriverUpgradeState.status.state 다. 보고 전용 종점(Idle·UnverifiedVersion)이
+	// State 는 DriverUpgradeState.status.state 다. 버전 관측 상태(Idle·UnverifiedVersion·HostAhead)가
 	// 아니면 억제한다 — 판정 집합은 v1alpha1.VersionObservationAllowed 가 갖는다.
 	State string
 	// DeclaredVersion 은 DUS 가 들고 있는 현재 버전(설치 시점 기록)이다.

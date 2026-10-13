@@ -3,7 +3,7 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-12
+// 생성일: 2026-04-13 | 수정일: 2026-10-13
 // ============================================================
 
 package controller
@@ -303,7 +303,7 @@ func (r *DriverUpgradeReconciler) syncDUSObservedModels(
 
 // resetRebootTracking 은 새 업그레이드 사이클 진입 시 이전 사이클의 재부팅 추적 상태를 초기화한다.
 // RebootAttempts 가 stale 이면 Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀
-// cross-major 자연 재부팅이 발화하지 않는다. RequestedTime/BootID 는 handleRebootRequired 가
+// 모듈 교체 재부팅이 발화하지 않는다. RequestedTime/BootID 는 handleRebootRequired 가
 // 재부팅 트리거 시 덮어쓰지만 사이클 경계에서 함께 리셋해 stale 관측을 없앤다.
 func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 	s.RebootAttempts = 0
@@ -372,10 +372,10 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 
 	// 대역외 드라이버 변경 감지(감지 전용) — 목표 버전과 NDR 실측이 어긋난 채 유예를 넘기면
 	// Warning 이벤트로만 알린다(자동 재설치·재부팅 없음). 기준은 EffectiveDesiredVersion(Host 모드는
-	// 로드된 호스트 버전) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태가 Idle·
-	// UnverifiedVersion 둘인 이유: 화이트리스트 밖 버전은 UnverifiedVersion 에 주차하므로 Idle 만
-	// 보면 자동 업그레이드를 끈 노드에서 감지가 영구히 꺼진다(그 상태는 Job·cordon 이 없는 보고
-	// 전용 종점이다). 억제 판정은 EvaluateVersionDrift 와 같은 술어를 쓴다.
+	// 로드된 호스트 버전) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 집합은
+	// VersionObservationAllowed 의 셋(Idle·UnverifiedVersion·HostAhead, Job·cordon 이 없는 상태)이다.
+	// Idle 만 보면 허용 목록 밖 버전으로 주차한 노드에서 감지가 꺼진다. HostAhead 에서는 같은
+	// 어긋남을 상태 기계의 HostDriverAhead 이벤트가 이미 알리므로 확정돼도 경고를 내지 않는다.
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
@@ -388,7 +388,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 		next := existing.Status.DriftFirstSeen
 		switch verdict {
 		case verification.VersionDriftConfirmed:
-			if r.Recorder != nil {
+			if r.Recorder != nil && existing.Status.State != v1alpha1.UpgradeStateHostAhead {
 				r.Recorder.Event(&existing, corev1.EventTypeWarning, "DriverVersionDrift", reason)
 			}
 		case verification.VersionDriftPending:
@@ -426,7 +426,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 			existing.Status.PreviousImage = ""
 		}
 		// 새 사이클 진입: 이전 사이클의 재부팅 카운터/마커를 리셋(durable persist).
-		// cross-major 재부팅 게이트(need && RebootAttempts==0)가 stale 값에 막히지 않게 한다.
+		// 모듈 교체 재부팅 게이트(need && RebootAttempts==0)가 stale 값에 막히지 않게 한다.
 		resetRebootTracking(&existing.Status)
 		existing.Status.LastTransitionTime = metav1.Now()
 		existing.Status.Message = fmt.Sprintf("정책 버전 변경: %s → %s", oldDesired, desiredVersion)

@@ -240,28 +240,36 @@ func TestHandleFailed_NoMatchingDevice_StaysFailed(t *testing.T) {
 	}
 }
 
-// driverModuleStepFailed 는 이 벤더의 driverModule 단계 실패만 실패로 읽는다.
+// driverModuleStepFailed 는 DUS 의 (vendor, model) 로 구한 검증 키의 driverModule 단계 실패만
+// 실패로 읽는다. rngd 는 detector 가 "rngd/driverModule" 로 내므로 furiosa 접두로 찾으면 놓친다.
 func TestDriverModuleStepFailed(t *testing.T) {
 	step := func(name string, passed, na bool) *v1alpha1.ValidationStatus {
 		return &v1alpha1.ValidationStatus{Steps: []v1alpha1.ValidationStep{{Name: name, Passed: passed, NotApplicable: na}}}
 	}
 	cases := []struct {
-		name string
-		v    *v1alpha1.ValidationStatus
-		want bool
+		name          string
+		vendor, model string
+		v             *v1alpha1.ValidationStatus
+		want          bool
 	}{
-		{"검증 없음", nil, false},
-		{"단일 벤더 이름 실패", step("driverModule", false, false), true},
-		{"벤더 접두 이름 실패(대소문자 무시)", step("NVIDIA/driverModule", false, false), true},
-		{"통과", step("nvidia/driverModule", true, false), false},
-		{"해당없음", step("nvidia/driverModule", false, true), false},
-		{"다른 벤더 접두 실패", step("furiosa/driverModule", false, false), false},
-		{"다른 단계 실패", step("nvidia/devicePlugin", false, false), false},
+		{"검증 없음", "nvidia", "a30", nil, false},
+		{"단일 벤더 이름 실패", "nvidia", "a30", step("driverModule", false, false), true},
+		{"벤더 접두 이름 실패(대소문자 무시)", "nvidia", "a30", step("NVIDIA/driverModule", false, false), true},
+		{"통과", "nvidia", "a30", step("nvidia/driverModule", true, false), false},
+		{"해당없음", "nvidia", "a30", step("nvidia/driverModule", false, true), false},
+		{"다른 벤더 접두 실패", "nvidia", "a30", step("furiosa/driverModule", false, false), false},
+		{"다른 단계 실패", "nvidia", "a30", step("nvidia/devicePlugin", false, false), false},
+		{"rngd 다중 벤더 노드의 rngd 실패", "furiosa", "rngd", step("rngd/driverModule", false, false), true},
+		{"rngd 모델 대소문자 무시", "furiosa", "RNGD", step("rngd/driverModule", false, false), true},
+		{"rngd DUS 는 warboy 키 실패를 보지 않음", "furiosa", "rngd", step("furiosa/driverModule", false, false), false},
+		{"warboy 실패", "furiosa", "warboy", step("furiosa/driverModule", false, false), true},
+		{"warboy DUS 는 rngd 실패를 보지 않음", "furiosa", "warboy", step("rngd/driverModule", false, false), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := driverModuleStepFailed(tc.v, "nvidia"); got != tc.want {
-				t.Errorf("driverModuleStepFailed=%v, want %v", got, tc.want)
+			key := validationVendorKey(tc.vendor, tc.model)
+			if got := driverModuleStepFailed(tc.v, key); got != tc.want {
+				t.Errorf("driverModuleStepFailed(key=%q)=%v, want %v", key, got, tc.want)
 			}
 		})
 	}

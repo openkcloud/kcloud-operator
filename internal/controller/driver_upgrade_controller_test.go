@@ -1887,6 +1887,43 @@ func TestSyncUpgradeStateDrift_UnverifiedVersionStillObserves(t *testing.T) {
 	}
 }
 
+// TestSyncUpgradeStateDrift_HostAheadNoWarning 은 HostAhead 에서 어긋남이 유예를 넘겨도
+// DriverVersionDrift 경고를 내지 않음을 고정한다 — 호스트가 정책보다 높다는 같은 사실을 상태
+// 기계의 HostDriverAhead 이벤트가 이미 알린다. currentVersion 은 계속 실측을 따른다.
+func TestSyncUpgradeStateDrift_HostAheadNoWarning(t *testing.T) {
+	const (
+		nodeName      = "worker-drift-hostahead"
+		dusName       = "worker-drift-hostahead-furiosa"
+		policyVersion = "580.126.09"
+		hostVersion   = "580.178.04"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy",
+		v1alpha1.UpgradeStateHostAhead, policyVersion, policyVersion)
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", policyVersion)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: hostVersion, DriverLoaded: true}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, hostVersion)
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("HostAhead 인데 DriverVersionDrift 경고가 발행됨 — HostDriverAhead 와 같은 사실의 중복")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.CurrentVersion != hostVersion {
+		t.Errorf("HostAhead 에서 currentVersion 이 실측을 따르지 않음: got %q, want %q",
+			got.Status.CurrentVersion, hostVersion)
+	}
+}
+
 // TestSyncUpgradeState_HostSourceAdoptsLoadedVersion 은 versionSource=Host 에서 DUS 의 desired 와
 // 드리프트 기준이 정책 버전이 아니라 NDR 이 보고한 로드된 호스트 버전임을 고정한다. 정책 버전을
 // 기준으로 두면 desired 동기화가 호스트와 어긋난 값을 쓰고 유예가 지나면 DriverVersionDrift 경고가

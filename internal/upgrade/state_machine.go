@@ -1001,21 +1001,32 @@ func (m *UpgradeStateMachine) failedStateRecovered(
 		}
 		matched = true
 	}
-	if !matched || driverModuleStepFailed(ndr.Status.Validation, state.Spec.Vendor) {
+	if !matched || driverModuleStepFailed(ndr.Status.Validation,
+		validationVendorKey(state.Spec.Vendor, state.Spec.Model)) {
 		return false, nil
 	}
 	return true, nil
 }
 
+// validationVendorKey 는 node-agent 검증 단계 이름의 벤더 접두다. detector 의 vendorKey
+// (node-device-detector/types.go)와 같은 규칙이다 — furiosa 의 rngd 만 "rngd" 로 가르고
+// 나머지는 벤더 이름 그대로다.
+func validationVendorKey(vendor, model string) string {
+	if strings.EqualFold(vendor, "furiosa") && strings.EqualFold(model, "rngd") {
+		return "rngd"
+	}
+	return vendor
+}
+
 // driverModuleStepFailed 는 node-agent 검증의 driverModule 단계가 실패했는지다. 단계 이름은
-// 단일 벤더 노드에서 "driverModule", 다중 벤더 노드에서 "<vendor>/driverModule" 이다.
-// 검증을 쓰지 않는 노드(Validation=nil)는 실패로 보지 않는다.
-func driverModuleStepFailed(v *v1alpha1.ValidationStatus, vendor string) bool {
+// 검증 키가 하나인 노드에서 "driverModule", 여럿인 노드에서 "<key>/driverModule" 이다(key 는
+// validationVendorKey). 검증을 쓰지 않는 노드(Validation=nil)는 실패로 보지 않는다.
+func driverModuleStepFailed(v *v1alpha1.ValidationStatus, key string) bool {
 	if v == nil {
 		return false
 	}
 	for _, s := range v.Steps {
-		if (s.Name == "driverModule" || strings.EqualFold(s.Name, vendor+"/driverModule")) && !s.Passed && !s.NotApplicable {
+		if (s.Name == "driverModule" || strings.EqualFold(s.Name, key+"/driverModule")) && !s.Passed && !s.NotApplicable {
 			return true
 		}
 	}
@@ -1234,7 +1245,7 @@ func (m *UpgradeStateMachine) transitionTo(
 
 // stateToPhase는 UpgradeState 상수를 메트릭 phase 레이블로 변환합니다.
 // ─────────────────────────────────────────────
-// cross-major reboot 자동화 (RebootRequired / Rebooting)
+// 모듈 교체 재부팅 자동화 (RebootRequired / Rebooting)
 // ─────────────────────────────────────────────
 
 // nodeNeedsReboot 는 NDR.status.devices[vendor/model].needsReboot 를 읽는다(driverNotLoaded 와 동일 패턴).
@@ -2372,9 +2383,8 @@ func deploymentTargetsNode(d *appsv1.Deployment, nodeName string) bool {
 	return false
 }
 
-// containsString 는 slice 에 s 가 포함되어 있으면 true 를 반환한다.
 // resetRebootTracking 은 새 업그레이드 사이클에 들어갈 때 이전 사이클의 재부팅 흔적을 지운다.
-// 카운터만 지우고 마커(RebootRequestedTime/RebootBootID)를 남기면, cross-major 재부팅 게이트가
+// 카운터만 지우고 마커(RebootRequestedTime/RebootBootID)를 남기면, 모듈 교체 재부팅 게이트가
 // 낡은 bootID 를 현재 부팅으로 착각한다.
 func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 	s.RebootAttempts = 0
@@ -2396,6 +2406,7 @@ func EffectiveDesiredVersion(policy *v1alpha1.DriverInstallPolicy, loadedHost st
 	return policy.Spec.Driver.Version
 }
 
+// containsString 는 slice 에 s 가 포함되어 있으면 true 를 반환한다.
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
