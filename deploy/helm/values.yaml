@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-12
+# 생성일: 2026-03-25 | 수정일: 2026-10-13
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류다. 어느 이미지가 어느 쪽인지는 deploy/helm/README.md 의 "레지스트리
@@ -262,7 +262,7 @@ furiosa:
   exporter:
     enabled: false
     repository: "furiosa-exporter"
-    tag: "0.1.3"
+    tag: "0.3.0"
     interval: "10s"
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin. spec.furiosa.rngd 필드는 omitempty 라 enabled=false 면

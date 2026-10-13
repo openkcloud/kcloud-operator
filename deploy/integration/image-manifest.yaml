@@ -2,7 +2,7 @@
 # image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)·감사용. condition 은 pull 조건, digest 는 ghcr.io/openkcloud 발행본 것이다.
 #       벤더 이미지는 upstream 그대로이며 global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10 | 수정일: 2026-10-12
+# 생성일: 2026-09-10 | 수정일: 2026-10-13
 # ============================================================
 release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
@@ -39,8 +39,8 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: ""
     condition: "furiosa.unified.enabled=true 설정 시에만(기본 false). 벤더 플러그인 우선 원칙으로 GHCR 에 발행하지 않는 내부 빌드"
   - image: furiosa-exporter
-    tag: "0.1.3"
-    digest: sha256:5caa47e01cb76f86a77e9357789b03cd4cf32e95f06ff117f361cafa3540b76e
+    tag: "0.3.0"
+    digest: sha256:5fa58b325dd56569f315e7e6b474a3fc7cbe14e2ef4e7f1dda4533744e96f9b8  # 발행 뒤 갱신
     condition: RNGD 노드(furiosa.exporter.enabled)
   - image: generic-device-plugin
     tag: v3
