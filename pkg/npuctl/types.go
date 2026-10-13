@@ -51,11 +51,12 @@ type VendorStatus struct {
 }
 
 // DIPStatus는 DriverInstallPolicy의 관리툴 관심 필드입니다(목표 버전/검증 버전 화이트리스트 등).
+// DesiredVersion 은 정책이 선언한 버전이다. versionSource=Host 면 노드별 목표는
+// Nodes[].Upgrades[].DesiredVersion 이다.
 type DIPStatus struct {
-	Name   string `json:"name"`
-	Vendor string `json:"vendor"`
-	Model  string `json:"model,omitempty"`
-	// DesiredVersion 은 정책이 선언한 버전이다. versionSource=Host 면 노드별 목표는 Nodes[].Upgrades[].DesiredVersion 이다.
+	Name             string   `json:"name"`
+	Vendor           string   `json:"vendor"`
+	Model            string   `json:"model,omitempty"`
 	DesiredVersion   string   `json:"desiredVersion,omitempty"`
 	Installer        string   `json:"installer,omitempty"`
 	VerifiedVersions []string `json:"verifiedVersions,omitempty"`

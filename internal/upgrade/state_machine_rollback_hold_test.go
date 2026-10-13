@@ -198,3 +198,56 @@ func TestHandleUncordoning_Success_CountsOnce(t *testing.T) {
 		t.Errorf("success 지표 +%v, want 1 — 성공 한 번을 두 번 센다", d)
 	}
 }
+
+func TestMarkRolledBack_ReentryKeepsFirstGeneration(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verNew, verNew)
+	dus.Status.PreviousVersion = verOld
+	dus.Status.PreviousImage = imgOld
+	dus.Status.RolledBackVersion = verNew
+	dus.Status.RolledBackGeneration = 7
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = 8 // 롤백 재진입 사이에 정책 spec 이 바뀜
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleRollbackJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollbackJob 실패: %v", err)
+	}
+	if dus.Status.RolledBackGeneration != 7 {
+		t.Errorf("rolledBackGeneration=%d, want 7 — 재진입이 롤백 시작 때 값을 덮으면 그 사이의 정책 변경이 보류를 풀지 못한다",
+			dus.Status.RolledBackGeneration)
+	}
+}
+
+// 데몬셋 모드 롤백도 이전 버전을 확인한 직후 보류 대상을 기록한다. 픽스처에 DaemonSet 이 없어
+// 호출은 DS 조회 오류로 끝나지만 기록은 그 앞에서 일어나므로 반환 오류는 보지 않는다.
+func TestMarkRolledBack_DaemonSetModeRecords(t *testing.T) {
+	dus := makeRollbackDUS("k8s-worker1-nvidia", "k8s-worker1", "nvidia", 0)
+	dip := makeRollbackDIP("nvidia-generic", "nvidia", 3)
+	dip.Generation = 5
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	_, _, _ = sm.handleRollback(context.Background(), dus, dip)
+	if dus.Status.RolledBackVersion != "580.142" || dus.Status.RolledBackGeneration != 5 {
+		t.Errorf("rolledBack=%q/%d, want 580.142/5 — 데몬셋 모드 롤백이 보류 대상을 기록하지 않는다",
+			dus.Status.RolledBackVersion, dus.Status.RolledBackGeneration)
+	}
+}
+
+// versionSource=Host 에서는 로드된 호스트 버전이 바뀌면 정책 generation 변경 없이 목표가 바뀐다.
+// 목표 변경 하나만으로 보류가 풀려야 한다.
+func TestReleaseRollbackHold_TargetChangeAloneReleases(t *testing.T) {
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = heldGen
+
+	moved := heldDUS()
+	releaseRollbackHold(moved, dip, verOld)
+	if moved.Status.RolledBackVersion != "" || moved.Status.RolledBackGeneration != 0 {
+		t.Errorf("목표만 바뀌었는데 보류가 남음: %q/%d", moved.Status.RolledBackVersion, moved.Status.RolledBackGeneration)
+	}
+
+	same := heldDUS()
+	releaseRollbackHold(same, dip, verNew)
+	if same.Status.RolledBackVersion != verNew || same.Status.RolledBackGeneration != heldGen {
+		t.Errorf("같은 목표·같은 generation 인데 보류가 풀림: %q/%d", same.Status.RolledBackVersion, same.Status.RolledBackGeneration)
+	}
+}

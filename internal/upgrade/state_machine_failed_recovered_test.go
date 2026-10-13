@@ -14,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
@@ -254,6 +255,32 @@ func TestHandleFailed_TargetLoadedButCurrentStale_ReturnsToIdle(t *testing.T) {
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateIdle {
 		t.Errorf("state=%q, want Idle — NDR 이 목표 버전 로드를 보고하는데 Failed 에 남는다", dus.Status.State)
+	}
+}
+
+// 복귀 뒤 첫 Idle 판정이 옛 currentVersion 으로 버전 불일치를 보고 사이클을 다시 열지 않는다.
+// 쿨다운을 0 으로 두어 쿨다운 대기 덕에 우연히 Idle 에 남는 경우를 막는다.
+func TestHandleFailed_RecoveredThenIdleStays(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verOld, verNew)
+	dip := makeCordonTestDIP()
+	dip.Spec.UpgradePolicy.IdleCooldownSeconds = ptr.To(int32(0))
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(true, verNew))
+	ctx := context.Background()
+
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("1회차 TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Fatalf("state=%q, want Idle(복귀)", dus.Status.State)
+	}
+	if _, _, err := sm.TransitionState(ctx, dus, dip); err != nil {
+		t.Fatalf("2회차 TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state=%q, want Idle — 복귀 뒤 옛 currentVersion 으로 사이클을 다시 연다", dus.Status.State)
+	}
+	if dus.Status.CurrentVersion != verNew {
+		t.Errorf("currentVersion=%q, want %q", dus.Status.CurrentVersion, verNew)
 	}
 }
 

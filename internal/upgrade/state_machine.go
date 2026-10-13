@@ -262,10 +262,12 @@ func (m *UpgradeStateMachine) handleHostAhead(
 	return true, 60 * time.Second, nil
 }
 
-// markRolledBack 은 이 사이클의 목표를 롤백한 버전으로 기록한다. 같은 사이클의 두 번째 롤백은
-// DesiredVersion 이 이미 이전 버전이라 덮지 않는다.
+// markRolledBack 은 이 사이클의 목표를 롤백한 버전으로 기록한다. 같은 목표를 이미 기록했으면
+// (잔여 Job 정리 등으로 Rollback 에 다시 들어온 경우) 롤백을 시작할 때의 generation 을 지키고,
+// 같은 사이클의 두 번째 롤백은 DesiredVersion 이 이미 이전 버전이라 덮지 않는다.
 func markRolledBack(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy) {
-	if state.Status.DesiredVersion == "" || state.Status.DesiredVersion == state.Status.PreviousVersion {
+	if state.Status.DesiredVersion == "" || state.Status.DesiredVersion == state.Status.PreviousVersion ||
+		state.Status.RolledBackVersion == state.Status.DesiredVersion {
 		return
 	}
 	state.Status.RolledBackVersion = state.Status.DesiredVersion
@@ -946,6 +948,10 @@ func (m *UpgradeStateMachine) handleFailed(
 		// 한도에 걸린다.
 		state.Status.RollbackAttempts = 0
 		resetRebootTracking(&state.Status)
+		// failedStateRecovered 는 NDR 로드 버전이 목표와 같음을 확인한 뒤에만 true 를 돌려준다.
+		// 맞춰 두지 않으면 다음 Idle 판정이 사이클 시작 때의 currentVersion 으로 버전 불일치를
+		// 보고 사이클을 다시 연다.
+		state.Status.CurrentVersion = state.Status.DesiredVersion
 
 		// 우리가 건 cordon 이 있으면 푼다. ACPP quiesce(internal/partition/quiesce.go Cordon) 와
 		// 운영자의 수동 cordon 은 표식을 남기지 않으므로, 여기서 직접 소유권을 확인해야 한다.

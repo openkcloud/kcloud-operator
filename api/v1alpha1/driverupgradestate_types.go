@@ -77,8 +77,9 @@ const (
 	// 꺼져 있을 때 진입하는 보고 전용 종점이다. install Job·cordon 을 만들지 않는다. 정책 버전을
 	// 올리거나 allowDowngrade·versionSource=Host 로 바꾸면 Idle 로 돌아간다.
 	UpgradeStateHostAhead = "HostAhead"
-	// UpgradeStateRebootRequired 는 install 성공 후 로드된 커널 모듈 버전 교체(계열 전환·같은 계열
-	// patch 교체)에 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다.
+	// UpgradeStateRebootRequired 는 install 성공 후 로드된 커널 모듈 버전 교체에 노드 재부팅이
+	// 필요할 때(NDR.needsReboot=true, 계열 전환·같은 계열 patch 교체 모두) validator 체인 앞에서
+	// 진입하는 상태입니다.
 	UpgradeStateRebootRequired = "RebootRequired"
 	// UpgradeStateRebooting 은 노드 재부팅을 트리거한 뒤 NotReady→Ready 복귀를 대기하는 상태입니다.
 	UpgradeStateRebooting = "Rebooting"

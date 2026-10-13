@@ -650,6 +650,33 @@ func hasUpgradingLabel(t *testing.T, r *DriverUpgradeReconciler, nodeName string
 	return ok
 }
 
+// TestReconcile_DeferRemovesLabelInClosedStates 는 Reconcile 이 어떤 경로로 끝나든 사이클 종료
+// 상태(HostAhead·UnverifiedVersion 포함)면 defer 가 driver-upgrading 라벨을 지우고, 진행 중
+// 상태(Draining)면 남긴다는 것을 고정한다. 정책이 없어 Reconcile 이 오류로 끝나도 defer 는 돈다.
+func TestReconcile_DeferRemovesLabelInClosedStates(t *testing.T) {
+	for _, tc := range []struct {
+		state     string
+		wantLabel bool
+	}{
+		{v1alpha1.UpgradeStateHostAhead, false},
+		{v1alpha1.UpgradeStateUnverifiedVersion, false},
+		{v1alpha1.UpgradeStateDraining, true},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			const nodeName, dusName = "worker-defer", "worker-defer-furiosa"
+			dus := dusWithTransition(dusName, nodeName, "furiosa", tc.state, 0)
+			r := newReconciler(nodeWithUpgradingLabel(nodeName), dus)
+			r.Recorder = record.NewFakeRecorder(64)
+			r.StateMachine.Recorder = r.Recorder
+
+			_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: dusName}})
+			if got := hasUpgradingLabel(t, r, nodeName); got != tc.wantLabel {
+				t.Errorf("state=%s 라벨 존재=%v, want %v", tc.state, got, tc.wantLabel)
+			}
+		})
+	}
+}
+
 // TestSweepStuckUpgradingLabels_RemovesIdleStuckLabel 는 6일 invariant root cause 재현 시나리오:
 // 사이클 mid-flight 에서 reconcile 이 panic 등으로 중단되어 DUS state 가 Idle 로 복귀했지만
 // 노드에 driver-upgrading 라벨이 남아있는 경우, sweep 이 자동 제거하는지 검증한다.
@@ -1949,6 +1976,72 @@ func TestSyncUpgradeStateDrift_HostAheadNoWarning(t *testing.T) {
 	if got.Status.CurrentVersion != hostVersion {
 		t.Errorf("HostAhead 에서 currentVersion 이 실측을 따르지 않음: got %q, want %q",
 			got.Status.CurrentVersion, hostVersion)
+	}
+}
+
+// TestSyncUpgradeStateDrift_RollbackHoldUsesRestoredVersion 은 롤백 뒤 보류 중(목표 = rolledBackVersion)
+// 이면 드리프트 기준이 롤백이 복원한 previousVersion 임을 고정한다. 정책 목표와 비교하면 호스트가
+// 복원 버전 그대로인데도 유예가 지나면 "operator 밖에서 바뀌었다" 는 거짓 경고가 난다.
+func TestSyncUpgradeStateDrift_RollbackHoldUsesRestoredVersion(t *testing.T) {
+	const (
+		nodeName = "worker-drift-hold"
+		dusName  = "worker-drift-hold-furiosa"
+		target   = "580.999.99"
+		restored = "580.178.04"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, restored, target)
+	dus.Status.RolledBackVersion = target
+	dus.Status.PreviousVersion = restored
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", target)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: restored}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("롤백 보류 중 호스트가 복원 버전인데 DriverVersionDrift 경고가 발행됨")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DriftFirstSeen != nil {
+		t.Errorf("복원 버전과 일치하는데 DriftFirstSeen 이 남음: %v", got.Status.DriftFirstSeen)
+	}
+}
+
+// TestSyncUpgradeStateDrift_RollbackHoldStillDetectsHostChange 는 보류 중에도 호스트가 복원 버전에서
+// 벗어나면 경고한다는 것을 고정한다. 보류를 경고 생략으로 처리하면 이 변경을 놓친다.
+func TestSyncUpgradeStateDrift_RollbackHoldStillDetectsHostChange(t *testing.T) {
+	const (
+		nodeName = "worker-drift-hold-moved"
+		dusName  = "worker-drift-hold-moved-furiosa"
+		target   = "580.999.99"
+		restored = "580.178.04"
+		moved    = "595.91.07"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, restored, target)
+	dus.Status.RolledBackVersion = target
+	dus.Status.PreviousVersion = restored
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", target)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: moved}
+	r.syncUpgradeState(context.Background(), nodeName, device, dip, "warboy", nil, "")
+
+	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("보류 중 호스트가 복원 버전에서 바뀌었는데 DriverVersionDrift 경고가 없음")
 	}
 }
 

@@ -1461,6 +1461,13 @@ func TestDipVersionCell_HostModeMarked(t *testing.T) {
 	if got := dipVersionCell(policy); got != "580.126.09" {
 		t.Errorf("Policy 모드 = %q", got)
 	}
+	dip := npuctl.DIPStatus{DesiredVersion: "580.126.09", VersionSource: "host"}
+	if got := dipVersionCell(dip); got != "580.126.09 (versionSource=Host)" {
+		t.Errorf("소문자 host = %q", got)
+	}
+	if got := dipVersionCell(npuctl.DIPStatus{VersionSource: "Host"}); got != "" {
+		t.Errorf("버전 없는 Host 정책 = %q, want 빈 값", got)
+	}
 }
 
 func TestBuildDiagnoseRows_종점과롤백보류(t *testing.T) {
@@ -1607,5 +1614,76 @@ func TestRenderNodeDetail_소비자절(t *testing.T) {
 		if !strings.Contains(some, want) {
 			t.Errorf("출력에 %q 가 없다:\n%s", want, some)
 		}
+	}
+}
+
+func TestVendorVersions_HostModeMarked(t *testing.T) {
+	v := npuctl.VendorStatus{DriverInstallPolicies: []npuctl.DIPStatus{
+		{DesiredVersion: "580.126.09", VersionSource: "Host"},
+		{DesiredVersion: "1.9.9-3", VersionSource: "Policy"},
+	}}
+	if got := vendorVersions(v); got != "580.126.09 (versionSource=Host),1.9.9-3" {
+		t.Errorf("vendorVersions = %q", got)
+	}
+}
+
+func TestPrintStatusText_HostModeVersionCell(t *testing.T) {
+	status := &npuctl.ClusterStatus{Vendors: []npuctl.VendorStatus{{
+		Name: "nvidia",
+		DriverInstallPolicies: []npuctl.DIPStatus{{
+			Name: "nvidia", Vendor: "nvidia", DesiredVersion: "580.126.09", VersionSource: "Host",
+		}},
+	}}}
+	out := captureStdout(t, func() { printStatusText(status) })
+	if !strings.Contains(out, "580.126.09 (versionSource=Host)") {
+		t.Errorf("DriverInstallPolicies VERSION 칸에 Host 표시가 없다: %q", out)
+	}
+}
+
+func TestUpgradeStateCell_RollbackHold(t *testing.T) {
+	cases := []struct {
+		u    npuctl.UpgradeStatus
+		want string
+	}{
+		{npuctl.UpgradeStatus{State: "Idle", RolledBackVersion: "580.999.99"}, "Idle(rolledBack=580.999.99)"},
+		{npuctl.UpgradeStatus{State: "Rollback", RolledBackVersion: "580.999.99"}, "Rollback"},
+		{npuctl.UpgradeStatus{State: "Idle"}, "Idle"},
+		{npuctl.UpgradeStatus{}, ""},
+	}
+	for _, c := range cases {
+		if got := upgradeStateCell(c.u); got != c.want {
+			t.Errorf("upgradeStateCell(%+v) = %q, want %q", c.u, got, c.want)
+		}
+	}
+}
+
+func TestPrintDriverStatusText_롤백보류표기(t *testing.T) {
+	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{{
+		Name: "k8s-worker1",
+		Upgrades: []npuctl.UpgradeStatus{{
+			Vendor: "nvidia", Model: "a30", State: "Idle",
+			CurrentVersion: "580.178.04", DesiredVersion: "580.999.99", RolledBackVersion: "580.999.99",
+		}},
+	}}}
+	out := captureStdout(t, func() { printDriverStatusText(status) })
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	want := []string{"k8s-worker1", "nvidia", "a30", "Idle(rolledBack=580.999.99)",
+		"580.178.04", "580.999.99"}
+	assertColumnsInOrder(t, lines[1], want)
+
+	out = captureStdout(t, func() { printStatusText(status) })
+	if !strings.Contains(out, "Idle(rolledBack=580.999.99)") {
+		t.Errorf("status 의 DriverUpgradeState 표에 롤백 보류가 없다: %q", out)
+	}
+}
+
+func TestBuildDiagnoseRows_Failed에롤백기록(t *testing.T) {
+	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{{Name: "n1", Upgrades: []npuctl.UpgradeStatus{{
+		Vendor: "nvidia", State: "Failed", CurrentVersion: "580.178.04",
+		DesiredVersion: "580.999.99", RolledBackVersion: "580.999.99",
+	}}}}}
+	rows := buildDiagnoseRows(status, nil, nil, nil)
+	if len(rows) != 1 || !strings.Contains(rows[0].detail, "state=Failed") || strings.Contains(rows[0].detail, "재시도 보류") {
+		t.Errorf("Failed 는 Failed 행 하나여야 한다(보류 행 아님): %+v", rows)
 	}
 }

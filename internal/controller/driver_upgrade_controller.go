@@ -313,6 +313,17 @@ func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 // defaultDriftGrace 는 버전 드리프트를 확정하기까지 기다리는 유예 시간이다(EvaluateVersionDrift 입력).
 const defaultDriftGrace = 10 * time.Minute
 
+// driftBaseline 은 드리프트 감지가 호스트에 있어야 한다고 보는 버전이다. 롤백 뒤 보류 중(목표가
+// rolledBackVersion)이면 롤백이 복원한 previousVersion 이 기준이다. 정책 목표와 비교하면 보류가
+// 풀릴 때까지 "호스트가 operator 밖에서 바뀌었다" 는 거짓 경고가 나고, 경고를 끄면 보류 중의
+// 실제 호스트 변경을 놓친다.
+func driftBaseline(s *v1alpha1.DriverUpgradeState, desired string) string {
+	if s.Status.RolledBackVersion != "" && s.Status.RolledBackVersion == desired && s.Status.PreviousVersion != "" {
+		return s.Status.PreviousVersion
+	}
+	return desired
+}
+
 // timeOrZero 는 *metav1.Time 이 nil 이면 zero time.Time 을 돌려준다(EvaluateVersionDrift 입력 변환용).
 func timeOrZero(t *metav1.Time) time.Time {
 	if t == nil {
@@ -378,7 +389,7 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
-			DeclaredVersion: upgrade.EffectiveDesiredVersion(policy, loaded),
+			DeclaredVersion: driftBaseline(&existing, upgrade.EffectiveDesiredVersion(policy, loaded)),
 			ObservedVersion: device.DriverVersion,
 			ObservedAt:      time.Now(),
 			Since:           timeOrZero(existing.Status.DriftFirstSeen),

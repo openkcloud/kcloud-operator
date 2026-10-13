@@ -438,9 +438,9 @@ func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 }
 
 // TestDriverModule_NeedsReboot_NoRmmodGuidance 는 NDR 이 needsReboot 을 보고할 때
-// rmmod 안내를 내지 않는 것을 고정한다. 계열 전환 교체는 목표 버전 모듈이 이미 디스크에
-// 준비됐고 구 모듈이 사용 중이라 삽입만 못 하는 상태이며, rmmod 로는 풀리지 않는다 —
-// 그 지시를 따르는 사람은 시간만 버린다.
+// rmmod 안내를 내지 않는 것을 고정한다. 모듈 교체(계열 전환·같은 계열 patch 교체)는 목표
+// 버전 모듈이 이미 디스크에 준비됐고 구 모듈이 사용 중이라 삽입만 못 하는 상태이며, rmmod 로는
+// 풀리지 않는다 — 그 지시를 따르는 사람은 시간만 버린다.
 func TestDriverModule_NeedsReboot_NoRmmodGuidance(t *testing.T) {
 	const (
 		nodeName = "k8s-worker1"

@@ -312,7 +312,7 @@ func printStatusText(status *npuctl.ClusterStatus) {
 	for _, n := range status.Nodes {
 		for _, u := range n.Upgrades {
 			upRows = append(upRows, []string{
-				n.Name, u.Vendor, modelCell(u.Model, u.Models), u.State, u.CurrentVersion, u.DesiredVersion,
+				n.Name, u.Vendor, modelCell(u.Model, u.Models), upgradeStateCell(u), u.CurrentVersion, u.DesiredVersion,
 			})
 		}
 	}
@@ -325,6 +325,15 @@ func modelCell(model string, observed []string) string {
 		return model + "(" + strings.Join(observed, ",") + ")"
 	}
 	return dashIfEmpty(model)
+}
+
+// upgradeStateCell 은 DUS 표의 STATE 칸이다. Idle 인데 롤백한 목표가 남아 있으면 그 목표의 재시도를
+// 보류하는 중이라 함께 적는다(diagnose 의 보류 행과 같은 조건). 공백 없이 붙여 열 구분을 지킨다.
+func upgradeStateCell(u npuctl.UpgradeStatus) string {
+	if u.State == npuv1alpha1.UpgradeStateIdle && u.RolledBackVersion != "" {
+		return u.State + "(rolledBack=" + u.RolledBackVersion + ")"
+	}
+	return u.State
 }
 
 func cmdDriverVersion() {
@@ -1055,7 +1064,7 @@ func printDriverStatusText(status *npuctl.ClusterStatus) {
 	for _, n := range status.Nodes {
 		for _, u := range n.Upgrades {
 			rows = append(rows, []string{
-				n.Name, u.Vendor, modelCell(u.Model, u.Models), dashIfEmpty(u.State),
+				n.Name, u.Vendor, modelCell(u.Model, u.Models), dashIfEmpty(upgradeStateCell(u)),
 				dashIfEmpty(u.CurrentVersion), dashIfEmpty(u.DesiredVersion),
 			})
 		}
@@ -1633,10 +1642,9 @@ func cmdSharingApply(args []string) {
 
 // diagnoseRow 는 diagnose 표의 한 행이다 — 이미 다른 명령이 읽는 값 중 정상이 아닌
 // 것만 모은다. 새 판정 기준을 두지 않는다: health 는 npuctl.HealthStateHealthy 가
-// 아닌 값(internal/health.StateHealthy 를 pkg/npuctl 이 중개한 것 — cmd/kubectl-npu 는
-// 별도 모듈이라 internal/ 을 직접 import 할 수 없다), upgrade 는
-// Failed·HostAhead·UnverifiedVersion 상수와 DUS 의 rolledBackVersion, allocation 은 AmbiguousProductNodes, capability 는
-// npuctl.VerificationDegraded 상수를 그대로 쓴다.
+// 아닌 값(internal/health.StateHealthy 를 pkg/npuctl 이 중개), upgrade 는 Failed·HostAhead·
+// UnverifiedVersion 상수와 DUS 의 rolledBackVersion, allocation 은 AmbiguousProductNodes,
+// capability 는 npuctl.VerificationDegraded 상수를 그대로 쓴다.
 type diagnoseRow struct {
 	category string
 	node     string
