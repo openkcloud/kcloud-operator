@@ -573,8 +573,9 @@ driverInstallPolicies:
 
       # v5 는 재부팅 유예 가드를 정책 version 의 patch 단위까지 비교한다(다른 patch 가 깔려
       # 있으면 재부팅을 맡기지 않는다) — apt 잠금 대기 실패는 호출부로 전파한다.
-      # v6 는 이미지에 드라이버 패키지를 담지 않는다 — 설치는 호스트 apt(또는 kernelImages 의 사전 컴파일 .deb)로만 한다.
-      tag: "v6"
+      # v6 부터 이미지에 NVIDIA 바이너리를 담지 않는다 — 설치는 호스트 apt(또는 kernelImages 의 사전 컴파일 .deb)로만 한다.
+      # v8 은 같은 계열 고정 설치에서 같은 소스 패키지의 사용자 공간 패키지도 함께 고정하고 apt 에 --allow-downgrades 를 준다.
+      tag: "v8"
       installer: apt
       # 다운그레이드 허용 여부 (false=버전 낮추기 금지, 안전장치)
       allowDowngrade: false

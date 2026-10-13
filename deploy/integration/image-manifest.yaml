@@ -19,8 +19,8 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: sha256:683f5ad08fe608b4d49e03ac43324e2f30c0e2844613777d01ccf926778202e5
     condition: NVIDIA 노드 MIG 관측 Job, 재부팅 Job
   - image: nvidia-driver-ds
-    tag: v6
-    digest: sha256:64013660600c358f0b2e79d31f51370c61b50074ec2dab587e9a74fa28ab6728  # 발행 뒤 갱신
+    tag: v8
+    digest: sha256:36b3834e081fafea6a1eb465d482eaed950d71c4ae52ada048daeb27f56cb2da  # 발행 뒤 갱신
     condition: NVIDIA 노드 드라이버 설치 Job
   - image: furiosa-driver-ds
     tag: v3
