@@ -279,7 +279,7 @@ func TestReconcile_GatesOpenEntersUpgrade(t *testing.T) {
 	}
 }
 
-// TestEnsureUpgradeStates_ResetsStaleRebootAttempts 는 새 cross-major 사이클 진입(버전 불일치) 시
+// TestEnsureUpgradeStates_ResetsStaleRebootAttempts 는 새 모듈 교체 사이클 진입(버전 불일치) 시
 // 이전 사이클의 stale RebootAttempts 가 0 으로 리셋됨을 검증한다. stale 이 남으면
 // Validating→RebootRequired 게이트(need && RebootAttempts==0)가 막혀 자연 재부팅이 미발화한다.
 func TestEnsureUpgradeStates_ResetsStaleRebootAttempts(t *testing.T) {
@@ -722,6 +722,34 @@ func TestSweepStuckUpgradingLabels_PreservesActiveCycleLabel(t *testing.T) {
 			}
 			if !hasUpgradingLabel(t, r, nodeName) {
 				t.Errorf("mid-cycle (%s) 라벨이 잘못 제거됨 — 정상 사이클 invariant 위반", st)
+			}
+		})
+	}
+}
+
+// TestSweepStuckUpgradingLabels_RemovesTerminalStateLabelAfterGrace 는 HostAhead 와
+// UnverifiedVersion 같은 보고 전용 종점 상태도 grace 경과 후 stuck 라벨 제거 대상임을 검증한다.
+func TestSweepStuckUpgradingLabels_RemovesTerminalStateLabelAfterGrace(t *testing.T) {
+	terminalStates := []string{
+		v1alpha1.UpgradeStateHostAhead,
+		v1alpha1.UpgradeStateUnverifiedVersion,
+	}
+	for _, st := range terminalStates {
+		t.Run(st, func(t *testing.T) {
+			const (
+				nodeName = "worker-terminal"
+				vendor   = "furiosa"
+				dusName  = "worker-terminal-furiosa"
+			)
+			node := nodeWithUpgradingLabel(nodeName)
+			dus := dusWithTransition(dusName, nodeName, vendor, st, 5*time.Minute)
+			r := newReconciler(node, dus)
+
+			if err := r.sweepStuckUpgradingLabels(context.Background()); err != nil {
+				t.Fatalf("sweep 오류: %v", err)
+			}
+			if hasUpgradingLabel(t, r, nodeName) {
+				t.Errorf("%s + grace 경과 stuck 라벨이 제거되지 않음", st)
 			}
 		})
 	}

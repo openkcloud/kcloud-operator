@@ -1,5 +1,5 @@
 // ============================================================
-// state_machine_reboot_test.go: cross-major reboot 전이 단위 테스트
+// state_machine_reboot_test.go: 모듈 교체(계열 전환 포함) reboot 전이 단위 테스트
 // 상세: 재부팅 트리거/완료 판정(bootID 가드), 재부팅 예산, needs-reboot 마커의 신선도 판정을
 // 검증한다.
 // 생성일: 2026-07-20 | 수정일: 2026-10-13
@@ -371,7 +371,7 @@ func TestTransitionState_NoMarker_NeverReboots(t *testing.T) {
 }
 
 // 하향(desired < current)에서도 마커가 있으면 재부팅으로 넘어간다.
-// cross-major 하향은 구 모듈이 물려 있어 삽입만 못 하는 상태이고 rmmod 로는 풀리지 않는다.
+// 계열 전환 하향은 구 모듈이 물려 있어 삽입만 못 하는 상태이고 rmmod 로는 풀리지 않는다.
 func TestTransitionState_Downgrade_Marker_TriggersReboot(t *testing.T) {
 	done := time.Now().Add(-2 * time.Minute)
 	// host 는 아직 verNew, 목표는 verOld — 하향.

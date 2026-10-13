@@ -2,7 +2,7 @@
 // driverinstallpolicy_types.go: DriverInstallPolicy CRD 타입
 // 상세: 벤더 하나의 드라이버를 어떤 이미지·버전·방식으로 깔지 선언한다.
 // 노드별 전이는 DriverUpgradeState 가 맡고 이 타입은 그 전이가 따를 정책이다.
-// 생성일: 2026-04-10 | 수정일: 2026-10-11
+// 생성일: 2026-04-10 | 수정일: 2026-10-13
 // ============================================================
 package v1alpha1
 
@@ -69,8 +69,8 @@ type UpgradePolicy struct {
 	// +kubebuilder:validation:Minimum=0
 	IdleCooldownSeconds *int32 `json:"idleCooldownSeconds,omitempty"`
 
-	// MaxReboots 는 cross-major 드라이버 교체 시 노드 재부팅을 트리거할 최대 횟수입니다.
-	// 초과 시 Failed 로 전이(무한 재부팅 방지). cross-major 는 통상 1회면 충분. 기본 1.
+	// MaxReboots 는 커널 모듈 교체(계열 전환·같은 계열 patch 교체)로 노드 재부팅을 트리거할 최대 횟수입니다.
+	// 초과 시 Failed 로 전이(무한 재부팅 방지). 교체 한 번에 재부팅 1회면 충분. 기본 1.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
 	MaxReboots int32 `json:"maxReboots,omitempty"`

@@ -240,6 +240,23 @@ func TestHandleFailed_NoMatchingDevice_StaysFailed(t *testing.T) {
 	}
 }
 
+// ── 시험: 실패 뒤 새 버전이 실제로 로드된 노드 ─────────────────────────────
+// CurrentVersion 은 Failed 에서 갱신되지 않는다. 실패 기록 뒤 사람이 재부팅해 목표 버전이
+// 로드됐는데 CurrentVersion 이 옛 값이라는 이유로 Failed 에 남기면 손댈 것이 없는 노드가
+// 수동 조치를 기다린다.
+func TestHandleFailed_TargetLoadedButCurrentStale_ReturnsToIdle(t *testing.T) {
+	dus := makeFailedDUSWithVersions(verOld, verNew) // current 는 사이클 시작 때 값
+	dip := makeCordonTestDIP()
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(true, verNew))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state=%q, want Idle — NDR 이 목표 버전 로드를 보고하는데 Failed 에 남는다", dus.Status.State)
+	}
+}
+
 // driverModuleStepFailed 는 DUS 의 (vendor, model) 로 구한 검증 키의 driverModule 단계 실패만
 // 실패로 읽는다. rngd 는 detector 가 "rngd/driverModule" 로 내므로 furiosa 접두로 찾으면 놓친다.
 func TestDriverModuleStepFailed(t *testing.T) {

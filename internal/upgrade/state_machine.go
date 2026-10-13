@@ -262,6 +262,48 @@ func (m *UpgradeStateMachine) handleHostAhead(
 	return true, 60 * time.Second, nil
 }
 
+// markRolledBack 은 이 사이클의 목표를 롤백한 버전으로 기록한다. 같은 사이클의 두 번째 롤백은
+// DesiredVersion 이 이미 이전 버전이라 덮지 않는다.
+func markRolledBack(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy) {
+	if state.Status.DesiredVersion == "" || state.Status.DesiredVersion == state.Status.PreviousVersion {
+		return
+	}
+	state.Status.RolledBackVersion = state.Status.DesiredVersion
+	state.Status.RolledBackGeneration = policy.Generation
+}
+
+// releaseRollbackHold 는 목표나 정책 generation 이 바뀌어 보류가 더는 맞지 않으면 기록을 지운다.
+func releaseRollbackHold(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy, desired string) {
+	if state.Status.RolledBackVersion == "" ||
+		(state.Status.RolledBackVersion == desired && state.Status.RolledBackGeneration == policy.Generation) {
+		return
+	}
+	state.Status.Message = fmt.Sprintf("롤백 보류 해제(목표 또는 정책 generation 변경): 이전 보류 목표 %s", state.Status.RolledBackVersion)
+	state.Status.RolledBackVersion = ""
+	state.Status.RolledBackGeneration = 0
+}
+
+// holdAfterRollback 은 같은 정책에서 이미 롤백한 목표면 true 를 반환해 사이클을 열지 않게 한다.
+// 열면 같은 실패와 롤백이 cooldown 간격으로 반복된다. 정책 spec 을 바꾸거나 DUS 를 지우면 다시 시도한다.
+// 경고 이벤트는 메시지가 바뀔 때 한 번만 낸다.
+func (m *UpgradeStateMachine) holdAfterRollback(
+	state *v1alpha1.DriverUpgradeState,
+	policy *v1alpha1.DriverInstallPolicy,
+	desiredVersion, currentVersion string,
+) bool {
+	if state.Status.RolledBackVersion == "" || state.Status.RolledBackVersion != desiredVersion ||
+		state.Status.RolledBackGeneration != policy.Generation {
+		return false
+	}
+	msg := fmt.Sprintf("목표 %s 는 롤백한 버전 — 정책 spec 변경 또는 DUS 삭제 전까지 재시도 보류(현재 %s)",
+		desiredVersion, currentVersion)
+	if state.Status.Message != msg {
+		state.Status.Message = msg
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "UpgradeHeldAfterRollback", "%s", msg)
+	}
+	return true
+}
+
 // handleIdle: 버전 불일치 감지 시 UpgradeRequired로 전이
 func (m *UpgradeStateMachine) handleIdle(
 	ctx context.Context,
@@ -280,6 +322,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	if err := m.refreshResolvedImage(ctx, state, policy); err != nil {
 		return false, 0, err
 	}
+	releaseRollbackHold(state, policy, desiredVersion)
 
 	// TrackOnly 정책: 설치/업그레이드 경로를 절대 트리거하지 않는다(버전 관측 전용).
 	// 아래 Job 모드 self-heal(driverLoaded=false) 트리거보다 먼저 차단하여, installer 미비
@@ -335,6 +378,8 @@ func (m *UpgradeStateMachine) handleIdle(
 			state.Status.PreviousVersion = ""
 			state.Status.PreviousImage = ""
 			state.Status.RollbackAttempts = 0
+			state.Status.RolledBackVersion = ""
+			state.Status.RolledBackGeneration = 0
 			resetRebootTracking(&state.Status) // 새 사이클: 재부팅 카운터·마커 초기화
 			m.Recorder.Eventf(state, corev1.EventTypeNormal, "InstallRequired",
 				"Job 모드 설치/복구 필요(driverLoaded=false): 목표 버전 %s (autoUpgrade 무관)", desiredVersion)
@@ -380,6 +425,10 @@ func (m *UpgradeStateMachine) handleIdle(
 		return true, 60 * time.Second, nil
 	}
 
+	if m.holdAfterRollback(state, policy, desiredVersion, currentVersion) {
+		return true, 60 * time.Second, nil
+	}
+
 	// IdleCooldown 가드 — Idle 진입 직후 (default 10s) 연속 trigger 거부.
 	// 사용자가 trigger 를 빠르게 두 번 던지면 첫 사이클의 Uncordoning→Idle 직후 다시 Cordoning 으로
 	// 진입해, 검증 스크립트가 mid-state 를 완료로 오인하는 결함을 막는다.
@@ -421,6 +470,8 @@ func (m *UpgradeStateMachine) handleIdle(
 	state.Status.PreviousVersion = currentVersion
 	state.Status.PreviousImage = ""
 	state.Status.RollbackAttempts = 0
+	state.Status.RolledBackVersion = ""
+	state.Status.RolledBackGeneration = 0
 	resetRebootTracking(&state.Status) // 새 사이클: 재부팅 카운터·마커 초기화
 	return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
 		fmt.Sprintf("버전 불일치 감지: %s → %s", currentVersion, desiredVersion), 0)
@@ -850,9 +901,6 @@ func (m *UpgradeStateMachine) handleUncordoning(
 		return false, 0, fmt.Errorf("노드 uncordon 실패: %w", err)
 	}
 
-	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUncordoned",
-		"노드 %s uncordon 완료, 업그레이드 성공", state.Spec.NodeName)
-
 	// 사이클 정상 종료 시 quiesce 된 Deployment 를 복구한다.
 	// uncordon 후 Idle 진입 직전이 가장 안전한 시점이다 (노드 schedulable + 새 driver 준비 완료).
 	if err := m.RestoreQuiescedDeployments(ctx, state); err != nil {
@@ -860,8 +908,14 @@ func (m *UpgradeStateMachine) handleUncordoning(
 			"node", state.Spec.NodeName)
 	}
 
+	if v := state.Status.RolledBackVersion; v != "" {
+		msg := fmt.Sprintf("롤백 완료: %s 대신 %s 로 복원", v, state.Status.DesiredVersion)
+		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackCompleted", "노드 %s %s", state.Spec.NodeName, msg)
+		return m.transitionTo(state, v1alpha1.UpgradeStateIdle, msg, 0)
+	}
+	m.Recorder.Eventf(state, corev1.EventTypeNormal, "NodeUncordoned",
+		"노드 %s uncordon 완료, 업그레이드 성공", state.Spec.NodeName)
 	metrics.RecordUpgradeComplete(state.Spec.Vendor, "success")
-
 	return m.transitionTo(state, v1alpha1.UpgradeStateIdle, "업그레이드 완료", 0)
 }
 
@@ -971,16 +1025,16 @@ func (m *UpgradeStateMachine) handleFailed(
 
 // failedStateRecovered 는 Failed 로 남은 DUS 의 노드가 이미 정책을 만족하는지 본다. 목표 버전이
 // NDR 의 로드된 모듈 버전과 같고, 그 장치가 로드돼 있고, node-agent 검증의 driverModule 단계가
-// 실패하지 않았을 때만 복구로 본다. currentVersion 은 이 사이클의 목표가 맞는지 거르는 데만
-// 쓴다. Failed 에서는 갱신되지 않으므로 실제 로드 상태는 NDR 에서 직접 읽는다. 버전 문자열만
-// 맞는 노드를 Idle 로 보내면 self-heal 이 설치를 걸고 같은 이유로 다시 실패하는 왕복이 생긴다.
-// NDR 이 없거나 이 벤더 장치가 없으면 확인하지 못한 것이므로 false 다.
+// 실패하지 않았을 때만 복구로 본다. currentVersion 은 Failed 에서 갱신되지 않으므로 보지 않는다.
+// 로드 상태는 NDR 에서 직접 읽는다. 복귀 뒤에는 목표가 이미 로드돼 있어 Idle 이 할 일이 없고
+// (컨트롤러가 Idle 에서 currentVersion 을 NDR 로 맞춘다), 롤백으로 끝난 사이클이면 rolledBackVersion
+// 보류가 같은 목표 재시도를 막는다. NDR 이 없거나 이 벤더 장치가 없으면 확인하지 못한 것이므로 false 다.
 func (m *UpgradeStateMachine) failedStateRecovered(
 	ctx context.Context,
 	state *v1alpha1.DriverUpgradeState,
 ) (bool, error) {
 	desired := state.Status.DesiredVersion
-	if desired == "" || desired != state.Status.CurrentVersion {
+	if desired == "" {
 		return false, nil
 	}
 	var ndr v1alpha1.NodeDeviceReport
@@ -1106,6 +1160,7 @@ func (m *UpgradeStateMachine) handleRollback(
 		}
 		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
 	}
+	markRolledBack(state, policy)
 
 	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 
@@ -1234,11 +1289,6 @@ func (m *UpgradeStateMachine) transitionTo(
 
 	// 새 상태 게이지 업데이트
 	metrics.SetUpgradeState(nodeName, vendor, nextState)
-
-	// 업그레이드 완료 감지: Uncordoning → Idle
-	if prevState == v1alpha1.UpgradeStateUncordoning && nextState == v1alpha1.UpgradeStateIdle {
-		metrics.RecordUpgradeComplete(vendor, "success")
-	}
 
 	return true, requeueAfter, nil
 }

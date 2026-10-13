@@ -30,12 +30,22 @@ func RollbackRequestAccepted(state string) bool {
 	return false
 }
 
+// UpgradeCycleClosed 는 업그레이드 사이클이 끝나 노드의 driver-upgrading 라벨을 쥐지 않는 상태인지다(Failed 는 cordon 을 남길 수 있다).
+// 사이클 라벨 정리(defer·stuck 스윕)가 이 술어 하나를 쓴다.
+func UpgradeCycleClosed(state string) bool {
+	switch state {
+	case "", UpgradeStateIdle, UpgradeStateFailed, UpgradeStateHostAhead, UpgradeStateUnverifiedVersion:
+		return true
+	}
+	return false
+}
+
 // VersionObservationAllowed 는 NodeDeviceReport 실측을 status.currentVersion 에 반영하고
 // 버전 드리프트를 판정해도 되는 상태인지다. 조정자(internal/controller)와 드리프트 검출기
 // (internal/verification)가 같은 술어를 써야 한쪽만 감지가 꺼지는 것을 막는다.
 // 사이클 중간은 상태 기계가 DesiredVersion·PreviousVersion 을 소유해 밖에서 덮으면 롤백이 깨지고,
 // 그 사이의 불일치는 설계상 정상이라 드리프트로 읽으면 오경보가 되므로 제외한다. Failed 는 사이클 결과(currentVersion)를 보존해야 하므로 제외한다.
-// 복구 판정은 이 값으로 목표를 거르고 로드 상태는 NDR 에서 읽는다. 받아들이는 것은 Idle 과 두 보고 전용 종점(UnverifiedVersion·HostAhead)뿐이다.
+// Failed 복구 판정은 currentVersion 을 보지 않고 NDR 의 로드 버전·검증을 읽는다. 받아들이는 것은 Idle 과 두 보고 전용 종점(UnverifiedVersion·HostAhead)뿐이다.
 func VersionObservationAllowed(state string) bool {
 	switch state {
 	case UpgradeStateIdle, UpgradeStateUnverifiedVersion, UpgradeStateHostAhead:
@@ -67,8 +77,8 @@ const (
 	// 꺼져 있을 때 진입하는 보고 전용 종점이다. install Job·cordon 을 만들지 않는다. 정책 버전을
 	// 올리거나 allowDowngrade·versionSource=Host 로 바꾸면 Idle 로 돌아간다.
 	UpgradeStateHostAhead = "HostAhead"
-	// UpgradeStateRebootRequired 는 install 성공 후 cross-major 등으로 커널 모듈 교체에
-	// 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다.
+	// UpgradeStateRebootRequired 는 install 성공 후 로드된 커널 모듈 버전 교체(계열 전환·같은 계열
+	// patch 교체)에 노드 재부팅이 필요할 때(NDR.needsReboot=true) validator 체인 앞에서 진입하는 상태입니다.
 	UpgradeStateRebootRequired = "RebootRequired"
 	// UpgradeStateRebooting 은 노드 재부팅을 트리거한 뒤 NotReady→Ready 복귀를 대기하는 상태입니다.
 	UpgradeStateRebooting = "Rebooting"
@@ -126,6 +136,7 @@ type DriverUpgradeStateStatus struct {
 	// RollbackAttempts는 현재 업그레이드 사이클에서의 롤백 시도 횟수입니다.
 	// policy.UpgradePolicy.MaxRollbackAttempts(기본 3)를 초과하면 Failed로 전이합니다.
 	// 새 업그레이드 사이클 진입 시(handleIdle) 0으로 초기화됩니다.
+	// 같은 목표의 재시도는 RolledBackVersion 이 막습니다.
 	RollbackAttempts int32 `json:"rollbackAttempts,omitempty"`
 	// RebootAttempts 는 현재 사이클에서 노드 재부팅을 트리거한 횟수입니다.
 	// UpgradePolicy.MaxReboots(기본 1) 초과 시 Failed 로 전이하여 무한 재부팅 루프를 방지합니다.
@@ -157,6 +168,13 @@ type DriverUpgradeStateStatus struct {
 	// 돌아간 뒤까지 미뤄지면 오래된 요청이 새 롤백을 시작하던 결함을 막는다.
 	// +optional
 	ConsumedRollbackRequest string `json:"consumedRollbackRequest,omitempty"`
+	// RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패 또는 관리자 요청). Idle 은 정책 목표가 이 값이고
+	// 정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
+	// +optional
+	RolledBackVersion string `json:"rolledBackVersion,omitempty"`
+	// RolledBackGeneration 은 롤백을 시작할 때의 DriverInstallPolicy metadata.generation 이다.
+	// +optional
+	RolledBackGeneration int64 `json:"rolledBackGeneration,omitempty"`
 }
 
 // QuiescedDeployment 는 driver upgrade cycle 동안 일시적으로 scale=0 으로 quiesce 된

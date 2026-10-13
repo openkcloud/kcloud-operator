@@ -2,7 +2,7 @@
 // 상세: NPUClusterPolicy/DriverInstallPolicy/NodeDeviceReport/DriverUpgradeState(CR)와
 // core/v1 Node(allocatable)를 한 번에 조회해 ClusterStatus로 합친다. kubectl-npu
 // status --json 및 사람용 텍스트 출력이 공통으로 사용하는 단일 진입점이다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-10-13
 package npuctl
 
 import (
@@ -242,15 +242,16 @@ func buildNodeStatuses(
 		dus := duses[i]
 		ns := ensure(dus.Spec.NodeName)
 		ns.Upgrades = append(ns.Upgrades, UpgradeStatus{
-			Name:           dus.Name,
-			Vendor:         dus.Spec.Vendor,
-			Model:          dus.Spec.Model,
-			State:          dus.Status.State,
-			CurrentVersion: dus.Status.CurrentVersion,
-			DesiredVersion: dus.Status.DesiredVersion,
-			Message:        dus.Status.Message,
-			Retries:        dus.Status.Retries,
-			Models:         dus.Status.ObservedModels,
+			Name:              dus.Name,
+			Vendor:            dus.Spec.Vendor,
+			Model:             dus.Spec.Model,
+			State:             dus.Status.State,
+			CurrentVersion:    dus.Status.CurrentVersion,
+			DesiredVersion:    dus.Status.DesiredVersion,
+			Message:           dus.Status.Message,
+			Retries:           dus.Status.Retries,
+			RolledBackVersion: dus.Status.RolledBackVersion,
+			Models:            dus.Status.ObservedModels,
 		})
 	}
 

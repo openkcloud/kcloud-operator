@@ -2,7 +2,7 @@
 // validator_test.go: Validator 단위 테스트 (fake client 기반)
 // 상세: DriverModuleValidator / DevicePluginValidator 의 PASS/FAIL 케이스 검증.
 //       envtest 미사용 — controller-runtime fake client 만 사용.
-// 생성일: 2026-04-27 | 수정일: 2026-10-11
+// 생성일: 2026-04-27 | 수정일: 2026-10-13
 // ============================================================
 
 package validator
@@ -438,7 +438,7 @@ func TestDriverModule_HostMismatch_ActionableMessage(t *testing.T) {
 }
 
 // TestDriverModule_NeedsReboot_NoRmmodGuidance 는 NDR 이 needsReboot 을 보고할 때
-// rmmod 안내를 내지 않는 것을 고정한다. cross-major 교체는 목표 버전 모듈이 이미 디스크에
+// rmmod 안내를 내지 않는 것을 고정한다. 계열 전환 교체는 목표 버전 모듈이 이미 디스크에
 // 준비됐고 구 모듈이 사용 중이라 삽입만 못 하는 상태이며, rmmod 로는 풀리지 않는다 —
 // 그 지시를 따르는 사람은 시간만 버린다.
 func TestDriverModule_NeedsReboot_NoRmmodGuidance(t *testing.T) {

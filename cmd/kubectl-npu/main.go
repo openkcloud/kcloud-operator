@@ -2,7 +2,7 @@
 // 상세: kubectl npu status[--json]/driver-version/upgrade/toggle/describe 등을 제공한다.
 // 조회·제어는 pkg/npuctl(kcloud-operator 모듈, replace 로 로컬 참조)에 위임하고, 이
 // 파일은 CLI 인자 파싱과 사람용/JSON 출력 서식만 맡는다.
-// 생성일: 2026-03-25 | 수정일: 2026-10-11
+// 생성일: 2026-03-25 | 수정일: 2026-10-13
 package main
 
 import (
@@ -245,7 +245,7 @@ func printStatusText(status *npuctl.ClusterStatus) {
 	var dipRows [][]string
 	for _, v := range status.Vendors {
 		for _, dip := range v.DriverInstallPolicies {
-			dipRows = append(dipRows, []string{dip.Name, dip.Vendor, dip.Model, dip.DesiredVersion})
+			dipRows = append(dipRows, []string{dip.Name, dip.Vendor, dip.Model, dipVersionCell(dip)})
 		}
 	}
 	printTable([]string{"NAME", "VENDOR", "MODEL", "VERSION"}, dipRows)
@@ -960,13 +960,22 @@ func printVendorsText(status *npuctl.ClusterStatus) {
 	printTable([]string{"NAME", "SUBVENDOR_OF", "ENABLED", "VERSION"}, rows)
 }
 
-// vendorVersions 는 한 벤더에 걸린 DriverInstallPolicy 들의 목표 버전을 쉼표로 잇는다.
+// dipVersionCell 은 DIP 표의 VERSION 칸이다. versionSource=Host 면 정책 버전은 호스트 무드라이버
+// 노드에만 쓰이는 값이라 그 사실을 함께 적는다.
+func dipVersionCell(dip npuctl.DIPStatus) string {
+	if strings.EqualFold(dip.VersionSource, "Host") && dip.DesiredVersion != "" {
+		return dip.DesiredVersion + " (versionSource=Host)"
+	}
+	return dip.DesiredVersion
+}
+
+// vendorVersions 는 한 벤더에 걸린 DriverInstallPolicy 들의 VERSION 칸(dipVersionCell)을 쉼표로 잇는다.
 // 보통은 벤더당 DIP 가 하나라 값도 하나지만, 슬라이스라 여럿이어도 잃지 않는다.
 func vendorVersions(v npuctl.VendorStatus) string {
 	var out []string
 	for _, dip := range v.DriverInstallPolicies {
 		if dip.DesiredVersion != "" {
-			out = append(out, dip.DesiredVersion)
+			out = append(out, dipVersionCell(dip))
 		}
 	}
 	if len(out) == 0 {
@@ -1626,7 +1635,7 @@ func cmdSharingApply(args []string) {
 // 것만 모은다. 새 판정 기준을 두지 않는다: health 는 npuctl.HealthStateHealthy 가
 // 아닌 값(internal/health.StateHealthy 를 pkg/npuctl 이 중개한 것 — cmd/kubectl-npu 는
 // 별도 모듈이라 internal/ 을 직접 import 할 수 없다), upgrade 는
-// npuv1alpha1.UpgradeStateFailed, allocation 은 AmbiguousProductNodes, capability 는
+// Failed·HostAhead·UnverifiedVersion 상수와 DUS 의 rolledBackVersion, allocation 은 AmbiguousProductNodes, capability 는
 // npuctl.VerificationDegraded 상수를 그대로 쓴다.
 type diagnoseRow struct {
 	category string
@@ -1665,10 +1674,19 @@ func buildDiagnoseRows(
 	if status != nil {
 		for _, n := range status.Nodes {
 			for _, u := range n.Upgrades {
-				if u.State == npuv1alpha1.UpgradeStateFailed {
+				switch {
+				case u.State == npuv1alpha1.UpgradeStateFailed || u.State == npuv1alpha1.UpgradeStateHostAhead ||
+					u.State == npuv1alpha1.UpgradeStateUnverifiedVersion:
 					rows = append(rows, diagnoseRow{
 						category: "upgrade", node: n.Name, vendor: u.Vendor,
-						detail: fmt.Sprintf("state=%s desired=%s", u.State, dashIfEmpty(u.DesiredVersion)),
+						detail: fmt.Sprintf("state=%s current=%s desired=%s", u.State,
+							dashIfEmpty(u.CurrentVersion), dashIfEmpty(u.DesiredVersion)),
+					})
+				case u.State == npuv1alpha1.UpgradeStateIdle && u.RolledBackVersion != "":
+					rows = append(rows, diagnoseRow{
+						category: "upgrade", node: n.Name, vendor: u.Vendor,
+						detail: fmt.Sprintf("state=%s rolledBack=%s current=%s — 정책 spec 변경 또는 DUS 삭제 전까지 재시도 보류",
+							u.State, u.RolledBackVersion, dashIfEmpty(u.CurrentVersion)),
 					})
 				}
 			}

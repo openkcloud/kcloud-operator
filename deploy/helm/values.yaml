@@ -630,8 +630,8 @@ driverInstallPolicies:
       # 쓰인다. Job 실행 자체는 activeDeadlineSeconds(30m)가 시한을 갖는다.
       validationTimeout: "10m"
       rollbackOnFailure: true
-      # cross-major reboot: rmmod 불가로 재부팅이 필요한 NVIDIA 메이저 교체(예 535→580) 대응.
-      # 미지정 시 CRD 기본값(maxReboots=1, rebootTimeout 15m) 적용. cross-major 는 통상 1회 재부팅이면 충분.
+      # 모듈 교체 재부팅: 로드된 nvidia 모듈을 rmmod 로 내릴 수 없어 계열 전환(예 535→580)·같은 계열 patch
+      # 교체 모두 재부팅으로 마친다. 미지정 시 CRD 기본값(maxReboots=1, rebootTimeout 15m) 적용.
       maxReboots: 1
       rebootTimeout: "15m"
       # driver.rebootExecutor 는 CRD 기본 Job(operator 가 privileged reboot Job 생성). kured 는 1차 미구현.

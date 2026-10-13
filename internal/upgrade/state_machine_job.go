@@ -2,7 +2,7 @@
 // state_machine_job.go: driver Job 모드 상태 핸들러 (Mode=job)
 // 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 의 Mode=job 대체
 //       경로다. DS patch 를 install Job 생성/재생성으로, Pod Ready 관찰을 Job 완료+NDR 일치로 재정의한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-12
+// 생성일: 2026-07-16 | 수정일: 2026-10-13
 // ============================================================
 
 package upgrade
@@ -358,6 +358,7 @@ func (m *UpgradeStateMachine) handleRollbackJob(
 			"롤백할 이전 버전 없음(job): 수동 조치 필요 (node=%s)", state.Spec.NodeName)
 		return m.jobTransitionToFailed(ctx, state, "이전 버전 없음(job): 수동 조치 필요")
 	}
+	markRolledBack(state, policy)
 
 	// rollback 대상 이미지: 캡처된 PreviousImage 우선, 없으면 DIP variant 재구성. kernelImages
 	// 정책도 재구성은 policy.Spec.Driver.Image(DKMS 이미지)에서 해 커널 토큰이 입력에 없으므로

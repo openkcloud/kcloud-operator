@@ -84,15 +84,14 @@ func (r *DriverUpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Defer cleanup — Reconcile 함수가 panic 으로 중단되거나 ctx 가 cancel 된 직후라도
-	// 사이클 종료 상태(Idle / Failed / "")에서는 라벨이 절대 남지 않도록 보장한다.
+	// 사이클 종료 상태(UpgradeCycleClosed)에서는 라벨이 절대 남지 않도록 보장한다.
 	// reconcile ctx 와 분리된 background ctx 를 사용해야 ctx cancel 시에도 cleanup 이 실행됨.
 	defer func() {
 		// 패닉 자체는 그대로 전파하되, 라벨 cleanup 은 시도한다.
 		if state.Spec.NodeName == "" {
 			return
 		}
-		switch state.Status.State {
-		case v1alpha1.UpgradeStateIdle, "", v1alpha1.UpgradeStateFailed:
+		if v1alpha1.UpgradeCycleClosed(state.Status.State) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := r.StateMachine.EnsureUpgradingLabelRemoved(cleanupCtx, state.Spec.NodeName); err != nil {
@@ -656,7 +655,7 @@ const stuckBlockingLabelGracePeriod = 15 * time.Second
 
 // sweepStuckUpgradingLabels 는 사이클이 비정상 종료된 채 driver-upgrading(-blocking) 라벨만
 // 남은 노드에서 그 라벨을 제거한다. 전부 만족할 때만 cleanup 한다: (1) 라벨이 있다 (2) 해당
-// 노드+vendor 의 DUS state 가 종료 상태(Idle·""·Failed) (3) LastTransitionTime 이 grace 이상
+// 노드+vendor 의 DUS state 가 종료 상태(UpgradeCycleClosed) (3) LastTransitionTime 이 grace 이상
 // 경과(transient 보호) (4) 매칭 DUS 가 하나도 없으면 라벨을 보존한다(다른 컨트롤러 소유 가능성).
 // mid-cycle(PreFlight~Uncordoning) 라벨은 절대 건드리지 않는다. blocking 라벨은 lifecycle 이
 // 좁아(Cordoning~Validating 진입) grace 를 15s 로 더 짧게 둔다.
@@ -696,10 +695,7 @@ func (r *DriverUpgradeReconciler) sweepStuckUpgradingLabels(ctx context.Context)
 		allTerminal := true
 		oldestTransition := time.Now()
 		for _, dus := range nodeDUS {
-			switch dus.Status.State {
-			case v1alpha1.UpgradeStateIdle, "", v1alpha1.UpgradeStateFailed:
-				// 종료 상태
-			default:
+			if !v1alpha1.UpgradeCycleClosed(dus.Status.State) {
 				// mid-cycle — 절대 건드리지 않음
 				allTerminal = false
 			}

@@ -306,8 +306,8 @@ spec:
                   maxReboots:
                     default: 1
                     description: |-
-                      MaxReboots 는 cross-major 드라이버 교체 시 노드 재부팅을 트리거할 최대 횟수입니다.
-                      초과 시 Failed 로 전이(무한 재부팅 방지). cross-major 는 통상 1회면 충분. 기본 1.
+                      MaxReboots 는 커널 모듈 교체(계열 전환·같은 계열 patch 교체)로 노드 재부팅을 트리거할 최대 횟수입니다.
+                      초과 시 Failed 로 전이(무한 재부팅 방지). 교체 한 번에 재부팅 1회면 충분. 기본 1.
                     format: int32
                     minimum: 1
                     type: integer

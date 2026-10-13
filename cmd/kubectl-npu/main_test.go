@@ -1,7 +1,7 @@
 // main_test.go: kubectl-npu 사람용 텍스트 출력 포맷 테스트
 // 상세: 같은 노드에 붙은 장치 여러 대가 표에서 서로 구분되는지 본다(벤더·모델·버전이
 // 같고 PCI 만 다른 경우). describe 명령의 렌더·인자 파싱도 여기서 시험한다.
-// 생성일: 2026-08-11 | 수정일: 2026-10-11
+// 생성일: 2026-08-11 | 수정일: 2026-10-13
 package main
 
 import (
@@ -1449,6 +1449,50 @@ func TestBuildDiagnoseRows_네범주각각걸림(t *testing.T) {
 		if r.node == "n2" {
 			t.Errorf("정상 노드 n2 가 행에 섞임: %+v", r)
 		}
+	}
+}
+
+func TestDipVersionCell_HostModeMarked(t *testing.T) {
+	host := npuctl.DIPStatus{DesiredVersion: "580.126.09", VersionSource: "Host"}
+	if got := dipVersionCell(host); got != "580.126.09 (versionSource=Host)" {
+		t.Errorf("Host 모드 = %q", got)
+	}
+	policy := npuctl.DIPStatus{DesiredVersion: "580.126.09", VersionSource: "Policy"}
+	if got := dipVersionCell(policy); got != "580.126.09" {
+		t.Errorf("Policy 모드 = %q", got)
+	}
+}
+
+func TestBuildDiagnoseRows_종점과롤백보류(t *testing.T) {
+	up := func(u npuctl.UpgradeStatus) []npuctl.UpgradeStatus {
+		u.Vendor = "nvidia"
+		return []npuctl.UpgradeStatus{u}
+	}
+	status := &npuctl.ClusterStatus{Nodes: []npuctl.NodeStatus{
+		{Name: "n1", Upgrades: up(npuctl.UpgradeStatus{
+			State: "HostAhead", CurrentVersion: "580.178.04", DesiredVersion: "580.126.09"})},
+		{Name: "n2", Upgrades: up(npuctl.UpgradeStatus{State: "UnverifiedVersion", DesiredVersion: "590.1.1"})},
+		{Name: "n3", Upgrades: up(npuctl.UpgradeStatus{
+			State: "Idle", CurrentVersion: "580.178.04", DesiredVersion: "580.126.09", RolledBackVersion: "580.126.09"})},
+		{Name: "n4", Upgrades: up(npuctl.UpgradeStatus{
+			State: "Idle", CurrentVersion: "580.178.04", DesiredVersion: "580.178.04"})},
+		// 롤백이 진행 중인 노드는 보류가 아니다 — RolledBackVersion 이 Rollback 중에도 채워져 있다.
+		{Name: "n5", Upgrades: up(npuctl.UpgradeStatus{
+			State: "Rollback", CurrentVersion: "580.178.04", DesiredVersion: "580.126.09", RolledBackVersion: "580.126.09"})},
+	}}
+	rows := buildDiagnoseRows(status, nil, nil, nil)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.node] = r.detail
+	}
+	if len(rows) != 3 || got["n4"] != "" || got["n5"] != "" {
+		t.Fatalf("행 %d개 %+v — n1·n2·n3 셋이어야 한다(n4 정상, n5 롤백 진행 중은 행 없음)", len(rows), rows)
+	}
+	if !strings.Contains(got["n1"], "state=HostAhead") || !strings.Contains(got["n1"], "current=580.178.04") {
+		t.Errorf("n1 detail=%q", got["n1"])
+	}
+	if !strings.Contains(got["n3"], "rolledBack=580.126.09") || !strings.Contains(got["n3"], "정책 spec 변경 또는 DUS 삭제 전까지") {
+		t.Errorf("n3 detail=%q — 롤백 보류가 보이지 않는다", got["n3"])
 	}
 }
 

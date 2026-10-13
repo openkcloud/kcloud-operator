@@ -1,6 +1,6 @@
 // status_test.go: CollectStatus 단위 테스트(fake client, envtest 불필요)
 // 상세: NCP/DIP(+rngd 서브벤더)/NDR/DUS/Node를 섞어 넣고 ClusterStatus 집약 결과를 검증한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-10-13
 package npuctl
 
 import (
@@ -312,6 +312,31 @@ func TestCollectStatus_ObservedModelsCopied(t *testing.T) {
 		}
 	}
 	t.Fatalf("observedModels 가 CLI 상태에 옮겨지지 않았다: %+v", status.Nodes)
+}
+
+// TestCollectStatus_RolledBackVersionCopied 는 DUS.Status.RolledBackVersion 이 CLI 상태
+// (UpgradeStatus.RolledBackVersion)로 그대로 옮겨지는지 본다.
+func TestCollectStatus_RolledBackVersionCopied(t *testing.T) {
+	dus := &npuv1alpha1.DriverUpgradeState{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1-nvidia"},
+		Spec:       npuv1alpha1.DriverUpgradeStateSpec{NodeName: "n1", Vendor: VendorNvidia},
+		Status: npuv1alpha1.DriverUpgradeStateStatus{
+			State: npuv1alpha1.UpgradeStateIdle, RolledBackVersion: "580.126.09",
+		},
+	}
+	c := newTestClient(t, dus)
+	status, err := c.CollectStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range status.Nodes {
+		for _, u := range n.Upgrades {
+			if u.Name == "n1-nvidia" && u.RolledBackVersion == "580.126.09" {
+				return
+			}
+		}
+	}
+	t.Fatalf("rolledBackVersion 이 CLI 상태에 옮겨지지 않았다: %+v", status.Nodes)
 }
 
 // 벤더 operator 조건도 집계에 포함된다 — Ready 조건만 읽으면 <Vendor>OperatorReady 가
