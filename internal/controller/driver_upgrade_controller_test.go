@@ -2,7 +2,7 @@
 // driver_upgrade_controller_test.go: DriverUpgradeReconciler 단위 테스트
 // 상세: ensureUpgradeStates()의 currentVersion 동기화 및 findPolicy fallback 로직 검증
 //       fake client 기반 — envtest 불필요
-// 생성일: 2026-04-21 | 수정일: 2026-10-13
+// 생성일: 2026-04-21 | 수정일: 2026-10-14
 // ============================================================
 
 package controller
@@ -2042,6 +2042,43 @@ func TestSyncUpgradeStateDrift_RollbackHoldStillDetectsHostChange(t *testing.T) 
 
 	if !hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
 		t.Errorf("보류 중 호스트가 복원 버전에서 바뀌었는데 DriverVersionDrift 경고가 없음")
+	}
+}
+
+// TestSyncUpgradeStateDrift_RollbackHoldReachedTarget 은 보류 중인 노드가 다른 경로(호스트에서 직접
+// 설치 등)로 보류 목표에 도달하면 경고하지 않음을 고정한다. previousVersion 을 기준으로 두면 보류가
+// 풀리기 전 reconcile 에서 목표에 수렴한 노드에 DriverVersionDrift 경고가 난다.
+func TestSyncUpgradeStateDrift_RollbackHoldReachedTarget(t *testing.T) {
+	const (
+		nodeName = "worker-drift-hold-reached"
+		dusName  = "worker-drift-hold-reached-furiosa"
+		target   = "580.126.09"
+		previous = "580.178.04"
+	)
+	firstSeen := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateIdle, target, target)
+	dus.Status.RolledBackVersion = target
+	dus.Status.PreviousVersion = previous
+	dus.Status.DriftFirstSeen = &firstSeen
+
+	r := newReconciler(dus)
+	fakeRec := record.NewFakeRecorder(8)
+	r.Recorder = fakeRec
+
+	dip := makeDIP("furiosa-warboy", "warboy", target)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: target}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
+
+	if hasRecorderEventReason(fakeRec, "DriverVersionDrift") {
+		t.Errorf("보류 목표에 도달한 노드에 DriverVersionDrift 경고가 발행됨")
+	}
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DriftFirstSeen != nil {
+		t.Errorf("관측이 목표와 같은데 DriftFirstSeen 이 남음: %v", got.Status.DriftFirstSeen)
 	}
 }
 

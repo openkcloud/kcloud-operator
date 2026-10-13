@@ -1,6 +1,6 @@
 // ============================================================
 // state_machine_rollback_hold_test.go: 롤백 뒤 같은 목표 재시도 보류와 롤백 보고 시험
-// 생성일: 2026-10-13
+// 생성일: 2026-10-13 | 수정일: 2026-10-14
 // ============================================================
 
 package upgrade
@@ -106,6 +106,29 @@ func TestRollbackHold_ReleasedWhenTargetChanges(t *testing.T) {
 	// 해제 원인은 정책 변경만이 아니다(versionSource=Host 에서는 적재된 호스트 버전이 목표를 바꾼다).
 	if strings.Contains(dus.Status.Message, "(정책 변경)") || !strings.Contains(dus.Status.Message, "목표 또는 정책 generation 변경") {
 		t.Errorf("message=%q — 해제 원인을 정책 변경으로만 적는다", dus.Status.Message)
+	}
+}
+
+// 보류 중인 노드가 다른 경로(호스트에서 직접 설치 등)로 보류 목표에 도달하면 보류를 푼다.
+// 풀지 않으면 desired 와 current 가 같은 노드가 보류로 계속 표시된다.
+func TestRollbackHold_ReleasedWhenNodeReachesTarget(t *testing.T) {
+	dus := heldDUS()
+	dus.Status.CurrentVersion = verNew
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = heldGen
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(true, verNew))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.RolledBackVersion != "" || dus.Status.RolledBackGeneration != 0 {
+		t.Errorf("보류 목표에 도달했는데 보류 필드가 남음: %q/%d", dus.Status.RolledBackVersion, dus.Status.RolledBackGeneration)
+	}
+	if want := "롤백 보류 해제(노드가 보류 목표 " + verNew + " 에 도달)"; dus.Status.Message != want {
+		t.Errorf("message=%q, want %q", dus.Status.Message, want)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateIdle {
+		t.Errorf("state=%q, want Idle", dus.Status.State)
 	}
 }
 
@@ -240,13 +263,13 @@ func TestReleaseRollbackHold_TargetChangeAloneReleases(t *testing.T) {
 	dip.Generation = heldGen
 
 	moved := heldDUS()
-	releaseRollbackHold(moved, dip, verOld)
+	releaseRollbackHold(moved, dip, verOld, verOld)
 	if moved.Status.RolledBackVersion != "" || moved.Status.RolledBackGeneration != 0 {
 		t.Errorf("목표만 바뀌었는데 보류가 남음: %q/%d", moved.Status.RolledBackVersion, moved.Status.RolledBackGeneration)
 	}
 
 	same := heldDUS()
-	releaseRollbackHold(same, dip, verNew)
+	releaseRollbackHold(same, dip, verNew, verOld)
 	if same.Status.RolledBackVersion != verNew || same.Status.RolledBackGeneration != heldGen {
 		t.Errorf("같은 목표·같은 generation 인데 보류가 풀림: %q/%d", same.Status.RolledBackVersion, same.Status.RolledBackGeneration)
 	}

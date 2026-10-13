@@ -3,7 +3,7 @@
 //
 //	안정 필드명의 JSON 계약. 필드는 모두 omitempty로 두어 벤더/리소스가 없을 때 생략된다.
 //
-// 생성일: 2026-07-16 | 수정일: 2026-10-13
+// 생성일: 2026-07-16 | 수정일: 2026-10-14
 package npuctl
 
 import "kcloud-operator/internal/health"
@@ -114,7 +114,7 @@ type UpgradeStatus struct {
 	DesiredVersion string `json:"desiredVersion,omitempty"`
 	Message        string `json:"message,omitempty"`
 	Retries        int32  `json:"retries,omitempty"`
-	// RolledBackVersion 은 설치 실패로 롤백해 재시도를 보류 중인 목표다(DUS status.rolledBackVersion).
+	// RolledBackVersion 은 롤백한 목표 버전이다(DUS status.rolledBackVersion). State 가 Idle 일 때만 재시도 보류를 뜻한다.
 	RolledBackVersion string `json:"rolledBackVersion,omitempty"`
 	// Models 는 DriverUpgradeState.Status.ObservedModels 를 그대로 옮긴 값이다 — Model 이
 	// generic 으로 뭉개진 혼재 노드에서 실제 섞인 제품을 CLI 에서 보기 위해서다.

@@ -1,6 +1,6 @@
 // driverupgradestate_types.go: DriverUpgradeState CRD 타입 정의
 // 상세: 노드별 드라이버 업그레이드 상태를 추적하는 클러스터 스코프 CRD
-// 생성일: 2026-04-13 | 수정일: 2026-10-13
+// 생성일: 2026-04-13 | 수정일: 2026-10-14
 
 package v1alpha1
 
@@ -169,8 +169,9 @@ type DriverUpgradeStateStatus struct {
 	// 돌아간 뒤까지 미뤄지면 오래된 요청이 새 롤백을 시작하던 결함을 막는다.
 	// +optional
 	ConsumedRollbackRequest string `json:"consumedRollbackRequest,omitempty"`
-	// RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패 또는 관리자 요청). Idle 은 정책 목표가 이 값이고
-	// 정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
+	// RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패, drain 타임아웃 또는 관리자 요청). Idle 은
+	// 정책 목표가 이 값이고 정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
+	// Job 모드 자체 복구(driverLoaded=false)는 이 보류와 무관하게 실행되고, 그 사이클이 시작되면 기록을 지운다.
 	// +optional
 	RolledBackVersion string `json:"rolledBackVersion,omitempty"`
 	// RolledBackGeneration 은 롤백을 시작할 때의 DriverInstallPolicy metadata.generation 이다.

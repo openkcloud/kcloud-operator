@@ -3,7 +3,7 @@
 // 상세: DriverUpgradeState CRD를 감시하고 UpgradeStateMachine을 호출하여
 //       노드별 드라이버 업그레이드 상태 전이를 수행합니다.
 //       ensureUpgradeStates()로 NodeDeviceReport 기반 DUS CR을 자동 생성합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-13
+// 생성일: 2026-04-13 | 수정일: 2026-10-14
 // ============================================================
 
 package controller
@@ -314,11 +314,12 @@ func resetRebootTracking(s *v1alpha1.DriverUpgradeStateStatus) {
 const defaultDriftGrace = 10 * time.Minute
 
 // driftBaseline 은 드리프트 감지가 호스트에 있어야 한다고 보는 버전이다. 롤백 뒤 보류 중(목표가
-// rolledBackVersion)이면 롤백이 복원한 previousVersion 이 기준이다. 정책 목표와 비교하면 보류가
-// 풀릴 때까지 "호스트가 operator 밖에서 바뀌었다" 는 거짓 경고가 나고, 경고를 끄면 보류 중의
-// 실제 호스트 변경을 놓친다.
-func driftBaseline(s *v1alpha1.DriverUpgradeState, desired string) string {
-	if s.Status.RolledBackVersion != "" && s.Status.RolledBackVersion == desired && s.Status.PreviousVersion != "" {
+// rolledBackVersion)이면 롤백이 복원한 previousVersion 이 기준이다. 관측(observed)이 목표와 같으면
+// 보류 중이라도 목표가 기준이다(호스트에서 직접 설치 등, 상태 기계가 보류를 풀기 전 reconcile).
+// 정책 목표만 쓰면 보류 중 거짓 경고가 나고, 경고를 끄면 보류 중의 실제 호스트 변경을 놓친다.
+func driftBaseline(s *v1alpha1.DriverUpgradeState, desired, observed string) string {
+	if observed != desired && s.Status.RolledBackVersion != "" && s.Status.RolledBackVersion == desired &&
+		s.Status.PreviousVersion != "" {
 		return s.Status.PreviousVersion
 	}
 	return desired
@@ -380,16 +381,16 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	r.syncDUSModel(ctx, &existing, vendorModel)
 	r.syncDUSObservedModels(ctx, &existing, observed)
 
-	// 대역외 드라이버 변경 감지(감지 전용) — 목표 버전과 NDR 실측이 어긋난 채 유예를 넘기면
-	// Warning 이벤트로만 알린다(자동 재설치·재부팅 없음). 기준은 EffectiveDesiredVersion(Host 모드는
-	// 로드된 호스트 버전) — CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 집합은
-	// VersionObservationAllowed 의 셋(Idle·UnverifiedVersion·HostAhead, Job·cordon 이 없는 상태)이다.
-	// Idle 만 보면 허용 목록 밖 버전으로 주차한 노드에서 감지가 꺼진다. HostAhead 에서는 같은
-	// 어긋남을 상태 기계의 HostDriverAhead 이벤트가 이미 알리므로 확정돼도 경고를 내지 않는다.
+	// 대역외 드라이버 변경 감지(감지 전용) — 기준과 NDR 실측이 어긋난 채 유예를 넘기면 Warning 이벤트로만
+	// 알린다. 기준은 driftBaseline(보류 중이면 previousVersion, 그 밖은 EffectiveDesiredVersion — Host
+	// 모드는 로드된 호스트 버전)이다. CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 집합은
+	// VersionObservationAllowed 의 셋(Idle·UnverifiedVersion·HostAhead)이다. Idle 만 보면 허용 목록
+	// 밖 버전으로 주차한 노드에서 감지가 꺼진다. HostAhead 에서는 같은 어긋남을 상태 기계의
+	// HostDriverAhead 이벤트가 이미 알리므로 확정돼도 경고를 내지 않는다.
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,
-			DeclaredVersion: driftBaseline(&existing, upgrade.EffectiveDesiredVersion(policy, loaded)),
+			DeclaredVersion: driftBaseline(&existing, upgrade.EffectiveDesiredVersion(policy, loaded), device.DriverVersion),
 			ObservedVersion: device.DriverVersion,
 			ObservedAt:      time.Now(),
 			Since:           timeOrZero(existing.Status.DriftFirstSeen),

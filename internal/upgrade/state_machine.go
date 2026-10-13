@@ -2,7 +2,7 @@
 // state_machine.go: Driver Upgrade 상태 머신
 // 상세: 노드별 드라이버 업그레이드 상태 전이를 관리한다. Idle → UpgradeRequired → PreFlight →
 //       Cordoning → Draining → Upgrading → Validating → Uncordoning → Idle(실패 시 Rollback).
-// 생성일: 2026-04-13 | 수정일: 2026-10-13
+// 생성일: 2026-04-13 | 수정일: 2026-10-14
 // ============================================================
 
 package upgrade
@@ -274,13 +274,21 @@ func markRolledBack(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverI
 	state.Status.RolledBackGeneration = policy.Generation
 }
 
-// releaseRollbackHold 는 목표나 정책 generation 이 바뀌어 보류가 더는 맞지 않으면 기록을 지운다.
-func releaseRollbackHold(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy, desired string) {
-	if state.Status.RolledBackVersion == "" ||
-		(state.Status.RolledBackVersion == desired && state.Status.RolledBackGeneration == policy.Generation) {
+// releaseRollbackHold 는 보류가 더는 맞지 않으면 기록을 지운다. 목표나 정책 generation 이 바뀐
+// 경우와, 로드된 호스트 버전(loaded)이 보류 목표와 같아진 경우(호스트에서 직접 설치 등)다.
+// 두 경우가 겹치면 도달 문구를 남긴다.
+func releaseRollbackHold(state *v1alpha1.DriverUpgradeState, policy *v1alpha1.DriverInstallPolicy, desired, loaded string) {
+	held := state.Status.RolledBackVersion
+	switch {
+	case held == "":
+		return
+	case loaded == held:
+		state.Status.Message = fmt.Sprintf("롤백 보류 해제(노드가 보류 목표 %s 에 도달)", held)
+	case held != desired || state.Status.RolledBackGeneration != policy.Generation:
+		state.Status.Message = fmt.Sprintf("롤백 보류 해제(목표 또는 정책 generation 변경): 이전 보류 목표 %s", held)
+	default:
 		return
 	}
-	state.Status.Message = fmt.Sprintf("롤백 보류 해제(목표 또는 정책 generation 변경): 이전 보류 목표 %s", state.Status.RolledBackVersion)
 	state.Status.RolledBackVersion = ""
 	state.Status.RolledBackGeneration = 0
 }
@@ -324,7 +332,7 @@ func (m *UpgradeStateMachine) handleIdle(
 	if err := m.refreshResolvedImage(ctx, state, policy); err != nil {
 		return false, 0, err
 	}
-	releaseRollbackHold(state, policy, desiredVersion)
+	releaseRollbackHold(state, policy, desiredVersion, loaded)
 
 	// TrackOnly 정책: 설치/업그레이드 경로를 절대 트리거하지 않는다(버전 관측 전용).
 	// 아래 Job 모드 self-heal(driverLoaded=false) 트리거보다 먼저 차단하여, installer 미비

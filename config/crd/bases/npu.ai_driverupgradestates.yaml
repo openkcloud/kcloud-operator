@@ -188,8 +188,9 @@ spec:
                 type: integer
               rolledBackVersion:
                 description: |-
-                  RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패 또는 관리자 요청). Idle 은 정책 목표가 이 값이고
-                  정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
+                  RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패, drain 타임아웃 또는 관리자 요청). Idle 은
+                  정책 목표가 이 값이고 정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
+                  Job 모드 자체 복구(driverLoaded=false)는 이 보류와 무관하게 실행되고, 그 사이클이 시작되면 기록을 지운다.
                 type: string
               state:
                 description: State 는 현재 업그레이드 단계입니다(UpgradeState* 상수 값 중 하나).
