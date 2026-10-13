@@ -3,7 +3,7 @@
 # comment-check.sh: 주석·문서에 남은 이력 서술·세션 식별자·날짜·긴 주석 블록을 거부한다
 # 상세: 머리말 수정일의 괄호 설명, 머리말 밖의 날짜, 과거 서술 종결, 세션 식별자, 7줄 이상
 #       주석 블록을 위반으로 본다. 규칙은 아래 PY 한 곳에만 둔다. 인자: [ROOT] [PREFIX…].
-#       --self-test 는 임시 저장소에서 스무 경우로 자가 검증한다.
+#       --self-test 는 임시 저장소에서 스물세 경우로 자가 검증한다.
 # 생성일: 2026-10-11 | 수정일: 2026-10-13
 # ============================================================
 set -euo pipefail
@@ -40,6 +40,8 @@ def ls(*opts):
     return set(subprocess.run(['git', 'ls-files', *opts], cwd=root, capture_output=True, text=True).stdout.split('\n'))
 files = sorted(ls('--cached', '--others', '--exclude-standard') - ls('--deleted') - {''})
 hit = set()
+checked = set()
+unread = []
 viol = []
 
 def add(f, i, kind, line):
@@ -101,6 +103,7 @@ def frontmatter_extent(lines):
     return 0
 
 for f in files:
+    m = []
     if prefixes:
         m = [p for p in prefixes if f == p or f.startswith(p + '/')]
         if not m:
@@ -122,7 +125,9 @@ for f in files:
     try:
         lines = open(os.path.join(root, f), encoding='utf-8').read().split('\n')
     except (OSError, UnicodeDecodeError):
+        unread.append(f)
         continue
+    checked.update(m)
     hdr_end = header_extent(lines, cm) if cm is not None else 0
     if hdr_end:
         hstart = 1 if cm.match(lines[0]) else 2
@@ -176,6 +181,11 @@ for p in prefixes:
     if p not in hit:
         sys.stderr.write('인자가 가리키는 파일이 없다: %s\n' % p)
         sys.exit(2)
+for p in prefixes:
+    if p not in checked:
+        sys.stderr.write('검사 대상 파일 없이 건너뛴 인자: %s\n' % p)
+for f in unread:
+    sys.stderr.write('읽지 못해 건너뛴 파일: %s\n' % f)
 if viol:
     print('주석·문서 정리 규칙 위반 %d건' % len(viol))
     print('\n'.join(viol))
@@ -196,6 +206,7 @@ scan() {
 # git 아님 하나, 머리말 면제 경계(설명 블록 하나 + 연속행 하나) 둘, 꼬리 주석 따옴표 짝(위반+통과) 둘,
 # Markdown frontmatter 제외 하나, 긴 머리말(연속행 포함 위반 하나 + 7줄 위반 하나) 둘,
 # 미추적 파일 인자 하나, 가리키는 파일이 없는 인자 하나, 빈 접두 하나, 삭제된 추적 파일 인자 하나.
+# 건너뜀 파일만 가리키는 인자 하나, 지원하지 않는 확장자 하나, 읽기 실패 하나.
 self_test() {
   local tmp rc out
   tmp="$(mktemp -d)"
@@ -268,6 +279,15 @@ self_test() {
   printf 'package a\n' > "$tmp/repo/a/g.go"
   git -C "$tmp/repo" add a/g.go; rm -f "$tmp/repo/a/g.go"
   expect 20 2 '가리키는 파일이 없다' "$tmp/repo" a/g.go
+  # 21) 건너뜀 규칙(.json)에 걸리는 파일만 가리키는 인자는 종료 0 이되 검사하지 않았다고 알린다
+  printf '{}\n' > "$tmp/repo/a/x.json"
+  expect 21 0 '검사 대상 파일 없이 건너뛴 인자: a/x.json' "$tmp/repo" a/x.json
+  # 22) 지원하지 않는 확장자(.txt)만 가리키는 인자도 같다
+  printf 'D-9\n' > "$tmp/repo/a/n.txt"
+  expect 22 0 '검사 대상 파일 없이 건너뛴 인자: a/n.txt' "$tmp/repo" a/n.txt
+  # 23) UTF-8 로 읽지 못한 파일은 건너뛰되 알린다
+  printf '\xff\xfe\n' > "$tmp/repo/a/bad.go"
+  expect 23 0 '읽지 못해 건너뛴 파일: a/bad.go' "$tmp/repo" a/bad.go
   echo "self-test ok"
 }
 
