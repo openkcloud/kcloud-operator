@@ -17,7 +17,7 @@ limitations under the License.
 // ============================================================
 // npuclusterpolicy_types.go: NPUClusterPolicy CRD 타입 정의
 // 상세: Detector/Nvidia/Furiosa/Rebellions/Tenstorrent vendor spec 포함
-// 생성일: 2025-01-01 | 수정일: 2026-10-11
+// 생성일: 2025-01-01 | 수정일: 2026-10-14
 // ============================================================
 
 package v1alpha1
@@ -80,7 +80,7 @@ type RngdSpec struct {
 	// +kubebuilder:validation:Enum=none;single-core;dual-core;quad-core
 	// +optional
 	PartitionPolicy string `json:"partitionPolicy,omitempty"`
-	// DebugMode 는 device plugin 바이너리에 --debugMode 를 넘길지 정한다. 사내 파티션 지원 빌드는
+	// DebugMode 는 device plugin 바이너리에 --debugMode 를 넘길지 정한다. 파티션을 지원하는 별도 빌드는
 	// 이 flag 가 없으면 장치를 인식 못하고, 공개 이미지는 이 flag 를 받으면 즉시 종료한다 —
 	// 이미지에 따라 정반대로 작동한다. 기본값 nil=켠 것(기존 유지), 공개 이미지는 false 로 명시.
 	// +optional

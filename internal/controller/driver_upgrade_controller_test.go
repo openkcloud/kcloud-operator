@@ -2252,6 +2252,40 @@ func TestSyncUpgradeState_RollbackDivergence_PreservesRebootBudget(t *testing.T)
 	}
 }
 
+// 롤백 보류 중 자체 복구 사이클(startHeldRestore)은 보류 목표 대신 복원 버전을 DesiredVersion 에
+// 둔다. 컨트롤러가 이를 정책 버전(보류 목표)으로 덮으면 복구가 실패한 목표를 다시 설치한다.
+func TestSyncUpgradeState_HeldRestoreKeepsDesiredVersion(t *testing.T) {
+	const (
+		nodeName   = "worker-held"
+		dusName    = "worker-held-furiosa"
+		restored   = "1.8.0"   // 롤백이 복원한 버전
+		heldTarget = "1.9.8-3" // 롤백한 목표 = 정책 버전
+	)
+	dus := makeDUS(dusName, nodeName, "furiosa", "warboy", v1alpha1.UpgradeStateRequired, restored, restored)
+	dus.Status.PreviousVersion = restored
+	dus.Status.RolledBackVersion = heldTarget
+	dus.Status.RolledBackGeneration = 2
+
+	r := newReconciler(dus)
+	dip := makeDIP("furiosa-warboy", "warboy", heldTarget)
+	device := v1alpha1.DeviceEntry{Vendor: "furiosa", Model: "warboy", DriverVersion: restored}
+	ctx := context.Background()
+	r.syncUpgradeState(ctx, nodeName, device, dip, "warboy", nil, "")
+
+	var got v1alpha1.DriverUpgradeState
+	if err := r.Get(ctx, types.NamespacedName{Name: dusName}, &got); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if got.Status.DesiredVersion != restored {
+		t.Errorf("DesiredVersion: got %q, want %q — 보류 중 복구 사이클의 목표를 보류 목표로 덮음",
+			got.Status.DesiredVersion, restored)
+	}
+	if got.Status.State != v1alpha1.UpgradeStateRequired || got.Status.RolledBackVersion != heldTarget {
+		t.Errorf("state=%q rolledBack=%q, want %q/%q", got.Status.State, got.Status.RolledBackVersion,
+			v1alpha1.UpgradeStateRequired, heldTarget)
+	}
+}
+
 // TestVendorObservedModels 는 벤더별 관측 모델 목록이 정렬·중복 제거되고, 모델이 빈
 // 장치(예: rebellions)는 목록에 들어가지 않는지 본다.
 func TestVendorObservedModels(t *testing.T) {

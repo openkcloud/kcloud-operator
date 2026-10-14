@@ -2,7 +2,7 @@
 # image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)·감사용. condition 은 pull 조건,
 #       digest 는 ghcr.io/openkcloud 발행본 기준이다. `# 발행 뒤 갱신` 이 붙은 항목은 GHCR 에 아직 없는
-#       태그라 사내 빌드 digest 를 적어 두고, 발행 뒤 hack/refresh-image-digests.sh 로 바꾼다.
+#       태그라 발행 전 빌드의 digest 를 적어 두고, 발행 뒤 hack/refresh-image-digests.sh 로 바꾼다.
 # 생성일: 2026-09-10 | 수정일: 2026-10-14
 # ============================================================
 release: "0.8.0"
@@ -85,11 +85,11 @@ vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
   - image: docker.io/nvidia/cuda
     tag: 12.9.1-base-ubuntu22.04
     digest: ""
-    condition: "acpp.probeImages.nvidia 설정 시(upstream 이미지를 내부 Harbor 로 미러, GHCR 미발행 — 릴리스 시 갱신). acpp.probeImages.nvidia 는 전체 경로 값(fullPathValues)이라 조립하지 않고 미러 경로를 직접 적는다. Harbor 미러: kcloud/nvidia/cuda:12.9.1-base-ubuntu22.04"
+    condition: "acpp.probeImages.nvidia 설정 시(upstream 이미지를 사이트 미러에 두고 쓴다. GHCR 로 발행하지 않는다 — 릴리스 시 갱신). acpp.probeImages.nvidia 는 전체 경로 값(fullPathValues)이라 조립하지 않고 미러 경로를 직접 적는다. 미러 경로 예: <미러>/kcloud/nvidia/cuda:12.9.1-base-ubuntu22.04"
   - image: docker.io/furiosaai/furiosa-smi
     tag: "2026.1.0"
     digest: ""
-    condition: "acpp.probeImages.furiosa 설정 시(upstream 이미지를 내부 Harbor 로 미러, GHCR 미발행 — 릴리스 시 갱신). NEEDS VENDOR RESEARCH: 이 이미지는 libfuriosa_smi.so 만 담고 furiosa-smi CLI 가 없음(2026-09-20 확인) — HostPathBinary 코드 배선 전까지 켜면 probe 가 항상 실패. Harbor 미러: kcloud/furiosaai/furiosa-smi:2026.1.0"
+    condition: "acpp.probeImages.furiosa 설정 시(upstream 이미지를 사이트 미러에 두고 쓴다. GHCR 로 발행하지 않는다 — 릴리스 시 갱신). NEEDS VENDOR RESEARCH: 이 이미지는 libfuriosa_smi.so 만 담고 furiosa-smi CLI 가 없음(2026-09-20 확인) — HostPathBinary 코드 배선 전까지 켜면 probe 가 항상 실패. 미러 경로 예: <미러>/kcloud/furiosaai/furiosa-smi:2026.1.0"
 fullPathValues:  # global 값으로 조립되지 않아 미러 시 직접 지정하는 값
   - nvidia.devicePluginImage
   - nvidia.dcgmExporter.image

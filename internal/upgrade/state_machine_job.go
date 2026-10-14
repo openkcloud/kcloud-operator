@@ -148,6 +148,8 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 	if held := state.Status.RolledBackVersion; held != "" && desiredVersion != held {
 		if state.Status.PreviousImage == "" {
 			metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
+			m.Recorder.Eventf(state, corev1.EventTypeWarning, "RestoreImageRefused",
+				"복원 버전 이미지 재구성 실패(job): 수동 조치 필요 (node=%s)", state.Spec.NodeName)
 			return m.jobTransitionToFailed(ctx, state, "복원 버전 이미지 재구성 실패(job): 수동 조치 필요")
 		}
 		desiredImage = state.Status.PreviousImage

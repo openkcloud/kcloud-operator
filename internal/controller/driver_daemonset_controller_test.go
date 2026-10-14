@@ -1,7 +1,7 @@
 // ============================================================
 // driver_daemonset_controller_test.go: renderDriverDaemonSet 단위 테스트
 // 상세: operator pod anti-affinity, PreStop timeout 30s,
-// TerminationGracePeriodSeconds=60s 가 DS spec 에 박혀 있는지, 롤백 보류 중 이미지 유지 검증
+// TerminationGracePeriodSeconds=60s 가 DS spec 에 들어 있는지, 롤백 보류 중 이미지 유지 검증
 // 생성일: 2026-04-27 | 수정일: 2026-10-14
 // ============================================================
 
@@ -198,7 +198,7 @@ func reconcileAndImage(t *testing.T, r *DriverDaemonSetReconciler, c client.Clie
 }
 
 // 롤백 보류 중(같은 정책 generation)에는 DS 이미지를 정책 이미지로 되돌리지 않는다. 되돌리면
-// 롤백한 노드의 다음 파드가 실패한 이미지로 뜨고, 그 버전이 로드되면 보류가 경고 없이 풀린다.
+// 롤백한 노드의 다음 파드가 실패한 이미지로 기동하고, 그 버전이 로드되면 보류가 경고 없이 풀린다.
 func TestDriverDS_KeepsImageWhileRollbackHeld(t *testing.T) {
 	r, c, ds, gen := heldDSFixture(t)
 	heldDUSFor(t, c, "nvidia", "a30", gen)

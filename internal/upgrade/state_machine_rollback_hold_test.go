@@ -287,6 +287,21 @@ func TestHandleUpgradingJob_HeldCycleWithoutImageFails(t *testing.T) {
 	if dus.Status.State != v1alpha1.UpgradeStateFailed || !strings.Contains(dus.Status.Message, "재구성 실패") {
 		t.Errorf("state=%q message=%q, want Failed·재구성 실패", dus.Status.State, dus.Status.Message)
 	}
+	// 운영자가 상태 메시지만 보지 않도록 Warning 이벤트도 낸다. install Job 은 만들지 않는다.
+	refused := false
+	for len(sm.Recorder.(*record.FakeRecorder).Events) > 0 {
+		if e := <-sm.Recorder.(*record.FakeRecorder).Events; strings.Contains(e, "Warning RestoreImageRefused") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Error("RestoreImageRefused Warning 이벤트가 없다")
+	}
+	var jobs batchv1.JobList
+	_ = sm.List(context.Background(), &jobs)
+	if len(jobs.Items) != 0 {
+		t.Errorf("install Job %d건 생성, want 0", len(jobs.Items))
+	}
 }
 
 // 보류 중 복구 사이클은 롤백 Job 을 만들지 않으므로 끝날 때 롤백 완료가 아니라 자체 복구 완료를
