@@ -79,9 +79,30 @@ vendor:  # global.vendorRegistry 가 비면 아래 upstream 그대로
   - image: docker.io/furiosaai/furiosa-device-plugin
     tag: "2026.1.1"
     condition: Furiosa RNGD 노드
+  - image: docker.io/rebellions/k8s-device-plugin
+    tag: v0.3.6
+    condition: Rebellions ATOM 노드(rebellions.enabled, 광고 주체가 device-plugin 인 기본 구성)
   - image: docker.io/bitnamilegacy/kubectl
     tag: "1.28"
     condition: helm hook Job(CRD 갱신·옛 DS 정리·post-delete CRD 삭제)
+  - image: registry.k8s.io/dra-driver-nvidia/dra-driver-nvidia-gpu
+    tag: v0.4.0
+    condition: NVIDIA 노드(nvidia.dra.enabled)
+  - image: docker.io/furiosaai/furiosa-dra-driver
+    tag: "2026.1.1"
+    condition: Furiosa RNGD 노드(furiosa.rngd.dra.enabled)
+  - image: docker.io/rebellions/k8s-dra-driver-npu
+    tag: v0.2.0
+    condition: Rebellions ATOM 노드(rebellions.dra.enabled)
+  - image: ghcr.io/tenstorrent/tt-dra-driver
+    tag: "0.0.48"
+    condition: Tenstorrent 노드(tenstorrent.dra.enabled)
+  - image: ghcr.io/tenstorrent/tt-fabric-manager
+    tag: latest
+    condition: "Tenstorrent 노드(tenstorrent.dra.enabled, DRA 드라이버와 같은 파드). 벤더가 버전 태그를 내지 않아 latest 다 — 재현이 필요하면 sha 태그를 골라 tenstorrent.dra.fabricManager.tag 를 덮는다"
+  - image: docker.io/library/nginx
+    tag: 1.25.2-alpine
+    condition: ACPP 적용 뒤 검증 파드(acpp.probeImage 기본값)
   - image: docker.io/nvidia/cuda
     tag: 12.9.1-base-ubuntu22.04
     digest: ""
