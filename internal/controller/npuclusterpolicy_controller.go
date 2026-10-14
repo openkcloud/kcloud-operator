@@ -925,11 +925,15 @@ func rngdDevicePluginArgs(partitionPolicy string, debugMode *bool) []string {
 	return args
 }
 
+// furiosaRngdDevicePluginImageDefault 는 spec.furiosa.rngd.devicePluginImage 가 비었을 때 쓰는 공개
+// 벤더 이미지다. 차트 기본값(furiosa.rngd.devicePlugin*)과 같아야 한다(chart_default_images_test.go).
+const furiosaRngdDevicePluginImageDefault = "docker.io/furiosaai/furiosa-device-plugin:2026.1.1"
+
 // -- ensureFuriosaRngdDevicePlugin creates a DaemonSet for the Furiosa RNGD (2nd-gen) NPU device
 // plugin. NodeSelector 는 자립 라벨 kcloud.ai/rngd.present=true 가 기본이며 override 는
 // Spec.Furiosa.Rngd.NodeSelector 다. entrypoint ./main 은 PCI scan 으로 장치를 자동 인식해
 // --resource-name 류 인자가 불필요하다(ResourceName/ConfigMapName CRD 필드는 공식 이미지가
-// 자동 처리해 참조하지 않는다 — backward-compat). upstream v2026.1.0 은 --debugMode 만 지원하고
+// 자동 처리해 참조하지 않는다 — backward-compat). upstream 이미지(2026.1.x)는 --debugMode 만 받고
 // --policy 는 unknown flag 로 거부해 기동이 실패하므로, partitionPolicy≠none 에는 custom 이미지가 필요하다.
 func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.Context, policy *npuv1alpha1.NPUClusterPolicy, partitionPolicy string) error {
 	log := logf.FromContext(ctx)
@@ -939,7 +943,7 @@ func (r *NPUClusterPolicyReconciler) ensureFuriosaRngdDevicePlugin(ctx context.C
 	// Image (default to upstream release tag when unset; registry path 은 `furiosaai`, 하이픈 없음)
 	image := rngdSpec.DevicePluginImage
 	if image == "" {
-		image = "docker.io/furiosaai/furiosa-device-plugin:2026.1.0"
+		image = furiosaRngdDevicePluginImageDefault
 	}
 
 	// nodeSelector: 자립 라벨(node-manager 부여, NFD 비의존); override via Spec.Furiosa.Rngd.NodeSelector

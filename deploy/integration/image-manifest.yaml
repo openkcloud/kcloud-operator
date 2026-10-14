@@ -1,8 +1,9 @@
 # ============================================================
 # image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
-# 상세: 미러(air-gap)·감사용. condition 은 pull 조건, digest 는 ghcr.io/openkcloud 발행본 것이다.
-#       벤더 이미지는 upstream 그대로이며 global.vendorRegistry 를 채우면 <미러>/<org>/<image> 로 조립된다.
-# 생성일: 2026-09-10 | 수정일: 2026-10-13
+# 상세: 미러(air-gap)·감사용. condition 은 pull 조건,
+#       digest 는 ghcr.io/openkcloud 발행본 기준이다. `# 발행 뒤 갱신` 이 붙은 항목은 GHCR 에 아직 없는
+#       태그라 사내 빌드 digest 를 적어 두고, 발행 뒤 hack/refresh-image-digests.sh 로 바꾼다.
+# 생성일: 2026-09-10 | 수정일: 2026-10-14
 # ============================================================
 release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
