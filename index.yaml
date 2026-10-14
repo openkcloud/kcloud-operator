@@ -4,6 +4,21 @@ entries:
   - annotations:
       npu.ai/paired-release: v0.6.2-k8s1.28
     apiVersion: v2
+    appVersion: v0.8.0
+    created: "2026-10-15T00:08:30.046241289+09:00"
+    description: Kubernetes Operator for unified NPU/GPU accelerator management. Chart
+      0.8.x targets Kubernetes 1.31+ (verified through 1.34, default line); use chart
+      0.6.x (branch release/k8s-1.28) for Kubernetes 1.26-1.30.
+    digest: b31e2de8f4e9d3c291aee39f15e141446063d4eea38bfb6d189b5baa37609897
+    kubeVersion: '>=1.31.0-0'
+    name: kcloud-operator
+    type: application
+    urls:
+    - https://openkcloud.github.io/kcloud-operator/kcloud-operator-0.8.0.tgz
+    version: 0.8.0
+  - annotations:
+      npu.ai/paired-release: v0.6.2-k8s1.28
+    apiVersion: v2
     appVersion: v0.7.30
     created: "2026-09-22T15:36:54.45365033+09:00"
     description: Kubernetes Operator for unified NPU/GPU accelerator management. Chart
@@ -29,4 +44,4 @@ entries:
     urls:
     - https://openkcloud.github.io/kcloud-operator/kcloud-operator-0.6.2.tgz
     version: 0.6.2
-generated: "2026-09-22T15:36:54.444502724+09:00"
+generated: "2026-10-15T00:08:30.043287712+09:00"
