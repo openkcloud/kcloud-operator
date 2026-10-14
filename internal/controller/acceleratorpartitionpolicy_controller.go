@@ -1,7 +1,7 @@
 // ============================================================
 // acceleratorpartitionpolicy_controller.go: ACPP reconciler — 상태머신·phase 집계 (spec §3)
 // 상세: 벤더 backend 위임(RNGD full / NVIDIA discovery-only). RNGD apply = DS env 전역.
-// 생성일: 2026-07-23 | 수정일: 2026-10-11
+// 생성일: 2026-07-23 | 수정일: 2026-10-14
 // ============================================================
 package controller
 
@@ -1602,6 +1602,9 @@ func (r *AcceleratorPartitionPolicyReconciler) handleNvidiaDeletion(ctx context.
 			r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
 			return err
 		}
+		// cordonForRollback 은 기록을 값으로 받아 자기 복사본만 바꾼다. 저장된 기록을 다시 읽어야
+		// 이후 단계가 CordonedByPolicy=true 를 보고, 옛 복사본으로 소유 표시를 지우지 않는다.
+		rec = getApplyRecord(acpp, rec.NodeName)
 		if err := r.assertNodeQuiesced(ctx, rec.NodeName); err != nil {
 			r.emitDeletionBlockedEvent(acpp, rec.NodeName, err)
 			return err
@@ -1811,7 +1814,9 @@ func (r *AcceleratorPartitionPolicyReconciler) restoreMigModeDisabled(ctx contex
 	}
 	// 시도 횟수를 Job 생성 **이전에** 영속한다 — 재부팅이 프로세스를 죽이므로 카운터가 먼저
 	// durable 해야 상한이 의미를 갖는다(enable 경로와 같은 규율).
-	next := rec
+	// 저장된 최신 기록에서 시작한다 — 호출자가 들고 있는 복사본으로 통째 저장하면 그 뒤에 바뀐
+	// 필드(삭제가 잡은 CordonedByPolicy)를 옛 값으로 되돌린다.
+	next := getApplyRecord(acpp, rec.NodeName)
 	next.NodeName = rec.NodeName
 	next.DisableRebootAttempts++
 	if err := r.patchApplyRecord(ctx, acpp, next); err != nil {

@@ -171,7 +171,8 @@ type DriverUpgradeStateStatus struct {
 	ConsumedRollbackRequest string `json:"consumedRollbackRequest,omitempty"`
 	// RolledBackVersion 은 롤백한 목표 버전이다(설치·검증 실패, drain 타임아웃 또는 관리자 요청). Idle 은
 	// 정책 목표가 이 값이고 정책 generation 이 RolledBackGeneration 과 같으면 새 사이클을 열지 않는다.
-	// Job 모드 자체 복구(driverLoaded=false)는 이 보류와 무관하게 실행되고, 그 사이클이 시작되면 기록을 지운다.
+	// Job 모드 자체 복구(driverLoaded=false)는 보류 중에도 실행되며, 이 목표 대신 롤백이 복원한 버전을
+	// 다시 설치하고 기록을 남긴다.
 	// +optional
 	RolledBackVersion string `json:"rolledBackVersion,omitempty"`
 	// RolledBackGeneration 은 롤백을 시작할 때의 DriverInstallPolicy metadata.generation 이다.
