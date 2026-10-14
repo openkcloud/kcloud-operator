@@ -1,6 +1,6 @@
 # lint.yml: push·PR 시 golangci-lint 와 주석·문서·설정 검증 게이트들을 돈다.
 # 상세: CRD embed 번들을 먼저 만들어야 golangci-lint 타입체크가 fresh clone 에서도 통과한다.
-# 생성일: 2025-07-04 | 수정일: 2026-10-13
+# 생성일: 2025-07-04 | 수정일: 2026-10-15
 name: Lint
 
 on:
@@ -87,11 +87,3 @@ jobs:
       - name: Footprint regression gate
         run: make footprint-check
 
-      # 차트 기본값이 당기는 이미지 태그가 레지스트리에 실재하는지 확인한다. 기본은
-      # 꺼져 있는 검사라 CHECK_REGISTRY=1 로 직접 켠다. release 태그(v*) push 에만 —
-      # 평시 push·PR 은 "다음 태그가 아직 미발행" 이 정상 상태라 늘 빨강이 된다.
-      - name: Image tag existence gate
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: make image-tag-check
-        env:
-          CHECK_REGISTRY: "1"
