@@ -1,7 +1,7 @@
 // driver_daemonset_controller.go: Driver DaemonSet 컨트롤러
 // 상세: DriverInstallPolicy.spec.driver.mode="daemonset"인 정책에 대해
 //       컨테이너화 드라이버 DaemonSet을 생성/업데이트합니다.
-// 생성일: 2026-04-13 | 수정일: 2026-10-11
+// 생성일: 2026-04-13 | 수정일: 2026-10-14
 
 package controller
 
@@ -38,6 +38,7 @@ type DriverDaemonSetReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=npu.ai,resources=driverinstallpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=npu.ai,resources=driverupgradestates,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -52,6 +53,11 @@ func (r *DriverDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	var states npuv1alpha1.DriverUpgradeStateList
+	if err := r.List(ctx, &states); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	for i := range pols.Items {
 		pol := &pols.Items[i]
 		if pol.Spec.Driver.Mode != "daemonset" {
@@ -63,7 +69,7 @@ func (r *DriverDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			logger.Info("TrackOnly 정책 — driver DaemonSet 생성 skip", "policy", pol.Name, "vendor", pol.Spec.Vendor)
 			continue
 		}
-		if err := r.createOrUpdateDriverDS(ctx, pol); err != nil {
+		if err := r.createOrUpdateDriverDS(ctx, pol, rollbackHeld(pols.Items, states.Items, pol)); err != nil {
 			logger.Error(err, "failed to ensure driver DaemonSet", "policy", pol.Name)
 			r.Recorder.Eventf(pol, corev1.EventTypeWarning, "ReconcileFailed",
 				"Failed to ensure driver DaemonSet for policy %s: %v", pol.Name, err)
@@ -75,9 +81,40 @@ func (r *DriverDaemonSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
+// rollbackHeld 는 이 정책이 맡는 노드 중 하나라도 현재 정책 generation 에서 롤백을 기록했는지다
+// (롤백 진행 중 또는 Idle 보류). 그동안 DS 이미지는 상태 기계가 롤백으로 패치한 값이다.
+// 정책 매칭은 상태 기계 쪽과 같은 findPolicy 다 — 규칙을 복제하면 한쪽만 고쳐진다.
+func rollbackHeld(pols []npuv1alpha1.DriverInstallPolicy, states []npuv1alpha1.DriverUpgradeState,
+	pol *npuv1alpha1.DriverInstallPolicy) bool {
+	for i := range states {
+		s := &states[i]
+		if s.Status.RolledBackVersion == "" || s.Status.RolledBackGeneration != pol.Generation {
+			continue
+		}
+		if owner := findPolicy(pols, s.Spec.Vendor, s.Spec.Model); owner != nil && owner.Name == pol.Name {
+			return true
+		}
+	}
+	return false
+}
+
 // createOrUpdateDriverDS는 DriverInstallPolicy에 맞는 드라이버 DaemonSet을 생성하거나 업데이트합니다.
-func (r *DriverDaemonSetReconciler) createOrUpdateDriverDS(ctx context.Context, pol *npuv1alpha1.DriverInstallPolicy) error {
+// keepImage 면 드라이버 컨테이너 이미지를 현재 DS 값으로 둔다(롤백 보류 중, rollbackHeld).
+func (r *DriverDaemonSetReconciler) createOrUpdateDriverDS(ctx context.Context, pol *npuv1alpha1.DriverInstallPolicy,
+	keepImage bool) error {
 	ds := renderDriverDaemonSet(pol)
+	if keepImage {
+		var cur appsv1.DaemonSet
+		err := r.Get(ctx, types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, &cur)
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		if err == nil && len(cur.Spec.Template.Spec.Containers) > 0 && len(ds.Spec.Template.Spec.Containers) > 0 {
+			ds.Spec.Template.Spec.Containers[0].Image = cur.Spec.Template.Spec.Containers[0].Image
+			logf.FromContext(ctx).Info("롤백 보류 중 — 드라이버 DS 이미지 유지", "policy", pol.Name,
+				"image", ds.Spec.Template.Spec.Containers[0].Image)
+		}
+	}
 	return r.createOrUpdateDS(ctx, ds)
 }
 

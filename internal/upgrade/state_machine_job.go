@@ -2,7 +2,7 @@
 // state_machine_job.go: driver Job 모드 상태 핸들러 (Mode=job)
 // 상세: state_machine.go 의 handleUpgrading/handleValidating/handleRollback 의 Mode=job 대체
 //       경로다. DS patch 를 install Job 생성/재생성으로, Pod Ready 관찰을 Job 완료+NDR 일치로 재정의한다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-13
+// 생성일: 2026-07-16 | 수정일: 2026-10-14
 // ============================================================
 
 package upgrade
@@ -142,6 +142,16 @@ func (m *UpgradeStateMachine) handleUpgradingJob(
 	// 재구성의 입력은 desiredImage(= status.resolvedImage)가 아니라 policy.Spec.Driver.Image 다 —
 	// 아래 handleRollbackJob 의 재구성과 같은 입력을 써야 두 자리가 갈리지 않는다.
 	captureJobPreviousImage(state, policy.Spec.Driver.Image, policy.Spec.Driver.Installer, policy.Spec.Driver.ImageVersionBaked)
+
+	// 롤백 보류 중 복구 사이클과 롤백 사이클의 재부팅 뒤 재진입은 보류 목표가 아니라 되돌린 버전을
+	// 설치한다. resolvedImage 는 정책 목표로 고른 이미지라 쓰지 않고 롤백과 같은 이전 이미지를 쓴다.
+	if held := state.Status.RolledBackVersion; held != "" && desiredVersion != held {
+		if state.Status.PreviousImage == "" {
+			metrics.RecordUpgradeComplete(state.Spec.Vendor, "failure")
+			return m.jobTransitionToFailed(ctx, state, "복원 버전 이미지 재구성 실패(job): 수동 조치 필요")
+		}
+		desiredImage = state.Status.PreviousImage
+	}
 
 	jobName := naming.InstallJobName(state.Spec.Vendor, state.Spec.Model, state.Spec.NodeName)
 	var job batchv1.Job

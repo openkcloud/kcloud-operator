@@ -382,11 +382,11 @@ func (r *DriverUpgradeReconciler) syncUpgradeState(ctx context.Context, nodeName
 	r.syncDUSObservedModels(ctx, &existing, observed)
 
 	// 대역외 드라이버 변경 감지(감지 전용) — 기준과 NDR 실측이 어긋난 채 유예를 넘기면 Warning 이벤트로만
-	// 알린다. 기준은 driftBaseline(보류 중이면 previousVersion, 그 밖은 EffectiveDesiredVersion — Host
-	// 모드는 로드된 호스트 버전)이다. CurrentVersion 은 아래 동기화가 덮어써 못 쓴다. 상태 집합은
-	// VersionObservationAllowed 의 셋(Idle·UnverifiedVersion·HostAhead)이다. Idle 만 보면 허용 목록
-	// 밖 버전으로 주차한 노드에서 감지가 꺼진다. HostAhead 에서는 같은 어긋남을 상태 기계의
-	// HostDriverAhead 이벤트가 이미 알리므로 확정돼도 경고를 내지 않는다.
+	// 알린다. 기준은 driftBaseline(보류 중이고 관측이 목표와 다르면 previousVersion, 그 밖은
+	// EffectiveDesiredVersion — Host 모드는 로드된 호스트 버전)이다. CurrentVersion 은 아래 동기화가
+	// 덮어써 못 쓴다. 상태 집합은 VersionObservationAllowed 의 셋(Idle·UnverifiedVersion·HostAhead)이다.
+	// Idle 만 보면 허용 목록 밖 버전으로 주차한 노드에서 감지가 꺼진다. HostAhead 에서는 같은 어긋남을
+	// 상태 기계의 HostDriverAhead 이벤트가 이미 알리므로 확정돼도 경고를 내지 않는다.
 	if v1alpha1.VersionObservationAllowed(existing.Status.State) && device.DriverVersion != "" {
 		verdict, reason := verification.EvaluateVersionDrift(verification.VersionDriftInput{
 			State:           existing.Status.State,

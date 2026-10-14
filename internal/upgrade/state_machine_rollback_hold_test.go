@@ -12,12 +12,20 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "kcloud-operator/api/v1alpha1"
+	"kcloud-operator/internal/driverjob"
 	"kcloud-operator/internal/metrics"
+	"kcloud-operator/internal/naming"
 )
 
 // heldGen 은 heldDUS 가 롤백을 기록한 시점의 정책 generation 이다.
@@ -132,8 +140,22 @@ func TestRollbackHold_ReleasedWhenNodeReachesTarget(t *testing.T) {
 	}
 }
 
-func TestRollbackHold_SelfHealStillRuns(t *testing.T) {
+// installJobOf 는 이 파일 픽스처 노드의 install Job 을 읽는다.
+func installJobOf(t *testing.T, sm *UpgradeStateMachine) *batchv1.Job {
+	t.Helper()
+	var job batchv1.Job
+	key := types.NamespacedName{Name: naming.InstallJobName(jVendor, jModel, jNode), Namespace: driverjob.Namespace}
+	if err := sm.Get(context.Background(), key, &job); err != nil {
+		t.Fatalf("install Job 조회 실패: %v", err)
+	}
+	return &job
+}
+
+// 보류 중 드라이버가 내려가면 실패한 보류 목표가 아니라 롤백이 복원한 버전을 다시 설치한다.
+// 보류 목표를 설치하면 실패했을 때 롤백할 버전이 없어 노드가 드라이버 없이 Failed 에 남는다.
+func TestRollbackHold_SelfHealReinstallsRestoredVersion(t *testing.T) {
 	dus := heldDUS()
+	dus.Status.PreviousVersion = verOld
 	dip := makeJobDIP(verNew, imgNew, true, true)
 	dip.Generation = heldGen
 	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(false, verOld))
@@ -142,10 +164,152 @@ func TestRollbackHold_SelfHealStillRuns(t *testing.T) {
 		t.Fatalf("TransitionState 실패: %v", err)
 	}
 	if dus.Status.State != v1alpha1.UpgradeStateRequired {
-		t.Errorf("state=%q, want UpgradeRequired — 드라이버가 내려간 노드는 보류와 무관하게 다시 설치한다", dus.Status.State)
+		t.Fatalf("state=%q, want UpgradeRequired — 드라이버가 내려간 노드는 보류 중에도 복구한다", dus.Status.State)
+	}
+	if dus.Status.DesiredVersion != verOld {
+		t.Errorf("desired=%q, want %q — 보류 중 복구가 실패한 보류 목표를 다시 설치한다", dus.Status.DesiredVersion, verOld)
+	}
+	if dus.Status.PreviousVersion != verOld {
+		t.Errorf("previous=%q, want %q — 재설치가 실패하면 롤백할 버전이 없다", dus.Status.PreviousVersion, verOld)
+	}
+	if dus.Status.RolledBackVersion != verNew || dus.Status.RolledBackGeneration != heldGen {
+		t.Errorf("보류 기록이 지워짐: %q/%d — 복구 뒤 같은 목표로 다시 시도한다", dus.Status.RolledBackVersion, dus.Status.RolledBackGeneration)
+	}
+
+	// cordon·drain 단계는 이 시험의 관심 밖이다. Upgrading 으로 넘겨 install Job 의 이미지·버전을 본다.
+	dus.Status.State = v1alpha1.UpgradeStateUpgrading
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	job := installJobOf(t, sm)
+	if got := jobContainerImage(job); got != imgOld {
+		t.Errorf("install Job image=%q, want %q — 정책 목표 이미지로 복원 버전을 설치한다", got, imgOld)
+	}
+	if got := jobDriverVersion(job); got != verOld {
+		t.Errorf("install Job DRIVER_VERSION=%q, want %q", got, verOld)
+	}
+}
+
+// 복원 버전이 허용 목록 밖이어도 복구한다. UnverifiedVersion 으로 보내면 handleUnverifiedVersion 이
+// 목표(보류 목표, 목록 안)를 보고 Idle 로 되돌려 매 reconcile 같은 판정을 반복한다.
+func TestRollbackHold_SelfHealSkipsAllowlistForRestoredVersion(t *testing.T) {
+	dus := heldDUS()
+	dus.Status.PreviousVersion = verOld
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = heldGen
+	dip.Spec.VerifiedVersions = []string{verNew}
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(false, verOld))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRequired || dus.Status.DesiredVersion != verOld {
+		t.Errorf("state=%q desired=%q, want UpgradeRequired/%q", dus.Status.State, dus.Status.DesiredVersion, verOld)
+	}
+}
+
+// 보류 기록은 있는데 currentVersion 이 비면 복원할 버전을 모른다. 종전처럼 정책 목표를 설치하고
+// 보류를 지운다.
+func TestRollbackHold_SelfHealWithoutCurrentVersionInstallsTarget(t *testing.T) {
+	dus := heldDUS()
+	dus.Status.CurrentVersion = ""
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = heldGen
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode(), makeNDRWithDriver(false, verOld))
+
+	if _, _, err := sm.TransitionState(context.Background(), dus, dip); err != nil {
+		t.Fatalf("TransitionState 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateRequired || dus.Status.DesiredVersion != verNew {
+		t.Errorf("state=%q desired=%q, want UpgradeRequired/%q", dus.Status.State, dus.Status.DesiredVersion, verNew)
 	}
 	if dus.Status.RolledBackVersion != "" {
-		t.Errorf("self-heal 사이클 시작 뒤 보류 필드가 남음: %q", dus.Status.RolledBackVersion)
+		t.Errorf("rolledBack=%q, want 빈 값", dus.Status.RolledBackVersion)
+	}
+}
+
+// 복원 버전 재설치가 실패하면 같은 복원 버전으로 롤백한다. 보류 목표는 덮이지 않는다.
+func TestRollbackHold_RestoreFailureRollsBackToRestoredVersion(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateRollback, verOld, verOld)
+	dus.Status.PreviousVersion = verOld
+	dus.Status.RolledBackVersion = verNew
+	dus.Status.RolledBackGeneration = heldGen
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	dip.Generation = heldGen
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleRollbackJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollbackJob 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateValidating {
+		t.Fatalf("state=%q, want Validating — 복원 버전으로 롤백 Job 을 만든다", dus.Status.State)
+	}
+	if dus.Status.RolledBackVersion != verNew {
+		t.Errorf("rolledBack=%q, want %q", dus.Status.RolledBackVersion, verNew)
+	}
+	job := installJobOf(t, sm)
+	if jobContainerImage(job) != imgOld || jobDriverVersion(job) != verOld {
+		t.Errorf("rollback Job=%s/%s, want %s/%s", jobContainerImage(job), jobDriverVersion(job), imgOld, verOld)
+	}
+}
+
+// 롤백 사이클이 재부팅 뒤 Upgrading 에 다시 들어오면(재설치로 마커 소거) 정책 목표로 고른
+// resolvedImage 가 아니라 롤백과 같은 이전 이미지로 되돌린 버전을 설치한다.
+func TestHandleUpgradingJob_HeldCycleUsesPreviousImage(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verOld)
+	dus.Status.PreviousVersion = verOld
+	dus.Status.PreviousImage = imgOld
+	dus.Status.RolledBackVersion = verNew
+	dus.Status.ResolvedImage = imgNew
+	dip := makeJobDIP(verNew, imgNew, true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip)
+
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	if got := jobContainerImage(installJobOf(t, sm)); got != imgOld {
+		t.Errorf("install Job image=%q, want %q", got, imgOld)
+	}
+}
+
+// 이전 이미지를 재구성할 수 없으면(ngc 인데 variant 접미사 없음) 정책 목표 이미지로 다른 버전을
+// 설치하지 않고 Failed 로 멈춘다.
+func TestHandleUpgradingJob_HeldCycleWithoutImageFails(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateUpgrading, verOld, verOld)
+	dus.Status.PreviousVersion = verOld
+	dus.Status.RolledBackVersion = verNew
+	dip := makeJobDIP(verNew, "reg/nv:latest", true, true)
+	sm := newUpgradeSMWithRecorder(dus, dip, makeUncordonedNode())
+
+	if _, _, err := sm.handleUpgradingJob(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleUpgradingJob 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed || !strings.Contains(dus.Status.Message, "재구성 실패") {
+		t.Errorf("state=%q message=%q, want Failed·재구성 실패", dus.Status.State, dus.Status.Message)
+	}
+}
+
+// 보류 중 복구 사이클은 롤백 Job 을 만들지 않으므로 끝날 때 롤백 완료가 아니라 자체 복구 완료를
+// 보고한다. 업그레이드 성공 지표도 세지 않는다.
+func TestHandleUncordoning_AfterHeldRestore_ReportsSelfHeal(t *testing.T) {
+	dus := makeJobDUS(v1alpha1.UpgradeStateUncordoning, verOld, verOld)
+	dus.Status.RolledBackVersion = verNew
+	sm := newUpgradeSMWithRecorder(dus, makeUncordonedNode())
+	before := testutil.ToFloat64(metrics.UpgradeTotal.WithLabelValues(jVendor, "success"))
+
+	if _, _, err := sm.handleUncordoning(context.Background(), dus); err != nil {
+		t.Fatalf("handleUncordoning 실패: %v", err)
+	}
+	if want := "자체 복구 완료(롤백 보류 유지): 보류 목표 " + verNew + " 대신 " + verOld + " 재설치"; dus.Status.Message != want {
+		t.Errorf("message=%q, want %q", dus.Status.Message, want)
+	}
+	if d := testutil.ToFloat64(metrics.UpgradeTotal.WithLabelValues(jVendor, "success")) - before; d != 0 {
+		t.Errorf("success 지표 +%v, want 0", d)
+	}
+	for len(sm.Recorder.(*record.FakeRecorder).Events) > 0 {
+		if e := <-sm.Recorder.(*record.FakeRecorder).Events; strings.Contains(e, "RollbackCompleted") {
+			t.Errorf("복구 사이클에 RollbackCompleted 이벤트: %s", e)
+		}
 	}
 }
 
@@ -186,6 +350,7 @@ func TestMarkRolledBack_SecondRollbackKeepsTarget(t *testing.T) {
 func TestHandleUncordoning_AfterRollback_ReportsRollback(t *testing.T) {
 	dus := makeJobDUS(v1alpha1.UpgradeStateUncordoning, verOld, verOld)
 	dus.Status.RolledBackVersion = verNew
+	dus.Status.RollbackAttempts = 1 // 실제 롤백 사이클은 롤백 Job 을 만들 때 1 이상이다
 	sm := newUpgradeSMWithRecorder(dus, makeUncordonedNode())
 	before := testutil.ToFloat64(metrics.UpgradeTotal.WithLabelValues(jVendor, "success"))
 
@@ -272,5 +437,118 @@ func TestReleaseRollbackHold_TargetChangeAloneReleases(t *testing.T) {
 	releaseRollbackHold(same, dip, verNew, verOld)
 	if same.Status.RolledBackVersion != verNew || same.Status.RolledBackGeneration != heldGen {
 		t.Errorf("같은 목표·같은 generation 인데 보류가 풀림: %q/%d", same.Status.RolledBackVersion, same.Status.RolledBackGeneration)
+	}
+}
+
+// 데몬셋 모드 롤백 시험의 DUS 가 보관한 이전 이미지와, 롤백이 보류 목표로 기록할 버전이다.
+const (
+	rolledBackImage  = "reg/nv:535.288-v1"
+	rolledBackTarget = "580.142"
+)
+
+// makeDriverDS 는 데몬셋 모드 롤백이 패치할 드라이버 DaemonSet 이다.
+func makeDriverDS(vendor, model, image string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: naming.DriverDSName(vendor, model), Namespace: naming.OperatorNamespace()},
+		Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: vendor + "-driver", Image: image}},
+		}}},
+	}
+}
+
+// newUpgradeSMOnDSPatch 는 DaemonSet 패치가 들어오는 순간 onPatch 를 부르고 원래 패치를 이어 가는
+// 상태 기계를 만든다. 패치 직전 저장소의 상태를 보려는 시험용이다.
+func newUpgradeSMOnDSPatch(onPatch func(ctx context.Context, c client.Client), objs ...client.Object) *UpgradeStateMachine {
+	c := fake.NewClientBuilder().
+		WithScheme(newUpgradeTestScheme()).
+		WithObjects(objs...).
+		WithStatusSubresource(&v1alpha1.DriverUpgradeState{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch,
+				opts ...client.PatchOption) error {
+				if _, ok := obj.(*appsv1.DaemonSet); ok {
+					onPatch(ctx, c)
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	return &UpgradeStateMachine{Client: c, Recorder: record.NewFakeRecorder(64)}
+}
+
+// 데몬셋 모드 롤백은 DS 를 패치하기 전에 보류 기록을 저장한다. 드라이버 DaemonSet 컨트롤러는 패치
+// 이벤트로 깨어나 이 기록을 보고 이미지를 유지하므로, 저장 전에 패치하면 정책 이미지로 되돌린다.
+func TestHandleRollback_DaemonSetPersistsHoldBeforePatch(t *testing.T) {
+	dus := makeRollbackDUS("k8s-worker1-nvidia", "k8s-worker1", "nvidia", 0)
+	dus.Status.PreviousImage = rolledBackImage
+	dip := makeRollbackDIP("nvidia-generic", "nvidia", 3)
+	dip.Generation = 5
+	ds := makeDriverDS("nvidia", "", "reg/nv:580.142-v1")
+	patches := 0
+	var atPatch v1alpha1.DriverUpgradeState // DS 패치가 들어온 시점의 저장소 DUS
+	sm := newUpgradeSMOnDSPatch(func(ctx context.Context, c client.Client) {
+		patches++
+		if err := c.Get(ctx, client.ObjectKeyFromObject(dus), &atPatch); err != nil {
+			t.Errorf("패치 시점 DUS 조회 실패: %v", err)
+		}
+	}, dus, dip, ds)
+
+	if _, _, err := sm.handleRollback(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollback 실패: %v", err)
+	}
+	if patches != 1 {
+		t.Fatalf("DS 패치 %d회, want 1", patches)
+	}
+	if atPatch.Status.RolledBackVersion != rolledBackTarget || atPatch.Status.RolledBackGeneration != 5 {
+		t.Errorf("DS 패치 시점의 저장된 보류 기록=%q/%d, want 580.142/5 — 패치 뒤에 저장하면 DS 컨트롤러가 먼저 되돌린다",
+			atPatch.Status.RolledBackVersion, atPatch.Status.RolledBackGeneration)
+	}
+	var stored v1alpha1.DriverUpgradeState
+	if err := sm.Get(context.Background(), client.ObjectKeyFromObject(dus), &stored); err != nil {
+		t.Fatalf("DUS 조회 실패: %v", err)
+	}
+	if stored.Status.RolledBackVersion != rolledBackTarget || stored.Status.RolledBackGeneration != 5 {
+		t.Errorf("저장된 보류 기록=%q/%d, want 580.142/5", stored.Status.RolledBackVersion, stored.Status.RolledBackGeneration)
+	}
+	var got appsv1.DaemonSet
+	if err := sm.Get(context.Background(), client.ObjectKeyFromObject(ds), &got); err != nil {
+		t.Fatalf("DS 조회 실패: %v", err)
+	}
+	if img := got.Spec.Template.Spec.Containers[0].Image; img != rolledBackImage {
+		t.Errorf("DS image=%q, want reg/nv:535.288-v1", img)
+	}
+}
+
+// 롤백 한 번은 롤백 지표 한 번이다.
+func TestHandleRollback_DaemonSetCountsRollbackOnce(t *testing.T) {
+	dus := makeRollbackDUS("k8s-worker1-nvidia", "k8s-worker1", "nvidia", 0)
+	dus.Status.PreviousImage = rolledBackImage
+	dip := makeRollbackDIP("nvidia-generic", "nvidia", 3)
+	sm := newUpgradeSMWithRecorder(dus, dip, makeDriverDS("nvidia", "", "reg/nv:580.142-v1"))
+	before := testutil.ToFloat64(metrics.RollbackTotal.WithLabelValues("nvidia"))
+
+	if _, _, err := sm.handleRollback(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollback 실패: %v", err)
+	}
+	if d := testutil.ToFloat64(metrics.RollbackTotal.WithLabelValues("nvidia")) - before; d != 1 {
+		t.Errorf("롤백 지표 +%v, want 1", d)
+	}
+}
+
+// 재시도를 소진해 Failed 로 가는 경로는 롤백을 하지 않으므로 롤백 지표를 세지 않는다.
+func TestHandleRollback_DaemonSetExhaustedDoesNotCountRollback(t *testing.T) {
+	dus := makeRollbackDUS("k8s-worker1-nvidia", "k8s-worker1", "nvidia", 3)
+	dip := makeRollbackDIP("nvidia-generic", "nvidia", 3)
+	sm := newUpgradeSMWithRecorder(dus, dip, makeDriverDS("nvidia", "", "reg/nv:580.142-v1"))
+	before := testutil.ToFloat64(metrics.RollbackTotal.WithLabelValues("nvidia"))
+
+	if _, _, err := sm.handleRollback(context.Background(), dus, dip); err != nil {
+		t.Fatalf("handleRollback 실패: %v", err)
+	}
+	if dus.Status.State != v1alpha1.UpgradeStateFailed {
+		t.Fatalf("state=%q, want Failed", dus.Status.State)
+	}
+	if d := testutil.ToFloat64(metrics.RollbackTotal.WithLabelValues("nvidia")) - before; d != 0 {
+		t.Errorf("롤백 지표 +%v, want 0", d)
 	}
 }

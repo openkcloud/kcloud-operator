@@ -314,6 +314,29 @@ func (m *UpgradeStateMachine) holdAfterRollback(
 	return true
 }
 
+// canRestoreHeld 는 롤백 보류 기록이 있고 복원할 버전(currentVersion)을 알 때 true 다.
+// 보류 기록은 있는데 currentVersion 이 비면 복원할 버전을 모르므로 호출부는 정책 목표를 설치한다.
+func canRestoreHeld(state *v1alpha1.DriverUpgradeState, currentVersion string) bool {
+	return state.Status.RolledBackVersion != "" && currentVersion != ""
+}
+
+// startHeldRestore 는 롤백 보류 중 드라이버가 내려간 노드의 복구 사이클을 연다. 실패한 보류 목표가
+// 아니라 롤백이 복원한 버전(restored)을 다시 설치한다. 보류 기록과 previousVersion 은 남긴다 —
+// 재설치가 실패하면 같은 버전으로 롤백하고, 끝나면 보류와 드리프트 기준이 그대로 이어진다.
+// 허용 목록(verifiedVersions)은 보지 않는다. 노드가 쓰던 버전이라 새 목표가 아니다.
+func (m *UpgradeStateMachine) startHeldRestore(state *v1alpha1.DriverUpgradeState, restored string) (bool, time.Duration, error) {
+	held := state.Status.RolledBackVersion
+	state.Status.DesiredVersion = restored
+	state.Status.PreviousVersion = restored
+	state.Status.PreviousImage = ""
+	state.Status.RollbackAttempts = 0
+	resetRebootTracking(&state.Status) // 새 사이클: 재부팅 카운터·마커 초기화
+	m.Recorder.Eventf(state, corev1.EventTypeNormal, "InstallRequired",
+		"Job 모드 복구 필요(driverLoaded=false): 롤백 보류 중이라 보류 목표 %s 대신 복원 버전 %s 재설치", held, restored)
+	return m.transitionTo(state, v1alpha1.UpgradeStateRequired,
+		fmt.Sprintf("Job 모드 복구(롤백 보류 중): %s 재설치", restored), 0)
+}
+
 // handleIdle: 버전 불일치 감지 시 UpgradeRequired로 전이
 func (m *UpgradeStateMachine) handleIdle(
 	ctx context.Context,
@@ -376,6 +399,9 @@ func (m *UpgradeStateMachine) handleIdle(
 			needInstall = notLoaded
 		}
 		if needInstall {
+			if canRestoreHeld(state, currentVersion) {
+				return m.startHeldRestore(state, currentVersion)
+			}
 			// verifiedVersions 화이트리스트는 설치/복구에도 적용(안전).
 			if len(policy.Spec.VerifiedVersions) > 0 && !containsString(policy.Spec.VerifiedVersions, desiredVersion) {
 				msg := fmt.Sprintf("Driver version %s 가 verifiedVersions 화이트리스트에 없음: %v",
@@ -919,6 +945,12 @@ func (m *UpgradeStateMachine) handleUncordoning(
 	}
 
 	if v := state.Status.RolledBackVersion; v != "" {
+		// 보류 중 복구 사이클(startHeldRestore)은 롤백 Job 을 만들지 않아 rollbackAttempts 가 0 이다.
+		if state.Status.RollbackAttempts == 0 {
+			msg := fmt.Sprintf("자체 복구 완료(롤백 보류 유지): 보류 목표 %s 대신 %s 재설치", v, state.Status.DesiredVersion)
+			m.Recorder.Eventf(state, corev1.EventTypeNormal, "SelfHealCompleted", "노드 %s %s", state.Spec.NodeName, msg)
+			return m.transitionTo(state, v1alpha1.UpgradeStateIdle, msg, 0)
+		}
 		msg := fmt.Sprintf("롤백 완료: %s 대신 %s 로 복원", v, state.Status.DesiredVersion)
 		m.Recorder.Eventf(state, corev1.EventTypeWarning, "RollbackCompleted", "노드 %s %s", state.Spec.NodeName, msg)
 		return m.transitionTo(state, v1alpha1.UpgradeStateIdle, msg, 0)
@@ -1133,8 +1165,6 @@ func (m *UpgradeStateMachine) handleRollback(
 		return m.handleRollbackJob(ctx, state, policy)
 	}
 
-	metrics.RecordRollback(state.Spec.Vendor)
-
 	// 롤백 시도 횟수를 제한한다. 반복 실패 시 무한 루프를 방지한다.
 	maxRollbacks := int32(3)
 	if policy.Spec.UpgradePolicy != nil && policy.Spec.UpgradePolicy.MaxRollbackAttempts > 0 {
@@ -1175,6 +1205,11 @@ func (m *UpgradeStateMachine) handleRollback(
 		return m.transitionTo(state, v1alpha1.UpgradeStateFailed, "이전 버전 없음: 수동 조치 필요", 0)
 	}
 	markRolledBack(state, policy)
+	// DS 를 패치하기 전에 보류 기록을 저장한다. 드라이버 DaemonSet 컨트롤러는 DS 변경 이벤트로 깨어나
+	// 정책 이미지로 다시 렌더하는데, 이 기록이 보여야 롤백 이미지를 덮지 않는다(rollbackHeld).
+	if err := m.Status().Update(ctx, state); err != nil {
+		return false, 0, fmt.Errorf("롤백 보류 기록 저장 실패: %w", err)
+	}
 
 	dsName := naming.DriverDSName(state.Spec.Vendor, state.Spec.Model)
 

@@ -2,7 +2,7 @@
 // state_machine_test.go: UpgradeStateMachine 단위 테스트
 // 상세: PreviousImage broken tag 정리, Rollback 소진 시 Failed 터미널 정지, 소비된 rollback
 //       요청 어노테이션 재소비 차단을 fake client 로 검증한다.
-// 생성일: 2026-04-28 | 수정일: 2026-10-11
+// 생성일: 2026-04-28 | 수정일: 2026-10-14
 // ============================================================
 
 package upgrade
@@ -334,6 +334,8 @@ func TestVerifiedVersions_Empty_Skip(t *testing.T) {
 
 // makeRollbackDIP 는 maxRollbackAttempts 가 명시된 DIP 를 반환한다.
 // MaxRollbackAttempts 초과 시 Failed 전이 검증용.
+//
+//nolint:unparam // name·vendor 는 오늘 모든 호출에서 같다 — 롤백 시험이 공유하는 nvidia 픽스처 값이라
 func makeRollbackDIP(name, vendor string, maxRollback int32) *v1alpha1.DriverInstallPolicy {
 	return &v1alpha1.DriverInstallPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -349,6 +351,8 @@ func makeRollbackDIP(name, vendor string, maxRollback int32) *v1alpha1.DriverIns
 
 // makeRollbackDUS 는 Rollback 상태에서 RollbackAttempts 가 max 와 동일한 DUS 를 반환한다.
 // 다음 reconcile 1 회 호출 시 attempts 가 max+1 로 증가 → Failed 전이.
+//
+//nolint:unparam // name·nodeName·vendor 는 오늘 모든 호출에서 같다 — 롤백 시험이 공유하는 nvidia 픽스처 값이라
 func makeRollbackDUS(name, nodeName, vendor string, attempts int32) *v1alpha1.DriverUpgradeState {
 	return &v1alpha1.DriverUpgradeState{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
