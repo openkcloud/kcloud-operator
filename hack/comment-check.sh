@@ -3,7 +3,7 @@
 # comment-check.sh: 주석·문서에 남은 이력 서술·세션 식별자·날짜·긴 주석 블록을 거부한다
 # 상세: 머리말 수정일의 괄호 설명, 머리말 밖의 날짜, 과거 서술 종결, 세션 식별자, 7줄 이상
 #       주석 블록을 위반으로 본다. 규칙은 아래 PY 한 곳에만 둔다. 인자: [ROOT] [PREFIX…].
-#       --self-test 는 임시 저장소에서 스물네 경우로 자가 검증한다.
+#       --self-test 는 임시 저장소에서 스물다섯 경우로 자가 검증한다.
 # 생성일: 2026-10-11 | 수정일: 2026-10-14
 # ============================================================
 set -euo pipefail
@@ -193,13 +193,16 @@ for f in unread:
 if viol:
     print('주석·문서 정리 규칙 위반 %d건' % len(viol))
     print('\n'.join(viol))
+if unread:
+    sys.exit(2)
+if viol:
     sys.exit(1)
 print('주석 정리 검사 통과')
 EOF
 )
 
-# scan <루트> [접두…]: 종료 0=위반 없음, 1=위반 있음, 2=루트가 git 저장소가 아니거나 인자가 가리키는 파일 없음
-# 또는 git ls-files 실패(검사 파일 0개를 통과로 읽지 않게).
+# scan <루트> [접두…]: 종료 0=위반 없음, 1=위반 있음, 2=루트가 git 저장소가 아니거나 인자가 가리키는
+# 파일 없음 또는 읽지 못한 파일 있음 또는 git ls-files 실패(검사 파일 0개를 통과로 읽지 않게).
 scan() {
   local root="$1"; shift
   ( cd "$root" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1 ) \
@@ -211,7 +214,7 @@ scan() {
 # git 아님 하나, 머리말 면제 경계(설명 블록 하나 + 연속행 하나) 둘, 꼬리 주석 따옴표 짝(위반+통과) 둘,
 # Markdown frontmatter 제외 하나, 긴 머리말(연속행 포함 위반 하나 + 7줄 위반 하나) 둘,
 # 미추적 파일 인자 하나, 가리키는 파일이 없는 인자 하나, 빈 접두 하나, 삭제된 추적 파일 인자 하나.
-# 건너뜀 파일만 가리키는 인자 하나, 지원하지 않는 확장자 하나, 읽기 실패 하나, git ls-files 실패 하나.
+# 건너뜀 파일만 가리키는 인자 하나, 지원하지 않는 확장자 하나, 읽기 실패 둘, git ls-files 실패 하나.
 self_test() {
   local tmp rc out
   tmp="$(mktemp -d)"
@@ -290,12 +293,16 @@ self_test() {
   # 22) 지원하지 않는 확장자(.txt)만 가리키는 인자도 같다
   printf 'D-9\n' > "$tmp/repo/a/n.txt"
   expect 22 0 '검사 대상 파일 없이 건너뛴 인자: a/n.txt' "$tmp/repo" a/n.txt
-  # 23) UTF-8 로 읽지 못한 파일은 건너뛰되 알린다
+  # 23) UTF-8 로 읽지 못한 파일이 있으면 알리고 종료 2(검사가 불완전하다)
   printf '\xff\xfe\n' > "$tmp/repo/a/bad.go"
-  expect 23 0 '읽지 못해 건너뛴 파일: a/bad.go' "$tmp/repo" a/bad.go
+  expect 23 2 '읽지 못해 건너뛴 파일: a/bad.go' "$tmp/repo" a/bad.go
   # 24) git ls-files 가 실패하면 종료 2(rev-parse 는 index 를 읽지 않으므로 손상된 index 를 따로 가리킨다)
   printf 'x' > "$tmp/badindex"
   GIT_INDEX_FILE="$tmp/badindex" expect 24 2 'git ls-files 실패' "$tmp/repo"
+  # 25) 읽지 못한 파일과 위반이 함께 있으면 위반을 출력하고 종료 2
+  printf 'package a\n\n// D-9 참고\nvar X = 1\n' > "$tmp/repo/a/v.go"
+  git -C "$tmp/repo" add a/v.go
+  expect 25 2 '[식별자]' "$tmp/repo" a/bad.go a/v.go
   echo "self-test ok"
 }
 
