@@ -3,8 +3,8 @@
 # third-party-notices.sh: Go 바이너리에 들어가는 서드파티 모듈의 라이선스 고지문을 만든다
 # 상세: 링크되는 패키지 디렉터리에서 모듈 루트까지 올라가며 LICENSE·COPYING·NOTICE 를 모두 싣고
 #       Go 툴체인 LICENSE 도 싣는다. Apache-2.0 본문은 같은 글이면 한 번만 싣는다.
-#       네트워크 없이 모듈 캐시를 읽는다.
-# 생성일: 2026-10-13 | 수정일: 2026-10-13
+#       네트워크 없이 모듈 캐시를 읽는다. Go 이외 구성 요소는 이미지 안 고지 위치만 안내한다.
+# 생성일: 2026-10-13 | 수정일: 2026-10-14
 # ============================================================
 set -euo pipefail
 # 정렬·ls 순서가 로케일에 따라 달라지면 CI 와 로컬의 결과가 갈린다. GOPROXY 는 호출자가 정하지 않았을 때만 끈다.
@@ -44,6 +44,9 @@ licfiles() { ls "$1" | grep -iE '^(LICENSE|LICENCE|COPYING|NOTICE)([-_.].*)?$' |
 render() {  # 표준 입력: modules 출력. Apache-2.0 본문은 목록 안 첫 Apache 파일을 한 번 싣는다.
   local path ver dir sub rel f name spdx cur="" hdr=0 s dup apache_file="" unknown=0 seen=()
   echo "이 소프트웨어에 포함된 서드파티 구성 요소와 그 라이선스 고지다. 자동 생성 파일이며 이 저장소의 고지문 재생성 명령(operator: make notices, images: hack/third-party-notices-images.sh)으로 다시 만든다."
+  echo
+  # Go 이외 구성 요소는 싣지 않는다. 대신 그 고지가 이미지 안 어디에 있는지 적는다.
+  echo "이 파일은 Go 바이너리에 링크되는 모듈과 Go 표준 라이브러리만 다룬다. 컨테이너 이미지의 베이스 이미지와 빌드 때 설치한 OS 패키지의 고지는 각 이미지 안에 배포판이 둔 위치에 있다. 베이스가 Ubuntu 나 distroless 인 이미지는 패키지마다 /usr/share/doc/<패키지>/copyright 에 저작권 표시와 라이선스 조건이 있고, GPL 처럼 여러 패키지가 함께 쓰는 라이선스의 전문은 /usr/share/common-licenses 에 있다. 베이스가 Alpine 인 이미지는 패키지별 라이선스 이름만 /lib/apk/db/installed 에 기록한다. 베이스가 scratch 인 이미지는 Go 바이너리만 담으므로 이 파일이 그 이미지의 고지 전부다. 각 이미지의 베이스는 Dockerfile 의 FROM 줄에 있다. tenstorrent-driver-ds 이미지는 tt-kmd 커널 모듈 소스(GPL-2.0-only)를 /opt/tt-kmd-src/<버전> 에 담고, 같은 디렉터리에 그 저장소의 LICENSE 파일을 둔다."
   echo
   # Go 바이너리에는 표준 라이브러리와 런타임이 정적으로 링크된다. 판 번호는 싣지 않는다 — 툴체인 판이 달라도 LICENSE 글이 같으면 결과가 같다.
   f="$(go env GOROOT)/LICENSE"
