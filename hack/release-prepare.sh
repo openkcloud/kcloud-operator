@@ -5,7 +5,7 @@
 #       출력한다(push 없음). 기본은 dry-run, --apply 가 태그를 만든다. 판정 근거는
 #       각 단계·함수의 본문 주석 참고(CHECK_REGISTRY·pend 완화·커널 묶음 태그 차단 등).
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-11
+# 생성일: 2026-10-03 | 수정일: 2026-10-14
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -112,6 +112,51 @@ elif KCLOUD_OTHER_LINE_PRESET="$blob" KUBEBUILDER_ASSETS="$assets" go test ./int
 else
   bad "프리셋이 operator 외 이미지를 재정의한다 (${other_ref}:${other_preset} 대조)"
   indent <"$log"
+fi
+
+# Magnum 계약(release.yaml)의 valuesURL 은 커밋 SHA 로 고정한 raw 주소다. 프리셋을 고치고 SHA 를
+# 옮기지 않으면 주소는 살아 있어도 지난 프리셋을 돌려주고, 차트 스키마가 그 값을 거절하면 Add-on
+# 설치가 검증 단계에서 멈춘다. 이 차트 버전의 프로파일은 고정 SHA 의 프리셋이 작업 트리 프리셋과
+# 바이트까지 같고 그 SHA 가 공개 브랜치에 있어야 한다. 다른 라인 프로파일은 그 SHA 가 이미 공개된
+# 브랜치(upstream 원격 추적 ref)에 있는지만 본다 — 그 라인의 차트는 이 트리에 없다.
+rel=deploy/integration/release.yaml
+pin_re='^https://raw\.githubusercontent\.com/[^/]+/[^/]+/([0-9a-f]{40})/(.+)$'
+profiles="$(awk '/^[[:space:]]*-[[:space:]]*range:/ { cv = ""; u = "" }
+  /^[[:space:]]*chartVersion:/ { cv = $2; gsub(/"/, "", cv) }
+  /^[[:space:]]*valuesURL:/ { u = $2 }
+  cv != "" && u != "" { print cv, u; cv = ""; u = "" }' "$rel")"
+[ -n "$profiles" ] || bad "${rel} 에서 chartVersion·valuesURL 쌍을 읽지 못했다 — 고정 프리셋 대조를 할 수 없다"
+while read -r cv url; do
+  [ -n "$cv" ] || continue
+  if ! [[ "$url" =~ $pin_re ]]; then
+    bad "${rel}: chartVersion ${cv} 의 valuesURL 이 커밋 SHA 고정 주소가 아니다 — ${url}"
+    continue
+  fi
+  sha="${BASH_REMATCH[1]}"; path="${BASH_REMATCH[2]}"
+  if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    bad "${rel}: chartVersion ${cv} 의 고정 커밋 ${sha:0:12} 가 이 저장소에 없다"
+  elif [ "$cv" = "$ver" ]; then
+    if ! git merge-base --is-ancestor "$sha" "$pub"; then
+      bad "${rel}: 고정 커밋 ${sha:0:12} 가 ${pub} 에 없다 — push 뒤 그 주소는 404 다"
+    elif ! git show "${sha}:${path}" 2>/dev/null | cmp -s - "$path"; then
+      bad "${rel}: 고정 커밋 ${sha:0:12} 의 ${path} 가 작업 트리 프리셋과 다르다 — ${pub} 에서 그 파일을 마지막으로 바꾼 커밋 $(git log -1 --format=%H "$pub" -- "$path") 로 옮길 것"
+    else
+      ok "${rel}: chartVersion ${cv} 의 고정 프리셋(${sha:0:12})이 작업 트리 프리셋과 같고 ${pub} 에 있다"
+    fi
+  elif [ -n "$(git for-each-ref --contains "$sha" refs/remotes/upstream)" ]; then
+    ok "${rel}: chartVersion ${cv} 의 고정 커밋 ${sha:0:12} 는 이미 공개된 브랜치에 있다"
+  else
+    bad "${rel}: chartVersion ${cv} 의 고정 커밋 ${sha:0:12} 가 공개된 브랜치(upstream)에 없다"
+  fi
+done <<<"$profiles"
+
+# 문서에 SHA 고정 주소를 다시 적으면 release.yaml 과 따로 낡는다. 예시는 <valuesURL> 로 둔다.
+dup="$(git grep -nE 'raw\.githubusercontent\.com/[^/]+/[^/]+/[0-9a-f]{40}/' -- . ":(exclude)${rel}" || true)"
+if [ -n "$dup" ]; then
+  bad "${rel} 밖에 커밋 SHA 고정 raw 주소가 있다 — <valuesURL> 로 바꿀 것"
+  printf '%s\n' "$dup" | indent
+else
+  ok "커밋 SHA 고정 raw 주소는 ${rel} 에만 있다"
 fi
 
 for r in "$op" "$img"; do

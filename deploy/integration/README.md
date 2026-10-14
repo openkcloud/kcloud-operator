@@ -1,4 +1,4 @@
-<!-- README.md: Magnum CAPI Add-on 연동 자료(kcloud-operator 측 제공물) 안내 | 생성일: 2026-09-10 | 수정일: 2026-10-04 -->
+<!-- README.md: Magnum CAPI Add-on 연동 자료(kcloud-operator 측 제공물) 안내 | 생성일: 2026-09-10 | 수정일: 2026-10-14 -->
 
 # Magnum CAPI 연동 자료
 
@@ -14,14 +14,14 @@
 
 ```bash
 helm upgrade --install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
-  --version 0.8.0 -n kcloud --create-namespace \
+  --version <chartVersion> -n kcloud --create-namespace \
   --reset-values \
-  -f https://raw.githubusercontent.com/openkcloud/kcloud-operator/45fcbedc83008c81c6976774b6af4ef8b01cd44d/deploy/helm/values-k8s1.34.yaml \
+  -f <valuesURL> \
   -f site-values.yaml \
   --wait --wait-for-jobs --timeout 15m
 ```
 
-`values-k8s1.34.yaml` 은 차트 안의 프리셋이다. helm 의 `-f` 는 URL 을 받으므로 차트를 풀지 않고 raw URL 을 그대로 준다. 이때 쓰는 주소는 `release.yaml` 의 `valuesURL` 이며 커밋 SHA 로 고정돼 있어 같은 주소가 늘 같은 내용을 돌려준다. 같은 파일의 `valuesBrowseURL` 은 브랜치 주소로, 최신 내용을 사람이 확인할 때만 쓴다. Add-on CR 에 값을 인라인으로 넣는 방식이면 그 파일 내용을 옮긴다. Service K8s 가 1.26~1.30 이면 차트 `0.6.2` 와 `values-k8s1.28.yaml`(태그 `v0.6.2-k8s1.28`)을 쓴다. 그 프리셋은 차트 `0.6.2` 를 담은 `release/k8s-1.28` 브랜치에 있다 — 차트 `0.8.0` 에는 없고, `0.8.0` 은 `kubeVersion` 으로 1.31 미만을 거절한다. 두 프로파일의 `valuesURL` 이 각자 그 라인의 커밋을 가리키므로 Add-on 이 받는 주소는 달라지지 않는다. 업그레이드도 같은 명령으로 값을 전부 다시 넘긴다. hook 을 생략하면 CRD 가 갱신되지 않으므로 `--no-hooks` 는 쓰지 않는다.
+`values-k8s1.34.yaml` 은 차트 안의 프리셋이다. helm 의 `-f` 는 URL 을 받으므로 차트를 풀지 않고 raw URL 을 그대로 준다. `<chartVersion>` 과 `<valuesURL>` 에는 `release.yaml` 에서 대상 클러스터의 K8s 버전에 맞는 프로파일 값을 넣는다. `valuesURL` 은 커밋 SHA 로 고정돼 있어 같은 주소가 늘 같은 내용을 돌려준다. 같은 파일의 `valuesBrowseURL` 은 브랜치 주소로, 최신 내용을 사람이 확인할 때만 쓴다. Add-on CR 에 값을 인라인으로 넣는 방식이면 그 파일 내용을 옮긴다. Service K8s 가 1.26~1.30 이면 차트 `0.6.2` 와 `values-k8s1.28.yaml`(태그 `v0.6.2-k8s1.28`)을 쓴다. 그 프리셋은 차트 `0.6.2` 를 담은 `release/k8s-1.28` 브랜치에 있다 — 차트 `0.8.0` 에는 없고, `0.8.0` 은 `kubeVersion` 으로 1.31 미만을 거절한다. 두 프로파일의 `valuesURL` 이 각자 그 라인의 커밋을 가리키므로 Add-on 이 받는 주소는 달라지지 않는다. 업그레이드도 같은 명령으로 값을 전부 다시 넘긴다. hook 을 생략하면 CRD 가 갱신되지 않으므로 `--no-hooks` 는 쓰지 않는다.
 
 `site-values.yaml` 은 저장소에 있는 파일이 아니다. Add-on 이 설치 직전에 대상 환경에 맞게 만드는 로컬 파일이며, 본보기가 `examples/site-values.example.yaml` 이다. 공개망이라 덮어쓸 값이 없어도 helm 이 `-f` 대상 파일을 찾지 못하면 실패하므로 반드시 만든다. 파일 이름은 `release.yaml` 의 `helm.siteValuesFile` 이 정한다.
 
