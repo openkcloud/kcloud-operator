@@ -5,7 +5,7 @@
 #       발행됐는지 본다(태그 문자열 형식만 보는 기존 검사와 다르다). 수집·분류·예외·커널
 #       이미지 별도 집계·조회실패 임계치의 근거는 각 구간 본문 주석 참고.
 # 용법: hack/image-tag-check.sh [--collect-only|--kernel-refs]
-# 생성일: 2026-10-04 | 수정일: 2026-10-11
+# 생성일: 2026-10-04 | 수정일: 2026-10-15
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -117,7 +117,8 @@ if [ "${1:-}" = "--kernel-refs" ]; then
   exit 0
 fi
 
-if ! default_render="$(render)"; then
+# exporter 는 기본값이 꺼짐이지만 1.31~1.34 프리셋이 켠다. 켜서 렌더해야 발행 전에 그 이미지도 조회한다.
+if ! default_render="$(render --set furiosa.exporter.enabled=true)"; then
   echo "!! 차트 기본값 렌더가 실패했다: $(head -1 "$renderlog")" >&2
   exit 1
 fi

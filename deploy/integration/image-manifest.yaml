@@ -3,7 +3,7 @@
 # 상세: 미러(air-gap)·감사용. condition 은 pull 조건,
 #       digest 는 ghcr.io/openkcloud 발행본 기준이다. `# 발행 뒤 갱신` 이 붙은 항목은 GHCR 에 아직 없는
 #       태그라 발행 전 빌드의 digest 를 적어 두고, 발행 뒤 hack/refresh-image-digests.sh 로 바꾼다.
-# 생성일: 2026-09-10 | 수정일: 2026-10-14
+# 생성일: 2026-09-10 | 수정일: 2026-10-15
 # ============================================================
 release: "0.8.0"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
@@ -40,8 +40,8 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     digest: ""
     condition: "furiosa.unified.enabled=true 설정 시에만(기본 false). 벤더 플러그인 우선 원칙으로 GHCR 에 발행하지 않는 내부 빌드"
   - image: furiosa-exporter
-    tag: "0.3.0"
-    digest: sha256:1daefdd748740f5e82ecfca0f7597aac4f3100c17d32ad58d7bc53e2a049f0fe
+    tag: "0.4.0"
+    digest: sha256:2c838e9324691d9cca2245873310ecf5c6540348e5f48010f5fd6d3f6114726e  # 발행 뒤 갱신
     condition: RNGD 노드(furiosa.exporter.enabled)
   - image: generic-device-plugin
     tag: v3

@@ -5,7 +5,7 @@
 #       출력한다(push 없음). 기본은 dry-run, --apply 가 태그를 만든다. 판정 근거는
 #       각 단계·함수의 본문 주석 참고(CHECK_REGISTRY·pend 완화·커널 묶음 태그 차단 등).
 # 용법: hack/release-prepare.sh [--apply] [<묶음 이름>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-14
+# 생성일: 2026-10-03 | 수정일: 2026-10-15
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -151,7 +151,8 @@ while read -r cv url; do
 done <<<"$profiles"
 
 # 문서에 SHA 고정 주소를 다시 적으면 release.yaml 과 따로 낡는다. 예시는 <valuesURL> 로 둔다.
-dup="$(git grep -nE 'raw\.githubusercontent\.com/[^/]+/[^/]+/[0-9a-f]{40}/' -- . ":(exclude)${rel}" || true)"
+# 주소 앞부분을 줄인 꼴(".../<SHA>/deploy/helm/values…")과 SHA 만 변수로 빼 둔 꼴(VALUES_SHA= 등, 따옴표 포함)도 같다.
+dup="$(git grep -nE 'raw\.githubusercontent\.com/[^/]+/[^/]+/[0-9a-f]{40}/|[0-9a-f]{40}/deploy/helm/values|[A-Z_]*SHA=["'"'"']?[0-9a-f]{40}' -- . ":(exclude)${rel}" || true)"
 if [ -n "$dup" ]; then
   bad "${rel} 밖에 커밋 SHA 고정 raw 주소가 있다 — <valuesURL> 로 바꿀 것"
   printf '%s\n' "$dup" | indent

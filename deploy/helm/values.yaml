@@ -1,5 +1,5 @@
 # values.yaml: NPU Operator 기본 설정값
-# 생성일: 2026-03-25 | 수정일: 2026-10-13
+# 생성일: 2026-03-25 | 수정일: 2026-10-15
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레지스트리는 두 종류다. 어느 이미지가 어느 쪽인지는 deploy/helm/README.md 의 "레지스트리
@@ -265,8 +265,9 @@ furiosa:
     tag: "0.4.0"
     interval: "10s"
     # true 면 장치를 할당받은 파드의 namespace·pod·container 라벨을 붙인다(공식 Furiosa 차트와 같은
-    # 기본값). kubelet PodResources 소켓 디렉터리(/var/lib/kubelet/pod-resources)를 읽기 전용으로
-    # 마운트한다. device plugin 으로 장치 단위 할당한 파드만 대상이다(DRA·파티션 할당은 라벨 없음).
+    # 기본값). exporter 0.4.0 이상이어야 한다 — 그 미만은 이 인자를 몰라 재시작을 반복한다. kubelet
+    # pod-resources 디렉터리를 읽기 전용으로 마운트하고, device plugin 으로 장치 단위 할당한 파드만
+    # 대상이다. Prometheus 수집 설정이 대상 파드 라벨을 붙이면 honorLabels: true 가 필요하다.
     kubeResourcesLabel: true
   # ─────────────────────────────────────────────────────────────────────
   # Furiosa RNGD device plugin. spec.furiosa.rngd 필드는 omitempty 라 enabled=false 면

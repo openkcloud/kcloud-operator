@@ -1,4 +1,4 @@
-<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-11 -->
+<!-- README.md: kcloud operator 저장소 안내 — 지원 가속기, 빌드, 배포, CRD 목록, 개발 진입점 | 생성일: 2025-07-04 | 수정일: 2026-10-15 -->
 <!-- cdocs-profile: blog -->
 
 # kcloud operator
@@ -230,7 +230,7 @@ RELEASE=kcloud-operator NAMESPACE=kcloud bash deploy/helm/uninstall.sh
 | `operationCoordinator.mode` | `off` | `delegate` 면 장치 변경을 `AcceleratorOperation` 트랜잭션으로 직렬화 |
 | `nvidia.dcgmExporter.enabled` | `false` | NVIDIA 텔레메트리 exporter(`:9400`) |
 | `furiosa.exporter.enabled` | `false` | RNGD 텔레메트리 exporter(`:9410`) |
-| `furiosa.exporter.kubeResourcesLabel` | `true` | exporter 지표에 장치를 할당받은 파드의 `namespace`·`pod`·`container` 라벨 추가(kubelet pod-resources 읽기 전용 마운트) |
+| `furiosa.exporter.kubeResourcesLabel` | `true` | exporter 지표에 장치를 할당받은 파드의 `namespace`·`pod`·`container` 라벨 추가(kubelet pod-resources 읽기 전용 마운트, 수집 설정은 `honorLabels: true`) |
 
 기본값이 `false` 인 항목은 켠 상태로 배포됐을 때 영향 범위가 커서 opt-in 으로 두었습니다.  
 `operationCoordinator.mode` 를 끄는 절차에는 선결 조건이 있습니다. `values.yaml` 의 해당 주석을  

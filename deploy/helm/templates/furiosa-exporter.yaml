@@ -50,6 +50,10 @@ spec:
               containerPort: 9410
               protocol: TCP
           securityContext:
+            # root 로 돈다. kubelet pod-resources 디렉터리(root:root 0750)에 연결하려면 uid 0 이어야
+            # 해서, 이미지 기본값에 기대지 않고 여기서 정한다.
+            runAsUser: 0
+            runAsNonRoot: false
             privileged: false
             allowPrivilegeEscalation: false
             capabilities:

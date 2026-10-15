@@ -391,12 +391,33 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
 - **설치 정책은 릴리스 자원**: 벤더별 `DriverInstallPolicy` 네 개는 helm hook 이 아니라 릴리스
   자원으로 관리한다. hook 으로 관리하면 업그레이드마다 삭제·재생성되어 uid 가 바뀌고, 정책을
   소유자로 참조하는 toolkit DaemonSet 이 연쇄로 재생성되며 정책에 직접 넣은 값도 다음
-  업그레이드에서 사라진다. 릴리스 자원 관리로 전환하기 전에 설치한 클러스터는 정책에 helm
-  소유 표시가 없으므로 `helm upgrade` 전에 `hack/adopt-helm-resources.sh --apply` 를 한 번
-  실행한다. 실행하지 않고 업그레이드하면 helm 이 "already exists" 로 거절한다. 릴리스 자원이
-  되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제 삭제 동작은 달라지지 않는다 —
-  `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가 `npu.ai` 사용자 정의
-  자원을 먼저 순서대로 지우기 때문이다.
+  업그레이드에서 사라진다. 릴리스 자원이 되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제
+  삭제 동작은 달라지지 않는다 — `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가
+  `npu.ai` 사용자 정의 자원을 먼저 순서대로 지우기 때문이다.
+
+  정책을 hook 으로 만드는 차트(0.7.x, 1.26~1.30 라인의 0.6.x)에서 올리는 클러스터는 정책에 helm
+  소유 표시가 없어, 그대로 `helm upgrade` 하면 helm 이 `invalid ownership metadata` 로 거절한다.
+  업그레이드 직전에 차트가 만든 정책만 이름으로 지운다(`driverInstallPolicies.<vendor>.name` 을
+  바꿨다면 그 이름). 그 차트들도 업그레이드마다 hook 으로 같은 삭제·재생성을 했고, 정책이 소유한
+  DaemonSet 은 업그레이드 뒤 operator 가 다시 만든다. `--all` 로 지우면 직접 만든 다른 정책까지
+  지워지고, helm 은 차트의 네 이름만 다시 만든다.
+
+  ```bash
+  kubectl delete driverinstallpolicies.npu.ai --ignore-not-found \
+    furiosa-warboy-ds nvidia-gpu-ds furiosa-rngd-ds tenstorrent-blackhole-ds
+  ```
+
+  정책을 지우지 않고 `hack/adopt-helm-resources.sh --apply` 로 소유 표시만 붙여 인계할 수도 있다.
+  이때 helm 이 인계한 정책의 spec 을 새 차트 값으로 바꾸지 않을 수 있다(Helm 3.21 에서 확인 —
+  Magnum 의 cluster-api-addon-provider 는 Helm 3 를 쓴다). 인계했다면 업그레이드 뒤
+  `helm get manifest` 의 DriverInstallPolicy 문서만 골라 `kubectl replace -f` 로 다시 써서 spec 을
+  맞춘다(uid 는 유지된다).
+- **Furiosa exporter 파드 라벨**: `furiosa.exporter.kubeResourcesLabel`(기본 true)은 exporter 에
+  `/var/lib/kubelet/pod-resources` 읽기 전용 hostPath 를 더하고 `--kube-resources-label` 을 켠다
+  (exporter 0.4.0 이상). hostPath 경로를 허용 목록으로 관리하는 정책 엔진이 있으면 이 경로를 더하거나
+  값을 끈다. 할당된 파드의 namespace·pod 이름이 인증 없는 `:9410` 지표에 나온다(dcgm-exporter 와
+  같다). Prometheus 수집 설정이 대상 파드 라벨을 붙이는 구성이면 `honorLabels: true` 가 있어야
+  exporter 의 라벨이 `exported_pod` 같은 이름으로 바뀌지 않는다.
 - **레지스트리 도달성**: 다른 클러스터에 배포할 때 노드가 이미지 레지스트리에 도달 가능해야
   한다. 안 되면 파드가 `ImagePullBackOff` 로 멈춘다.
 - **CRD**: helm 자체는 `crds/` 의 CRD 를 삭제하지 않는다. 차트의 `post-delete` Job 이

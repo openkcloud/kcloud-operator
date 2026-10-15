@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
 # adopt-helm-resources.sh: 기존 helm hook 객체를 릴리스 자원으로 인계한다(일회성)
-# 상세: hook 으로 만들어진 객체는 helm 소유 표시가 없어, 템플릿에서 hook 주석을 지우고
-#       업그레이드하면 "already exists" 로 거절된다. helm 3 이후는 라벨 하나·주석 두 개가
-#       붙어 있으면 기존 객체를 인계하는데, 이 스크립트가 그 셋을 붙인다(기본은 미리보기,
-#       --apply 로 실제 적용, 삭제는 하지 않는다).
-# 생성일: 2026-09-24 | 수정일: 2026-10-11
+# 상세: hook 객체에 helm 소유 표시(라벨 하나·주석 두 개)를 붙여 다음 업그레이드가 인계하게 한다
+#       (기본은 미리보기, --apply 로 적용, 삭제는 하지 않는다). helm 이 인계한 정책의 spec 을 새 값으로
+#       바꾸지 않을 수 있어(Helm 3), 업그레이드 뒤 manifest 의 DIP 로 kubectl replace 해야 한다.
+# 생성일: 2026-09-24 | 수정일: 2026-10-15
 # ============================================================
 set -euo pipefail
 APPLY=0
@@ -46,3 +45,6 @@ if [ "$APPLY" = 1 ]; then
 else
   echo "미리보기였다. 실제로 붙이려면 --apply 를 준다"
 fi
+echo "주의: helm 이 인계한 정책의 spec 을 새 값으로 바꾸지 않을 수 있다(Helm 3). 업그레이드 뒤"
+echo "      helm get manifest 의 DriverInstallPolicy 문서로 kubectl replace -f 해 spec 을 맞추거나,"
+echo "      인계 대신 차트 정책을 이름으로 지우고 업그레이드한다(deploy/helm/README.md)"
