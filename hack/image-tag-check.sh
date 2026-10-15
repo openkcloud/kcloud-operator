@@ -119,7 +119,7 @@ fi
 
 # exporter 는 기본값이 꺼짐이지만 1.31~1.34 프리셋이 켠다. 켜서 렌더해야 발행 전에 그 이미지도 조회한다.
 if ! default_render="$(render --set furiosa.exporter.enabled=true)"; then
-  echo "!! 차트 기본값 렌더가 실패했다: $(head -1 "$renderlog")" >&2
+  echo "!! 차트 기본값(exporter 포함) 렌더가 실패했다: $(head -1 "$renderlog")" >&2
   exit 1
 fi
 default_rows="$(printf '%s\n' "$default_render" | collect | sort)"
@@ -136,7 +136,7 @@ label() {
   esac
 }
 
-echo ">> 차트 기본값 렌더 — 참조 자리 $(printf '%s\n' "$default_rows" | grep -c .)개, 고유 이미지 $(printf '%s\n' "$default_rows" | cut -f2 | sort -u | grep -c .)개"
+echo ">> 차트 기본값(exporter 포함) 렌더 — 참조 자리 $(printf '%s\n' "$default_rows" | grep -c .)개, 고유 이미지 $(printf '%s\n' "$default_rows" | cut -f2 | sort -u | grep -c .)개"
 for cls in image key map arg env shape; do
   rows="$(printf '%s\n' "$default_rows" | awk -F'\t' -v c="$cls" '$1==c')"
   n="$(printf '%s' "$rows" | grep -c . || true)"
@@ -305,4 +305,4 @@ if [ "$unresolved" -gt 0 ] && [ $((unresolved * 4)) -gt "$queryable" ]; then
   echo "!! 조회 실패 ${unresolved}건이 조회 대상 ${queryable}건의 4분의 1을 넘는다 — 확인한 것이 너무 적다." >&2
   exit 1
 fi
-echo ">> 기본값 설치가 당기는 이미지 ${published}건이 레지스트리에 있다 (건너뛴 ${skipped}건은 확인 못 함, 허용된 비공개 ${allowed}건)"
+echo ">> 기본값(exporter 포함) 설치가 당기는 이미지 ${published}건이 레지스트리에 있다 (건너뛴 ${skipped}건은 확인 못 함, 허용된 비공개 ${allowed}건)"

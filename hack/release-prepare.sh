@@ -270,7 +270,7 @@ echo
 out="$(bash hack/image-tag-check.sh 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out" | indent
 if [ "$rc" -eq 0 ]; then
-  ok "차트 기본값이 당기는 이미지 태그가 레지스트리에 있다 (image-tag-check)"
+  ok "차트 기본값(exporter 포함)이 당기는 이미지 태그가 레지스트리에 있다 (image-tag-check)"
 else
   bad "이미지 태그 실재 확인 실패 — 네트워크가 없거나 미발행 태그가 있다 (image-tag-check)"
 fi

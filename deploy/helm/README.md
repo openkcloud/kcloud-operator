@@ -90,6 +90,28 @@ helm upgrade kcloud-operator deploy/helm -n kcloud --reset-then-reuse-values --s
 - **반영 후 확인**: 리비전이 올라간 것만으로는 값이 반영됐다는 증거가 아니다. 바꾼 필드가 실제로
   라이브에 들어갔는지 `helm get values` 등으로 직접 확인한다.
 
+### 0.7.x·0.6.x 에서 올릴 때
+
+정책을 hook 으로 만드는 차트(0.7.x, 1.26~1.30 라인의 0.6.x)에서 올리는 클러스터는 정책에 helm 소유
+표시가 없어, 그대로 `helm upgrade` 하면 helm 이 `invalid ownership metadata` 로 거절한다. 업그레이드
+직전에 차트가 만든 정책만 이름으로 지운다(`driverInstallPolicies.<vendor>.name` 을 바꿨다면 그 이름).
+그 차트들도 업그레이드마다 hook 으로 같은 삭제·재생성을 했고, 정책이 소유한 DaemonSet 은 업그레이드
+뒤 operator 가 다시 만든다. `--all` 로 지우면 직접 만든 다른 정책까지 지워지고, helm 은 차트의 네
+이름만 다시 만든다.
+
+```bash
+kubectl delete driverinstallpolicies.npu.ai --ignore-not-found \
+  furiosa-warboy-ds nvidia-gpu-ds furiosa-rngd-ds tenstorrent-blackhole-ds
+```
+
+0.7.x 의 values 파일에 `driverInstallPolicies.nvidia.toolkit.method` 가 있으면 0.8.x 의
+`values.schema.json` 이 거절하므로 그 줄을 지운다.
+
+정책을 지우지 않고 `hack/adopt-helm-resources.sh --apply` 로 소유 표시만 붙여 인계할 수도 있다. 이때
+helm 이 인계한 정책의 spec 을 새 차트 값으로 바꾸지 않을 수 있다(Helm 3.21 에서 확인 — Magnum 의
+cluster-api-addon-provider 는 Helm 3 를 쓴다). 인계했다면 업그레이드 뒤 `helm get manifest` 의
+DriverInstallPolicy 문서만 골라 `kubectl replace -f` 로 다시 써서 spec 을 맞춘다(uid 는 유지된다).
+
 ## Uninstalling
 
 삭제는 `helm uninstall` 한 번으로 끝납니다. 차트가 `pre-delete` hook Job 을 먼저 실행하고,
@@ -393,25 +415,8 @@ helm install kcloud-operator oci://<reg>/charts/kcloud-operator --version <v> \
   소유자로 참조하는 toolkit DaemonSet 이 연쇄로 재생성되며 정책에 직접 넣은 값도 다음
   업그레이드에서 사라진다. 릴리스 자원이 되면서 `helm uninstall` 의 삭제 대상에 들어가지만, 실제
   삭제 동작은 달라지지 않는다 — `uninstall.gate.enabled` 가 기본으로 켜져 있어 pre-delete 게이트가
-  `npu.ai` 사용자 정의 자원을 먼저 순서대로 지우기 때문이다.
-
-  정책을 hook 으로 만드는 차트(0.7.x, 1.26~1.30 라인의 0.6.x)에서 올리는 클러스터는 정책에 helm
-  소유 표시가 없어, 그대로 `helm upgrade` 하면 helm 이 `invalid ownership metadata` 로 거절한다.
-  업그레이드 직전에 차트가 만든 정책만 이름으로 지운다(`driverInstallPolicies.<vendor>.name` 을
-  바꿨다면 그 이름). 그 차트들도 업그레이드마다 hook 으로 같은 삭제·재생성을 했고, 정책이 소유한
-  DaemonSet 은 업그레이드 뒤 operator 가 다시 만든다. `--all` 로 지우면 직접 만든 다른 정책까지
-  지워지고, helm 은 차트의 네 이름만 다시 만든다.
-
-  ```bash
-  kubectl delete driverinstallpolicies.npu.ai --ignore-not-found \
-    furiosa-warboy-ds nvidia-gpu-ds furiosa-rngd-ds tenstorrent-blackhole-ds
-  ```
-
-  정책을 지우지 않고 `hack/adopt-helm-resources.sh --apply` 로 소유 표시만 붙여 인계할 수도 있다.
-  이때 helm 이 인계한 정책의 spec 을 새 차트 값으로 바꾸지 않을 수 있다(Helm 3.21 에서 확인 —
-  Magnum 의 cluster-api-addon-provider 는 Helm 3 를 쓴다). 인계했다면 업그레이드 뒤
-  `helm get manifest` 의 DriverInstallPolicy 문서만 골라 `kubectl replace -f` 로 다시 써서 spec 을
-  맞춘다(uid 는 유지된다).
+  `npu.ai` 사용자 정의 자원을 먼저 순서대로 지우기 때문이다. 정책을 hook 으로 만드는 차트에서 올릴
+  때의 절차는 [0.7.x·0.6.x 에서 올릴 때](#07x06x-에서-올릴-때)에 있다.
 - **Furiosa exporter 파드 라벨**: `furiosa.exporter.kubeResourcesLabel`(기본 true)은 exporter 에
   `/var/lib/kubelet/pod-resources` 읽기 전용 hostPath 를 더하고 `--kube-resources-label` 을 켠다
   (exporter 0.4.0 이상). hostPath 경로를 허용 목록으로 관리하는 정책 엔진이 있으면 이 경로를 더하거나
