@@ -9,7 +9,7 @@ release: "0.8.1"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
   - image: kcloud-operator
     tag: v0.8.1
-    digest: ""  # 발행 뒤 갱신
+    digest: sha256:3331723119a1d7d8fce64ea450724587aa552964819b42776cc1ef181c85e6bd
     condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (digest sha256:2797159760b85c49ab391bc8edf9f891033e43c8a36081f01962f5c6250e9148, 나머지 이미지는 동일)
   - image: kcloud-node-manager
     tag: "0.6.19"
