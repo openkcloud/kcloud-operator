@@ -55,7 +55,7 @@ kcloud 가 공개 발행하는 차트는 GHCR 에 있다. `v*` 태그를 push �
 
 ```bash
 helm install kcloud-operator oci://ghcr.io/openkcloud/charts/kcloud-operator \
-  --version 0.8.0 -n kcloud --create-namespace
+  --version 0.8.1 -n kcloud --create-namespace
 ```
 
 GHCR 은 HTTPS 이므로 `--plain-http` 를 붙이지 않는다. 공개 패키지는 인증 없이 받을 수 있고,

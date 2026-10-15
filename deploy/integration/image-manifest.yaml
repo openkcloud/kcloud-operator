@@ -1,15 +1,15 @@
 # ============================================================
-# image-manifest.yaml: 릴리스 세트 0.8.0 이 사용하는 컨테이너 이미지 전체 목록
+# image-manifest.yaml: 릴리스 세트 0.8.1 이 사용하는 컨테이너 이미지 전체 목록
 # 상세: 미러(air-gap)·감사용. condition 은 pull 조건,
 #       digest 는 ghcr.io/openkcloud 발행본 기준이다. `# 발행 뒤 갱신` 이 붙은 항목은 GHCR 에 아직 없는
 #       태그라 발행 전 빌드의 digest 를 적어 두고, 발행 뒤 hack/refresh-image-digests.sh 로 바꾼다.
 # 생성일: 2026-09-10 | 수정일: 2026-10-15
 # ============================================================
-release: "0.8.0"
+release: "0.8.1"
 kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
   - image: kcloud-operator
-    tag: v0.8.0
-    digest: sha256:8498ae6b840c1ac850a73ede240b981c2313f4cd7366508e36a509ff154df15f
+    tag: v0.8.1
+    digest: ""  # 발행 뒤 갱신
     condition: 항상. pre-delete hook Job 도 이 이미지. K8s 1.26~1.30 프로파일은 v0.6.2-k8s1.28 (digest sha256:2797159760b85c49ab391bc8edf9f891033e43c8a36081f01962f5c6250e9148, 나머지 이미지는 동일)
   - image: kcloud-node-manager
     tag: "0.6.19"
@@ -41,7 +41,7 @@ kcloud:  # global.registry 로 조립. 기본 ghcr.io/openkcloud
     condition: "furiosa.unified.enabled=true 설정 시에만(기본 false). 벤더 플러그인 우선 원칙으로 GHCR 에 발행하지 않는 내부 빌드"
   - image: furiosa-exporter
     tag: "0.4.0"
-    digest: sha256:2c838e9324691d9cca2245873310ecf5c6540348e5f48010f5fd6d3f6114726e  # 발행 뒤 갱신
+    digest: sha256:608db4de25f9dd02323b82544e4c5ce57ff4ac2d3d896e4047ad7e4a336ef4e7
     condition: RNGD 노드(furiosa.exporter.enabled)
   - image: generic-device-plugin
     tag: v3

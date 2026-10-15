@@ -47,7 +47,7 @@ metrics:
 # operator 이미지: registry 는 global.registry 로 조립됨 (repository 는 registry-relative path).
 image:
   repository: kcloud-operator
-  tag: v0.8.0
+  tag: v0.8.1
   pullPolicy: IfNotPresent
 
 # hostExec: operator 가 호스트에서 명령을 대신 실행할 때 띄우는 특권 hostPID Job 이미지
