@@ -3,8 +3,9 @@
 # furiosa-exporter.yaml: Furiosa RNGD 텔레메트리 exporter DaemonSet
 # 상세: :9410 에서 코어 사용률·DRAM·전력·온도를 Prometheus 포맷으로 낸다.
 #       비특권 — /sys·/dev 읽기만으로 furiosa-smi 가 동작한다(기존 통합
-#       device-plugin 과 동일 조건). 대상은 RNGD 노드뿐이다.
-# 생성일: 2026-08-07 | 수정일: 2026-10-11
+#       device-plugin 과 동일 조건). 대상은 RNGD 노드뿐이다. kubeResourcesLabel 이면
+#       kubelet 할당 기록으로 장치를 쓰는 파드의 namespace·pod·container 라벨을 붙인다.
+# 생성일: 2026-08-07 | 수정일: 2026-10-15
 # ============================================================
 apiVersion: apps/v1
 kind: DaemonSet
@@ -34,7 +35,11 @@ spec:
       containers:
         - name: furiosa-exporter
           image: "{{ include "kcloud-operator.image" (dict "registry" .Values.global.registry "repo" .Values.furiosa.exporter.repository "tag" .Values.furiosa.exporter.tag) }}"
-          args: ["--interval={{ .Values.furiosa.exporter.interval }}"]
+          args:
+            - "--interval={{ .Values.furiosa.exporter.interval }}"
+            {{- if .Values.furiosa.exporter.kubeResourcesLabel }}
+            - "--kube-resources-label=true"
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -62,6 +67,13 @@ spec:
             - name: libsmi
               mountPath: /usr/lib/x86_64-linux-gnu/libfuriosa_smi.so
               readOnly: true
+            {{- if .Values.furiosa.exporter.kubeResourcesLabel }}
+            # kubelet 할당 기록(PodResources) 소켓. 디렉터리가 root:root 0750 이라 uid 0 으로 도는
+            # 이 컨테이너만 연결할 수 있다(이미지에 USER 지정 없음).
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -78,4 +90,12 @@ spec:
           hostPath:
             path: /usr/lib/x86_64-linux-gnu/libfuriosa_smi.so
             type: File
+        {{- if .Values.furiosa.exporter.kubeResourcesLabel }}
+        # DirectoryOrCreate: kubelet root 를 옮긴 노드에서도 파드는 뜬다. 소켓이 없으면 exporter 가
+        # 로그를 남기고 세 라벨만 비운다 — 장치 지표까지 멈추지 않는다.
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+            type: DirectoryOrCreate
+        {{- end }}
 {{- end }}

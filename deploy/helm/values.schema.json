@@ -147,7 +147,8 @@
             "enabled": { "type": "boolean" },
             "repository": {},
             "tag": {},
-            "interval": {}
+            "interval": {},
+            "kubeResourcesLabel": { "type": "boolean" }
           }
         },
         "rngd": {
